@@ -392,6 +392,8 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 	mut cuts := 0
 	mut displaced := 0
 	mut mid_image := 0
+	mut refusals := 0
+	mut held := 0
 	for run in 0 .. 40 {
 		mut r := new_rig(2)
 		mut captured := map[string][]u8{} // dtc:stamp -> the record captured
@@ -408,7 +410,28 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 			do_step(mut sh, op, rng, step, now)
 			new := stored_image(sh)
 			programs := sh.f.calls - r.f.calls // what the step programs, from the shadow
-			if programs > 0 && rng % 3 == 0 {
+			// a step that displaces is the one a refusal of the NEW snapshot must not cost both sides of
+			displacing := sh.m.displaced != r.m.displaced
+			refusing := programs > 0 && (rng % 5 == 1 || (displacing && rng % 2 == 0))
+			if refusing {
+				// a REFUSAL, not a cut: the store says no to one snapshot block (the new one, when the
+				// step displaces), or to every write (no headroom, a program failure); the ECU runs on
+				refusals++
+				if displacing {
+					held++
+					mut newest := 0
+					for k in 1 .. sh.m.cap {
+						if sh.m.entries[k].stamp > sh.m.entries[newest].stamp {
+							newest = k
+						}
+					}
+					r.refuse_id = sh.m.slots[sh.m.entries[newest].slot].snap_id
+				} else if (rng >> 9) & 1 == 0 {
+					r.refuse_id = u16(0x1000 + (rng >> 10) % 3)
+				} else {
+					r.f.refuse = true
+				}
+			} else if programs > 0 && rng % 3 == 0 {
 				r.f.cut_at = r.f.calls + 1 + (rng >> 8) % programs
 				r.f.cut_part = (rng >> 16) % 33
 			}
@@ -417,6 +440,13 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 			if r.m.displaced != pre {
 				displaced++
 			}
+			r.refuse_id = 0
+			r.f.refuse = false
+			// the journal never holds more than the generator budgets: the image, EVERY snapshot
+			// block whole, the marker (gen_nvm.v derive_fault_nvm)
+			budget := nvm.records_for(u16(2 + r.m.n * image_rec)) + 3 * nvm.records_for(u16(snap_hdr +
+				r.m.snap_len(0))) + 1
+			assert r.j.live_records() <= budget, '${ctx}: ${r.j.live_records()} live records, the budget is ${budget}'
 			for k in 0 .. r.m.cap {
 				e := r.m.entries[k]
 				if e.used {
@@ -425,7 +455,21 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 			}
 			if !r.f.dead {
 				r.f.cut_at = 0
-				assert stored_image(r) == new, '${ctx}: the shadow and the ECU wrote different images'
+				after := stored_image(r)
+				if !refusing {
+					assert after == new, '${ctx}: the shadow and the ECU wrote different images'
+					continue
+				}
+				// refused: a snapshot the store claimed may stop being claimed only when the DTC no
+				// longer holds a failure (healed, aged, cleared) or its replacement is claimed in the
+				// same image — never both sides of a displacement gone
+				lost := claimed(old).filter(it !in claimed(after))
+				gained := claimed(after).filter(it !in claimed(old))
+				for dtc in lost {
+					i := r.m.slot_of(dtc)
+					freed := r.m.slots[i].status & (pending | confirmed) == 0
+					assert freed || gained.len > 0, '${ctx}: DTC ${dtc:06X} lost its stored snapshot to a refused write, and nothing replaced it'
+				}
 				continue
 			}
 			cuts++
@@ -451,8 +495,19 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 			}
 		}
 	}
-	println('persistence fuzz: ${cuts} power cuts (${mid_image} of them in a step that changed the image), ${displaced} displacements')
-	assert cuts > 300 && mid_image > 50 && displaced > 20
+	println('persistence fuzz: ${cuts} power cuts (${mid_image} of them in a step that changed the image), ${refusals} refusals (${held} of the new snapshot of a displacement), ${displaced} displacements')
+	assert cuts > 300 && mid_image > 50 && displaced > 20 && refusals > 300 && held > 10
+}
+
+// claimed: the DTCs a status image claims a stored snapshot for.
+fn claimed(img []u8) []u32 {
+	mut out := []u32{}
+	for o := 2; o + image_rec <= img.len; o += image_rec {
+		if img[o + 3] & img_snapshot != 0 {
+			out << u32(img[o]) << 16 | u32(img[o + 1]) << 8 | u32(img[o + 2])
+		}
+	}
+	return out
 }
 
 // do_step: one random action — a result for a DTC (most of them), a clear, a flush, or a power

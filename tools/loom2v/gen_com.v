@@ -805,9 +805,6 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			}
 			glue << rx_gate_sample(m, conns, rx_by_msg.keys(), bname, '\t', true)
 			glue << fault_pass_lines(m)
-			if m.faults.len > 0 {
-				glue << fault_capture_lines(m, 'st.fmem', 'st.conn_${snake(conns[0].name)}', '\t')
-			}
 		}
 		if rx_by_msg.len > 0 || conns.len > 0 || my_routes.len > 0 {
 			glue << '\tmut rx := can.Frame{}'
@@ -1029,6 +1026,11 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\t\t}'
 			}
 			glue << '\t}'
+			if m.faults.len > 0 && conns.len > 0 {
+				// after the drain, where the signal-status faults' publications were consumed and a
+				// cycle edge or a clear may have moved the status: one capture site per pass
+				glue << fault_capture_lines(m, 'st.fmem', 'st.conn_${snake(conns[0].name)}', '\t')
+			}
 			// Serve the reassembled request, then send the answer — tx_ready-gated, so a response
 			// burst never overruns the Tx FIFO or blocks: at most a FIFO's worth per pass.
 			for c in conns {

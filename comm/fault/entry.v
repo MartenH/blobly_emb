@@ -73,7 +73,10 @@ pub fn (mut m Memory) capture(srv &uds.Server) {
 			continue
 		}
 		m.slots[i].snap_due = false
-		if m.slots[i].nfreeze == 0 || m.slots[i].entry != 0 {
+		// none for a DTC whose failure is no longer stored by the time the owner gets here (a cycle
+		// end that healed it, or a clear, in the same pass): its snapshot would describe nothing
+		if m.slots[i].nfreeze == 0 || m.slots[i].entry != 0
+			|| m.slots[i].status & (pending | confirmed) == 0 {
 			continue
 		}
 		k := m.allocate(i)

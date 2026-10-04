@@ -234,6 +234,8 @@ pub mut:
 	setting_off  bool // 0x85 off
 	cycle_active bool
 	boundary_off bool // an operation cycle began while 0x85 was off
+	ending       bool // the cycle's end is requested and waits for the producers (end_cycle_after)
+	end_at       u64
 	// snapshot entries (entry.v): `cap` of them, held by the DTCs that failed most importantly
 	entries    [max_entries]Entry
 	cap        int
@@ -275,6 +277,8 @@ pub fn (mut m Memory) init() {
 	m.setting_off = false
 	m.cycle_active = false
 	m.boundary_off = false
+	m.ending = false
+	m.end_at = 0
 	m.next_stamp = 1
 	m.displaced = 0
 	m.img_len = 0
@@ -344,6 +348,7 @@ pub fn (mut m Memory) consume(i int, r Report) {
 // still open is ended first, so its pending / aging bookkeeping is never skipped. While 0x85 has
 // DTC setting off no status bit changes — the cycle's own bits included.
 pub fn (mut m Memory) cycle_start() {
+	m.ending = false // an end still waiting for its grace happens now
 	if m.cycle_active {
 		m.cycle_end()
 	}
@@ -360,9 +365,31 @@ pub fn (mut m Memory) cycle_start() {
 	m.cycle_active = true
 }
 
+// end_cycle_after requests the operation cycle's end `grace_us` from `now`, the cycle-end barrier
+// (docs/diagnostics.md §7): a producer's dispatch that began before the end was decided — NM going
+// to sleep — publishes its report within one of its periods, and a report the owner reads only
+// after cycle_end would count for nothing, the qualification in it lost from the cycle it belongs
+// to and from the store. So the cycle stays open for the grace (at least the longest period of a
+// fault-owning handler), the owner consuming as usual, and ends at cycle_end_due — after one more
+// consume. Nothing ends while no cycle is open.
+pub fn (mut m Memory) end_cycle_after(now u64, grace_us u64) {
+	if !m.cycle_active || m.ending {
+		return
+	}
+	m.ending = true
+	m.end_at = now + grace_us
+}
+
+// cycle_end_due: a requested end's grace has passed — the owner consumes the producers' latest
+// reports, then calls cycle_end.
+pub fn (m &Memory) cycle_end_due(now u64) bool {
+	return m.ending && now >= m.end_at
+}
+
 // cycle_end closes it: a DTC tested and not failed this cycle is no longer pending, and a confirmed
 // one ages toward removal.
 pub fn (mut m Memory) cycle_end() {
+	m.ending = false
 	if !m.cycle_active {
 		return
 	}

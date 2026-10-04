@@ -395,8 +395,9 @@ ride the same bus-sleep flush choreography as persisted signals.
   come back). A group clear, a displacement and a cycle boundary are each one atomic write of it,
   so no clear epoch is needed;
 - one **snapshot block** per fault with `freeze` — its id hashed from the DTC and the snapshot's
-  schema (the DIDs and their sizes), salted on a collision, so an update that changes a snapshot
-  restores none rather than the wrong bytes — holding the DTC, an allocation stamp and the record
+  schema (the DIDs and their sizes), so an update that changes a snapshot restores none rather than
+  the wrong bytes; a collision is refused at generation, naming the pin (`snapshot_id`) — never
+  resolved by declaration order, which an update may change — holding the DTC, an allocation stamp and the record
   body; a freed one is rewritten as a 1-byte TOMBSTONE, so freed snapshots stop occupying the
   journal.
 
@@ -431,8 +432,8 @@ entry whose DTC failed this cycle cannot be displaced) and tombstoned once when 
 write stays outstanding and is retried no sooner than `[nvm] min_write_ms` later. On a 4096-record
 sector a `cycle = "power"` node like zone_a writes a few image records per boot — on the order of a
 hundred boots per sector fill. loom2v checks the capacity at generation: the live set (persisted
-signals, the image, `2 × entries` whole snapshots — a displacement writes the new one before its
-victim is tombstoned, and each entry may be displaced once in a cycle — and tombstones for the rest) and its full rewrite must fit one sector, and the journal pool must hold a
+signals, the image and EVERY snapshot block whole — a tombstone waits for the image that frees its
+block, so a refusal or a power cut can leave any of them waiting) and its full rewrite must fit one sector, and the journal pool must hold a
 row for each block.
 
 **Where writes happen.** Every comm pass after the cycle step (`fault_target_persist`), and with a

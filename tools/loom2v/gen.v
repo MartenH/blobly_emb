@@ -1314,6 +1314,7 @@ mut:
 	// fault's snapshot (0 = the fault has no `freeze`)
 	fault_status_id u16
 	fault_snap_ids  []u16
+	fault_grace_us  u64 // the cycle-end barrier: twice the longest period of a fault-testing handler
 	bulk      []BulkPoolCfg
 }
 
@@ -3741,6 +3742,7 @@ fn main() {
 	mut m := build_model(doc, dbc)
 	m.nvm_names, m.nvm_ids = derive_nvm(mut m, doc)
 	m.fault_status_id, m.fault_snap_ids = derive_fault_nvm(m)
+	m.fault_grace_us = fault_grace_us(m, doc)
 	validate_doip(m)
 
 	// [trace]: ThreadX streams the exec hooks (gen_trace.v); every other shape serves comm/trace's
@@ -4896,6 +4898,7 @@ struct FaultCfg {
 	aging      int
 	freeze     []int // the snapshot: [[did]]s captured at the failure that allocates an entry
 	priority   int   // displacement: 1 = the most important .. 255
+	snapshot_id int  // the snapshot's journal block, pinned (0 = derived from the DTC and schema)
 	// a SIGNAL-STATUS fault (R4c): no FB tests it — the diagnostic bridge is the detector, from the
 	// named received signal's status: on = "timeout" | "integrity" | "lost"
 	signal string
@@ -4910,6 +4913,10 @@ fn parse_faults(doc toml.Doc) []FaultCfg {
 		mut freeze := []int{}
 		for d in (m['freeze'] or { toml.Any([]toml.Any{}) }).array() {
 			freeze << int(d.i64())
+		}
+		snapshot_id := (m['snapshot_id'] or { toml.Any(0) }).i64()
+		if 'snapshot_id' in m && (snapshot_id < 1 || snapshot_id > 0xFFFE) {
+			panic('loom2v: [[fault]] "${name}": snapshot_id ${snapshot_id} must be 1..65534')
 		}
 		priority := (m['priority'] or { toml.Any(default_fault_priority) }).i64()
 		if priority < 1 || priority > 255 {
@@ -5001,6 +5008,7 @@ fn parse_faults(doc toml.Doc) []FaultCfg {
 			on:         on
 			freeze:     freeze
 			priority:   int(priority)
+			snapshot_id: int(snapshot_id)
 		}
 	}
 	return out
@@ -5341,21 +5349,48 @@ fn fault_target_cycle(m Model) []string {
 	if !fault_target_on(m) || !m.nm.on || m.fault_cycle != '' {
 		return []string{}
 	}
+	// bus sleep REQUESTS the end: the cycle stays open for the barrier's grace, so a report a
+	// dispatch from before the edge publishes after this pass's read still lands in it (§7)
 	mut g := [
 		'\t\tif g_nm.awake() != g_fcycle_on { // the operation cycle follows NM (D3)',
 		'\t\t\tg_fcycle_on = g_nm.awake()',
 		'\t\t\tif g_fcycle_on {',
 		'\t\t\t\tg_fmem.cycle_start()',
 		'\t\t\t} else {',
-	]
-	g << fault_target_consume(m, '\t\t\t\t')
-	g << fault_capture_lines(m, 'g_fmem', 'g_diag', '\t\t\t\t')
-	g << [
-		'\t\t\t\tg_fmem.cycle_end()',
+		'\t\t\t\tg_fmem.end_cycle_after(t1, u64(${m.fault_grace_us})) // the cycle-end barrier: the producers publish first',
 		'\t\t\t}',
+		'\t\t}',
+		'\t\tif g_fmem.cycle_end_due(t1) {',
+	]
+	g << fault_target_consume(m, '\t\t\t')
+	g << fault_capture_lines(m, 'g_fmem', 'g_diag', '\t\t\t')
+	g << [
+		'\t\t\tg_fmem.cycle_end()',
 		'\t\t}',
 	]
 	return g
+}
+
+// fault_grace_us: the cycle-end barrier's grace — twice the longest period of a handler that tests
+// a fault, so every dispatch begun before the end has published its report by then.
+fn fault_grace_us(m Model, doc toml.Doc) u64 {
+	mut longest := u64(0)
+	for c in ecumodel.toml_arr(doc, 'fb') {
+		cm := c.as_map()
+		fb := (cm['name'] or { toml.Any('') }).string()
+		for h in (cm['handler'] or { toml.Any([]toml.Any{}) }).array() {
+			hm := h.as_map()
+			hn := (hm['name'] or { toml.Any('') }).string()
+			if !m.faults.any(it.fb == fb && it.handler == hn) {
+				continue
+			}
+			p := u64((hm['period_ms'] or { toml.Any(0) }).i64())
+			if p > longest {
+				longest = p
+			}
+		}
+	}
+	return 2 * longest * 1000
 }
 
 // fault_target_cycle_boot: right after NM's init, before the loop's first pass consumes a report —

@@ -316,7 +316,8 @@ fn chain_records(len int) int {
 // table moves it, and a firmware update can never prune it and resurrect cleared DTCs. Each
 // SNAPSHOT's id is a hash of its DTC and its schema (the DIDs and their sizes), so an update that
 // changes a snapshot restores none rather than the wrong bytes; a collision with a persisted
-// signal or an earlier snapshot is resolved by rehashing with a salt, in declaration order.
+// signal, the status image or another snapshot is refused, naming the pin (`snapshot_id`) that
+// resolves it — never resolved by declaration order, which an update may change.
 fn derive_fault_nvm(m Model) (u16, []u16) {
 	if !fault_persist_on(m) {
 		return 0, []u16{}
@@ -350,14 +351,15 @@ fn derive_fault_nvm(m Model) (u16, []u16) {
 		if r > snap_recs {
 			snap_recs = r
 		}
-		mut salt := 0
-		mut id := u16(0)
-		for {
-			id = nvm_hash16('fault_snapshot:${f.dtc}:${schema.join(',')}' + if salt > 0 { '#${salt}' } else { '' })
-			if id !in used {
-				break
-			}
-			salt++
+		id := if f.snapshot_id != 0 {
+			u16(f.snapshot_id)
+		} else {
+			nvm_hash16('fault_snapshot:${f.dtc}:${schema.join(',')}')
+		}
+		if prev := used[id] {
+			// never resolved by the order the faults are declared in: an update that reorders them,
+			// or adds a colliding signal, would move a stored snapshot to another id and lose it
+			panic('loom2v: [[fault]] "${f.name}": its snapshot block 0x${id.hex()} collides with ${prev} — pin one with `snapshot_id = <1..65534>` on the fault (or `nvm_id` on a signal), and keep it')
 		}
 		used[id] = 'the snapshot of [[fault]] "${f.name}"'
 		snaps << id
@@ -367,14 +369,11 @@ fn derive_fault_nvm(m Model) (u16, []u16) {
 	if m.nvm_names.len + 1 + nsnap > 48 {
 		panic('loom2v: ${m.nvm_names.len} persistent signals + the fault memory (${1 + nsnap} blocks) exceed the safe journal pool budget (48 of nvm.max_blocks)')
 	}
-	// capacity, the docs/nvm.md headroom rule: the live set — at most 2 x entries whole snapshots
-	// (a displacement writes the new one before its victim is tombstoned, and every entry may be
-	// displaced once in a cycle before the image that frees the victims is durable), the rest
-	// tombstones — plus a full rewrite of it must fit one sector, so a flush never needs an erase
-	entries := fault_entries(m)
-	whole := if 2 * entries < nsnap { 2 * entries } else { nsnap }
-	live := m.nvm_names.len + chain_records(2 + m.faults.len * fault.image_rec) + whole * snap_recs +
-		(nsnap - whole) + 1
+	// capacity, the docs/nvm.md headroom rule: the live set — EVERY snapshot block whole (a
+	// tombstone is written only after the image that frees it is durable, and a refusal or a power
+	// cut can leave any number of freed blocks waiting for theirs) — plus a full rewrite of it
+	// must fit one sector, so a flush never needs an erase
+	live := m.nvm_names.len + chain_records(2 + m.faults.len * fault.image_rec) + nsnap * snap_recs + 1
 	if live + live > int(m.nvm.sector_records) {
 		panic('loom2v: the journal needs ${live + live} records of sector headroom (live set ${live}: ' +
 			'${m.nvm_names.len} persistent signals + the fault memory, docs/nvm.md) but [nvm] sector_records = ${m.nvm.sector_records}')
