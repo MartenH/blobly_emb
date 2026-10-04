@@ -300,6 +300,11 @@ pub const net_wait_us = u64(10_000_000)
 // Call it from the serve loop; handle() stamps the activity clock.
 pub fn (mut p Prog) tick(now u64) {
 	p.clock = now
+	if p.remote_inflight {
+		// a network exchange in flight — its answer not yet acknowledged — holds S3 and the
+		// stay-window, as a bus exchange in flight does (comm/diag serve_step)
+		p.heard_via(via_net, now)
+	}
 	if p.await_net && elapsed(now, p.last_rx_us) > net_wait_us {
 		p.await_net = false // the network never came: time the session from the handoff
 	}
