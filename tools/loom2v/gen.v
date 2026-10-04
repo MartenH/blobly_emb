@@ -992,6 +992,15 @@ fn parse_dids(doc toml.Doc) []DidCfg {
 			write_security: wr_sec
 		}
 	}
+	// one id, one row: the server serves the FIRST row of an id, so a repeat would carry gates and
+	// bindings nobody is served by — a weaker-gated twin of a parameter DID would code it
+	for i, d in dids {
+		for e in dids[..i] {
+			if e.id == d.id {
+				panic('loom2v: [[did]] 0x${d.id.hex()} is declared twice — one DID, one row (the server answers the first)')
+			}
+		}
+	}
 	if dids.len > uds.max_dids {
 		panic('loom2v: ${dids.len} [[did]]s — a diagnostic server holds at most ${uds.max_dids} (comm/uds max_dids)')
 	}

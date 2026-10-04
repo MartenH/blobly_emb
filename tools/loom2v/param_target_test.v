@@ -243,6 +243,8 @@ fn test_what_generation_refuses() {
 			'param = "Workload"'), 'and [[signal]] "Workload" are one identifier']
 		'pin wraps':        [pt_conn + pt_param.replace('apply   = "reset"', 'apply   = "reset"\nnvm_id  = 0x100000001'),
 			'nvm_id = 4294967297 is out of range']
+		'duplicate did':    [pt_conn + pt_param + '\n[[did]]\nid = 0x0111\nbytes = "00"\nwrite = { session = ["default"] }\n',
+			'[[did]] 0x111 is declared twice']
 		'no isotp':         [pt_conn.all_after('functional_id = 0x7DF') + pt_param.all_before('[[did]]'),
 			'declare the diagnostic server\'s [isotp] connection']
 	}
@@ -267,6 +269,36 @@ fn test_what_generation_refuses() {
 			'name      = "LoadFast"\nthread    = "other"\n  [[fb.handler]]\n  name      = "on_10ms"\n  period_ms = 10\n  reads     = ["Trim"]')
 	}, pt_conn + pt_param)
 	assert two.code != 0 && two.out.contains('parameter "Trim" is read on threads'), two.out
+}
+
+// the fingerprint is 32 bits over the whole layout: two layouts the old 16-bit fold confused
+// (found here by search) are told apart
+fn test_two_layouts_the_16_bit_fold_confused_get_different_fingerprints() {
+	mk := fn (fname string) ParamCfg {
+		return ParamCfg{
+			name:   'SteerLimit'
+			fields: [ParamField{
+				name: fname
+				typ:  'u16'
+			}]
+		}
+	}
+	mut seen := map[u16]string{}
+	mut a := ''
+	mut b := ''
+	for i in 0 .. 100000 {
+		f := 'f${i}'
+		h := nvm_hash16('param-layout:${param_layout(mk(f))}')
+		if prev := seen[h] {
+			a = prev
+			b = f
+			break
+		}
+		seen[h] = f
+	}
+	assert a != '', 'no 16-bit collision found to test with'
+	assert nvm_hash16('param-layout:${param_layout(mk(a))}') == nvm_hash16('param-layout:${param_layout(mk(b))}')
+	assert param_fp(mk(a)) != param_fp(mk(b)), 'layouts ${a} and ${b} share a fingerprint'
 }
 
 // a 0x2E service row gating the write is the gate a parameter DID without its own needs

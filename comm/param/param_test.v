@@ -90,9 +90,10 @@ struct Schema {
 mut:
 	steer_max   i64 = 360
 	steer_def   i64 = 360
-	steer_fp    u16 = 0x5151 // the layout's fingerprint; another layout under a pinned id: another fp
+	steer_fp    u32 = 0x5151_0001 // the layout's fingerprint; another layout under a pinned id: another fp
 	trailer_id  u16 = 0x2002
 	offset_x_lo i64 = -100
+	steer_i16   bool // an update makes SteerLimit's field an i16 under the SAME fingerprint
 }
 
 // Rig is one ECU: the flash outlives a reboot; the journal, the table and the server do not.
@@ -155,6 +156,9 @@ fn (mut r Rig) reboot() {
 		max:   r.sch.steer_max
 		def:   r.sch.steer_def
 	}
+	if r.sch.steer_i16 {
+		r.ps.p[steer].fields[0].signed = true // the same width and fingerprint, another type
+	}
 	r.ps.p[trailer] = Param{
 		did:         0x0111
 		id:          r.sch.trailer_id
@@ -163,8 +167,9 @@ fn (mut r Rig) reboot() {
 		apply_reset: true
 	}
 	r.ps.p[trailer].fields[0] = Field{
-		width: 1
-		min:   0
+		width:   1
+		boolean: true
+		min:     0
 		max:   1
 		def:   0
 	}
@@ -364,7 +369,7 @@ fn test_another_layout_is_never_applied() {
 	assert r.write(0x0111, [u8(0x01)])[0] == 0x6E
 	// an update changes SteerLimit's layout under its pinned id: the fingerprint refuses the old
 	// bytes — the default, and the status says the coding was dropped
-	r.sch.steer_fp = 0x5152
+	r.sch.steer_fp = 0x5151_0002
 	// and moves TrailerFitted's block (a layout change unpinned: a new hash): nothing found
 	r.sch.trailer_id = 0x2F02
 	r.reboot()
@@ -380,6 +385,23 @@ fn test_another_layout_is_never_applied() {
 	assert r.write(0x0110, [u8(0x01), 0x68])[0] == 0x6E
 	assert r.puts == puts + 1
 	assert r.status(steer) == status_coded
+}
+
+// a fingerprint collision is not enough: the record states the structure too. An update makes
+// SteerLimit an i16 and (constructed) its fingerprint is unchanged — a hash that collided. The
+// stored u16 is refused, not read as an i16.
+fn test_a_colliding_fingerprint_with_another_structure_is_refused() {
+	mut r := new_rig()
+	r.unlock()
+	assert r.write(0x0110, [u8(0x00), 0x64])[0] == 0x6E
+	r.sch.steer_i16 = true
+	r.reboot()
+	assert r.status(steer) == status_reverted
+	assert r.cell_a[steer] == 360
+	// the same structure under the same fingerprint is applied (the control)
+	r.sch.steer_i16 = false
+	r.reboot()
+	assert r.status(steer) == status_coded && r.cell_a[steer] == 100
 }
 
 fn test_a_restored_value_is_revalidated_against_this_firmwares_range() {

@@ -34,6 +34,7 @@ local function u16(v) return frombytes({ (v >> 8) & 0xFF, v & 0xFF }) end
 local function reset(d)
   d:reset(0x01)
   sleep_ms(BOOT_MS)
+  while bus.recv("edge", 0) do end -- what queued across the restart is the old run's
 end
 
 -- the largest SteeringAngle zone_a transmits over `frames` SteeringFrames (the raw sweep steps 5°
@@ -117,6 +118,7 @@ test("zone_a: a power cut with no warning keeps the coding the tester was answer
   d:write_did(LIMIT_DID, u16(150)) -- durable before this answer arrived
   check.truthy(os.execute(cmd), "the power-cut command failed: " .. cmd)
   sleep_ms(BOOT_MS)
+  while bus.recv("edge", 0) do end
   d = diag()
   check.equal(tohex(d:read_did(LIMIT_DID)), tohex(u16(150)))
   check.equal(max_angle(80), 150)

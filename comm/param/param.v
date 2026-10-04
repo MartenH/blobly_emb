@@ -10,12 +10,14 @@ module param
 //
 // One journal value per parameter, under its own block id:
 //
-//   [ version | schema fingerprint (2) | each field, big-endian, at its width ]
+//   [ version | layout fingerprint (4) | field count | each field's type code | each field,
+//     big-endian, at its width ]
 //
 // The block id is derived from the parameter's NAME (pinnable on a collision), so declaration order
-// and layout never move it; the record carries a FINGERPRINT of the LAYOUT — its fields' names,
-// types and order, which is the byte order of the record and the DID — so a firmware update that
-// changes the layout finds a record it refuses, and says so (status `reverted`), rather than finding
+// and layout never move it; the record carries a 32-bit FINGERPRINT of the LAYOUT — its fields'
+// names, types and order, which is the byte order of the record and the DID — AND the structure
+// itself (field count, each field's type code), so a hash collision must also agree field by field
+// to be confused. A firmware update that changes the layout finds a record it refuses, and says so (status `reverted`), rather than finding
 // nothing or misreading it. The RANGE is in neither: a range is not a layout, the stored bytes still
 // mean the same thing under a new range, and a workshop's coding must not be lost to an update that
 // only widens one.
@@ -45,10 +47,10 @@ import comm.uds
 
 pub const max_params = 8 // per node: one diagnostic server
 pub const max_fields = 2 // a parameter rides one {a, b} IOC cell to its FBs
-pub const record_version = u8(1)
-pub const record_hdr = 3 // version + fingerprint
+pub const record_version = u8(2) // 2: a 32-bit fingerprint and the structure written out
+pub const record_fixed = 6 // version, fingerprint (4), field count
 pub const max_value = max_fields * 4
-pub const max_record = record_hdr + max_value
+pub const max_record = record_fixed + max_fields + max_value // 16 B: one journal record
 pub const nrc_general_programming_failure = u8(0x72)
 
 // Status, per parameter, as the status DID reports it (one byte each, declaration order).
@@ -71,8 +73,9 @@ pub mut:
 // it is signed, its inclusive range, and its compiled default (in range — generation checks it).
 pub struct Field {
 pub mut:
-	width  u8
-	signed bool
+	width   u8
+	signed  bool
+	boolean bool // a bool (width 1, 0..1) — its own type code, never read as a u8
 	min    i64
 	max    i64
 	def    i64
@@ -83,7 +86,7 @@ pub struct Param {
 pub mut:
 	did         u16 // the DID that codes and reads it
 	id          u16 // its journal block
-	fp          u16 // its layout's fingerprint, stored in the record
+	fp          u32 // its layout's fingerprint (32-bit), stored in the record
 	nfields     int
 	fields      [max_fields]Field
 	apply_reset bool // the value takes effect at the next start, not the next dispatch
@@ -109,6 +112,28 @@ pub mut:
 	srv        voidptr
 	status_idx int
 	wrote      int // journal writes since the owner last asked (take_wrote)
+}
+
+// type_code: field f's type as the record states it — width, signedness, bool — so a record is
+// applied only when its STRUCTURE matches too, not on the fingerprint alone: a hash collides, and
+// two layouts that collide must also agree field by field to be confused.
+fn (p &Param) type_code(f int) u8 {
+	fl := p.fields[f]
+	return fl.width | (if fl.signed { u8(0x10) } else { u8(0) }) | (if fl.boolean { u8(0x20) } else { u8(0) })
+}
+
+// header writes the record's fixed part and type codes into rec and returns its length.
+fn (p &Param) header(mut rec [max_record]u8) int {
+	rec[0] = record_version
+	rec[1] = u8(p.fp >> 24)
+	rec[2] = u8(p.fp >> 16)
+	rec[3] = u8(p.fp >> 8)
+	rec[4] = u8(p.fp)
+	rec[5] = u8(p.nfields)
+	for f in 0 .. p.nfields {
+		rec[record_fixed + f] = p.type_code(f)
+	}
+	return record_fixed + p.nfields
 }
 
 // width: the record's value bytes for parameter i.
@@ -140,9 +165,16 @@ pub fn (mut ps Params) restore(mounted bool) {
 			if n > 0 {
 				p.status = status_reverted
 				mut v := [max_fields]i64{}
-				if n == record_hdr + p.width() && rec[0] == record_version
-					&& u16(rec[1]) << 8 | u16(rec[2]) == p.fp {
-					p.decode(&rec[record_hdr], mut v)
+				mut want := [max_record]u8{}
+				h := p.header(mut want)
+				mut same := n == h + p.width()
+				for b in 0 .. h {
+					if rec[b] != want[b] {
+						same = false
+					}
+				}
+				if same {
+					p.decode(&rec[h], mut v)
 					// this schema's record, revalidated against THIS firmware's range: a value a
 					// narrowed range refuses is not applied (the default stands, and says so)
 					if p.in_range(v) {
@@ -227,14 +259,18 @@ fn (ps &Params) publish_live(i int) {
 pub fn (mut ps Params) bind(mut s uds.Server, status_did u16) {
 	ps.srv = unsafe { voidptr(&s) }
 	ps.status_idx = -1
-	for k in 0 .. s.ndid {
+	// the FIRST row of each id — the one the server serves (generation refuses a repeated id)
+	for k := s.ndid - 1; k >= 0; k-- {
 		if status_did != 0 && s.dids[k].id == status_did {
 			ps.status_idx = k
 		}
-		for i in 0 .. ps.n {
+	}
+	for i in 0 .. ps.n {
+		for k in 0 .. s.ndid {
 			if s.dids[k].id == ps.p[i].did {
 				s.dids[k].bound = true
 				s.dids[k].len = u8(ps.p[i].encode(ps.p[i].stored, &s.dids[k].data[0]))
+				break
 			}
 		}
 	}
@@ -295,10 +331,8 @@ pub fn (mut ps Params) write(did u16, data &u8, n int) u8 {
 			return nrc_general_programming_failure // nowhere durable to put it
 		}
 		mut rec := [max_record]u8{}
-		rec[0] = record_version
-		rec[1] = u8(p.fp >> 8)
-		rec[2] = u8(p.fp)
-		len := record_hdr + p.encode(v, &rec[record_hdr])
+		h := p.header(mut rec)
+		len := h + p.encode(v, &rec[h])
 		if !ps.store.put(ps.store.ctx, p.id, &rec[0], u16(len)) {
 			// nothing changed here: the live value, the 0x22 record and the status are as they
 			// were. But a put the journal could not CONFIRM may still have landed (nvm.Journal.put:

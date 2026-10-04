@@ -573,11 +573,13 @@ param_status = true                         # one byte per parameter: 0 default,
   them. A parameter no handler reads is refused (it codes nothing), as is a handler that writes one.
   Its value rides one IOC cell `{a, b}` (so at most two fields), the comm thread its one writer; the
   readers sit on one thread (the cell's one reader context) on the image that owns the journal.
-- **Identity.** One journal record per parameter: `[version | fingerprint (2) | each field
-  big-endian at its width]`, ≤ 11 B — one record. The block id is a hash of the parameter's NAME,
+- **Identity.** One journal record per parameter: `[version | layout fingerprint (4) | field count |
+  each field's type code | each field big-endian at its width]`, ≤ 16 B — one record. The block id is a hash of the parameter's NAME,
   pinnable with `nvm_id` to resolve a collision generation reports, and kept in the prune keep-set;
-  the record carries a hash of its LAYOUT (field names, types and their order, which is the byte
-  order of the record and the DID). So declaration order moves nothing, and an update that changes
+  the record carries a 32-bit hash of its LAYOUT (field names, types and their order, which is the
+  byte order of the record and the DID, under the record format's version) AND the structure itself
+  (field count, each field's width / signedness / bool), so a hash collision must also agree field
+  by field before an old record is read as the new layout. So declaration order moves nothing, and an update that changes
   the layout finds the old record and REFUSES it — status `reverted`, never the old bytes read as
   the new layout, and never a coding silently gone (a layout-derived id, the persisted signals'
   rule, would have pruned it and read `default`).

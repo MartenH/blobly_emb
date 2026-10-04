@@ -45,7 +45,7 @@ struct ParamCfg {
 	nvm_id      u16 // a pinned block id (0 = derived)
 mut:
 	id  u16 // its journal block (derive_param_nvm)
-	fp  u16 // its layout's fingerprint
+	fp  u32 // its layout's fingerprint (param_fp)
 	did int // the [[did]] that codes it
 }
 
@@ -180,6 +180,18 @@ fn field_ident_ok(s string) bool {
 		return false
 	}
 	return s.bytes().all((it >= `a` && it <= `z`) || (it >= `0` && it <= `9`) || it == `_`)
+}
+
+// param_fp: the layout's 32-bit fingerprint (FNV-1a), under the record format's version, so a new
+// format never reads an old one's hash as its own. comm/param stores the structure beside it, so a
+// collision must also agree field by field to be confused.
+fn param_fp(p ParamCfg) u32 {
+	mut h := u32(0x811C_9DC5)
+	for b in '${param.record_version}:${param_layout(p)}'.bytes() {
+		h ^= u32(b)
+		h *= 16777619
+	}
+	return h
 }
 
 // param_layout: a parameter's LAYOUT — each field's name and type in declaration order, the order
@@ -329,7 +341,7 @@ fn derive_param_nvm(mut m Model) {
 		}
 		used[id] = '[[param]] "${p.name}"'
 		m.params[i].id = id
-		m.params[i].fp = nvm_hash16('param-layout:${param_layout(p)}')
+		m.params[i].fp = param_fp(p)
 	}
 }
 
@@ -408,7 +420,7 @@ fn param_config_lines(m Model) []string {
 	for i, p in m.params {
 		g << '\tg_param.p[${i}].did = u16(0x${p.did.hex()}) // ${p.name}'
 		g << '\tg_param.p[${i}].id = u16(0x${p.id.hex()})'
-		g << '\tg_param.p[${i}].fp = u16(0x${p.fp.hex()})'
+		g << '\tg_param.p[${i}].fp = u32(0x${p.fp.hex()})'
 		g << '\tg_param.p[${i}].nfields = ${p.fields.len}'
 		if p.apply_reset {
 			g << '\tg_param.p[${i}].apply_reset = true // takes effect at the next start'
@@ -418,6 +430,9 @@ fn param_config_lines(m Model) []string {
 			g << '\t\twidth:  ${f.width}'
 			if f.signed {
 				g << '\t\tsigned: true'
+			}
+			if f.typ == 'bool' {
+				g << '\t\tboolean: true'
 			}
 			g << '\t\tmin:    i64(${f.min})'
 			g << '\t\tmax:    i64(${f.max})'
