@@ -23,6 +23,7 @@
 #define APP_BASE 0x08020000u
 #define APP_SIZE 0x000E0000u /* sectors 1..7 */
 #define APP_VECTORS (APP_BASE + 0x400u)
+#define FLASH_SECTOR 0x00020000u /* the erase unit: the boot erases the app a sector per step */
 
 /* Handshake cells in D3 SRAM4 (0x38000000, 16 KB) — survive NVIC_SystemReset,
  * garbage after POR (that's what the magics are for). Single-core: no xcore.h

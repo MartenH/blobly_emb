@@ -1,6 +1,10 @@
 # Persistence (non-volatile storage) — design
 
-> Status (2026-10-04): the fault memory (diagnostics.md R6b) persists in this journal — a
+> Status (2026-10-04, R7): **P4 is built** as the parameters' write path — a `[[param]]` is one
+> record in this journal, coded with 0x2E on the `[[did]]` that names it, durable before the answer
+> ([diagnostics.md](diagnostics.md) §3.4 "As built"). The persisted signals still have no DID binding.
+>
+> Earlier (2026-10-04): the fault memory (diagnostics.md R6b) persists in this journal — a
 > status image and per-fault snapshot blocks, the journal's sectors now the board's (`bootmap.h`
 > NVM_*, linked by the generator through `boards/common/nvm_map.c`).
 >
@@ -385,8 +389,10 @@ The entire layer develops dry.
    `examples/h755_threadx` and `system_full/nodes/domain` persist signals on the
    H755. NOT yet recorded: the bench loop that pulls power mid-append and counts
    survivors has no entry in `requirements/verifications.toml`.
-4. **P4 — DID binding**: writable DIDs backed by blocks (the explicit-write path);
-   `[nvm]` policy knobs (per-signal write-through for the rare value that earns it).
+4. **P4 — DID binding**: writable DIDs backed by blocks (the explicit-write path). BUILT for
+   parameters (R7, `comm/param`): a `[[param]]` block per parameter, written by 0x2E through a
+   bound DID (`uds.DidWrite`), validated and durable before the answer. Not for persisted signals,
+   and no `[nvm]` policy knobs (per-signal write-through for the rare value that earns it).
 
 ## Non-goals (v1)
 

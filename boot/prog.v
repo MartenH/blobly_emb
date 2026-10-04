@@ -26,6 +26,18 @@ const nrc_security_access_denied = u8(0x33)
 const nrc_invalid_key = u8(0x35)
 const nrc_general_programming_failure = u8(0x72)
 const nrc_wrong_block_sequence = u8(0x73)
+const nrc_busy_repeat = u8(0x21)
+const nrc_response_pending = u8(0x78)
+
+// the routine work answered responsePending and done a unit at a time (Prog.step)
+const work_erase = u8(1)
+const work_check = u8(2)
+// the routine is done; only its answer (0x71, or 7F 31 72) is still on its way: held, like every
+// response it gives, until the transport confirms it, and sent again if lost
+const work_answer = u8(3)
+
+// how often a routine's lost 0x78 is sent again before the routine ends refused
+pub const work_resend_max = u8(3)
 
 // routine ids (0x31 sub 0x01 = start)
 pub const routine_erase = u16(0xFF00)
@@ -101,13 +113,179 @@ pub mut:
 	stage_len u32
 	// set by 0x11 after the positive response is sent — the owner loop resets
 	reset_pending bool
+	// Two transports, one server (a node that serves DoIP too, docs/bootloader.md "The DoIP
+	// binding"): the transport whose request opened the session in force holds it (0 = none, the
+	// default session), and a request over the other is refused conditionsNotCorrect until that
+	// session ends — so an unlock earned over one transport is never used over the other.
+	owner u8
+	// a network request whose answer is not sent yet (DoIP acknowledges every request, answered
+	// or not): no reset overtakes it — and whether the pending reset was asked over the network
+	remote uds.RemoteReset // comm/uds remote.v: the rule the application's server keeps too
+	// the network has been heard in the session it holds: only then does a dropped connection end
+	// it — a connection that drops before its first request (a stray peer, a refused activation)
+	// is not the tester a handed-off session waits for
+	remote_spoke bool
+	// the time of the last tick: a network request is stamped with it (the mailbox carries none,
+	// and the serve loop ticks every pass)
+	clock u64
+	// a session handed off over the network: S3 does not time it until the boot's own network is
+	// up (net_up) — no tester can reach the boot before — and at most net_wait_us
+	await_net bool
+	// routine work answered responsePending (0x78) and done a step at a time once that answer has
+	// LEFT — on the wire, or acknowledged over the network — because a flash erase stalls the whole
+	// chip on a single-bank part, the network stack with it: the erase of one unit
+	// (`erase_unit`, the flash sector; 0 = the whole region at once) or the image check per step,
+	// a 0x78 between steps, the routine's answer after the last. work_via: the transport that
+	// asked, which carries every response. A request meanwhile is answered busyRepeatRequest.
+	work      u8
+	work_via  u8
+	work_addr u32
+	work_end  u32
+	erase_unit u32
+	// The ONE gate of a step, whichever transport: the routine's own preceding response has LEFT.
+	// work_out: THE in-flight state — a response of the routine (a 0x78 or its answer) is on its
+	// way: handed to the transport, not yet CONFIRMED (a bus drain that completed, or the push's
+	// own acknowledgement). work_push: it was pushed (over the network: only the push's own
+	// acknowledgement counts, never another request's). work_left / work_lost settle it: left,
+	// the next unit may run (work_ready) or, after the answer, the routine is over; lost (a
+	// refused, aborted or undrained bus transfer), that response is sent again before anything
+	// else (work_resend) — at most work_resend_max times. A lost 0x78 then ends the routine
+	// refused; a lost answer is given up. While work != 0, S3 and the stay-window are held.
+	work_out    bool
+	work_push   bool
+	work_ready  bool
+	work_resend bool
+	work_tries  u8
+	work_rsp    [8]u8 // the routine's answer, kept until confirmed (sent again if lost)
+	work_rsp_n  int
+	// the longest that wait may last: the node's link start-up allowance plus its whole
+	// announcement sequence (gen/boot_gen.h BOOT_DOIP_NET_WAIT_MS — every announcement goes out
+	// before the DoIP listener opens); 0 = net_wait_default_us
+	net_wait_us u64
 }
 
-// handle: boot services first, everything else delegated to comm/uds.
+// the transports a request reaches the programming server over: the bus (ISO-TP on CAN) and the
+// network (DoIP) — the request cell names the one a handoff was asked over (boards/common/bootcell.h)
+pub const via_bus = u8(1)
+pub const via_net = u8(2)
+
+// handle serves one request from the bus (ISO-TP) — on a node without DoIP, the only transport.
 pub fn (mut p Prog) handle(req &u8, req_len int, resp &u8) int {
-	if req_len < 1 {
+	return p.handle_via(via_bus, req, req_len, resp)
+}
+
+// serve_remote serves one request that arrived over the network (DoIP, through the doip thread's
+// mailbox), stamped as tester activity at the last tick. Every network request is in flight until
+// remote_sent — its acknowledgement goes out whether or not there is an answer — and none is
+// served once a reset is pending. A functional request is not served: the bus side serves none.
+pub fn (mut p Prog) serve_remote(req &u8, req_len int, functional bool, resp &u8) int {
+	p.remote.begin()
+	if req_len < 1 || functional || p.reset_pending {
 		return 0
 	}
+	p.heard_via(via_net, p.clock)
+	return p.handle_via(via_net, req, req_len, resp)
+}
+
+// remote_sent: the answer serve_remote gave has been ACKNOWLEDGED by the tester (driver/eth/doip_mb.h)
+// — queued is not sent: an answer still in TCP's queue dies with a connection that drops, and the
+// drop (remote_dropped) then cancels the reset it announced.
+pub fn (mut p Prog) remote_sent() {
+	p.remote.sent()
+	// a routine's answer to its request is an ordinary answer: its acknowledgement (or one TCP
+	// gives after it, in order) is that the 0x78 left; a pushed response waits for its own
+	if p.work_via == via_net && !p.work_push {
+		p.work_left()
+	}
+}
+
+// push_sent: the response the routine PUSHED over the network (driver/eth/doip_mb.h) has itself
+// been acknowledged — the one thing that lets its next step run
+pub fn (mut p Prog) push_sent() {
+	if p.work_via == via_net && p.work_push {
+		p.work_left()
+	}
+}
+
+// work_left: the routine's response on its way has left (on the wire, or acknowledged)
+pub fn (mut p Prog) work_left() {
+	if p.work_out {
+		p.work_out = false
+		p.work_tries = 0
+		if p.work == work_answer {
+			p.work = 0 // the answer is confirmed: the routine is over
+		} else {
+			p.work_ready = true
+		}
+	}
+}
+
+// work_lost: the routine's response on its way was lost (a refused, aborted or undrained bus
+// transfer): it goes again before any unit runs
+pub fn (mut p Prog) work_lost() {
+	if p.work_out {
+		p.work_out = false
+		p.work_resend = true
+	}
+}
+
+// remote_dropped: the network connection is gone. A reset it asked for whose answer never left is
+// abandoned (never reset unanswered); a session it held ends — relocked, a download abandoned —
+// since no tester outlives its connection's session.
+pub fn (mut p Prog) remote_dropped() {
+	if p.remote.dropped() {
+		p.reset_pending = false // its own reset, whose answer was never acknowledged
+	}
+	if p.owner == via_net && p.remote_spoke {
+		p.end_session()
+	}
+	if p.work_via == via_net {
+		p.work = 0 // nobody will acknowledge its responses: the routine goes with its connection
+	}
+}
+
+// net_up: the boot's network is reachable now (its DoIP listener is open). A session handed off
+// over it starts its S3 here, the first moment its tester can speak.
+pub fn (mut p Prog) net_up(now u64) {
+	if p.await_net {
+		p.await_net = false
+		p.stamp(now)
+	}
+}
+
+// handle_via: one request over transport `via`, refused while the other holds the session. A
+// request while a reset is pending is dropped unanswered, as the bus side drops it.
+fn (mut p Prog) handle_via(via u8, req &u8, req_len int, resp &u8) int {
+	if req_len < 1 || p.reset_pending {
+		return 0
+	}
+	if p.srv.session != 0x01 && p.owner != 0 && p.owner != via {
+		return negative(resp, unsafe { req[0] }, nrc_conditions_not_correct)
+	}
+	if p.work != 0 && p.work != work_answer {
+		return negative(resp, unsafe { req[0] }, nrc_busy_repeat) // a routine still running
+	}
+	n := p.dispatch(req, req_len, resp)
+	if p.work == work_erase || p.work == work_check {
+		// the routine just started: its responses go where its request came from, the first being
+		// this answer (0x78)
+		p.work_via = via
+		p.work_out = true
+		p.work_push = false
+		p.work_ready = false
+		p.work_resend = false
+		p.work_tries = 0
+	}
+	p.owner = if p.srv.session == 0x01 { u8(0) } else { via }
+	p.remote_spoke = p.owner == via_net
+	if p.reset_pending {
+		p.remote.asked(via == via_net)
+	}
+	return n
+}
+
+// dispatch: boot services first, everything else delegated to comm/uds.
+fn (mut p Prog) dispatch(req &u8, req_len int, resp &u8) int {
 	sid := unsafe { req[0] }
 	match sid {
 		0x10 {
@@ -144,16 +322,49 @@ pub fn (mut p Prog) init() {
 // 0x29 without asking twice (docs/diagnostics.md §7). Locked, like any session entry, and timed
 // from `now`: a tester that never speaks loses it to S3 like any other, and then the stay-window
 // (REQ-BOOT-014) gives the ECU back to the application.
-pub fn (mut p Prog) open_handed_off(now u64) {
+// `via` is the transport the handoff was asked over, which holds the session; over the network the
+// session waits for the boot's own network (net_up) before S3 times it.
+pub fn (mut p Prog) open_handed_off(now u64, via u8) {
 	p.srv.session = 0x02
+	p.owner = via
+	p.await_net = via == via_net
+	p.remote_spoke = false
 	p.unlocked = false
 	p.challenge_valid = false
-	p.heard(now)
+	p.stamp(now)
 }
 
-// heard stamps tester activity at `now` — every request the owner hands to handle(), and the
-// handed-off session's start. The silence clocks run from it.
+// add_did adds an identification DID the boot answers 0x22 with (REQ-BOOT-009): `n` bytes from
+// `data`; false when the table or the DID cannot hold it (nothing is added)
+pub fn (mut p Prog) add_did(id u16, data &u8, n int) bool {
+	if p.srv.ndid >= uds.max_dids || n < 0 || n > uds.max_did_data {
+		return false
+	}
+	mut d := &p.srv.dids[p.srv.ndid]
+	d.id = id
+	for i in 0 .. n {
+		d.data[i] = unsafe { data[i] }
+	}
+	d.len = u8(n)
+	p.srv.ndid++
+	return true
+}
+
+// heard stamps bus activity at `now` — every bus request the owner hands to handle(), and the
+// bus exchange in flight (comm/diag serve_step). The silence clocks run from it.
 pub fn (mut p Prog) heard(now u64) {
+	p.heard_via(via_bus, now)
+}
+
+// heard_via: activity over `via` counts only when that transport may use the session in force —
+// a request the other transport's session refuses keeps nothing alive (S3, the stay-window)
+fn (mut p Prog) heard_via(via u8, now u64) {
+	if p.srv.session == 0x01 || p.owner == 0 || p.owner == via {
+		p.stamp(now)
+	}
+}
+
+fn (mut p Prog) stamp(now u64) {
 	p.last_rx_us = now
 	p.heard = true
 }
@@ -165,13 +376,17 @@ fn elapsed(now u64, since u64) u64 {
 }
 
 // reset_due / cancel_reset: the answered 0x11 the owner performs once its answer is on the wire,
-// and its cancellation when that answer is lost (comm/diag serve_step: never reset unanswered)
+// and its cancellation when that answer is lost (comm/diag serve_step: never reset unanswered).
+// Not while a network answer is still on its way: no reset overtakes an answer, whoever asked.
 pub fn (p &Prog) reset_due() bool {
-	return p.reset_pending
+	return p.reset_pending && !p.remote.inflight
 }
 
+// A reset the network asked for is not the bus's to cancel: its answer is not the one the bus lost.
 pub fn (mut p Prog) cancel_reset() {
-	p.reset_pending = false
+	if !p.remote.reset {
+		p.reset_pending = false
+	}
 }
 
 // S3server (ISO 14229): a non-default session dies after 5 s of tester silence.
@@ -181,18 +396,144 @@ pub const s3_server_us = u64(5_000_000)
 // session + this much silence -> give the ECU back to the application.
 pub const idle_return_us = u64(10_000_000)
 
+// The longest a session handed off over the network waits for the boot's own network (PHY
+// auto-negotiation, NetX, the vehicle announcements) before S3 times it from the handoff as usual
+// — a network that never comes up must not park the ECU in its bootloader (REQ-BOOT-014). The
+// node's own bound (Prog.net_wait_us) covers its announcement sequence; this is the default.
+pub const net_wait_default_us = u64(10_000_000)
+
 // tick expires the diagnostic session on tester silence (REQ-BOOT-013): back to
 // the default session, security re-locked, a half-done download abandoned (the
 // torn image is refused by the valid-mark-last rule anyway — conservative wins).
 // Call it from the serve loop; handle() stamps the activity clock.
 pub fn (mut p Prog) tick(now u64) {
-	if p.srv.session != 0x01 && p.heard && elapsed(now, p.last_rx_us) > s3_server_us {
-		p.srv.session = 0x01
-		p.unlocked = false
-		p.challenge_valid = false
-		p.downloading = false
-		p.erased = false
+	p.clock = now
+	if p.work != 0 {
+		p.stamp(now) // a routine running is an exchange in flight
 	}
+	if p.remote.inflight {
+		// a network exchange in flight — its answer not yet acknowledged — holds S3 and the
+		// stay-window, as a bus exchange in flight does (comm/diag serve_step)
+		p.heard_via(via_net, now)
+	}
+	wait := if p.net_wait_us != 0 { p.net_wait_us } else { net_wait_default_us }
+	if p.await_net && elapsed(now, p.last_rx_us) > wait {
+		p.await_net = false // the network never came: time the session from the handoff
+	}
+	if p.srv.session != 0x01 && !p.await_net && p.heard && elapsed(now, p.last_rx_us) > s3_server_us {
+		p.end_session()
+	}
+}
+
+// work_due: routine work for `via` waits on its next step: its own preceding response has left
+// (work_left) or was lost and goes again (work_lost) — the one gate, for both transports
+pub fn (p &Prog) work_due(via u8) bool {
+	return p.work != 0 && p.work_via == via && (p.work_ready || p.work_resend)
+}
+
+// work_pending / work_out_here / work: the bus side's routine work, for comm/diag serve_step
+pub fn (p &Prog) work_pending() bool {
+	return p.work_due(via_bus)
+}
+
+pub fn (p &Prog) work_awaiting() bool {
+	return p.work != 0 && p.work_via == via_bus && p.work_out
+}
+
+pub fn (mut p Prog) work(now u64, resp &u8) int {
+	return p.step(now, resp)
+}
+
+// step does the next unit of the routine work in progress and returns the response that follows
+// it: responsePending while more is left, the routine's answer once it is done. Call it only once
+// the previous response has LEFT (work_due; on the bus, after the wire drain): an erase stalls a
+// single-bank chip whole. Each step is tester activity; a network step's response is in flight
+// until acknowledged.
+pub fn (mut p Prog) step(now u64, resp &u8) int {
+	if !p.work_due(p.work_via) {
+		return 0
+	}
+	p.stamp(now)
+	if p.work_resend {
+		// the preceding response was lost: say it again before anything else — or give up
+		p.work_resend = false
+		p.work_tries++
+		if p.work == work_answer {
+			if p.work_tries > work_resend_max {
+				p.work = 0 // the answer lost every time: the routine is over unanswered
+				return 0
+			}
+			p.work_out = true
+			p.work_push = p.work_via == via_net
+			for i in 0 .. p.work_rsp_n {
+				unsafe {
+					resp[i] = p.work_rsp[i]
+				}
+			}
+			return p.work_rsp_n
+		}
+		if p.work_tries > work_resend_max {
+			return p.answer_out(resp, negative(resp, 0x31, nrc_general_programming_failure))
+		}
+		return p.pending_out(resp)
+	}
+	p.work_ready = false
+	if p.work == work_check {
+		ok := p.check_and_mark()
+		return p.answer_out(resp, routine_rsp(resp, routine_check, if ok { u8(0x00) } else { u8(0x01) }))
+	}
+	// erase the unit holding work_addr, up to the next unit boundary (units count from app_base)
+	mut next := p.work_end
+	if p.erase_unit != 0 {
+		b := p.app_base + ((p.work_addr - p.app_base) / p.erase_unit + 1) * p.erase_unit
+		if b < next {
+			next = b
+		}
+	}
+	if !p.flash.erase(p.flash.ctx, p.work_addr, next - p.work_addr) {
+		return p.answer_out(resp, negative(resp, 0x31, nrc_general_programming_failure))
+	}
+	p.work_addr = next
+	if next < p.work_end {
+		return p.pending_out(resp)
+	}
+	p.erased = true
+	return p.answer_out(resp, routine_rsp(resp, routine_erase, 0x00))
+}
+
+// answer_out: the routine's answer (n bytes in resp), on its way and kept until confirmed — the
+// routine holds the session until then, and the answer goes again if it is lost
+fn (mut p Prog) answer_out(resp &u8, n int) int {
+	p.work = work_answer
+	p.work_tries = 0
+	p.work_rsp_n = n
+	for i in 0 .. n {
+		p.work_rsp[i] = unsafe { resp[i] }
+	}
+	p.work_out = true
+	p.work_push = p.work_via == via_net
+	return n
+}
+
+// pending_out: the routine's 0x78, on its way (pushed over the network, through the link on the bus)
+fn (mut p Prog) pending_out(resp &u8) int {
+	p.work_out = true
+	p.work_push = p.work_via == via_net
+	return negative(resp, 0x31, nrc_response_pending)
+}
+
+// end_session: back to the default session — relocked, a challenge and a download abandoned, no
+// transport holding it.
+fn (mut p Prog) end_session() {
+	p.srv.session = 0x01
+	p.unlocked = false
+	p.challenge_valid = false
+	p.downloading = false
+	p.erased = false
+	p.owner = 0
+	p.await_net = false
+	p.remote_spoke = false
+	p.work = 0
 }
 
 // idle_return_due: the serve loop's exit question (REQ-BOOT-014). Only in the
@@ -322,12 +663,13 @@ fn (mut p Prog) routine_control(req &u8, req_len int, resp &u8) int {
 			if !p.region_ok(addr, size) {
 				return negative(resp, 0x31, nrc_request_out_of_range)
 			}
-			if !p.flash.erase(p.flash.ctx, addr, size) {
-				return negative(resp, 0x31, nrc_general_programming_failure)
-			}
-			p.erased = true
+			// answered pending: the erase runs a unit at a time (step)
+			p.erased = false
 			p.downloading = false
-			return routine_rsp(resp, rid, 0x00)
+			p.work = work_erase
+			p.work_addr = addr
+			p.work_end = addr + size
+			return negative(resp, 0x31, nrc_response_pending)
 		}
 		routine_check {
 			// full-image verification, then — only on success — the valid mark
@@ -335,10 +677,9 @@ fn (mut p Prog) routine_control(req &u8, req_len int, resp &u8) int {
 			if p.downloading {
 				return negative(resp, 0x31, nrc_request_sequence_error)
 			}
-			if !p.check_and_mark() {
-				return routine_rsp(resp, rid, 0x01) // routine ran; verdict: failed
-			}
-			return routine_rsp(resp, rid, 0x00)
+			// answered pending: the image is hashed and verified in one step (well inside P2*)
+			p.work = work_check
+			return negative(resp, 0x31, nrc_response_pending)
 		}
 		else {
 			return negative(resp, 0x31, nrc_request_out_of_range)

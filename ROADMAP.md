@@ -156,9 +156,11 @@ the FB never calls a service API.
   changes need DoIP's own unlock, REQ-NET-012, #347); the programming-session handoff's app side
   generated from `[boot]` (0x10 02 answered, then the boot cell and the reset by 0x11's path).
   The bootloader is one platform program built per node from that config (`boot/boot.mk`), and
-  every `system_full` CAN node (domain, sysnode, zone_a) runs behind its own. Left: the bench run
-  (`test/boot_bench.sh`: handoff → 0x29 → flash → new version), and tcu (Ethernet only) waits for
-  the bootloader's DoIP binding
+  every `system_full` CAN node (domain, sysnode, zone_a) runs behind its own. A `[doip]` node's
+  bootloader is its DoIP entity too (ThreadX + NetX on the stay path, the application's own network
+  seam; REQ-BOOT-019), so sysnode is field-updatable over DoIP as well as CAN. Left: the bench runs
+  (`test/boot_bench.sh`: handoff → 0x29 → flash → new version, `sysnode-doip` included), and tcu
+  (Ethernet only) behind a DoIP-only bootloader
 - 🧭 **R5 target COM checks** — rx deadlines + E2E/SecOC on the comm thread, so receive
   status reaches FBs on silicon
 - 🧭 **R6 fault memory on the target** — *R6a landed (#350, 2026-10-02):* `[[fault]]` on a
@@ -174,7 +176,14 @@ the FB never calls a service API.
   `test/faults_zone_a_persist.lua`, run pending). Left: signal-status faults on the target (R5),
   faults in multi-thread / satellite partitions, a cycle signal on the target, the incremental flash
   path with 0x78 (§7)
-- 🧭 **R7 parameters / variant coding** (#288) — `[[param]]` over the nvm P4 DID write path
+- 🧭 **R7 parameters / variant coding** (#288) — *built:* `[[param]]` on a ThreadX target: read-only
+  In fields an FB names in its `reads`, published by the comm thread; one journal record each (block
+  id assigned (its DID, never a hash), the record's header stating its structure exactly and by position (count, type per position, a declared version — a same-type reorder needs a version bump), revalidated against the range at restore — out of range → the
+  default, the status DID says `reverted`); coded with 0x2E on the `[[did]]` that names it (0x13 /
+  0x31 before storage, durable before the answer, 0x72 on a refusal, a repeat writes nothing), read
+  back with 0x22; `apply` = next dispatch or next start (comm/param, tools/loom2v/gen_param.v). zone_a
+  codes `SteerLimit` (bench suite `test/param_zone_a.lua`, run pending). Left: the host bridge, FBs in
+  a satellite partition, 0x78 for a write that waits on flash (§7)
 
 ## Drivers & IO
 

@@ -24,12 +24,15 @@ import comm.uds
 // over both ISO-TP and DoIP (docs/diagnostics.md) hands DoIP a hook to it.
 
 pub const header_len = 8
-pub const max_msg = 256 // DoIP header + the largest UDS payload we serve
 
-// the largest UDS response a request answered through `serve` may produce: one
-// ISO-TP message, so a server shared with a CAN connection answers over DoIP
-// whatever it answers there
+// the largest UDS message either way: one ISO-TP message, so a server shared with a CAN
+// connection takes over DoIP whatever it takes there — a bootloader's TransferData block
+// (boot.max_block_data) included — and answers whatever it answers there
 pub const max_uds = isotp.max_payload
+
+// the largest DoIP message this entity assembles: a diagnostic message carrying max_uds
+// (header, source and target address, the UDS bytes)
+pub const max_msg = header_len + 4 + max_uds
 
 // the most tester addresses and activation types the routing-activation policy holds (policy.v);
 // here, beside the arrays they size: declared in policy.v, the checker read them as 0 when
@@ -158,6 +161,24 @@ fn nack_if_room(resp &u8, at int, code u8, resp_max int) int {
 		return at
 	}
 	return gen_nack(resp, at, code)
+}
+
+// response_message frames a further response to the activated tester — one its server sends after
+// the answer to a request (a routine answered responsePending, then its next response): a
+// diagnostic message from this entity, `n` UDS bytes. Returns its length; out holds header_len + 4
+// + n bytes.
+pub fn (s &Server) response_message(uds_resp &u8, n int, out &u8) int {
+	o := put_header(out, 0, pt_diag, u32(4 + n))
+	unsafe {
+		out[o] = u8(s.entity_addr >> 8)
+		out[o + 1] = u8(s.entity_addr)
+		out[o + 2] = u8(s.tester_addr >> 8)
+		out[o + 3] = u8(s.tester_addr)
+		for i in 0 .. n {
+			out[o + 4 + i] = uds_resp[i]
+		}
+	}
+	return o + 4 + n
 }
 
 // announcement builds the vehicle-announcement payload (UDP broadcast at boot,

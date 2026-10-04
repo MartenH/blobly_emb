@@ -32,7 +32,9 @@ examples/<name>/   a FREESTANDING app (own Makefile, `make all`):
 loom/   the Loom: scheduler (the de-AUTOSAR'd "RTE")
 comm/   comms stack: com, e2e (AUTOSAR E2E Profile 1), secoc (AES-CMAC), isotp (15765-2), uds (14229), nm,
         fault (debounce + fault memory behind 0x19/0x14/0x85; snapshots, extended data, displacement
-        and its persistence in the NvM journal — entry.v, persist.v), diag (the UDS server on its ISO-TP
+        and its persistence in the NvM journal — entry.v, persist.v), param (variant coding: read-only
+        FB inputs coded with 0x2E on a bound DID, one NvM journal record each, docs/diagnostics.md §3.4),
+        diag (the UDS server on its ISO-TP
         connection and the order a pass runs it — the host bridge calls it; the ThreadX comm
         thread from R2; its transport step — intake, busy guard, pump/abort, S3 hold, wire
         drain — is step.v, which the bootloader runs whole as serve_step)
@@ -75,6 +77,15 @@ every V file `-dump-files` reports (vlib's too), every C source and `#flag -I` d
 `v version`, the tool's flags, `$VFLAGS`), `tools.mk` and the helper. The list lives in `tools.mk`;
 `tools/loom2v/no_v_run_makefiles_test.v` changes each kind of input and asks make, pins that no
 Makefile runs `v run`, and that including `tools.mk` leaves every default goal where it was.
+The same goes for what an IMAGE transpiles: every `app.c` (and a bootloader's `boot.c`) depends on
+what V compiled into it and how V was run — `$(call v_unrecorded,$(BUILD)/app.c)` among its
+prerequisites (no record, remade), `$(call v_sign,$(BUILD)/app.c,$(TRANSPILE_FLAGS))` (the V command,
+version, the rule's flags with its defines, `$(VFLAGS)`: a signature rewritten only when it changes,
+as `tool_sig` is for tools), V run with exactly `$(TRANSPILE_FLAGS)` and `$(call v_dump,$@)`, `$(call v_deps,$@)` after it (a failed record removes
+the C), `-include $(BUILD)/app.c.d` (`tools.mk`, `scripts/vdeps.sh`, the writer `build_tool.sh`
+shares) — never a hand list of module directories; `scripts/app_deps_check.sh` (CI cross job) pins
+the rule's shape, that `tools.mk` is included before it, and asks make each way it can go stale
+(a module, the recording rule, a missing record, another define).
 
 Examples use classic CAN (`[bus] fd = false`) so blobly_net (classic) can drive
 them; the driver picks classic vs CAN-FD from that flag. Integration tests live in
@@ -149,9 +160,18 @@ manager program (`boot/target/main.v`, `boards/common/boot_glue.c`) built for th
 at the app slot, `make image SW_VERSION=<n>`, and `make flash` = boot + factory image
 (`threadx_makefiles_test.v` pins that). The system_full CAN nodes all run that way, so
 **`make flash` on domain / sysnode / zone_a writes the boot at 0x08000000 and the app at
-0x08020000** — not one image at 0x08000000 any more. zone_a's NvM journal (its persisted fault memory) is
-flash sectors 6 + 7 (`boards/h723/bootmap.h` NVM_*, outside the app region, which is sectors 1..5):
-`make flash` never erases it, so DTCs survive a reflash — clear them with 0x14.
+0x08020000** — not one image at 0x08000000 any more. A `[boot]` node with **`[doip]`** gets a
+bootloader that is its DoIP entity too (`BOOT_DOIP := 1` in `gen/loom_build.mk`): the decision and
+the jump stay kernel-free, the stay path enters ThreadX and runs the application's own network seam
+(`driver/eth/netx_up.c`, `doip_netx.c`, the loop in **`driver/doipnet`**, shared with the
+application, which also shares `doipnet.serve_mailbox` / `drain_tx`), linked from the node's
+`TX_A`/`NX_A` (`boards/common/boot_net.c`). sysnode's boot is
+~90 KB of its 128 KB sector that way (37 KB bus-only); `boot/target/serve_{d,notd}_boot_doip.v` are
+the two variants of the serve loop. zone_a's NvM journal (its persisted fault memory) is
+flash sectors 6 + 7 (`boards/h723/bootmap.h` NVM_*, outside the app region, which is sectors 1..5) and
+holds its persisted fault memory and its `SteerLimit` parameter: `make flash` never erases it, so DTCs
+and coded parameters survive a reflash — clear DTCs with 0x14, recode a parameter with 0x2E
+(`test/param_zone_a.lua` leaves it at 360).
 
 **CI pins the V compiler** to the release tag in `.v-version` (currently `0.5.2`), installed as the
 **prebuilt** `v_linux.zip` release asset in both jobs. It used to install master HEAD, so an upstream

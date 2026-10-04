@@ -32,6 +32,7 @@ jobs:
   test:
     name: linux • host unit tests + check + trace
     runs-on: ubuntu-latest
+    timeout-minutes: 30 # a run takes 5–7 min; a hung job otherwise holds an account-wide slot for 6 h
     steps:
       - uses: actions/checkout@v4
 
@@ -190,6 +191,7 @@ jobs:
   cross:
     name: cross • bare-metal STM32H7 images (+ the _vinit gate)
     runs-on: ubuntu-latest
+    timeout-minutes: 30 # a run takes 5–7 min; a hung job otherwise holds an account-wide slot for 6 h
     steps:
       - uses: actions/checkout@v4
 
@@ -270,3 +272,9 @@ jobs:
       # (boot/boot.mk takes them from the compiler's dependency output). Asks make, after the builds.
       - name: The bootloaders track every source (scripts/boot_deps_check.sh)
         run: scripts/boot_deps_check.sh
+
+      # Every image's generated C (app.c, a bootloader's boot.c) is remade when a V module it compiles
+      # in changes: its dependencies are V's own -dump-files (tools/tools.mk v_deps), never a hand
+      # list of module directories. Asks make, after the builds.
+      - name: The images track every V source (scripts/app_deps_check.sh)
+        run: scripts/app_deps_check.sh
