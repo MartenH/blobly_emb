@@ -8,6 +8,8 @@
 #   tcu       (H723)    : Telematics/connectivity, SOME/IP-over-eth [ThreadX, boards/h723, eth]
 #   tester    (none)    : the bench tool as a node — a declaration only (nodes/tester/ecu.toml);
 #                         blobly_net restbus-simulates it, nothing is built
+#   chassis   (none)    : an absent edge ECU sending zone_a its protected SafetyCmd — a declaration
+#                         only (nodes/chassis/ecu.toml); blobly_net simulates it on the bench
 #
 # Usage:
 #   make syscheck          # validate system-wide invariants and signal routes
@@ -16,7 +18,8 @@
 #   make all               # gen + syscheck + nodes
 #
 # Every BUILT node — including the gateway — is a real ThreadX image generated from system.toml
-# (the tester is declaration-only: in the model, not in NODES; blobly_net stands in for it).
+# (the tester and the chassis are declaration-only: in the model, not in NODES; blobly_net stands
+# in for them).
 # sysnode's comm thread owns both FDCAN buses (compute=FDCAN1, edge=FDCAN2) and forwards the
 # 4 resolved routes on target (raw copy + id remap). Both buses come out on the H735-DK's own
 # transceivers, so blobly_net can tap both. Driving edge on silicon needs the h735dk board to

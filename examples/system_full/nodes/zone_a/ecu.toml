@@ -93,6 +93,21 @@ thread = "front_thread"
   reads     = ["RawSteer", "VehicleSpeed", "HeadlightCmd", "LedLevel", "UserButton", "SteerLimit"]
   writes    = ["SteeringAngle", "HeadlightLed", "BreathLed"] # trailing comment terminates nested block (vlang/v#27684)
 
+# SafetyMonitor receives the chassis node's protected SafetyCmd (system.toml; on the bench blobly_net
+# simulates the chassis). The comm thread checks every frame of it — the E2E CRC and counter, and E2E's own 300 ms
+# sender-loss timeout (edge.dbc) — and the FB reads the value WITH its receive status and the count of
+# frames the sequence showed missing (docs/diagnostics.md §3.2, R5). It acts on the level only while
+# the status is ok and holds the safe level 0 otherwise, and reports what it saw on SafetyView.
+[[fb]]
+name   = "SafetyMonitor"
+thread = "front_thread"
+
+  [[fb.handler]]
+  name      = "on_50ms"
+  period_ms = 50
+  reads     = ["SafetyCmd"]
+  writes    = ["SafetyView"] # trailing comment terminates nested block (vlang/v#27684)
+
 # --- A parameter (docs/diagnostics.md §3.4, R7): variant coding ------------------------------------
 # The most SteerLimiter ever puts on the wire, coded per vehicle: an In field the limiter reads like
 # any input (it cannot write it), kept in the NvM journal below, coded with 0x2E on DID 0x0110 (the
@@ -124,6 +139,26 @@ debounce = { kind = "counter", fail = 3, pass = 3 }   # accumulating: 150 ms to 
 confirm  = 1
 aging    = 3                           # three passing power cycles after the last failure age it out
 freeze   = [0xF1A0]
+
+# Signal-status faults (docs/diagnostics.md §3.3, R5): no FB tests these — the comm thread is the
+# detector, from SafetyCmd's receive status, on every publication. Debounced there (counter defaults).
+[[fault]]
+name   = "SafetyCmdTimeout"
+dtc    = 0xC16400                      # U0164-00: lost communication with the safety command source
+signal = "SafetyCmd"
+on     = "timeout"
+
+[[fault]]
+name   = "SafetyCmdIntegrity"
+dtc    = 0xC46400                      # U0464-00: invalid data received (an E2E CRC failure)
+signal = "SafetyCmd"
+on     = "integrity"
+
+[[fault]]
+name   = "SafetyCmdLost"
+dtc    = 0xC46401                      # frames missing from the command's E2E sequence
+signal = "SafetyCmd"
+on     = "lost"
 
 # The operation cycle: zone_a is in no NM cluster (the edge bus runs none) and receives no ignition,
 # so the cycle is the power cycle — begun at boot, ended by power-off. The memory is persisted in

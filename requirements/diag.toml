@@ -92,6 +92,8 @@ method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
 
+# On the host bridge (R4c) and, since R5, a ThreadX comm thread — the same hooks, emitted from one
+# set of receive templates (tools/loom2v/gen_rx.v).
 [[req]]
 id = "REQ-DIAG-011"
 title = "Faults from a signal's receive status"

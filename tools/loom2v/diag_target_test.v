@@ -82,8 +82,10 @@ fn test_the_comm_thread_serves_the_connection_in_order() {
 		'wait_ticks := if g_tm.is_dumping() || g_diag.link.busy() {',
 		'g_diag.housekeep(',
 		'for ch.recv(mut rx) {',
-		'if g_nm.awake() && g_diag.on_frame(',
+		'if g_nm.awake() {',
+		'match g_diag.on_frame(',
 		'g_diag.serve()',
+		'st.rxg.sample(g_diag.server.rx_enabled(), true)', // a 0x28 served now gates what follows it
 		'g_nm.hold(t1, g_diag.active())',
 		'nm_up := g_nm.awake()',
 		'g_diag.pump(t1, mut ch)',
@@ -102,10 +104,13 @@ fn test_the_comm_thread_serves_the_connection_in_order() {
 		}
 		at = at + 1 + i
 	}
-	// the comm thread performs an answered reset; nothing gates its frames on 0x28 yet
+	// the comm thread performs an answered reset, and gates its application frames on 0x28: the
+	// lean rx publish on the receive gate, the COM tx producer on the transmit one
 	assert glue.contains('g_diag.server.serves_reset = true')
 	assert glue.contains('g_diag.owner_resets = true')
-	assert !glue.contains('g_diag.server.serves_comm_control = true')
+	assert glue.contains('g_diag.server.serves_comm_control = true')
+	in_order_dt(glue, ['if st.rxg.on {', 'C.ioc_pub('])
+	assert glue.contains('if nm_up && g_diag.server.tx_enabled() && t1 - last_tx_workload >= u64(100000) && ch.tx_ready() {'), glue
 }
 
 // a live DID reads what the node transmits, from the cell the comm thread already reads; an input's
@@ -369,7 +374,6 @@ fn test_a_service_table_the_build_cannot_honour_is_refused() {
 	ok := '"0x10" = {}\n"0x22" = {}\n'
 	sa := ok + '"0x27" = {}\n"0x2E" = {}\n'
 	cases := {
-		'comm_control':   [ok + '"0x28" = {}', 'nothing on the target gates its frames on CommunicationControl']
 		'dtcs':           [ok + '"0x19" = {}', 'no fault memory']
 		'clear':          [ok + '"0x14" = {}', 'no fault memory']
 		'dtc_setting':    [ok + '"0x85" = {}', 'no fault memory']
@@ -726,6 +730,18 @@ fn test_a_boot_on_an_fd_bus_opens_it_in_fd() {
 	assert '#define BOOT_CAN_IDX 1 /* the [isotp] bus "can1": the comm thread\'s FDCAN */' in h
 	assert '#define BOOT_CAN_FD 1 /* its frame format, as the application opens it */' in h
 	assert fdcan_index('can10') == '' && fdcan_index('can3') == '' && fdcan_index('edge') == ''
+}
+
+// in_order_dt asserts every step appears in `glue`, each after the one before it
+fn in_order_dt(glue string, steps []string) {
+	mut at := -1
+	for step in steps {
+		i := glue[at + 1..].index(step) or {
+			assert false, 'step "${step}" missing or out of order (after offset ${at})'
+			return
+		}
+		at = at + 1 + i
+	}
 }
 
 // the bound a handed-off DoIP session waits for the boot's listener covers the longest

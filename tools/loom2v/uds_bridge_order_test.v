@@ -24,15 +24,15 @@ fn test_the_generated_diagnostic_pass_runs_in_order() {
 	// comm/diag's and tested there; this pins where the bridge calls them
 	steps := [
 		'st.conn_diag.housekeep(now)',
-		'diag_rx_ok :=',
+		'if st.rxg.sample(st.conn_diag.server.rx_enabled(), true)',
 		'match st.conn_diag.on_frame(now, &rx) {',
 		'.request { break }',
 		'.served {',
-		'diag_rx_ok = st.conn_diag.server.rx_enabled()',
+		'if st.rxg.sample(st.conn_diag.server.rx_enabled(), true)',
 		'st.conn_diag.serve()',
 		'st.conn_diag.pump(now, mut st.chan)', // comm/diag's step: a refused frame aborts the answer
-		'diag_rx_ok = st.conn_diag.server.rx_enabled()',
-		'if diag_rx_ok && st.diag_rx_was_off',
+		'if st.rxg.sample(st.conn_diag.server.rx_enabled(), true)',
+		'if st.rxg.settle()',
 		'diag_tx_ok :=',
 		'if tx_lamp_frame_any && diag_tx_ok',
 	]

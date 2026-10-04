@@ -83,6 +83,30 @@ bus      = "edge"
 frame    = "SteeringFrame"
 cycle_ms = 50
 
+# SafetyCmd: a protected command the chassis node sends zone_a on edge — the received-signal checks
+# on a ThreadX target (docs/diagnostics.md R5). SafetyCmdFrame carries AUTOSAR E2E Profile 1 (Data
+# ID 0x55, CRC byte 2, counter byte 3) and its receiver's 300 ms sender-loss timeout, all in edge.dbc
+# (blobly_net's docs/dbc_attributes.md). zone_a's comm thread checks every frame of it, and its FB
+# sees the value with its RxStatus and lost count (sysgen adds both to a receiver of an E2E frame);
+# zone_a's signal-status faults turn a lost sender, a corrupt frame and a gap in the sequence into
+# DTCs with no FB code. SafetyView is what zone_a's FB SAW — status, lost count, the level it acts
+# on — sent back so a bench reads it off the wire (test/rx_faults_zone_a.lua).
+[[signal]]
+name     = "SafetyCmd"
+fields   = { level = "u16" }
+producer = "chassis"
+bus      = "edge"
+frame    = "SafetyCmdFrame"
+cycle_ms = 50
+
+[[signal]]
+name     = "SafetyView"
+fields   = { code = "u32" }
+producer = "zone_a"
+bus      = "edge"
+frame    = "SafetyViewFrame"
+cycle_ms = 100
+
 # --- Gateway routes on sysnode (H735-DK): compute <-> edge ---
 [[route]]
 gateway = "sysnode"
@@ -272,6 +296,15 @@ buses = ["edge"]
 nm    = 0x13
 diag  = { req = 0x7C0, rsp = 0x7C8 }
 trace = 3
+
+# chassis: an edge-bus ECU that is not on the bench — a declaration only (nodes/chassis/ecu.toml),
+# nothing is built; blobly_net restbus-simulates it (test/rx_faults.blobnet), as it does the tester
+# on compute, and breaks its frames on purpose to exercise zone_a's receive checks. No `nm`: edge
+# runs no NM cluster.
+[[node]]
+name  = "chassis"
+ecu   = "nodes/chassis/ecu.toml"
+buses = ["edge"]
 
 # The telematics node: SOME/IP-over-Ethernet (#244, #245). No `nm` (not an NM cluster member)
 # and no `trace` (its observability is the eth rung's). Its endpoint is its identity on the

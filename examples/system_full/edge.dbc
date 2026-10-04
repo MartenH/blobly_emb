@@ -4,7 +4,7 @@ NS_ :
 
 BS_:
 
-BU_: sysnode zone_a
+BU_: sysnode zone_a chassis
 
 BO_ 304 VehSpeedFrame_E: 8 sysnode
  SG_ VehicleSpeed : 0|32@1+ (1,0) [0|4294967295] "km/h" zone_a
@@ -18,9 +18,29 @@ BO_ 307 LedLevelFrame_E: 8 sysnode
 BO_ 306 SteeringFrame: 8 zone_a
  SG_ SteeringAngle : 0|32@1+ (1,0) [0|360] "deg" sysnode
 
+BO_ 296 SafetyCmdFrame: 8 chassis
+ SG_ SafetyCmd : 0|16@1+ (1,0) [0|1000] "" zone_a
+ SG_ SafetyCmdCrc : 16|8@1+ (1,0) [0|255] "" zone_a
+ SG_ SafetyCmdCounter : 24|4@1+ (1,0) [0|15] "" zone_a
+
+BO_ 308 SafetyViewFrame: 8 zone_a
+ SG_ SafetyView : 0|32@1+ (1,0) [0|4294967295] "" chassis
+
 BA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;
+BA_DEF_ BO_ "E2ECounterSignal" STRING;
+BA_DEF_ BO_ "E2ECrcSignal" STRING;
+BA_DEF_ BO_ "E2EProfile" STRING;
+BA_DEF_ BO_ "E2EDataId" INT 0 65535;
+BA_DEF_ BO_ "E2ETimeout" INT 0 65535;
 BA_DEF_DEF_ "GenMsgCycleTime" 0;
 BA_ "GenMsgCycleTime" BO_ 304 100;
 BA_ "GenMsgCycleTime" BO_ 305 100;
 BA_ "GenMsgCycleTime" BO_ 307 100;
 BA_ "GenMsgCycleTime" BO_ 306 50;
+BA_ "GenMsgCycleTime" BO_ 296 50;
+BA_ "GenMsgCycleTime" BO_ 308 100;
+BA_ "E2ECounterSignal" BO_ 296 "SafetyCmdCounter";
+BA_ "E2ECrcSignal" BO_ 296 "SafetyCmdCrc";
+BA_ "E2EProfile" BO_ 296 "P01";
+BA_ "E2EDataId" BO_ 296 85;
+BA_ "E2ETimeout" BO_ 296 300;

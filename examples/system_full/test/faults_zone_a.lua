@@ -30,6 +30,16 @@ local function implausible(ms)
   end
 end
 
+-- the entry for DTC `name` in a 0x19 list, or nil. zone_a declares other faults too — the
+-- signal-status faults on SafetyCmd (R5), which this bench project does not simulate the sender
+-- of, so its timeout DTC confirms here — so a check selects its own DTC and never counts the list.
+local function find(list, name)
+  for _, e in ipairs(list) do
+    if e.name == name then return e end
+  end
+  return nil
+end
+
 -- a clean slate: cleared, then long enough for the producer to apply the clear and pass its test
 local function clean(d)
   d:clear_dtcs()
@@ -38,13 +48,11 @@ local function clean(d)
     testFailedSinceLastClear = false, testNotCompletedSinceLastClear = false })
 end
 
-test("zone_a: the fault memory serves its one DTC, passing with plausible speeds", function()
+test("zone_a: the fault memory serves its DTC, passing with plausible speeds", function()
   local d = diag()
   clean(d)
-  local all = d:supported_dtcs()
-  check.equal(#all, 1, "zone_a declares one fault")
-  check.equal(all[1].name, DTC)
-  check.equal(d:dtc_count(0x09), 0, "a DTC failed or confirmed while the speed was plausible")
+  check.truthy(find(d:supported_dtcs(), DTC) ~= nil, DTC .. " is not among zone_a's DTCs")
+  check.truthy(find(d:dtcs(0x09), DTC) == nil, DTC .. " failed or confirmed while the speed was plausible")
 end)
 
 test("zone_a: an implausible speed confirms the DTC; plausible speeds clear testFailed only", function()
@@ -54,10 +62,7 @@ test("zone_a: an implausible speed confirms the DTC; plausible speeds clear test
   local r = check.dtc(d, DTC, { confirmedDTC = true, pendingDTC = true,
     testFailedThisOperationCycle = true, testFailedSinceLastClear = true })
   log(string.format("%s status 0x%02X after the injection", DTC, r.status))
-  check.equal(d:dtc_count(0x08), 1)
-  local listed = d:dtcs(0x08)
-  check.equal(#listed, 1)
-  check.equal(listed[1].name, DTC)
+  check.truthy(find(d:dtcs(0x08), DTC) ~= nil, DTC .. " is not listed as confirmed")
   -- the gateway's own speed passes the test again: the history stays (one power cycle)
   sleep_ms(600)
   check.dtc(d, DTC, { testFailed = false, confirmedDTC = true, pendingDTC = true,

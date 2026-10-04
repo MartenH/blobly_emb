@@ -41,7 +41,7 @@ struct Bridge_can0_state {
 mut:
 	chan can.Channel
 	tx_lamp_frame_st com.TxState
-	rx_powertrain_st com.RxState
+	rxm_powertrain com.RxMonitor // its deadlines, E2E receive state and silences (comm/com)
 }
 
 fn io_can0_10ms(ctx voidptr) {
@@ -50,13 +50,20 @@ fn io_can0_10ms(ctx voidptr) {
 	mut rx := can.Frame{}
 	for st.chan.recv(mut rx) {
 		if rx.id == powertrain_id && rx.len == powertrain_dlc && rx.ext == false {
-			mut vehicle_speed := sig.VehicleSpeed{ kph: u16(powertrain_vehicle_speed_phys(rx.data)), status: .ok }
-			osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
-			st.rx_powertrain_st.on_receive(now)
+			p_powertrain := st.rxm_powertrain.received(now, true)
+			if p_powertrain != .none {
+				mut vehicle_speed := sig.VehicleSpeed{}
+				if p_powertrain == .ok {
+					vehicle_speed.kph = u16(powertrain_vehicle_speed_phys(rx.data))
+				}
+				vehicle_speed.status = rx_status_of(p_powertrain)
+				osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
+			}
 		}
 	}
-	if st.rx_powertrain_st.expired(now) {
-		mut vehicle_speed := sig.VehicleSpeed{ status: .timeout }
+	if st.rxm_powertrain.expire(now) {
+		mut vehicle_speed := sig.VehicleSpeed{}
+		vehicle_speed.status = .timeout
 		osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
 	}
 	mut tx_lamp_frame := can.Frame{
@@ -86,10 +93,8 @@ pub fn partition_can0(ch can.Channel) {
 		cycle_us: 100000
 		min_delay_us: 20000
 	}
-	st.rx_powertrain_st = com.RxState{
-		timeout_us: 200000
-	}
-	st.rx_powertrain_st.arm(osal.now_us())
+	st.rxm_powertrain.com.timeout_us = 200000
+	st.rxm_powertrain.start(osal.now_us())
 	mut sched := loom.Scheduler{}
 	sched.every(10_000, io_can0_10ms, &st)
 	for {
@@ -106,4 +111,14 @@ pub fn run(can0 can.Channel) {
 	t_app := spawn partition_app(1, unsafe { nil })
 	t_can0.wait()
 	t_app.wait()
+}
+
+// rx_status_of: what com.RxMonitor answered, as the signal status it publishes
+fn rx_status_of(p com.RxPublish) sig.RxStatus {
+	return match p {
+		.none { .never_received }
+		.ok { .ok }
+		.timeout { .timeout }
+		.integrity { .integrity }
+	}
 }

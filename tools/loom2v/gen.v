@@ -468,6 +468,22 @@ fn (r Route) xr_ch() string {
 // fdcan_index_of strips the single FDCAN index digit ("can0" -> "0") the driver's
 // blob_can_open reads (name[0]-'0'). loom2v already validated the telem bus this way; a
 // gateway's route buses are validated the same when the extra channels are opened.
+// frame_len_refusal: why a frame of `dlc` bytes cannot ride a CAN bus that is `fd` (or not) — none
+// when it can. The ONE statement of the rule every frame goes through before any path splits (a
+// signal's frame, TX or RX, checked or lean, and both ends of a route): a classic bus carries at
+// most 8 bytes, and on an FD bus only the lengths a DLC expresses arrive — the FDCAN receiver
+// reports the canonical wire length (9 bytes arrive as 12) and every matcher compares rx.len to
+// the literal DLC, so either mismatch is a frame that is never sent or never matched.
+fn frame_len_refusal(dlc int, fd bool) ?string {
+	if !fd && dlc > 8 {
+		return '${dlc} bytes on a classic bus (fd = false carries at most 8)'
+	}
+	if fd && !fd_len_ok(dlc) {
+		return '${dlc} bytes — not a representable CAN-FD length (0..8, 12, 16, 20, 24, 32, 48, 64)'
+	}
+	return none
+}
+
 // fd_len_ok: is `n` a length CAN-FD can carry (the DLC set the driver's len_to_dlc maps 1:1)?
 fn fd_len_ok(n int) bool {
 	return n <= 8 || n == 12 || n == 16 || n == 20 || n == 24 || n == 32 || n == 48 || n == 64
@@ -1366,6 +1382,8 @@ mut:
 	fault_snap_ids_b []u16 // each fault's second snapshot block (persist.v A / B)
 	fault_grace_us  u64 // the cycle-end barrier: twice the longest period of a fault-testing handler
 	bulk      []BulkPoolCfg
+	fb_reads    map[string]int      // signal -> how many FB handlers read it
+	fb_reads_by map[string][]string // fb -> the signals its handlers read
 }
 
 fn build_model(doc toml.Doc, dbc string) Model {
@@ -1578,6 +1596,8 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		xcore_xw_total: xcore_xw_total
 		nvm:          parse_nvm(doc)
 		bulk:         parse_bulk(doc)
+		fb_reads:     fb_read_counts(doc)
+		fb_reads_by:  fb_reads_of(doc)
 	}
 	validate_signal_routes_model(m, doc)
 	validate_uds(m)
@@ -1609,6 +1629,15 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 		}
 	}
 	for r in m.routes {
+		// both ends of every route — a signal route's two frames, or the one frame a raw route
+		// forwards unchanged — fit their buses (frame_len_refusal, the one rule)
+		to_dlc := if r.signal == '' { r.from_dlc } else { r.to_dlc }
+		if why := frame_len_refusal(r.from_dlc, bus_fd[r.from_bus] or { false }) {
+			panic('route: source frame "${r.from_frame}" on bus "${r.from_bus}" is ${why}')
+		}
+		if why := frame_len_refusal(to_dlc, bus_fd[r.to_bus] or { false }) {
+			panic('route: frame ${if r.signal == '' { r.from_frame } else { r.to_frame }} forwarded onto bus "${r.to_bus}" is ${why}')
+		}
 		if r.signal == '' {
 			continue
 		}
@@ -1684,24 +1713,6 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 		// destination channel. Cross-core: generated as the sanctioned crossing instead — the
 		// value rides an IOC channel to the DESTINATION bridge, which composes and transmits
 		// on its own channel (REQ-TOPO-010; frame routes were already rejected at parse).
-		// a classic (non-FD) bus caps the DLC at 8 on BOTH ends: the source can never
-		// receive a >8 frame it requires by len, and the socket rejects a >8 send.
-		if !(bus_fd[r.from_bus] or { false }) && r.from_dlc > 8 {
-			panic('route: source frame "${r.from_frame}" is ${r.from_dlc} bytes but bus "${r.from_bus}" is classic (fd = false, DLC <= 8)')
-		}
-		if !(bus_fd[r.to_bus] or { false }) && r.to_dlc > 8 {
-			panic('route: destination frame "${r.to_frame}" is ${r.to_dlc} bytes but bus "${r.to_bus}" is classic (fd = false, DLC <= 8)')
-		}
-		// A length the FD DLC set cannot represent (9..11, 13..15, 17..19, ... — the CAN-FD
-		// lengths are 0..8, 12, 16, 20, 24, 32, 48, 64) is rejected by blob_can_send at runtime;
-		// the forwarder would drop the frame yet still count it, a silent loss (codex emb#267). A
-		// classic bus (<=8) is already covered above; only an FD-length frame needs the check.
-		if (bus_fd[r.from_bus] or { false }) && !fd_len_ok(r.from_dlc) {
-			panic('route: source frame "${r.from_frame}" is ${r.from_dlc} bytes — not a representable CAN-FD length (0..8, 12, 16, 20, 24, 32, 48, 64)')
-		}
-		if (bus_fd[r.to_bus] or { false }) && !fd_len_ok(r.to_dlc) {
-			panic('route: destination frame "${r.to_frame}" is ${r.to_dlc} bytes — not a representable CAN-FD length (0..8, 12, 16, 20, 24, 32, 48, 64)')
-		}
 		// the destination frame must not ALSO be a COM tx frame ON THE SAME BUS — a
 		// [[signal]] to a bus makes its DBC message an implicit cyclic transmitter even
 		// with no [[frame]].tx (so it is not in m.frames.tx_mode). Two writers of one
@@ -1841,15 +1852,14 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 			frame_src[key] = r.from_bus
 		}
 	}
-	// Every EXTERNAL signal (COM tx/rx, not just routes) on an FD bus must carry a representable
-	// CAN-FD length: the FDCAN receiver reports the canonical wire length (a 9-byte DBC arrives as
-	// 12), but the generated matcher compares rx.len to the literal dbc_dlc, so a non-canonical DLC
-	// on an FD bus is matched by nothing and every such frame is silently dropped (codex emb#267).
+	// every EXTERNAL signal's frame on a CAN bus — COM tx and rx, host and target, before any of
+	// those paths splits — fits its bus (frame_len_refusal, the one rule)
 	for _, si in m.sig_of {
-		if si.external && (bus_fd[si.bus] or { false }) && !fd_len_ok(si.dbc_dlc) {
-			panic('signal "${si.dbc_msg}" on FD bus "${si.bus}" has DLC ${si.dbc_dlc} — not a ' +
-				'representable CAN-FD length (0..8, 12, 16, 20, 24, 32, 48, 64); the rx matcher would ' +
-				'never match the canonical wire length')
+		if !si.external || (m.bus_kind[si.bus] or { 'can' }) != 'can' {
+			continue
+		}
+		if why := frame_len_refusal(si.dbc_dlc, bus_fd[si.bus] or { false }) {
+			panic('signal "${si.name}": frame "${si.dbc_msg}" on bus "${si.bus}" is ${why}')
 		}
 	}
 }
@@ -2387,8 +2397,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << 'fn C.blob_eth_recv(int, &u8, &u16, &u8, int) int'
 			}
 			if iocb_on(m) {
-				// the byte IOC pool (boards/common/iocb.c): struct-bearing eth signals and the
-				// fault cells cross threads through size-proportional arenas (boards/common/ioc.h)
+				// the byte IOC pool (boards/common/iocb.c): struct-bearing eth signals, checked
+				// received signals and the fault cells cross threads through size-proportional
+				// arenas (boards/common/ioc.h)
 				glue << 'fn C.iocb_cfg(int, u16)'
 				glue << 'fn C.iocb_pub(int, voidptr)'
 				glue << 'fn C.iocb_get(int, voidptr)'
@@ -2410,6 +2421,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			// kernel reads/writes word fields through this pointer as a TX_THREAD*, so a byte-
 			// aligned [256]u8 could fault. The stack stays a byte buffer (ThreadX aligns the SP
 			// internally in tx_thread_stack_build).
+			glue << rx_target_struct(m)
 			glue << '__global ('
 			for thr in app_threads {
 				own := if multi { thr } else { part }
@@ -2426,6 +2438,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << shell_module_globals(m)
 			glue << diag_target_globals(m)
 			glue << fault_target_globals(m)
+			glue << rx_target_global(m)
 			glue << doip_target_globals(m)
 			glue << xcore_trace_globals(m)
 			glue << nvm_globals(m)
@@ -2751,10 +2764,14 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// message, and the lean cut counts received frames, so a frame must increment once.
 				mut rx_sigs := []SigInfo{}
 				mut rx_ids_seen := map[int]bool{}
+				rx_checked := rx_checked_msgs(m)
 				for sn in m.sig_names {
 					s := m.sig_of[sn] or { continue }
 					if m.eth != '' && s.bus == m.eth {
 						continue // eth signals ride the eth thread, not the CAN drain
+					}
+					if s.dbc_msg in rx_checked {
+						continue // checked: rx_target_arms below
 					}
 					if s.rx && !rx_ids_seen[s.dbc_id] {
 						rx_ids_seen[s.dbc_id] = true
@@ -2849,6 +2866,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << shell_module_init(m)
 				glue << diag_target_init(m)
 				glue << fault_target_init(m)
+				glue << rx_target_init(m)
 				glue << doip_target_init(m)
 				glue << param_bind_lines(m)
 				glue << nm_shell_register(m)
@@ -2879,50 +2897,97 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				} else {
 					glue << '\t\tC.comm_rx_wait(10) // block up to 10 ticks; the FDCAN Rx ISR wakes us on a new frame'
 				}
-				glue << diag_target_housekeep(m)
-				glue << fault_target_pass(m)
-				glue << doip_target_serve(m)
-				glue << '\t\t// CONSUMER: drain the Rx FIFO (non-blocking); account each external rx frame'
-				glue << '\t\tfor ch.recv(mut rx) {'
-				for si in rx_sigs {
-					// Gate on the DBC DLC too: recv reuses the frame and copies only the bytes that
-					// arrived, so a short same-id frame would leave stale high bytes in the decode.
-					glue << '\t\t\tif rx.id == u32(0x${si.dbc_id.hex()}) && rx.len == ${si.dbc_dlc} && rx.ext == ${si.dbc_ext} { // ${si.dbc_msg}'
-					glue << '\t\t\t\tg_rx_count++'
-					glue << '\t\t\t\tg_rx_last = u32(rx.data[0]) | (u32(rx.data[1]) << 8) | (u32(rx.data[2]) << 16) | (u32(rx.data[3]) << 24)'
-					if idx := msg_ioc_idx[si.dbc_id] {
-						// This message carries an FB-read signal (keyed by DBC id, so it fires even when
-						// the de-duped representative is a different, un-read signal): publish the decoded
-						// value (byte-0 scalar) into its IOC cell so the app thread picks it up wait-free.
-						glue << '\t\t\t\tC.ioc_pub(${idx}, g_rx_last, u32(0))'
+				// the pass, in the ONE order comm_pass_order states (gen_rx_target.v)
+				for step in comm_pass_order {
+					// a step this node has nothing for leaves no marker
+					at := glue.len
+					glue << '\t\t// pass: ${step}'
+					match step {
+						.housekeep {
+							glue << diag_target_housekeep(m)
+						}
+						.open {
+							glue << rx_target_top(m)
+						}
+						.reports {
+							glue << fault_target_pass(m)
+						}
+						.remote {
+							glue << doip_target_serve(m)
+							if m.doip.on {
+								glue << rx_target_resample(m, '\t\t')
+							}
+						}
+						.drain {
+							glue << comm_nm_seen(m)
+						glue << '\t\t// CONSUMER: drain the Rx FIFO (non-blocking); account each external rx frame'
+						glue << '\t\tfor ch.recv(mut rx) {'
+						for si in rx_sigs {
+							// Gate on the DBC DLC too: recv reuses the frame and copies only the bytes that
+							// arrived, so a short same-id frame would leave stale high bytes in the decode.
+							glue << '\t\t\tif rx.id == u32(0x${si.dbc_id.hex()}) && rx.len == ${si.dbc_dlc} && rx.ext == ${si.dbc_ext} { // ${si.dbc_msg}'
+							glue << '\t\t\t\tg_rx_count++'
+							glue << '\t\t\t\tg_rx_last = u32(rx.data[0]) | (u32(rx.data[1]) << 8) | (u32(rx.data[2]) << 16) | (u32(rx.data[3]) << 24)'
+							if idx := msg_ioc_idx[si.dbc_id] {
+								// This message carries an FB-read signal (keyed by DBC id, so it fires even when
+								// the de-duped representative is a different, un-read signal): publish the decoded
+								// value (byte-0 scalar) into its IOC cell so the app thread picks it up wait-free
+								// — while 0x28 has reception on.
+								if m.isotp_conns.len > 0 {
+									glue << '\t\t\t\tif st.rxg.on {'
+									glue << '\t\t\t\t\tC.ioc_pub(${idx}, g_rx_last, u32(0))'
+									glue << '\t\t\t\t}'
+								} else {
+									glue << '\t\t\t\tC.ioc_pub(${idx}, g_rx_last, u32(0))'
+								}
+							}
+							glue << '\t\t\t}'
+						}
+						glue << rx_target_arms(m)
+						glue << trace_rx_arms(m, part)
+					glue << shell_rx_arms(m)
+					glue << diag_target_rx_arm(m)
+					glue << nm_rx_arms(m)
+					// an NM frame that woke the network: the next frame sees the new state
+					glue << comm_nm_transition(m)
+					glue << xcore_trace_rx_arm(m)
+						// GATEWAY: forward routes whose SOURCE is the telem bus (`ch`) — raw copy +
+						// id remap onto the destination channel (tx_ready-gated).
+						glue << gateway_forward_arms(m, m.telem.bus)
+						glue << '\t\t}'
+						// GATEWAY: drain each OTHER route bus and forward its routes. Same wake
+						// semaphore, so one comm_rx_wait covers every bus; recv is non-blocking.
+						for b in gw_extra {
+							glue << '\t\tfor ch_${snake(b)}.recv(mut rx) { // route bus ${b}'
+							glue << gateway_forward_arms(m, b)
+							glue << '\t\t}'
+						}
+						}
+						.tick {
+							glue << '\t\tt1 := C.board_now_us()'
+							// NM drains FIRST: produce() ticks the state machine, so the gate
+							// below reflects THIS pass's state — otherwise the producers get one
+							// free frame past the sleep boundary (codex on emb#135).
+							glue << diag_target_nm_hold(m)
+							glue << nm_produce_drain(m)
+						}
+						.cycle {
+							glue << fault_target_cycle(m, 't1', '\t\t')
+						}
+						.settle {
+							glue << rx_target_settle(m)
+						}
+						.persist {
+							// after the pass's last consume, so a DTC persisted now has its snapshot
+							glue << fault_capture_lines(m, 'g_fmem', 'g_diag', '\t\t')
+							glue << fault_target_persist(m, ioc_idx)
+							glue << param_sleep_lines(m, ioc_idx)
+						}
 					}
-					glue << '\t\t\t}'
+					if glue.len == at + 1 {
+						glue.delete(at)
+					}
 				}
-				glue << trace_rx_arms(m, part)
-			glue << shell_rx_arms(m)
-			glue << diag_target_rx_arm(m)
-			glue << nm_rx_arms(m)
-			glue << xcore_trace_rx_arm(m)
-				// GATEWAY: forward routes whose SOURCE is the telem bus (`ch`) — raw copy +
-				// id remap onto the destination channel (tx_ready-gated).
-				glue << gateway_forward_arms(m, m.telem.bus)
-				glue << '\t\t}'
-				// GATEWAY: drain each OTHER route bus and forward its routes. Same wake
-				// semaphore, so one comm_rx_wait covers every bus; recv is non-blocking.
-				for b in gw_extra {
-					glue << '\t\tfor ch_${snake(b)}.recv(mut rx) { // route bus ${b}'
-					glue << gateway_forward_arms(m, b)
-					glue << '\t\t}'
-				}
-				glue << '\t\tt1 := C.board_now_us()'
-				// NM drains FIRST: produce() ticks the state machine, so the gate
-				// below reflects THIS pass's state — otherwise the producers get one
-				// free frame past the sleep boundary (codex on emb#135).
-				glue << diag_target_nm_hold(m)
-				glue << nm_produce_drain(m)
-				glue << fault_target_cycle(m)
-				glue << fault_target_persist(m, ioc_idx)
-				glue << param_sleep_lines(m, ioc_idx)
 				if m.nm.on {
 					// REQ-COM-007: every producer below gates on this — the bus is
 					// SILENT in sleep; NM's own drain is exempt (its state machine
@@ -2956,7 +3021,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\t// PRODUCER: external tx signal "${si.name}" — read the FB-published IOC'
 					glue << '\t\t// cell, encode the value (LE at byte 0), and send it cyclically (tx_ready-gated).'
 					nm_gate := if m.nm.on { 'nm_up && ' } else { '' }
-					glue << '\t\tif ${nm_gate}t1 - last_tx_${snake(si.name)} >= u64(${cyc}) && ch.tx_ready() {'
+					glue << '\t\tif ${nm_gate}${diag_tx_gate(m)}t1 - last_tx_${snake(si.name)} >= u64(${cyc}) && ch.tx_ready() {'
 					glue << '\t\t\tlast_tx_${snake(si.name)} = t1'
 					glue << '\t\t\tmut tv_a := u32(0)'
 					glue << '\t\t\tmut tv_b := u32(0)'
@@ -3129,6 +3194,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\tC.iocb_cfg(${eth_iocb_idx(m)[bn]}, u16(sizeof(cfg_${snake(bn)})))'
 				}
 			}
+			glue << rx_target_boot(m)
 			glue << fault_target_boot(m)
 			glue << '\tC._tx_initialize_kernel_enter()'
 			glue << '}'
@@ -3475,9 +3541,10 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 							glue << '\tC.ioc_get(${idx}, &${snake(rn)}_a, &${snake(rn)}_b)'
 							glue << '\t${asn}'
 						}
-					} else if bidx := eth_iocb_idx(m)[rn] {
-						// eth rx signal on the ThreadX target: the eth thread published
-						// the unpacked struct into its byte IOC channel (docs/someip.md)
+					} else if bidx := rx_iocb_idx(m)[rn] {
+						// a received signal crossing whole on the ThreadX target: the eth thread's
+						// unpacked struct (docs/someip.md), or a checked CAN frame's decoded signal
+						// with its status (gen_rx_target.v)
 						glue << '\tC.iocb_get(${bidx}, &inp.${snake(rn)})'
 					} else if rn in m.xcore_names && image_part == '' && m.target.threadx {
 						// OWNER FB reads a CROSS-CORE signal (satellite -> owner) on the TARGET: read it
@@ -3746,7 +3813,8 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 			has_eth_tx = true
 		}
 	}
-	if (m.has_can_ext && !comm_thread_on) || has_eth_tx || m.routes.any(it.signal != '') {
+	if (m.has_can_ext && !comm_thread_on) || has_eth_tx || m.routes.any(it.signal != '')
+		|| (comm_thread_on && rx_target_on(m)) {
 		glue << 'import comm.com' // per-PDU TX modes + RX deadline; eth codec PDU bound (max_pdu); signal-route producer TxState
 	}
 	// the eth comm thread's codec: pure V, both sides of the silicon line; the
@@ -4190,17 +4258,16 @@ fn main() {
 				'not generated yet (raw-identical route forwarding is the supported cut)')
 		}
 		validate_diag_threadx(m)
+		validate_rx_target(m)
+		rx_checked := rx_checked_msgs(m)
 		// Which signals FB handlers read vs write. An rx signal READ by an FB flows through the
 		// target IOC pool (6b-2b); an rx signal WRITTEN by an FB is a config error (an input isn't
 		// written). Everything else external is still deferred (rejected below).
-		mut read_count := map[string]int{} // how many FB handlers read each signal
+		read_count := m.fb_reads.clone() // how many FB handlers read each signal (fb_read_counts)
 		mut written_count := map[string]int{} // how many FB handlers write each signal
 		for fb in ecumodel.toml_arr(doc, 'fb') {
 			for h in (fb.as_map()['handler'] or { toml.Any([]toml.Any{}) }).array() {
 				hm := h.as_map()
-				for r in (hm['reads'] or { toml.Any([]toml.Any{}) }).array() {
-					read_count[r.string()]++
-				}
 				for w in (hm['writes'] or { toml.Any([]toml.Any{}) }).array() {
 					written_count[w.string()]++
 				}
@@ -4269,19 +4336,8 @@ fn main() {
 						'"${tx_m}" is not generated — the comm producer sends purely cyclically (no ' +
 						'event/mixed/triggered or min_delay_ms); use mode = "cyclic"')
 				}
-				// >8 bytes needs CAN-FD. On a classic bus the backend rejects it; on an FD bus a
-				// canonical DLC (12..64) is fine (validate_signal_routes_model already rejected a
-				// non-canonical FD length). si.bus == m.telem.bus here (checked above). #267.
-				tx_sig_bus_fd := if bc := doc.value_opt('bus') {
-					(bc.as_map()[si.bus] or { toml.Any(map[string]toml.Any{}) }).as_map()['fd'] or { toml.Any(false) }
-				} else {
-					toml.Any(false)
-				}.bool()
-				if !tx_sig_bus_fd && si.dbc_dlc > 8 {
-					panic('loom2v: [target] kind="threadx" comm thread: TX message "${si.dbc_msg}" DLC ' +
-						'${si.dbc_dlc} > 8 (CAN-FD sized) on classic bus "${si.bus}"; use a <= 8-byte ' +
-						'frame or set the bus fd = true')
-				}
+				// the frame fits its bus: frame_len_refusal, asked for every frame in
+				// validate_signal_routes_model before this path splits
 				if si.remote {
 					// remote TX (satellite -> bus): the satellite image publishes into the signal's
 					// xioc slot; the comm producer polls it (xcore_produce_drain) — no owner IOC cell.
@@ -4333,6 +4389,11 @@ fn main() {
 				panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" DBC message is ' +
 					'extended (29-bit${if si.dbc_ext { ' — the EFF flag is set' } else { '' }}), but the ' +
 					'classic FDCAN backend delivers only 11-bit standard frames — use a standard id')
+			}
+			// a frame the COM receive rule checks crosses to its FBs whole, through the byte IOC
+			// (gen_rx_target.v) — none of the lean copy's limits below apply to it
+			if si.dbc_msg in rx_checked {
+				continue
 			}
 			if (m.frames.rx_timeout_us[si.dbc_msg] or { 0 }) > 0 || (m.frames.e2e_on[si.dbc_msg] or { false })
 				|| (m.frames.secoc_on[si.dbc_msg] or { false }) {
@@ -4584,6 +4645,17 @@ fn main() {
 	if !glue.any(it.contains('app.')) {
 		glue = glue.filter(it.trim_space() != 'import app')
 	}
+	// the RxPublish -> RxStatus map, once, where a monitored frame publishes a status (gen_rx.v)
+	if glue.any(it.contains('rx_status_of(')) {
+		glue << rx_status_fn()
+	}
+	// and comm.com / comm.e2e, imported for what a config COULD use: a received frame's E2E state
+	// now lives inside com.RxMonitor, so an rx-only E2E image may name no e2e.* at all
+	for mod in ['com', 'e2e'] {
+		if !refs_module(glue, mod) {
+			glue = glue.filter(it.trim_space() != 'import comm.${mod}')
+		}
+	}
 
 	os.write_file(args[3], signals.join('\n') + '\n') or { panic('write ${args[3]}: ${err}') }
 	os.write_file(args[4], ports.join('\n') + '\n') or { panic('write ${args[4]}: ${err}') }
@@ -4650,6 +4722,26 @@ fn main() {
 	}
 
 	eprintln('loom2v: ${m.sig_names.len} signals (${bus_names.len} bus bridge), ${m.isotp_conns.len} isotp, ${m.part.by_part.len} partition(s)')
+}
+
+// refs_module: the glue names module `mod` — `mod.` at the start of an identifier, so a field of
+// the same name (`st.rxm.e2e.check`) is not a reference, nor is an import line.
+fn refs_module(glue []string, mod string) bool {
+	pat := mod + '.'
+	for line in glue {
+		if line.trim_space().starts_with('import ') {
+			continue
+		}
+		mut from := 0
+		for {
+			i := line.index_after(pat, from) or { break }
+			if i == 0 || !(line[i - 1].is_letter() || line[i - 1].is_digit() || line[i - 1] in [`_`, `.`]) {
+				return true
+			}
+			from = i + 1
+		}
+	}
+	return false
 }
 
 // did_value_width is how many bytes a live DID of value type `val_type` carries — none for a type
@@ -5184,9 +5276,6 @@ fn validate_faults(m Model, doc toml.Doc) {
 		}
 		dtcs[f.dtc] = f.name
 		if f.signal != '' {
-			if m.target.on {
-				panic('loom2v: [[fault]] "${f.name}": a signal-status fault on the target needs the comm thread\'s rx status, deadlines and E2E (rung R5, phase 6b-2b) — not generated yet; test it in an FB')
-			}
 			validate_signal_fault(m, f)
 			continue
 		}
@@ -5315,15 +5404,15 @@ fn validate_fault_snapshots(m Model) {
 const fault_cycle_power = 'power'
 
 // iocb_pool_n: the byte-IOC channels a ThreadX image has (boards/common/iocb.c IOCB_POOL_N),
-// shared by the eth signals and the fault cells.
+// shared by the eth signals, the checked received signals and the fault cells (iocb_overflow).
 const iocb_pool_n = 8
 
 // validate_fault_target: what a ThreadX image's fault memory needs beyond the host's rules. The
 // memory runs on the comm thread (D2) — the owner of the diagnostic connection, which
 // validate_diag_threadx keeps on that thread's bus; each fault-owning FB reaches it through two
 // byte-IOC cells (fault_cell). The operation cycle is NM's wake -> bus sleep (D3's default), or
-// "power"; a cycle SIGNAL is not generated there yet: the comm thread's lean rx decode publishes a
-// byte-0 scalar into the FB's cell and keeps no bool it could watch.
+// "power"; a cycle SIGNAL is not generated there yet: the comm thread keeps no edge state for one
+// (the host bridge's rx_group_hooks cycle edges are not wired on the target).
 fn validate_fault_target(m Model) {
 	if m.fault_cycle == '' && !m.nm.on {
 		panic('loom2v: [[fault]] on the target needs an operation cycle: [nm] (D3\'s default, wake -> bus sleep) or [fault_memory] cycle = "power"')
@@ -5334,9 +5423,8 @@ fn validate_fault_target(m Model) {
 	if !m.nvm.on {
 		panic('loom2v: [[fault]] on the target needs [nvm] — the fault memory keeps its DTCs, counters and snapshots in the NvM journal across resets and power loss (docs/diagnostics.md §3.3); declare the storage')
 	}
-	cells := eth_iocb_idx(m).len + 2 * fault_fbs(m).len
-	if cells > iocb_pool_n {
-		panic('loom2v: [[fault]]: ${fault_fbs(m).len} fault-owning FB(s) need ${2 * fault_fbs(m).len} byte-IOC cells beside ${eth_iocb_idx(m).len} eth signal(s) — the pool holds ${iocb_pool_n} (boards/common/iocb.c IOCB_POOL_N)')
+	if why := iocb_overflow(m) {
+		panic('loom2v: [[fault]]: ${why}')
 	}
 }
 
@@ -5348,7 +5436,7 @@ fn fault_cell(m Model, fb string, control bool) int {
 	if k < 0 {
 		panic('loom2v: no fault cell for ${fb}')
 	}
-	return eth_iocb_idx(m).len + 2 * k + if control { 1 } else { 0 }
+	return rx_iocb_idx(m).len + 2 * k + if control { 1 } else { 0 }
 }
 
 // fault_target_on: the image runs a fault memory on its ThreadX comm thread (R6).
@@ -5358,7 +5446,7 @@ fn fault_target_on(m Model) bool {
 
 // iocb_on: the image uses the byte IOC pool — its eth signals, its fault cells, or both.
 fn iocb_on(m Model) bool {
-	return eth_thread_on(m) || fault_target_on(m)
+	return eth_thread_on(m) || fault_target_on(m) || rx_iocb_idx(m).len > 0
 }
 
 // fault_target_globals: the fault memory and each fault-owning FB's two cells, comm-thread side,
@@ -5444,34 +5532,34 @@ fn fault_target_consume(m Model, ind string) []string {
 // after the NM tick, so this pass's state is the one acted on. What the FBs reported since the pass
 // top is consumed before the cycle ends, so a result from the cycle's last dispatches lands inside
 // it (the host's falling edge follows its frame's results the same way, rx_group_hooks).
-fn fault_target_cycle(m Model) []string {
+fn fault_target_cycle(m Model, now string, ind string) []string {
 	if !fault_target_on(m) || !m.nm.on || m.fault_cycle != '' {
 		return []string{}
 	}
 	// bus sleep REQUESTS the end: the cycle stays open for the barrier's grace, so a report a
 	// dispatch from before the edge publishes after this pass's read still lands in it (§7)
 	mut g := [
-		'\t\tif g_nm.awake() != g_fcycle_on { // the operation cycle follows NM (D3)',
-		'\t\t\tg_fcycle_on = g_nm.awake()',
-		'\t\t\tif g_fcycle_on {',
-		'\t\t\t\tif g_fmem.ending { // woken inside the grace: what the ending cycle saw is read into it first',
+		'${ind}if g_nm.awake() != g_fcycle_on { // the operation cycle follows NM (D3)',
+		'${ind}\tg_fcycle_on = g_nm.awake()',
+		'${ind}\tif g_fcycle_on {',
+		'${ind}\t\tif g_fmem.ending { // woken inside the grace: what the ending cycle saw is read into it first',
 	]
-	g << fault_target_consume(m, '\t\t\t\t\t')
-	g << fault_capture_lines(m, 'g_fmem', 'g_diag', '\t\t\t\t\t')
+	g << fault_target_consume(m, ind + '\t\t\t')
+	g << fault_capture_lines(m, 'g_fmem', 'g_diag', ind + '\t\t\t')
 	g << [
-		'\t\t\t\t}',
-		'\t\t\t\tg_fmem.cycle_start()',
-		'\t\t\t} else {',
-		'\t\t\t\tg_fmem.end_cycle_after(t1, u64(${m.fault_grace_us})) // the cycle-end barrier: the producers publish first',
-		'\t\t\t}',
-		'\t\t}',
-		'\t\tif g_fmem.cycle_end_due(t1) {',
+		'${ind}\t\t}',
+		'${ind}\t\tg_fmem.cycle_start()',
+		'${ind}\t} else {',
+		'${ind}\t\tg_fmem.end_cycle_after(${now}, u64(${m.fault_grace_us})) // the cycle-end barrier: the producers publish first',
+		'${ind}\t}',
+		'${ind}}',
+		'${ind}if g_fmem.cycle_end_due(${now}) {',
 	]
-	g << fault_target_consume(m, '\t\t\t')
-	g << fault_capture_lines(m, 'g_fmem', 'g_diag', '\t\t\t')
+	g << fault_target_consume(m, ind + '\t')
+	g << fault_capture_lines(m, 'g_fmem', 'g_diag', ind + '\t')
 	g << [
-		'\t\t\tg_fmem.cycle_end()',
-		'\t\t}',
+		'${ind}\tg_fmem.cycle_end()',
+		'${ind}}',
 	]
 	return g
 }

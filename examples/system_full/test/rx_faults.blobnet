@@ -1,0 +1,26 @@
+# The RECEIVE-CHECK bench for system_full (test/rx_faults_zone_a.lua): blobly_net stands in for the
+# chassis node on edge (nodes/chassis, a declaration only) — it restbus-simulates its SafetyCmdFrame
+# from edge.dbc, stamping AUTOSAR E2E Profile 1 from the DBC's own attributes (Data ID 0x55, CRC
+# byte 2, counter byte 3), and the suite breaks that sender on purpose with sim.fault. It is also the
+# tester on edge (UDS to zone_a, 0x7C0/0x7C8). Same CANsub.4 wiring as diag_bench.blobnet: channel 1
+# = edge (CAN-FD 500k/2M with BRS); compute is not needed here.
+project:
+  name: system_full — receive checks on zone_a
+  version: 2
+
+buses:
+  - name: edge
+    network: system_full
+    adapter: cansub
+    address: e5a16adf/1
+    protocol: canfd
+    bitrate: 500000
+    data_bitrate: 2000000
+    mode: normal
+    enabled: true
+    databases:
+      - ../edge.dbc
+    simulation:
+      - name: chassis
+        signals:
+          - { name: SafetyCmd, type: const, value: 500 }

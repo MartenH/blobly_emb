@@ -1,0 +1,25 @@
+# chassis — an edge-bus ECU as a NODE, declaration only. It is not on the bench: blobly_net
+# restbus-simulates it there (test/rx_faults.blobnet `simulation: chassis`, keyed on the DBC
+# transmitter name in edge.dbc), stamping SafetyCmdFrame's E2E Profile 1 from the DBC's attributes
+# and breaking it on purpose (fault injection). Nothing here is built — the model wants the producer
+# of SafetyCmd to be a node with one FB writing it (single-writer, REQ-TOPO-005), and the receiver of
+# zone_a's SafetyView to be a node that reads it (REQ-TOPO-001).
+#
+# NOTE: no inline comments inside [[...]] tables (vlang/v#27684).
+
+[[partition]]
+name = "chassis"
+core = 0
+
+  [[partition.thread]]
+  name = "ctrl"
+
+[[fb]]
+name   = "SafetySource"
+thread = "ctrl"
+
+  [[fb.handler]]
+  name      = "on_50ms"
+  period_ms = 50
+  reads     = ["SafetyView"]
+  writes    = ["SafetyCmd"] # trailing comment terminates the nested block (vlang/v#27684)

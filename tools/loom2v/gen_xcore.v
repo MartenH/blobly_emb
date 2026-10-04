@@ -189,7 +189,7 @@ fn xcore_produce_drain(m Model) []string {
 			// (DLC == 4 * lanes is validated in the comm-thread walk; > 8 needs FD and the
 			// classic comm thread rejects it there, loudly).
 			off := m.xcore_xw_off[sname] or { 0 }
-			g << '\t\tif ${nm_gate(m)}C.xcore_layout_ok() != 0 && t1 - xcore_${n}_last >= u64(${cyc}) && ch.tx_ready()'
+			g << '\t\tif ${nm_gate(m)}${diag_tx_gate(m)}C.xcore_layout_ok() != 0 && t1 - xcore_${n}_last >= u64(${cyc}) && ch.tx_ready()'
 			g << '\t\t\t&& C.xcore_poll_n(u32(${off}), ${si.fields.len}, &xcore_${n}_seq, &xcore_${n}_lanes[0]) != 0 {' // REQ-COM-007
 			g << '\t\t\txcore_txf.id = u32(0x${si.dbc_id.hex()})'
 			g << '\t\t\txcore_txf.len = ${si.dbc_dlc}'
@@ -205,7 +205,7 @@ fn xcore_produce_drain(m Model) []string {
 			continue
 		}
 		slot := m.xcore_idx[sname] or { 0 }
-		g << '\t\tif ${nm_gate(m)}C.xcore_layout_ok() != 0 && t1 - xcore_${n}_last >= u64(${cyc}) && ch.tx_ready()'
+		g << '\t\tif ${nm_gate(m)}${diag_tx_gate(m)}C.xcore_layout_ok() != 0 && t1 - xcore_${n}_last >= u64(${cyc}) && ch.tx_ready()'
 		g << '\t\t\t&& C.xcore_poll(${slot}, &xcore_${n}_a, &xcore_${n}_b) != 0 {' // REQ-COM-007
 		g << '\t\t\txcore_txf.id = u32(0x${si.dbc_id.hex()})'
 		g << '\t\t\txcore_txf.len = ${si.dbc_dlc}'

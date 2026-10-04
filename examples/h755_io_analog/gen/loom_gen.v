@@ -172,9 +172,11 @@ fn comm_thread_entry(input u32) {
 	mut rx := can.Frame{}
 	for {
 		C.comm_rx_wait(10) // block up to 10 ticks; the FDCAN Rx ISR wakes us on a new frame
+		// pass: drain
 		// CONSUMER: drain the Rx FIFO (non-blocking); account each external rx frame
 		for ch.recv(mut rx) {
 		}
+		// pass: tick
 		t1 := C.board_now_us()
 		// PRODUCER: CpuLoad telemetry — reads the FB thread's load scratch
 		if t1 - last_telem >= telem_period_us && ch.tx_ready() {

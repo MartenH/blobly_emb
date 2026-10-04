@@ -20,6 +20,8 @@ derives = "SYS-REQ-SAFE-001"
 # for the SOME/IP receive path 2026-10-01 (#299): the host bridge and the ThreadX eth thread
 # share one set of templates with the CAN bridge's rules, an eth rx signal carries the same
 # RxStatus, and a system.toml frame's e2e.timeout_ms is lowered to the receiving node.
+# On a ThreadX target's CAN comm thread since R5: the same templates as the host bridge, the rule
+# in com.RxMonitor, the status crossing to the FB through the byte IOC.
 [[req]]
 id = "REQ-E2E-002"
 title = "Detect repetition and loss"

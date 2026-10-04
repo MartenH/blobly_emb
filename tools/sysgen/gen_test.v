@@ -310,3 +310,77 @@ id      = 0x7E0
 	assert out.contains('peers = [0x500, 0x53f]'), 'a cluster bus emits the peer range:\n${out}'
 	assert !out.contains('enabled = false'), 'a cluster bus must not disable NM:\n${out}'
 }
+
+// REQ-COM-008, REQ-E2E-002: a CAN receiver of a frame its bus's DBC declares E2E-protected gets the
+// bridge's receive status and lost count on the lowered signal, as a someip E2E receiver does —
+// loom2v refuses a received E2E frame whose signals carry no status, so without this a system could
+// not declare one. An unprotected frame's receiver gets the value alone.
+fn test_a_can_receiver_of_an_e2e_frame_gets_its_status() {
+	dir := os.join_path(os.temp_dir(), 'sysgen_rxe2e_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'edge.dbc'), 'VERSION ""\nBU_: src zone\n' +
+		'BO_ 296 CmdFrame: 8 src\n SG_ Cmd : 0|16@1+ (1,0) [0|1000] "" zone\n SG_ CmdCrc : 16|8@1+ (1,0) [0|255] "" zone\n SG_ CmdCtr : 24|4@1+ (1,0) [0|15] "" zone\n' +
+		'BO_ 297 PlainFrame: 8 src\n SG_ Plain : 0|32@1+ (1,0) [0|0] "" zone\n' +
+		'BA_DEF_ BO_ "E2ECounterSignal" STRING;\nBA_DEF_ BO_ "E2ECrcSignal" STRING;\nBA_DEF_ BO_ "E2EProfile" STRING;\nBA_DEF_ BO_ "E2EDataId" INT 0 65535;\nBA_DEF_ BO_ "E2ETimeout" INT 0 65535;\n' +
+		'BA_ "E2ECounterSignal" BO_ 296 "CmdCtr";\nBA_ "E2ECrcSignal" BO_ 296 "CmdCrc";\nBA_ "E2EProfile" BO_ 296 "P01";\nBA_ "E2EDataId" BO_ 296 85;\nBA_ "E2ETimeout" BO_ 296 300;\n') or {
+		panic(err)
+	}
+	os.write_file(os.join_path(dir, 'zone.toml'), '
+[[partition]]
+name = "front"
+core = 0
+
+  [[partition.thread]]
+  name = "t"
+
+[[fb]]
+name   = "Mon"
+thread = "t"
+
+  [[fb.handler]]
+  name      = "on_50ms"
+  period_ms = 50
+  reads     = ["Cmd", "Plain"] # trailing comment terminates the nested block (vlang/v#27684)
+') or {
+		panic(err)
+	}
+	sys := sysmodel.System{
+		dir:     dir
+		buses:   [sysmodel.Bus{
+			name:      'edge'
+			interface: 'can1'
+			dbc:       'edge.dbc'
+		}]
+		nodes:   [sysmodel.Node{
+			name:  'zone'
+			ecu:   'zone.toml'
+			buses: ['edge']
+		}]
+		signals: [sysmodel.SysSignal{
+			name:     'Cmd'
+			fields:   {
+				'level': 'u16'
+			}
+			producer: 'src'
+			bus:      'edge'
+			frame:    'CmdFrame'
+		}, sysmodel.SysSignal{
+			name:     'Plain'
+			fields:   {
+				'v': 'u32'
+			}
+			producer: 'src'
+			bus:      'edge'
+			frame:    'PlainFrame'
+		}]
+	}
+	out := generate_node(sys, sys.nodes[0]) or { panic(err) }
+	cmd := out.all_after('name   = "Cmd"').all_before('[[')
+	assert cmd.contains('status = "RxStatus"') && cmd.contains('lost = "u32"'), out
+	assert cmd.contains('level = "u16"'), out
+	plain := out.all_after('name   = "Plain"').all_before('[[')
+	assert !plain.contains('RxStatus') && !plain.contains('lost'), out
+}
