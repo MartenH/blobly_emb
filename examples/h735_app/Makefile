@@ -70,9 +70,10 @@ $(BUILD)/app.c: main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) $(call v_s
 -include $(BUILD)/app.c.d
 
 # 2) cross-compile + link: V output + startup + board shim + CAN backend
-$(BUILD)/app.elf: $(CSRC) $(BOARD_LD_BARE) | $(BUILD)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(CSRC) -o $@
+$(BUILD)/app.elf: $(CSRC) $(BOARD_LD_BARE) $(call c_unrecorded,$(BUILD)/app.elf) | $(BUILD)
+	$(call c_build,$(CC) $(CFLAGS) $(LDFLAGS) $(CSRC))
 	$(SIZE) $@
+-include $(BUILD)/app.elf.d
 
 # 3) raw binary for the flasher
 $(BUILD)/app.bin: $(BUILD)/app.elf

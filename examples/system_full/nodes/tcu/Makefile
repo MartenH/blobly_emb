@@ -50,6 +50,8 @@ TX_OBJ = $(patsubst $(TX_PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
 NX_A   = $(BUILD)/nx.a
 NX_C   = $(wildcard $(NX)/common/src/*.c)
 NX_OBJ = $(patsubst $(NX)/common/src/%.c,$(BUILD)/nx/%.o,$(NX_C))
+# the kernel and the network stack resolve each other: one archive group
+LINKLIBS = -Wl,--start-group $(TX_A) $(NX_A) -Wl,--end-group
 
 # board bring-up + ETH MAC (H723) + the NetX STM32H7 driver + the shared NetX eth
 # backend + the shared byte-IOC glue
@@ -114,12 +116,12 @@ $(NX_A): $(NX_OBJ)
 	$(AR) -rc $@ $^
 
 # 3) cross-compile + link.
-# eth.h is a driver-ABI header the BSP .c files include (descriptor counts, buffer sizes) —
-# list it as a prereq, or a change there won't relink (codex #247).
-$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(NX_A) $(BOARD_LD_THREADX) $(REPO)/boards/common/ioc.h $(wildcard $(REPO)/driver/eth/*.h) $(REPO)/boards/$(BOARD)/eth.h
-	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) \
-	  -Wl,--start-group $(TX_A) $(NX_A) -Wl,--end-group -o $@
+# eth.h (descriptor counts, buffer sizes), bootmap.h and every other header the sources include
+# reach the link through its dependency record (tools/tools.mk c_build), never a hand list
+$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(NX_A) $(BOARD_LD_THREADX) $(call c_unrecorded,$(BUILD)/$(NAME).elf)
+	$(call c_build,$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(LINKLIBS))
 	$(SIZE) $@
+-include $(BUILD)/$(NAME).elf.d
 
 $(BUILD)/$(NAME).bin: $(BUILD)/$(NAME).elf
 	$(OBJCOPY) -O binary $< $@

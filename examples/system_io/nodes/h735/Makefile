@@ -85,12 +85,14 @@ $(TX_A): $(TX_OBJ)
 # 32-bit pointers as u64 (never called no-alloc; --gc-sections drops it). None are our
 # code and none are fixable in a regenerated file, so compile THIS unit quiet (-w) — the
 # hand-written glue (comm_glue.c, board.c, drivers) keeps full warnings.
-$(BUILD)/app.o: $(BUILD)/app.c Makefile
-	$(CC) $(CFLAGS) -w -c $< -o $@
+$(BUILD)/app.o: $(BUILD)/app.c Makefile $(call c_unrecorded,$(BUILD)/app.o)
+	$(call c_build,$(CC) $(CFLAGS) -w -c $<)
+-include $(BUILD)/app.o.d
 
-$(BUILD)/$(NAME).elf: $(BUILD)/app.o $(BSP) $(REPO)/boards/common/ioc.h $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(REPO)/driver/io/io_stm32.c $(REPO)/driver/io/io_port.h $(TX_A) $(BOARD_LD_THREADX)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(TX_A) -o $@
+$(BUILD)/$(NAME).elf: $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(TX_A) $(BOARD_LD_THREADX) $(call c_unrecorded,$(BUILD)/$(NAME).elf)
+	$(call c_build,$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(TX_A))
 	$(SIZE) $@
+-include $(BUILD)/$(NAME).elf.d
 
 $(BUILD)/$(NAME).bin: $(BUILD)/$(NAME).elf
 	$(OBJCOPY) -O binary $< $@

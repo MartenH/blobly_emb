@@ -48,6 +48,8 @@ TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
 NX_A     = $(BUILD)/nx.a
 NX_C     = $(wildcard $(NX)/common/src/*.c)
 NX_OBJ   = $(patsubst $(NX)/common/src/%.c,$(BUILD)/nx/%.o,$(NX_C))
+# the kernel and the network stack resolve each other: one archive group
+LINKLIBS = -Wl,--start-group $(TX_A) $(NX_A) -Wl,--end-group
 # + the network the config asks for (gen/loom_build.mk: ETH MAC, NetX driver, driver/eth seams)
 BSP      = $(BOARD_BSP_THREADX) $(LOOM_GLUE_SRCS) $(REPO)/boards/common/trace_hooks.c \
            $(LOOM_NET_SRCS) $(LOOM_FAULT_SRCS)
@@ -109,15 +111,15 @@ $(BUILD)/nx/%.o: $(NX)/common/src/%.c Makefile
 $(NX_A): $(NX_OBJ)
 	$(AR) -rc $@ $^
 
-$(BUILD)/app.o: $(BUILD)/app.c Makefile
-	$(CC) $(CFLAGS) -w -c $< -o $@
+$(BUILD)/app.o: $(BUILD)/app.c Makefile $(call c_unrecorded,$(BUILD)/app.o)
+	$(call c_build,$(CC) $(CFLAGS) -w -c $<)
+-include $(BUILD)/app.o.d
 
-$(BUILD)/$(NAME).elf: $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) $(NX_A) $(BOARD_LD_THREADX) \
-                      $(REPO)/boards/$(BOARD)/eth.h $(wildcard $(REPO)/driver/eth/*.h)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c \
-	  -Wl,--start-group $(TX_A) $(NX_A) -Wl,--end-group -o $@
+$(BUILD)/$(NAME).elf: $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) $(NX_A) $(BOARD_LD_THREADX) $(call c_unrecorded,$(BUILD)/$(NAME).elf)
+	$(call c_build,$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(LINKLIBS))
 	$(SIZE) $@
 	@$(REPO)/scripts/lint_vinit.sh $@   # the _vinit-trap gate (host CI can't cross-compile; run it here)
+-include $(BUILD)/$(NAME).elf.d
 
 $(BUILD)/$(NAME).bin: $(BUILD)/$(NAME).elf
 	$(OBJCOPY) -O binary $< $@
