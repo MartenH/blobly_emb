@@ -59,8 +59,10 @@ TOOL_GOAL := $(.DEFAULT_GOAL)
 # scripts/vdeps.sh: never a hand list of module directories, which went stale the day a generated
 # image started importing one more (driver/doipnet). In the rule, V run from $(REPO):
 #
-#     $(BUILD)/app.c: main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) | $(BUILD)
-#     	cd $(REPO) && $(V) -freestanding ... $(call v_dump,$@) -o .../$(BUILD)/app.c .../main.v
+#     TRANSPILE_FLAGS = -freestanding ... -path "..."
+#     $(BUILD)/app.c: main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) \
+#                     $(call v_sign,$(BUILD)/app.c,$(TRANSPILE_FLAGS)) | $(BUILD)
+#     	cd $(REPO) && $(V) $(TRANSPILE_FLAGS) $(call v_dump,$@) -o .../$(BUILD)/app.c .../main.v
 #     	$(call v_deps,$@)
 #     -include $(BUILD)/app.c.d
 #
@@ -73,8 +75,19 @@ TOOL_GOAL := $(.DEFAULT_GOAL)
 v_dump = -dump-files $(CURDIR)/$(1).files
 v_deps = { VDEPS_BASE=$(TOOL_REPO) $(TOOL_REPO)/scripts/vdeps.sh $(1) $(1).files >$(1).d.tmp && mv -f $(1).d.tmp $(1).d; } || { rm -f $(1) $(1).d.tmp; exit 1; }
 v_unrecorded = $(if $(wildcard $(1).d),,v-unrecorded)
+#
+# How a transpile is run is an input too, as a tool's compiler is (tool_sig above): the V command,
+# its binary and version, the flags the rule passes — the image's defines among them
+# (-d boot_doip, -d loom_max_tasks) — and $(VFLAGS). $(call v_sign,<target>,<flags>) keeps that in
+# <target>.sig, rewritten while make reads the Makefile and only when it differs, and names it as
+# a prerequisite: a changed define or compiler remakes the C. The rule's recipe runs V with the
+# same <flags>, so the signature is what was actually run.
+v_sigtext = $(strip $(V) | $(TOOL_V_PATH) | $(TOOL_V_VERSION) | $(1) | $(VFLAGS))
+v_sign = $(if $(call tool_same,$(call v_sigtext,$(2)),$(strip $(if $(wildcard $(1).sig),$(file <$(1).sig)))),,$(shell mkdir -p $(dir $(1)))$(file >$(1).sig,$(call v_sigtext,$(2))))$(1).sig
 .PHONY: v-unrecorded
 v-unrecorded: ;
+# the signature is written while make reads the Makefile; never made on its own
+%.c.sig: ;
 
 TOOL_REPO := $(abspath $(REPO))
 TOOL_DIR  := $(CURDIR)/bin

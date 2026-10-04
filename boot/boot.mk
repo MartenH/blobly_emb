@@ -78,9 +78,10 @@ $(BOOT_DIR):
 	mkdir -p $(BOOT_DIR)
 
 # what V compiles into it is its dependency list (tools/tools.mk v_deps)
-$(BOOT_DIR)/boot.c: $(call v_unrecorded,$(BOOT_DIR)/boot.c) | $(BOOT_DIR)
-	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(BOOT_VDEFS) \
-	  -path "@vlib|@vmodules|." $(call v_dump,$@) -o $(CURDIR)/$@ boot/target
+# how V is run for it — -d boot_doip on a [doip] node — also its signature (tools/tools.mk v_sign)
+BOOT_TRANSPILE_FLAGS = -freestanding -gc none -no-bounds-checking -enable-globals $(BOOT_VDEFS) -path "@vlib|@vmodules|."
+$(BOOT_DIR)/boot.c: $(call v_unrecorded,$(BOOT_DIR)/boot.c) $(call v_sign,$(BOOT_DIR)/boot.c,$(BOOT_TRANSPILE_FLAGS)) | $(BOOT_DIR)
+	cd $(REPO) && $(V) $(BOOT_TRANSPILE_FLAGS) $(call v_dump,$@) -o $(CURDIR)/$@ boot/target
 	$(call v_deps,$@)
 	$(REPO)/scripts/lint_vinit.sh $@
 -include $(BOOT_DIR)/boot.c.d

@@ -15,9 +15,9 @@ cd "$(dirname "$0")/.."
 fail=0
 # a transpile rule — the C file V writes — not in the documented shape
 if grep -nE '^\$\((BUILD|BOOT_DIR)\)/[a-z_]+\.c:' examples/*/Makefile examples/*/nodes/*/Makefile boot/boot.mk \
-	| grep -vE ':\$\(BUILD\)/([a-z_]+)\.c: (\$\(SYSDIR\)/)?main\.v( gen/(\.stamp|loom_gen\.v))? \$\(call v_unrecorded,\$\(BUILD\)/\1\.c\) \| \$\(BUILD\)$' \
-	| grep -vE '^boot/boot\.mk:[0-9]+:\$\(BOOT_DIR\)/boot\.c: \$\(call v_unrecorded,\$\(BOOT_DIR\)/boot\.c\) \| \$\(BOOT_DIR\)$'; then
-	echo "app_deps_check: a transpile rule (above) is not the tools/tools.mk shape — v_unrecorded, no hand-listed sources"
+	| grep -vE ':\$\(BUILD\)/([a-z_]+)\.c: (\$\(SYSDIR\)/)?main\.v( gen/(\.stamp|loom_gen\.v))? \$\(call v_unrecorded,\$\(BUILD\)/\1\.c\) \$\(call v_sign,\$\(BUILD\)/\1\.c,\$\(TRANSPILE_FLAGS\)\) \| \$\(BUILD\)$' \
+	| grep -vE '^boot/boot\.mk:[0-9]+:\$\(BOOT_DIR\)/boot\.c: \$\(call v_unrecorded,\$\(BOOT_DIR\)/boot\.c\) \$\(call v_sign,\$\(BOOT_DIR\)/boot\.c,\$\(BOOT_TRANSPILE_FLAGS\)\) \| \$\(BOOT_DIR\)$'; then
+	echo "app_deps_check: a transpile rule (above) is not the tools/tools.mk shape — v_unrecorded, v_sign, no hand-listed sources"
 	fail=1
 fi
 for mk in examples/*/Makefile examples/*/nodes/*/Makefile; do
@@ -26,6 +26,11 @@ for mk in examples/*/Makefile examples/*/nodes/*/Makefile; do
 	i=$(grep -nF 'include $(REPO)/tools/tools.mk' "$mk" | head -1 | cut -d: -f1)
 	if [ -z "$i" ] || [ "$i" -gt "$r" ]; then
 		echo "app_deps_check: $mk uses tools/tools.mk's macros without including it first"
+		fail=1
+	fi
+	# V runs with the flags the signature records, nothing beside them
+	if ! sed -n "$((r + 1))p" "$mk" | grep -qE '^	cd \$\(REPO\) && \$\(V\) \$\(TRANSPILE_FLAGS\) \$\(call v_dump,\$@\) -o '; then
+		echo "app_deps_check: $mk: the transpile does not run V with exactly \$(TRANSPILE_FLAGS)"
 		fail=1
 	fi
 done
@@ -45,6 +50,12 @@ for mk in examples/*/Makefile examples/*/nodes/*/Makefile; do
 			fail=1
 		fi
 		make -C "$d" "$rel" >/dev/null 2>&1 && [ -f "$c.d" ] || { echo "app_deps_check: $c did not rebuild its record"; fail=1; continue; }
+		# how V runs is an input: another define leaves the C out of date
+		if make -C "$d" -q "$rel" LOOM_VDEFS="-d app_deps_check" VDBG="-d app_deps_check" BOOT_VDEFS="-d app_deps_check" >/dev/null 2>&1; then
+			echo "app_deps_check: $c ignores a change of V flags"
+			fail=1
+		fi
+		make -C "$d" "$rel" >/dev/null 2>&1 || { echo "app_deps_check: $c rebuild failed"; fail=1; }
 		# a repo module it compiles in: the shared DoIP loop where it imports it, else the first one
 		src=$(grep -m1 'driver/doipnet/doipnet.v' "$c.files" || grep -m1 -E '^\./(comm|loom|driver|boot|bcrypto|nvm)/' "$c.files")
 		[ -n "$src" ] || { echo "app_deps_check: $c compiles in no repo module?"; fail=1; continue; }

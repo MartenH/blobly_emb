@@ -58,10 +58,10 @@ ifneq ($(MAKECMDGOALS),clean)
 endif
 gen/loom_build.mk: gen/.stamp ;
 
-$(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) | $(BUILD)
-	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
-	  -path "@vlib|@vmodules|.|examples/system_full/nodes/$(NAME)" \
-	  $(call v_dump,$@) -o examples/system_full/nodes/$(NAME)/$(BUILD)/app.c examples/system_full/main.v
+# how V is run for it — also its signature (tools/tools.mk v_sign)
+TRANSPILE_FLAGS = -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) -path "@vlib|@vmodules|.|examples/system_full/nodes/$(NAME)"
+$(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) $(call v_sign,$(BUILD)/app.c,$(TRANSPILE_FLAGS)) | $(BUILD)
+	cd $(REPO) && $(V) $(TRANSPILE_FLAGS) $(call v_dump,$@) -o examples/system_full/nodes/$(NAME)/$(BUILD)/app.c examples/system_full/main.v
 	$(call v_deps,$@)
 # what V compiled into it (tools/tools.mk v_deps)
 -include $(BUILD)/app.c.d
