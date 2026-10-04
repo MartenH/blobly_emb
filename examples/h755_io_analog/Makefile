@@ -94,11 +94,12 @@ $(TX_A): $(TX_OBJ)
 	$(AR) -rc $@ $^
 
 # 3) cross-compile + link: generated app.c + board bring-up + CAN/IO backends + ThreadX.
-# io_backend.c textually includes the STM32 implementation — list both it and
-# the port header, or an edited driver flashes stale (codex on emb#150)
-$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(REPO)/boards/common/ioc.h $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(REPO)/driver/io/io_stm32.c $(REPO)/driver/io/io_port.h $(TX_A) $(BOARD_LD_THREADX)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(TX_A) -o $@
+# io_backend.c textually includes the STM32 implementation; that and every header reach the
+# link through its dependency record (tools/tools.mk c_build), never a hand list
+$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(TX_A) $(BOARD_LD_THREADX) $(call c_unrecorded,$(BUILD)/$(NAME).elf)
+	$(call c_build,$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(TX_A))
 	$(SIZE) $@
+-include $(BUILD)/$(NAME).elf.d
 
 $(BUILD)/$(NAME).bin: $(BUILD)/$(NAME).elf
 	$(OBJCOPY) -O binary $< $@

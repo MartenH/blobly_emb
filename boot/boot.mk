@@ -86,13 +86,13 @@ $(BOOT_DIR)/boot.c: $(call v_unrecorded,$(BOOT_DIR)/boot.c) $(call v_sign,$(BOOT
 	$(REPO)/scripts/lint_vinit.sh $@
 -include $(BOOT_DIR)/boot.c.d
 
-# every header and textually included backend (can_backend.c includes can_fdcan.c) comes from the
-# compiler's own dependency output, written as the image links — no hand list to miss the next one
-$(BOOT_DIR)/boot.elf: $(BOOT_DIR)/boot.c gen/boot_gen.h $(BOOT_SRCS) $(BOOT_LD) $(BOOT_LIBS) $(REPO)/scripts/boot_layout.sh
-	$(CC) $(BOOT_CFLAGS) $(BOOT_LDFLAGS) $(BOOT_DIR)/boot.c $(BOOT_SRCS) $(BOOT_LINKLIBS) -o $@
-	$(CC) $(BOOT_CFLAGS) -MM -MP -MT $@ $(BOOT_SRCS) > $(BOOT_DIR)/boot.d
+# every header (bootmap.h, the generated boot_gen.h) and textually included backend (can_backend.c
+# includes can_fdcan.c) comes from the compiler's own dependency output, written as the image links
+# (tools/tools.mk c_build, the rule every image's link shares) — no hand list to miss the next one
+$(BOOT_DIR)/boot.elf: $(BOOT_DIR)/boot.c $(BOOT_SRCS) $(BOOT_LD) $(BOOT_LIBS) $(REPO)/scripts/boot_layout.sh $(call c_unrecorded,$(BOOT_DIR)/boot.elf)
+	$(call c_build,$(CC) $(BOOT_CFLAGS) $(BOOT_LDFLAGS) $(BOOT_DIR)/boot.c $(BOOT_SRCS) $(BOOT_LINKLIBS))
 	$(SIZE) $@
--include $(BOOT_DIR)/boot.d
+-include $(BOOT_DIR)/boot.elf.d
 
 $(BOOT_DIR)/boot.bin: $(BOOT_DIR)/boot.elf
 	$(OBJCOPY) -O binary $< $@

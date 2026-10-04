@@ -88,6 +88,20 @@ the C), `-include $(BUILD)/app.c.d` (`tools.mk`, `scripts/vdeps.sh`, the writer 
 shares) — never a hand list of module directories; `scripts/app_deps_check.sh` (CI cross job) pins
 the rule's shape, that `tools.mk` is included before it, and asks make each way it can go stale
 (a module, the recording rule, a missing record, another define).
+And for what the C COMPILER reads (#375): every rule that runs it — an image's ELF, an `app.o`, a
+bootloader's `boot.elf` — runs it as `$(call c_build,<command>)`, which compiles and then records
+the same command's `-MM -MP` (`<target>.d`, `-include`d after the rule), with
+`$(call c_unrecorded,<target>)` among its prerequisites. So `bootmap.h`, the board headers, the
+forced `board.h`, `boot_gen.h` and a textually included backend (`can_fdcan.c`, `io_stm32.c`) are
+derived from the compile, never listed (boot/boot.mk still names `bootmap.h` beside the app ELF —
+for the LINK flags `boot_layout.sh` reads from it, not for a compile); a `-Wl,` group goes in a
+variable (a literal comma splits the call). The same script pins that no recipe runs `$(CC)` any
+other way (the pinned ThreadX/NetX archive objects aside), that no such rule names a header, and
+asks make's what-if (`-W`), with the target's generated C and objects held old (`-o`), that an edit
+to `bootmap.h` (where the image reads it — every `[boot]` node's app and bootloader must),
+`board.h` or `tools.mk` leaves each image stale. Flags are not recorded yet, nor the archive
+objects' headers (#382). Host builds are unaffected: their `build` target is phony and V
+recompiles everything.
 
 Examples use classic CAN (`[bus] fd = false`) so blobly_net (classic) can drive
 them; the driver picks classic vs CAN-FD from that flag. Integration tests live in

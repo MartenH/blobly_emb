@@ -57,9 +57,10 @@ $(BUILD)/canfd.c: main.v $(call v_unrecorded,$(BUILD)/canfd.c) $(call v_sign,$(B
 -include $(BUILD)/canfd.c.d
 
 # 2) cross-compile + link: V output + the shared bare-metal startup (boards/common) + board shim + CAN backend
-$(BUILD)/canfd.elf: $(CSRC) linker.ld | $(BUILD)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(CSRC) -o $@
+$(BUILD)/canfd.elf: $(CSRC) linker.ld $(call c_unrecorded,$(BUILD)/canfd.elf) | $(BUILD)
+	$(call c_build,$(CC) $(CFLAGS) $(LDFLAGS) $(CSRC))
 	$(SIZE) $@
+-include $(BUILD)/canfd.elf.d
 
 # 3) raw binary for the flasher
 $(BUILD)/canfd.bin: $(BUILD)/canfd.elf

@@ -89,6 +89,31 @@ v-unrecorded: ;
 # the signature is written while make reads the Makefile; never made on its own
 %.c.sig: ;
 
+# The same for what the C COMPILER reads: every target an image compiles C into — its ELF, an
+# app.o, a bootloader's boot.elf — depends on every header its sources include (bootmap.h's flash
+# addresses, a board header, the forced board.h, the generated boot_gen.h, xcore.h) and every file
+# one includes textually (can_backend.c -> can_fdcan.c), from the compiler's own -MM -MP output:
+# never a hand list of headers, which missed bootmap.h (#375). The rule runs its compiler through
+# $(call c_build,<command>): <command> -o $@, then the same command with -MM -MP -MT $@ (archives and
+# objects dropped — they are link inputs, and an object has its own record), so the record is taken
+# with exactly the sources and flags that were compiled and no second list can drift from the
+# first. A separate pass, because one gcc call that compiles several sources and links writes a
+# -MMD record for the LAST source only. In the rule:
+#
+#     $(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(LD) $(call c_unrecorded,$(BUILD)/$(NAME).elf)
+#     	$(call c_build,$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(TX_A))
+#     -include $(BUILD)/$(NAME).elf.d
+#
+# The record names this file too, as a V record names the rule that wrote it: a changed rule
+# re-records. A literal comma in <command> splits the call's argument: name -Wl,... groups by a
+# variable. As with v_deps, a failed compile or record removes the target, and a target with no
+# record is remade. What it does NOT carry is the command's flags (no c_sign beside v_sign yet). scripts/app_deps_check.sh pins the shape and asks make that a header's edit remakes each
+# image, the bootloaders included.
+c_build = $(1) -o $@ && { { $(filter-out %.o %.a,$(1)) -MM -MP -MT $@ && echo "$@: $(TOOL_REPO)/tools/tools.mk"; } >$@.d.tmp && mv -f $@.d.tmp $@.d; } || { rm -f $@ $@.d.tmp; exit 1; }
+c_unrecorded = $(if $(wildcard $(1).d),,c-unrecorded)
+.PHONY: c-unrecorded
+c-unrecorded: ;
+
 TOOL_REPO := $(abspath $(REPO))
 TOOL_DIR  := $(CURDIR)/bin
 TOOLS     := $(patsubst TOOL_SRC_%,%,$(filter TOOL_SRC_%,$(.VARIABLES)))

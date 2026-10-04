@@ -68,9 +68,10 @@ $(BUILD)/tx/%.o: $(TX)/common/src/%.c Makefile
 $(TX_A): $(TX_OBJ)
 	$(AR) -rc $@ $^
 
-$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(BOARD_LD_CM4_THREADX)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(TX_A) -o $@
+$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(BOARD_LD_CM4_THREADX) $(call c_unrecorded,$(BUILD)/$(NAME).elf)
+	$(call c_build,$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(TX_A))
 	$(SIZE) $@
+-include $(BUILD)/$(NAME).elf.d
 
 $(BUILD)/$(NAME).bin: $(BUILD)/$(NAME).elf
 	$(OBJCOPY) -O binary $< $@
