@@ -87,7 +87,7 @@ endif
 CFLAGS += $(LOOM_NET_DEFS) # the network the config sizes (driver/eth/netx_up.c)
 gen/loom_build.mk: gen/.stamp ;
 
-$(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp | $(BUILD)
+$(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) | $(BUILD)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
 	  -path "@vlib|@vmodules|.|$(GW)" \
 	  $(call v_dump,$@) -o $(GW)/$(BUILD)/app.c examples/system_full/main.v

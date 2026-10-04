@@ -78,7 +78,7 @@ $(BOOT_DIR):
 	mkdir -p $(BOOT_DIR)
 
 # what V compiles into it is its dependency list (tools/tools.mk v_deps)
-$(BOOT_DIR)/boot.c: | $(BOOT_DIR)
+$(BOOT_DIR)/boot.c: $(call v_unrecorded,$(BOOT_DIR)/boot.c) | $(BOOT_DIR)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(BOOT_VDEFS) \
 	  -path "@vlib|@vmodules|." $(call v_dump,$@) -o $(CURDIR)/$@ boot/target
 	$(call v_deps,$@)

@@ -60,7 +60,7 @@ gen/.stamp: ecu.toml bus.dbc $(wildcard app/*.v) $(TOOL_ecucheck) $(TOOL_loom2v)
 #    freestanding C (-enable-globals: the trace module + ring live in __global). Run from
 #    the repo root so `import loom/comm.telem/driver.can` resolve via `.` and the local
 #    `import gen/app/ports/sig` via examples/$(NAME).
-$(BUILD)/app.c: main.v gen/.stamp | $(BUILD)
+$(BUILD)/app.c: main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) | $(BUILD)
 	cd $(REPO) && $(V) $(VDBG) -freestanding -gc none -no-bounds-checking -enable-globals \
 	  -path "@vlib|@vmodules|.|examples/$(NAME)" \
 	  $(call v_dump,$@) -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
