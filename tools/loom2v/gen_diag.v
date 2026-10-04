@@ -249,10 +249,10 @@ fn diag_unbuilt(m Model, sid u8) string {
 			'' // both owners perform the reset once the answer is out (housekeep / diag_target_reset)
 		}
 		0x28 {
-			if m.target.on {
-				'nothing on the target gates its frames on CommunicationControl yet'
+			if m.target.on && !m.target.threadx {
+				'nothing on a bare-metal target gates its frames on CommunicationControl'
 			} else {
-				''
+				'' // the host bridge and the ThreadX comm thread gate their application frames
 			}
 		}
 		0x14, 0x19, 0x85 {
@@ -790,20 +790,38 @@ fn diag_target_housekeep(m Model) []string {
 	return ['\t\tg_diag.housekeep(C.board_now_us())']
 }
 
-// diag_target_rx_arm: the connection's share of the drain. With no 0x28 on the target a request
-// gates nothing behind it, so it is served where it completes and the drain goes on — frames the
-// gateway forwards are not held a pass for a diagnostic request. In bus sleep nothing reaches the
-// server: it could not answer; once served, a request holds the network up (diag_target_nm_hold).
+// diag_target_rx_arm: the connection's share of the drain. A request is served where it completes
+// and the drain goes on — frames the gateway forwards are not held a pass for a diagnostic
+// request — and the reception gate is re-sampled at once, so a 0x28 answered now gates the frames
+// queued behind it (a functional request is served on arrival, inside on_frame). In bus sleep
+// nothing reaches the server: it could not answer; once served, a request holds the network up
+// (diag_target_nm_hold).
 fn diag_target_rx_arm(m Model) []string {
 	if m.isotp_conns.len == 0 {
 		return []string{}
 	}
-	awake := if m.nm.on { 'g_nm.awake() && ' } else { '' }
-	return [
-		'\t\t\tif ${awake}g_diag.on_frame(C.board_now_us(), &rx) == .request {',
-		'\t\t\t\tg_diag.serve()',
-		'\t\t\t}',
-	]
+	ind := if m.nm.on { '\t\t\t\t' } else { '\t\t\t' }
+	resample := rx_target_resample(m, ind + '\t\t')
+	mut out := []string{}
+	if m.nm.on {
+		out << '\t\t\tif g_nm.awake() {'
+	}
+	out << '${ind}match g_diag.on_frame(C.board_now_us(), &rx) {'
+	out << '${ind}\t.request {'
+	out << '${ind}\t\tg_diag.serve()'
+	out << resample
+	out << '${ind}\t}'
+	if m.isotp_conns[0].functional_id != 0 && resample.len > 0 {
+		out << '${ind}\t.served {'
+		out << resample
+		out << '${ind}\t}'
+	}
+	out << '${ind}\telse {}'
+	out << '${ind}}'
+	if m.nm.on {
+		out << '\t\t\t}'
+	}
+	return out
 }
 
 // diag_target_nm_hold: before the NM tick, so a request served this pass keeps the network up

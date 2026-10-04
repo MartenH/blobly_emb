@@ -309,9 +309,17 @@ fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 		// reaches domain on compute through sysnode. Filtering rx by origin dropped exactly
 		// those three cross-bus reads (caught by diffing the regenerated tree).
 		part := sig_part[name] or { continue }
+		// received through E2E (the frame on THIS node's bus says so in its DBC): the bridge's
+		// receive status and lost count ride along, as on a someip E2E event — loom2v requires
+		// the status, so an E2E timeout never reaches the FB as a healthy-looking zero
+		mut rx_fields := sig.fields.clone()
+		if can_rx_e2e(sys, bus, sig.name) {
+			rx_fields['status'] = 'RxStatus'
+			rx_fields['lost'] = 'u32'
+		}
 		b << '[[signal]]'
 		b << 'name   = "${sig.name}"'
-		b << 'fields = ${fields_inline(sig.fields)}'
+		b << 'fields = ${fields_inline(rx_fields)}'
 		b << 'from   = "${iface}"'
 		b << 'to     = "${part}"'
 		b << ''
@@ -488,6 +496,20 @@ fn frame_of_signal(sys sysmodel.System, bus sysmodel.Bus, sig string) !string {
 		return error('appears in ${hits.len} frames (${hits.join(', ')}) in bus "${bus.name}" DBC "${bus.dbc}" — the route mapping is ambiguous')
 	}
 	return hits[0]
+}
+
+// can_rx_e2e: the frame carrying `sig` on CAN bus `bus` declares E2E protection in the bus's DBC
+// (blobly_net's docs/dbc_attributes.md) — so its receiver's bridge checks it and reports a status.
+fn can_rx_e2e(sys sysmodel.System, bus sysmodel.Bus, sig string) bool {
+	fr := frame_of_signal(sys, bus, sig) or { return false }
+	path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(sys.dir, bus.dbc) }
+	db := candb.load_dbc_file(path) or { return false }
+	for m in db.messages {
+		if m.name == fr {
+			return m.e2e.declared()
+		}
+	}
+	return false
 }
 
 // signal_partitions maps each signal a node's FBs read/write to the partition

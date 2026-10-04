@@ -1317,6 +1317,8 @@ mut:
 	fault_snap_ids_b []u16 // each fault's second snapshot block (persist.v A / B)
 	fault_grace_us  u64 // the cycle-end barrier: twice the longest period of a fault-testing handler
 	bulk      []BulkPoolCfg
+	fb_reads    map[string]int      // signal -> how many FB handlers read it
+	fb_reads_by map[string][]string // fb -> the signals its handlers read
 }
 
 fn build_model(doc toml.Doc, dbc string) Model {
@@ -1528,6 +1530,8 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		xcore_xw_total: xcore_xw_total
 		nvm:          parse_nvm(doc)
 		bulk:         parse_bulk(doc)
+		fb_reads:     fb_read_counts(doc)
+		fb_reads_by:  fb_reads_of(doc)
 	}
 	validate_signal_routes_model(m, doc)
 	validate_uds(m)
@@ -2336,8 +2340,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << 'fn C.blob_eth_recv(int, &u8, &u16, &u8, int) int'
 			}
 			if iocb_on(m) {
-				// the byte IOC pool (boards/common/iocb.c): struct-bearing eth signals and the
-				// fault cells cross threads through size-proportional arenas (boards/common/ioc.h)
+				// the byte IOC pool (boards/common/iocb.c): struct-bearing eth signals, checked
+				// received signals and the fault cells cross threads through size-proportional
+				// arenas (boards/common/ioc.h)
 				glue << 'fn C.iocb_cfg(int, u16)'
 				glue << 'fn C.iocb_pub(int, voidptr)'
 				glue << 'fn C.iocb_get(int, voidptr)'
@@ -2359,6 +2364,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			// kernel reads/writes word fields through this pointer as a TX_THREAD*, so a byte-
 			// aligned [256]u8 could fault. The stack stays a byte buffer (ThreadX aligns the SP
 			// internally in tx_thread_stack_build).
+			glue << rx_target_struct(m)
 			glue << '__global ('
 			for thr in app_threads {
 				own := if multi { thr } else { part }
@@ -2375,6 +2381,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << shell_module_globals(m)
 			glue << diag_target_globals(m)
 			glue << fault_target_globals(m)
+			glue << rx_target_global(m)
 			glue << doip_target_globals(m)
 			glue << xcore_trace_globals(m)
 			glue << nvm_globals(m)
@@ -2699,10 +2706,14 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// message, and the lean cut counts received frames, so a frame must increment once.
 				mut rx_sigs := []SigInfo{}
 				mut rx_ids_seen := map[int]bool{}
+				rx_checked := rx_checked_msgs(m)
 				for sn in m.sig_names {
 					s := m.sig_of[sn] or { continue }
 					if m.eth != '' && s.bus == m.eth {
 						continue // eth signals ride the eth thread, not the CAN drain
+					}
+					if s.dbc_msg in rx_checked {
+						continue // checked: rx_target_arms below
 					}
 					if s.rx && !rx_ids_seen[s.dbc_id] {
 						rx_ids_seen[s.dbc_id] = true
@@ -2797,6 +2808,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << shell_module_init(m)
 				glue << diag_target_init(m)
 				glue << fault_target_init(m)
+				glue << rx_target_init(m)
 				glue << doip_target_init(m)
 				glue << nm_shell_register(m)
 				glue << stat_shell_register(m)
@@ -2827,6 +2839,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\tC.comm_rx_wait(10) // block up to 10 ticks; the FDCAN Rx ISR wakes us on a new frame'
 				}
 				glue << diag_target_housekeep(m)
+				glue << rx_target_top(m)
 				glue << fault_target_pass(m)
 				glue << doip_target_serve(m)
 				glue << '\t\t// CONSUMER: drain the Rx FIFO (non-blocking); account each external rx frame'
@@ -2840,11 +2853,19 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					if idx := msg_ioc_idx[si.dbc_id] {
 						// This message carries an FB-read signal (keyed by DBC id, so it fires even when
 						// the de-duped representative is a different, un-read signal): publish the decoded
-						// value (byte-0 scalar) into its IOC cell so the app thread picks it up wait-free.
-						glue << '\t\t\t\tC.ioc_pub(${idx}, g_rx_last, u32(0))'
+						// value (byte-0 scalar) into its IOC cell so the app thread picks it up wait-free
+						// — while 0x28 has reception on.
+						if m.isotp_conns.len > 0 {
+							glue << '\t\t\t\tif st.rxg.on {'
+							glue << '\t\t\t\t\tC.ioc_pub(${idx}, g_rx_last, u32(0))'
+							glue << '\t\t\t\t}'
+						} else {
+							glue << '\t\t\t\tC.ioc_pub(${idx}, g_rx_last, u32(0))'
+						}
 					}
 					glue << '\t\t\t}'
 				}
+				glue << rx_target_arms(m)
 				glue << trace_rx_arms(m, part)
 			glue << shell_rx_arms(m)
 			glue << diag_target_rx_arm(m)
@@ -2867,6 +2888,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// free frame past the sleep boundary (codex on emb#135).
 				glue << diag_target_nm_hold(m)
 				glue << nm_produce_drain(m)
+				glue << rx_target_settle(m)
 				glue << fault_target_cycle(m)
 				glue << fault_target_persist(m, ioc_idx)
 				if m.nm.on {
@@ -2902,7 +2924,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\t// PRODUCER: external tx signal "${si.name}" — read the FB-published IOC'
 					glue << '\t\t// cell, encode the value (LE at byte 0), and send it cyclically (tx_ready-gated).'
 					nm_gate := if m.nm.on { 'nm_up && ' } else { '' }
-					glue << '\t\tif ${nm_gate}t1 - last_tx_${snake(si.name)} >= u64(${cyc}) && ch.tx_ready() {'
+					glue << '\t\tif ${nm_gate}${diag_tx_gate(m)}t1 - last_tx_${snake(si.name)} >= u64(${cyc}) && ch.tx_ready() {'
 					glue << '\t\t\tlast_tx_${snake(si.name)} = t1'
 					glue << '\t\t\tmut tv_a := u32(0)'
 					glue << '\t\t\tmut tv_b := u32(0)'
@@ -3073,6 +3095,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\tC.iocb_cfg(${eth_iocb_idx(m)[bn]}, u16(sizeof(cfg_${snake(bn)})))'
 				}
 			}
+			glue << rx_target_boot(m)
 			glue << fault_target_boot(m)
 			glue << '\tC._tx_initialize_kernel_enter()'
 			glue << '}'
@@ -3408,9 +3431,10 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 							glue << '\tC.ioc_get(${idx}, &${snake(rn)}_a, &${snake(rn)}_b)'
 							glue << '\t${asn}'
 						}
-					} else if bidx := eth_iocb_idx(m)[rn] {
-						// eth rx signal on the ThreadX target: the eth thread published
-						// the unpacked struct into its byte IOC channel (docs/someip.md)
+					} else if bidx := rx_iocb_idx(m)[rn] {
+						// a received signal crossing whole on the ThreadX target: the eth thread's
+						// unpacked struct (docs/someip.md), or a checked CAN frame's decoded signal
+						// with its status (gen_rx_target.v)
 						glue << '\tC.iocb_get(${bidx}, &inp.${snake(rn)})'
 					} else if rn in m.xcore_names && image_part == '' && m.target.threadx {
 						// OWNER FB reads a CROSS-CORE signal (satellite -> owner) on the TARGET: read it
@@ -3679,7 +3703,8 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 			has_eth_tx = true
 		}
 	}
-	if (m.has_can_ext && !comm_thread_on) || has_eth_tx || m.routes.any(it.signal != '') {
+	if (m.has_can_ext && !comm_thread_on) || has_eth_tx || m.routes.any(it.signal != '')
+		|| (comm_thread_on && rx_target_on(m)) {
 		glue << 'import comm.com' // per-PDU TX modes + RX deadline; eth codec PDU bound (max_pdu); signal-route producer TxState
 	}
 	// the eth comm thread's codec: pure V, both sides of the silicon line; the
@@ -4115,6 +4140,8 @@ fn main() {
 				'not generated yet (raw-identical route forwarding is the supported cut)')
 		}
 		validate_diag_threadx(m)
+		validate_rx_target(m)
+		rx_checked := rx_checked_msgs(m)
 		// Which signals FB handlers read vs write. An rx signal READ by an FB flows through the
 		// target IOC pool (6b-2b); an rx signal WRITTEN by an FB is a config error (an input isn't
 		// written). Everything else external is still deferred (rejected below).
@@ -4258,6 +4285,11 @@ fn main() {
 				panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" DBC message is ' +
 					'extended (29-bit${if si.dbc_ext { ' — the EFF flag is set' } else { '' }}), but the ' +
 					'classic FDCAN backend delivers only 11-bit standard frames — use a standard id')
+			}
+			// a frame the COM receive rule checks crosses to its FBs whole, through the byte IOC
+			// (gen_rx_target.v) — none of the lean copy's limits below apply to it
+			if si.dbc_msg in rx_checked {
+				continue
 			}
 			if (m.frames.rx_timeout_us[si.dbc_msg] or { 0 }) > 0 || (m.frames.e2e_on[si.dbc_msg] or { false })
 				|| (m.frames.secoc_on[si.dbc_msg] or { false }) {
@@ -5134,9 +5166,6 @@ fn validate_faults(m Model, doc toml.Doc) {
 		}
 		dtcs[f.dtc] = f.name
 		if f.signal != '' {
-			if m.target.on {
-				panic('loom2v: [[fault]] "${f.name}": a signal-status fault on the target needs the comm thread\'s rx status, deadlines and E2E (rung R5, phase 6b-2b) — not generated yet; test it in an FB')
-			}
 			validate_signal_fault(m, f)
 			continue
 		}
@@ -5282,9 +5311,9 @@ fn validate_fault_target(m Model) {
 	if !m.nvm.on {
 		panic('loom2v: [[fault]] on the target needs [nvm] — the fault memory keeps its DTCs, counters and snapshots in the NvM journal across resets and power loss (docs/diagnostics.md §3.3); declare the storage')
 	}
-	cells := eth_iocb_idx(m).len + 2 * fault_fbs(m).len
+	cells := rx_iocb_idx(m).len + 2 * fault_fbs(m).len
 	if cells > iocb_pool_n {
-		panic('loom2v: [[fault]]: ${fault_fbs(m).len} fault-owning FB(s) need ${2 * fault_fbs(m).len} byte-IOC cells beside ${eth_iocb_idx(m).len} eth signal(s) — the pool holds ${iocb_pool_n} (boards/common/iocb.c IOCB_POOL_N)')
+		panic('loom2v: [[fault]]: ${fault_fbs(m).len} fault-owning FB(s) need ${2 * fault_fbs(m).len} byte-IOC cells beside ${rx_iocb_idx(m).len} signal cell(s) — the pool holds ${iocb_pool_n} (boards/common/iocb.c IOCB_POOL_N)')
 	}
 }
 
@@ -5296,7 +5325,7 @@ fn fault_cell(m Model, fb string, control bool) int {
 	if k < 0 {
 		panic('loom2v: no fault cell for ${fb}')
 	}
-	return eth_iocb_idx(m).len + 2 * k + if control { 1 } else { 0 }
+	return rx_iocb_idx(m).len + 2 * k + if control { 1 } else { 0 }
 }
 
 // fault_target_on: the image runs a fault memory on its ThreadX comm thread (R6).
@@ -5306,7 +5335,7 @@ fn fault_target_on(m Model) bool {
 
 // iocb_on: the image uses the byte IOC pool — its eth signals, its fault cells, or both.
 fn iocb_on(m Model) bool {
-	return eth_thread_on(m) || fault_target_on(m)
+	return eth_thread_on(m) || fault_target_on(m) || rx_iocb_idx(m).len > 0
 }
 
 // fault_target_globals: the fault memory and each fault-owning FB's two cells, comm-thread side,
