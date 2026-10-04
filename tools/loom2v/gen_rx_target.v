@@ -119,15 +119,14 @@ fn rx_target_on(m Model) bool {
 fn rx_target_owner(m Model) RxOwner {
 	idx := rx_iocb_idx(m)
 	return RxOwner{
-		fmem:    'g_fmem'
-		rx_on:   if m.isotp_conns.len > 0 { 'g_diag.server.rx_enabled()' } else { '' }
-		awake:   if m.nm.on && rx_checked_msgs(m).len > 0 { 'g_nm.awake()' } else { '' }
-		faults:  m.faults.any(it.signal != '')
+		fmem: 'g_fmem'
+		rx_on: if m.isotp_conns.len > 0 { 'g_diag.server.rx_enabled()' } else { '' }
+		awake: if m.nm.on && rx_checked_msgs(m).len > 0 { 'g_nm.awake()' } else { '' }
+		faults: m.faults.any(it.signal != '')
 		publish: fn [idx] (si SigInfo, fld string) string {
 			if i := idx[si.name] {
 				return 'C.iocb_pub(${i}, &${fld}) // to the FBs, status and all'
-			}
-			return ''
+			}return ''
 		}
 	}
 }
@@ -138,8 +137,9 @@ fn rx_target_struct(m Model) []string {
 	if !rx_target_on(m) {
 		return []string{}
 	}
-	mut out := ['', '// the comm thread\'s receive state (gen_rx.v templates): monitors, the reception gate,',
-		'// the signal-status faults\' debouncers', 'struct CommRx_state {', 'mut:']
+	mut out := ['',
+		"// the comm thread's receive state (gen_rx.v templates): monitors, the reception gate,",
+		"// the signal-status faults' debouncers", 'struct CommRx_state {', 'mut:']
 	out << rx_state_fields(m, rx_checked_msgs(m), rx_target_bus(m), rx_target_owner(m))
 	out << signal_fault_fields(m)
 	out << '}'
@@ -151,7 +151,7 @@ fn rx_target_global(m Model) []string {
 	if !rx_target_on(m) {
 		return []string{}
 	}
-	return ['\tg_crx CommRx_state // the comm thread\'s receive state (bss)']
+	return ["\tg_crx CommRx_state // the comm thread's receive state (bss)"]
 }
 
 // rx_target_init: at the comm thread's start, after the fault memory is configured — the
@@ -176,7 +176,7 @@ fn rx_target_top(m Model) []string {
 	owner := rx_target_owner(m)
 	mut out := []string{}
 	if rx_checked_msgs(m).any(rx_monitored(m, it, rx_target_bus(m))) || owner.faults {
-		out << '\t\tnow := C.board_now_us() // the receive rule\'s clock for this pass'
+		out << "\t\tnow := C.board_now_us() // the receive rule's clock for this pass"
 	}
 	out << rx_gate_lines(m, rx_checked_msgs(m), rx_target_bus(m), owner, '\t\t')
 	if owner.faults {
