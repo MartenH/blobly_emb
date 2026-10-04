@@ -7,7 +7,7 @@ import rand
 #flag -I @VMODROOT/driver/eth
 #include "doip_mb.h"
 
-fn C.doip_mb_sent_take(u32, u32, &u32, int, u32) int
+fn C.doip_mb_sent_take(u32, u32, &u32, u32, u32) int
 
 // @verifies REQ-BOOT-005, REQ-BOOT-008, REQ-BOOT-009
 // The full programming session against RAM-backed FlashOps: the same session
@@ -741,6 +741,26 @@ fn test_a_refused_request_does_not_hold_the_other_transports_session() {
 	assert p.srv.session == 0x01 && !p.unlocked, 'the network kept the bus session alive'
 }
 
+// a DoIP answer whose acknowledgement is slow holds the session past S3, as a bus answer still
+// being sent does; once acknowledged, S3 runs from then
+fn test_a_slow_acknowledgement_holds_s3() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	unlock_via(mut p, via_net, proof(), 0)
+	p.tick(3 * s3_server_us) // the 0x29 answer still unacknowledged
+	assert p.srv.session == 0x02 && p.unlocked
+	p.remote_sent()
+	p.tick(4 * s3_server_us)
+	assert p.srv.session == 0x02, 'S3 runs from the last exchange in flight'
+	p.tick(4 * s3_server_us + 1)
+	assert p.srv.session == 0x01
+	// nor does the stay-window give the ECU back while it is in flight
+	mut q := new_prog(mut f)
+	assert ask_net(mut q, [u8(0x3E), 0x00], 0)[0] == 0x7E
+	q.tick(5 * idle_return_us)
+	assert !q.idle_return_due(5 * idle_return_us, 0)
+}
+
 // a reset the network asked for is not cancelled by a bus answer the controller refused
 fn test_a_bus_failure_does_not_cancel_a_network_reset() {
 	mut f := &TestFlash{}
@@ -853,6 +873,9 @@ fn (mut m Model) dropped() {
 }
 
 fn (mut m Model) tick(now u64) {
+	if m.inflight && (m.session == 0x01 || m.owner == via_net) {
+		m.heard = now // an exchange in flight holds the silence clocks
+	}
 	if m.session != 0x01 && now - m.heard > s3_server_us {
 		m.end()
 	}
@@ -936,7 +959,8 @@ fn test_two_transports_against_the_reference_model() {
 			else {}
 		}
 		// the serve loop's mailbox pass: an answer is sent once acknowledged on a live connection
-		if C.doip_mb_sent_take(queued, answered, &seen, connected, unacked) == 1 {
+		state := if connected == 1 { u32(5) } else { u32(1) } // ESTABLISHED / CLOSED (NetX)
+		if C.doip_mb_sent_take(queued, answered, &seen, state, unacked) == 1 {
 			assert connected == 1 && unacked == 0
 			p.remote_sent()
 			m.inflight = false

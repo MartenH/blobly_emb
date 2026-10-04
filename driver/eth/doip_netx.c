@@ -158,10 +158,22 @@ void doip_mb_answer(int n) {
 
 /* comm thread: 1 once the answer it gave last has been ACKNOWLEDGED by the tester (doip_mb.h: a
  * reset waits for it, and an answer still queued dies with a connection that drops) */
+#if NX_TCP_ESTABLISHED != DOIP_MB_TCP_ESTABLISHED || NX_TCP_CLOSE_WAIT != DOIP_MB_TCP_CLOSE_WAIT
+#error "doip_mb.h: its TCP state numbers are not NetX's"
+#endif
 int doip_mb_take_sent(void) {
+	NX_IP *ip = blob_net_ip();
+	/* the socket's state and its transmit queue, read together under the IP instance's mutex (the
+	 * IP thread changes both); a connection the doip thread has not opened reads as closed */
+	uint32_t state = NX_TCP_CLOSED, unacked = 0u;
+	if (tcp_connected) {
+		tx_mutex_get(&ip->nx_ip_protection, TX_WAIT_FOREVER);
+		state = (uint32_t)tcp_sock.nx_tcp_socket_state;
+		unacked = (uint32_t)tcp_sock.nx_tcp_socket_transmit_sent_count;
+		tx_mutex_put(&ip->nx_ip_protection);
+	}
 	uint32_t seen = (uint32_t)mb_sent_seen;
-	int r = doip_mb_sent_take((uint32_t)mb_sent_seq, (uint32_t)mb_answered, &seen, tcp_connected ? 1 : 0,
-	                          (uint32_t)tcp_sock.nx_tcp_socket_transmit_sent_count);
+	int r = doip_mb_sent_take((uint32_t)mb_sent_seq, (uint32_t)mb_answered, &seen, state, unacked);
 	mb_sent_seen = seen;
 	return r;
 }
