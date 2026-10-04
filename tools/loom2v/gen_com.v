@@ -1528,7 +1528,10 @@ fn emit_eth_target_create(m Model, prio int) []string {
 // loop's seams differ, and each side is bench-proven against the same host
 // oracle, so parameterizing one emitter over both seam sets would trade two
 // straight-line loops for one harder-to-review indirection (deliberate).
-fn emit_eth_thread_target(m Model, doc toml.Doc) []string {
+// On a DoIP-only node (diag_doip_only) it hosts the diagnostic server too: configured before the
+// loop, the doip thread's mailbox answered at the top of each pass, an answered reset performed at
+// its end — the CAN comm thread's part, without the bus.
+fn emit_eth_thread_target(m Model, doc toml.Doc, ioc_idx map[string]int) []string {
 	mut glue := []string{}
 	if !eth_thread_on(m) {
 		return glue
@@ -1587,9 +1590,18 @@ fn emit_eth_thread_target(m Model, doc toml.Doc) []string {
 	glue << '\tmut rx_buf := [80]u8{} // oversize datagrams truncate here and drop (real length reported)'
 	glue << '\tmut rx_ip := [4]u8{}'
 	glue << '\tmut rx_port := u16(0)'
+	if diag_doip_only(m) {
+		glue << diag_target_init(m)
+		glue << doip_target_init(m)
+	}
 	glue << '\tfor {'
 	glue << '\t\tC._tx_thread_sleep(1) // one kernel tick — the [target] tick_ms pace'
 	glue << '\t\tnow := C.board_now_us()'
+	if diag_doip_only(m) {
+		glue << diag_target_housekeep(m)
+		glue << doip_target_serve(m)
+		glue << diag_target_reset(m, ioc_idx)
+	}
 	if rx_frames.len == 0 && !shell_on_eth(m) {
 		glue << '\t\t// tx-only endpoint: drain and count unsolicited datagrams (bounded) —'
 		glue << '\t\t// nothing routes here, but the pool packets must come back'

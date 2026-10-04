@@ -2890,15 +2890,17 @@ fn check_doip(s System) []Issue {
 			}
 		}
 		// the server DoIP carries is the node's ONE diagnostic server: its [isotp] connection,
-		// on the ids the system allocates it (diag)
-		if n.diag.req == 0 && n.diag.rsp == 0 {
+		// on the ids the system allocates it (diag) — or, on a node on no CAN bus, none: DoIP is
+		// its only transport (loom2v diag_doip_only)
+		doip_only := n.view.isotp_conns.len == 0 && !n.buses.any(!is_someip_bus(s, it))
+		if !doip_only && n.diag.req == 0 && n.diag.rsp == 0 {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-005'
 				msg:      'node "${n.name}": declares `doip` but has no `diag` allocation — DoIP carries the node\'s diagnostic server, which the system addresses by its diag ids'
 			}
 		}
-		if n.view.isotp_conns.len != 1 {
+		if !doip_only && n.view.isotp_conns.len != 1 {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-005'

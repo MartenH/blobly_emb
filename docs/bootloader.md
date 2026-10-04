@@ -6,8 +6,8 @@
 > every node", below): every `system_full` CAN node — domain (H755), sysnode (H735), zone_a (H723)
 > — runs behind its own. Bench run pending (`examples/system_full/test/boot_bench.sh`).
 > 2026-10-04: **the DoIP binding** (REQ-BOOT-019, "The DoIP binding", below): a `[doip]` node's
-> bootloader is its DoIP entity too, so sysnode is field-updatable over DoIP as well as CAN. Bench
-> run pending (`boot_bench.sh sysnode-doip`).
+> bootloader is its DoIP entity too, so sysnode is field-updatable over DoIP as well as CAN, and
+> tcu (Ethernet only) over DoIP alone. Bench runs pending (`boot_bench.sh sysnode-doip tcu-doip`).
 > The chain runs on real silicon: header-verified jump, CAN reflash + torn-image
 > recovery, S3/return-to-app session timers, and full asymmetric authenticity —
 > Ed25519 image signatures verified on the CM7 (no heap) + a 0x29 session gate
@@ -175,9 +175,13 @@ restarts both cores. Bench check: with the boot in programming mode, `st-flash r
 `0x38000008` (the release cell) reads 0 and the CM4 heartbeat counter (`0x38000004`, after its magic) does not advance. A CAN field update does NOT refresh the CM4 image — it is flashed over SWD (`make -C
 nodes/domain_m4 flash`), as before (non-goal: multi-image orchestration).
 
-**tcu** (H723, Ethernet only) has no CAN, so no CAN bootloader reaches it: it does not declare
-`[boot]` yet. The DoIP binding (below) is what it needs; what is left is a diagnostic server on a
-node with no `[isotp]`, and a boot with no bus to open.
+**tcu** (H723, Ethernet only) has no CAN, so no CAN bootloader reaches it: it runs behind a
+**DoIP-only** bootloader (the binding below). Its application's one diagnostic server is reached
+over DoIP alone — `[uds]` + `[doip]` and no `[isotp]`, hosted by the eth thread, which answers the
+doip thread's mailbox as a CAN comm thread does (loom2v `diag_doip_only`; syscheck accepts a `doip`
+node with no `diag` ids when it is on no CAN bus) — and its bootloader opens no bus
+(`BOOT_CAN_IDX -1`): the serve loop serves the mailbox alone. Same 128 KB boot sector as the H735,
+same footprint (89.7 KB text).
 
 ### The DoIP binding (as built, REQ-BOOT-019)
 

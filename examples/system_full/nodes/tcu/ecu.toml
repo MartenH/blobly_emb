@@ -31,6 +31,37 @@ tick_ms = 1
 bus    = "eth0"
 method = 0x0001
 
+# The diagnostic server (docs/diagnostics.md): UDS (ISO 14229) — [uds] — reached over DoIP ALONE.
+# tcu is on no CAN bus, so it has no [isotp]: its one server is hosted by the eth thread, which
+# answers the doip thread's mailbox (system.toml's `doip`, lowered into [doip]). The table is
+# sysnode's: every state change over IP behind the network tester's own level 1 (REQ-NET-012), the
+# public reference key on this BENCH node by name (system.toml allow_bench_key).
+[uds]
+s3_ms             = 5000
+security_attempts = 3
+security_delay_ms = 3000
+security_key      = "reference"
+
+[uds.services]
+"0x10" = {}                            # DiagnosticSessionControl
+"0x10 02" = { security = 1 }           # the programming handoff ([boot]), over DoIP (REQ-NET-012)
+"0x11" = { sessions = ["extended"], security = 1 }   # ECUReset
+"0x22" = {}                            # ReadDataByIdentifier
+"0x27" = {}                            # SecurityAccess
+"0x3E" = {}                            # TesterPresent
+
+# Behind its bootloader (docs/bootloader.md "The DoIP binding"): the boot manager is built from THIS
+# config and, with no bus to open, serves the programming session over DoIP alone — the same entity
+# (192.168.0.51, logical 0x07E0) — so tcu is field-updatable over the wire. Dev keys, as sysnode's.
+[boot]
+image_key   = "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8"
+session_key = "29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7"
+
+# the VIN: 17 characters, announced by DoIP too
+[[did]]
+id    = 0xF190
+ascii = "BLOBLY-TCU-H723-1"
+
 [[partition]]
 name    = "app"
 core    = 0

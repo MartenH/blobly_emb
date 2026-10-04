@@ -1143,12 +1143,29 @@ fn test_doip_needs_the_diagnostic_server_it_carries() {
 	mut sys := doip_system()
 	sys.nodes[0].diag = sysmodel.Diag{}
 	assert doip_errs(sys).any(it.contains('has no `diag` allocation')), doip_errs(sys).str()
+	// a node on a CAN bus serves diagnostics on its [isotp] connection: DoIP carries that server
 	sys = doip_system()
+	sys.buses << sysmodel.Bus{
+		name: 'body'
+		kind: 'can'
+	}
+	sys.nodes[0].buses << 'body'
 	sys.nodes[0].view.isotp_conns = []
 	assert doip_errs(sys).any(it.contains('0 [isotp] connection(s)')), doip_errs(sys).str()
+	sys.nodes[0].diag = sysmodel.Diag{}
+	assert doip_errs(sys).any(it.contains('has no `diag` allocation')), doip_errs(sys).str()
 	sys = doip_system()
 	sys.nodes[0].view.is_threadx = false
 	assert doip_errs(sys).any(it.contains('is not a threadx target')), doip_errs(sys).str()
+}
+
+// a node on no CAN bus (tcu) reaches its diagnostic server over DoIP alone: no [isotp] connection
+// and no `diag` ids to allocate (loom2v diag_doip_only hosts it on the eth thread)
+fn test_a_node_on_no_can_bus_serves_doip_alone() {
+	mut sys := doip_system()
+	sys.nodes[0].diag = sysmodel.Diag{}
+	sys.nodes[0].view.isotp_conns = []
+	assert doip_errs(sys).len == 0, doip_errs(sys).str()
 }
 
 // The node's [doip] is the SYSTEM's now: a hand-written one beside the lowered one is a second

@@ -2020,7 +2020,7 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 		tid++
 	}
 	// the DoIP transport's threads (gen_doip.v): bound after eth, before the kernel timer
-	if comm_thread_on {
+	if comm_thread_on || diag_doip_only(m) {
 		doip_rows := doip_manifest_rows(m, tid)
 		man << doip_rows
 		tid += doip_rows.len
@@ -2394,7 +2394,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			}
 			if eth_thread_on(m) {
 				glue << '\tg_eth_tcb   [32]u64  // the SOME/IP eth comm thread (docs/someip.md)'
-				glue << '\tg_eth_stack [4096]u8 // someip codec + TxState/E2E frames: comm-thread-class depth'
+				// a DoIP-only node's diagnostic server runs here: the comm thread's 8 KB (its dispatch
+				// copies the UDS server by value into several frames)
+				eth_stack := if diag_doip_only(m) { 8192 } else { 4096 }
+				glue << '\tg_eth_stack [${eth_stack}]u8 // someip codec + TxState/E2E frames: comm-thread-class depth'
 				// drop/ok counters as exported globals: SWD-observable (the
 				// semihosting-never rule) — the host bridge prints, silicon counts
 				glue << '\tg_eth_rx_ok u32'
@@ -3015,6 +3018,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// TX_NO_TIME_SLICE, so an equal-priority eth drain pass would run to
 				// completion ahead of a due io cadence (codex #169 r2)
 				glue << emit_eth_target_create(m, min_prio - 2)
+				glue << doip_target_create(m) // a DoIP-only node: the eth thread hosts its server
 				if m.trace.on {
 					// Deterministic ids in MANIFEST order (app threads, then io) — without
 					// explicit binds the io thread, running at min FB - 1, is first-sighted
@@ -3032,6 +3036,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					if eth_thread_on(m) {
 						glue << '\tC.trace_bind_thread(&g_eth_tcb[0])'
 					}
+					glue << doip_target_trace_binds(m)
 				}
 				glue << '}'
 			}
@@ -3698,8 +3703,8 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 		glue << 'import comm.doip' // the diagnostic server over DoIP too (gen_doip.v)
 		glue << 'import driver.doipnet' // its network loop, shared with the node's bootloader
 	}
-	if m.isotp_conns.len > 0 {
-		glue << 'import comm.diag' // the diagnostic server on its ISO-TP connection
+	if diag_on(m) {
+		glue << 'import comm.diag' // the diagnostic server (on its ISO-TP connection, or DoIP alone)
 		// the glue names uds only for [[did]]s — their tables, the live refresh, 0x27 — and for a
 		// [uds] service table
 		// a [uds] service table, and the programming handoff (uds.reset_into_boot)
@@ -4409,7 +4414,7 @@ fn main() {
 	}
 	// --- eth comm thread: SOME/IP over the NetX seam (ThreadX target) ---
 	if m.target.threadx {
-		glue << emit_eth_thread_target(m, doc)
+		glue << emit_eth_thread_target(m, doc, ioc_idx)
 	}
 	mut bus_names := bnames.clone()
 
@@ -4522,7 +4527,7 @@ fn main() {
 		if m.boot.on {
 			// the node's bootloader: its config header, and the build of it (boot/boot.mk), which
 			// also links the application at the board's app slot
-			bus := m.isotp_conns[0].bus
+			bus := diag_conn(m).bus
 			fd := (doc.value('bus').as_map()[bus] or { toml.Any(map[string]toml.Any{}) }).as_map()['fd'] or {
 				toml.Any(false)
 			}

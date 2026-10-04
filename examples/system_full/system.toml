@@ -275,9 +275,12 @@ trace = 3
 
 # The telematics node: SOME/IP-over-Ethernet (#244, #245). No `nm` (not an NM cluster member)
 # and no `trace` (its observability is the eth rung's). Its endpoint is its identity on the
-# segment — the address it answers at, and the port it listens on.
+# segment — the address it answers at, and the port it listens on. Its diagnostic server is
+# reached over DoIP alone (no CAN bus, so no `diag` ids), as sysnode's posture: the bench tester,
+# the public reference key by name.
 [[node]]
 name     = "tcu"
 ecu      = "nodes/tcu/ecu.toml"
 buses    = ["tel"]
 endpoint = { address = "192.168.0.51", port = 30490 }
+doip     = { logical = 0x07E0, testers = [0x0E00], allow_bench_key = true }

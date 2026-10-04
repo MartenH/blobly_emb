@@ -80,8 +80,10 @@ fn validate_doip(m Model) {
 	if !m.target.threadx {
 		panic('loom2v: [doip] is a ThreadX target transport (driver/eth/doip_netx.c); a host node has none yet')
 	}
-	if m.isotp_conns.len != 1 {
-		panic('loom2v: [doip] carries the node\'s ONE diagnostic server — declare its [uds] server and [isotp] connection')
+	// the server is the [isotp] connection's on the CAN comm thread — or, on a node with no CAN
+	// (diag_doip_only), the eth thread's, reached over DoIP alone
+	if m.isotp_conns.len > 1 || (m.isotp_conns.len == 0 && !eth_thread_on(m)) {
+		panic('loom2v: [doip] carries the node\'s ONE diagnostic server — declare its [uds] server and [isotp] connection, or, on a node with no CAN, an eth bus whose thread hosts it')
 	}
 	// one NetX per image, at one address (driver/eth/netx_up.c): SOME/IP and DoIP share it
 	if eth_thread_on(m) && ip4_octets(m.eth_iface) != ip4_octets(d.address) {

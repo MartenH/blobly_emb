@@ -16,7 +16,7 @@
 --                        `make -C nodes/<node> image SW_VERSION=$BOOT_VERSION` (boot_bench.sh does both)
 --   BOOT_PHASE=roundtrip the handoff, then 0x11 from the boot back to the application (no flash)
 -- BOOT_NODES (comma-separated, default every entry) picks the entries: a node over CAN by its name,
--- over DoIP as <name>-doip (sysnode-doip).
+-- over DoIP as <name>-doip (sysnode-doip, tcu-doip).
 --   BLOBLY_NET=/path/to/blobly_net; BOOT_VERSION=<n> v -enable-globals \
 --     -path "@vlib|@vmodules|$BLOBLY_NET/modules" run $BLOBLY_NET/cmd/script/run.v \
 --     examples/system_full/test/boot_handoff.lua
@@ -30,6 +30,8 @@ local all = {
   -- sysnode's bootloader over DoIP (diag_bench.blobnet's sysnode_ip): the handoff needs this network
   -- tester's own level 1 (REQ-NET-012), and the session it opens is the network's
   { name = "sysnode-doip", node = "sysnode", doip = "sysnode_ip", ident = "BLOBLYSYSNODEH735", level = 1 },
+  -- tcu: on no CAN bus, so DoIP is the only way to its bootloader (tcu_ip, 192.168.0.51)
+  { name = "tcu-doip", node = "tcu", doip = "tcu_ip", ident = "BLOBLY-TCU-H723-1", level = 1 },
 }
 
 local phase = os.getenv("BOOT_PHASE") or "flash"

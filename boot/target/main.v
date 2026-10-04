@@ -94,7 +94,9 @@ fn main() {
 	// --- stay: programming mode (REQ-BOOT-004: always reachable) ---
 	C.boot_info_no_app()
 	C.board_clock_init()
-	C.board_can_clock_pins_init()
+	if C.boot_can_idx() >= 0 {
+		C.board_can_clock_pins_init()
+	}
 	g_prog.flash = boot.FlashOps{
 		erase:   fl_erase
 		program: fl_program
@@ -139,9 +141,9 @@ fn main() {
 // [doip] node it is the boot thread's.
 fn serve_loop() {
 	mut ch := can.Channel{}
-	idx := C.boot_can_idx()
+	idx := C.boot_can_idx() // -1: a node with no bus (DoIP only)
 	ifname := if idx == 1 { '1' } else if idx == 2 { '2' } else { '0' } // the driver's one-digit index
-	can_ok := ch.open(ifname, C.boot_can_fd() != 0)
+	can_ok := idx >= 0 && ch.open(ifname, C.boot_can_fd() != 0)
 	if !can_ok && !net_serves() {
 		for {} // no transport, nothing to serve — parked, but flashable over SWD
 	}

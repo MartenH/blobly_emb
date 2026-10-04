@@ -469,8 +469,9 @@ from a mailbox (`driver/eth/doip_netx.c`) through `comm/diag`'s `serve_remote`, 
 tester share one session — while a 0x27 unlock belongs to the transport that earned it, so a
 network tester never writes under a bus tester's unlock (REQ-NET-012) — and a reset a DoIP tester asks for waits for its
 answer to be acknowledged. A `[boot]` node with `[doip]` has a bootloader that is its DoIP entity
-too, so its handoff may be asked over DoIP (docs/bootloader.md, "The DoIP binding"). Not built: a
-host-side DoIP transport.
+too, so its handoff may be asked over DoIP (docs/bootloader.md, "The DoIP binding"). A node on no
+CAN bus (system_full's tcu) declares `[uds]` + `[doip]` and no `[isotp]`: its one server is the eth
+thread's, reached over DoIP alone. Not built: a host-side DoIP transport.
 
 ## 7. Obligations carried into the rungs
 

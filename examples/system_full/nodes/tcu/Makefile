@@ -5,7 +5,7 @@
 # ../../test/tcu_e2e.lua (the E2E-protected receive path).
 #
 #   make -C ../../../.. deps      # once: ThreadX + NetX Duo + CMSIS
-#   make flash SERIAL=0029003E3233510639363634
+#   make flash SERIAL=0029003E3233510639363634   # its bootloader at 0x08000000 + the app at 0x08020000
 CROSS   ?= arm-none-eabi-
 CC       = $(CROSS)gcc
 AR       = $(CROSS)ar
@@ -124,9 +124,15 @@ $(BUILD)/$(NAME).bin: $(BUILD)/$(NAME).elf
 $(BUILD):
 	@mkdir -p $(BUILD)
 
+# behind its bootloader ([boot]: boot/boot.mk, included by gen/loom_build.mk) the application
+# goes to the app slot with the boot beside it — a DoIP-only boot, tcu having no CAN
+ifeq ($(BOOT_ON),1)
+flash: boot-flash
+else
 flash: $(BUILD)/$(NAME).bin
 	st-flash $(if $(SERIAL),--serial $(SERIAL),) write $(BUILD)/$(NAME).bin 0x08000000
 	st-flash $(if $(SERIAL),--serial $(SERIAL),) reset
+endif
 
 clean:
 	rm -rf $(BUILD) gen ports sig bin

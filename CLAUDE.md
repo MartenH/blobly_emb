@@ -146,8 +146,8 @@ That file includes the board's `bootmap.h`; on a board with none the build stops
 manager program (`boot/target/main.v`, `boards/common/boot_glue.c`) built for that node from its
 `[isotp]` and `[boot]` keys (`gen/boot_gen.h`) and its board's `bootmap.h`, the application linked
 at the app slot, `make image SW_VERSION=<n>`, and `make flash` = boot + factory image
-(`threadx_makefiles_test.v` pins that). The system_full CAN nodes all run that way, so
-**`make flash` on domain / sysnode / zone_a writes the boot at 0x08000000 and the app at
+(`threadx_makefiles_test.v` pins that). Every system_full node built here runs that way, so
+**`make flash` on domain / sysnode / zone_a / tcu writes the boot at 0x08000000 and the app at
 0x08020000** — not one image at 0x08000000 any more. A `[boot]` node with **`[doip]`** gets a
 bootloader that is its DoIP entity too (`BOOT_DOIP := 1` in `gen/loom_build.mk`): the decision and
 the jump stay kernel-free, the stay path enters ThreadX and runs the application's own network seam
@@ -155,7 +155,9 @@ the jump stay kernel-free, the stay path enters ThreadX and runs the application
 application, which also shares `doipnet.serve_mailbox` / `drain_tx`), linked from the node's
 `TX_A`/`NX_A` (`boards/common/boot_net.c`). sysnode's boot is
 ~90 KB of its 128 KB sector that way (37 KB bus-only); `boot/target/serve_{d,notd}_boot_doip.v` are
-the two variants of the serve loop.
+the two variants of the serve loop. A node on no CAN bus (tcu) declares `[uds]` + `[doip]` and no
+`[isotp]`: its server is the eth thread's (loom2v `diag_doip_only`), its boot opens no bus
+(`BOOT_CAN_IDX -1`).
 
 **CI pins the V compiler** to the release tag in `.v-version` (currently `0.5.2`), installed as the
 **prebuilt** `v_linux.zip` release asset in both jobs. It used to install master HEAD, so an upstream
@@ -200,7 +202,9 @@ Know four things before running it on the bench:
   because the bench H723 is usually **zone_a**'s board and `make hwtest` passes `--flash` to every
   script; without it the script skips. Set it, and reflash zone_a afterwards for a CAN bench. It
   probes over UDP from the Windows host (powershell.exe, an Ethernet link — the H723's RJ45 must
-  be on the LAN), binding the tester's port and sending first.
+  be on the LAN), binding the tester's port and sending first. Its `make flash` writes tcu's
+  DoIP-only bootloader and the factory app (boot-flash), so after it tcu is field-updatable over
+  DoIP (`test/boot_bench.sh tcu-doip`).
 
 The two H755 scripts need no CAN adapter, but they need DIFFERENT SWD tooling, so install both:
 

@@ -41,3 +41,12 @@ buses:
     address: 192.168.0.50:13400
     tester_address: "0x0E00"
     ecu_address: "0x07A0"
+
+  # tcu's DoIP entity (system.toml: 192.168.0.51, logical 0x07E0) — on no CAN bus, so DoIP is its
+  # only diagnostic transport, its bootloader's too (boot_handoff.lua tcu-doip)
+  - name: tcu_ip
+    network: system_full
+    adapter: doip
+    address: 192.168.0.51:13400
+    tester_address: "0x0E00"
+    ecu_address: "0x07E0"

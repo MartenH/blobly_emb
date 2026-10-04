@@ -390,3 +390,122 @@ fn test_doip_and_someip_share_one_netx() {
 	_, _, _, mk3 := generate_mk('no_net', '')
 	assert mk3.contains('LOOM_NET_SRCS :=\n'), mk3
 }
+
+// a node on no CAN bus (system_full's tcu): [doip] with no [isotp]. Its one diagnostic server is
+// the eth thread's — configured before its loop, the mailbox answered and an answered reset
+// performed in it, with no bus to drain — and its bootloader opens no bus (BOOT_CAN_IDX -1)
+const eth_only_node = '
+[target]
+kind    = "threadx"
+tick_ms = 1
+
+[bus.eth0]
+kind      = "eth"
+interface = "192.168.0.51"
+
+[someip]
+bus     = "eth0"
+service = 0x100
+version = 1
+port    = 30490
+peer    = "192.168.0.190:30491"
+
+[[signal]]
+name   = "Level"
+fields = { level = "u8" }
+from   = "app"
+to     = "eth0"
+
+[[frame]]
+name    = "LevelFrame"
+bus     = "eth0"
+id      = 0x8001
+signals = ["Level"]
+tx      = { mode = "cyclic", cycle_ms = 100 }
+
+[[partition]]
+name    = "app"
+core    = 0
+  [[partition.thread]]
+  name     = "app_main"
+  priority = 10
+
+[[fb]]
+name   = "Src"
+thread = "app_main"
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  writes    = ["Level"]
+
+[uds]
+security_key = "reference"
+
+[uds.services]
+"0x10" = {}
+"0x10 02" = { security = 1 }
+"0x11" = { sessions = ["extended"], security = 1 }
+"0x22" = {}
+"0x27" = {}
+"0x3E" = {}
+
+[boot]
+image_key   = "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8"
+session_key = "29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7"
+
+[[did]]
+id    = 0xF190
+ascii = "BLOBLY-TCU-H723-1"
+
+[doip]
+address         = "192.168.0.51"
+logical_address = 0x07E0
+allow_bench_key = true
+'
+
+// @verifies REQ-BOOT-019
+fn test_a_node_with_no_can_serves_diagnostics_over_doip_alone() {
+	tmp := os.join_path(os.temp_dir(), 'doip_target_eth_only_${os.getpid()}')
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	os.mkdir_all(tmp) or { panic(err) }
+	ecu := os.join_path(tmp, 'ecu.toml')
+	os.write_file(ecu, eth_only_node) or { panic(err) }
+	glue_path := os.join_path(tmp, 'gen.v')
+	r := os.execute('${doip_loom2v()} ${ecu} ${os.join_path(tmp, 'none.dbc')} ${os.join_path(tmp,
+		'sig.v')} ${os.join_path(tmp, 'ports.v')} ${glue_path} ${os.join_path(tmp, 'manifest.csv')}')
+	assert r.exit_code == 0, r.output
+	glue := os.read_file(glue_path) or { panic(err) }
+	entry := glue.index('fn eth_thread_entry(') or { -1 }
+	assert entry >= 0
+	eth := glue[entry..]
+	in_order := fn (s string, steps []string) {
+		mut at := -1
+		for step in steps {
+			i := s[at + 1..].index(step) or {
+				assert false, 'step "${step}" missing or out of order'
+				return
+			}
+			at = at + 1 + i
+		}
+	}
+	in_order(eth, [
+		'g_diag.init(u32(0x0), u32(0x0), u32(0x0), 0, 0)',
+		'g_diag.handoff_remote = true',
+		'C.doip_net_seed(doip_seed)',
+		'for {',
+		'g_diag.housekeep(',
+		'doipnet.serve_mailbox(mut g_diag, &g_doip_req[0], &g_doip_resp[0])',
+		'if g_diag.reset_due() != 0 {',
+		'doipnet.drain_tx(diag_now_us)',
+		'C.boot_handoff_request(if g_diag.reset_asked_remotely() { 1 } else { 0 })',
+		'C.diag_sys_reset()',
+	])
+	assert !glue.contains('diag.wire_drain('), 'no bus to drain'
+	assert !glue.contains('fn comm_thread_entry'), 'no CAN comm thread'
+	assert glue.contains('g_eth_stack [8192]u8')
+	assert glue.contains("C.doip_net_create(c'192.168.0.51',")
+	h := os.read_file(os.join_path(tmp, 'boot_gen.h')) or { panic(err) }
+	assert h.contains('#define BOOT_CAN_IDX -1') && h.contains('#define BOOT_DOIP 1'), h
+}
