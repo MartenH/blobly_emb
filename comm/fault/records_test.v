@@ -176,13 +176,15 @@ fn test_counters_saturate_at_their_width() {
 	assert rcall(mut s, [u8(0x19), 0x06, 0xC1, 0x00, 0x00, 0x01])#[6..] == [u8(0x01), 0xFF, 0xFF]
 }
 
-// Without the snapshot seam the new subfunctions stay unsupported, as before R6b.
-fn test_without_snapshots_the_new_subfunctions_are_unsupported() {
+// Without either seam the new subfunctions stay unsupported, as before R6b.
+fn test_without_the_seams_the_new_subfunctions_are_unsupported() {
 	mut m := snap_memory(1, 1)
 	mut s := snap_server(mut m, 0)
 	s.faults.snapshot = unsafe { nil }
+	s.faults.extended = unsafe { nil }
 	assert rcall(mut s, [u8(0x19), 0x03]) == [u8(0x7F), 0x19, 0x12]
-	assert rcall(mut s, [u8(0x19), 0x06, 0x00, 0x00, 0x01, 0x01]) == [u8(0x7F), 0x19, 0x12]
+	assert rcall(mut s, [u8(0x19), 0x04, 0xC1, 0x00, 0x00, 0x01]) == [u8(0x7F), 0x19, 0x12]
+	assert rcall(mut s, [u8(0x19), 0x06, 0xC1, 0x00, 0x00, 0x01]) == [u8(0x7F), 0x19, 0x12]
 }
 
 // An entry lives while the DTC is pending or confirmed: a DTC that heals before confirming loses
@@ -352,4 +354,20 @@ fn test_a_snapshot_holds_the_values_at_storage() {
 	set_speed(mut s, 30)
 	r := rcall(mut s, [u8(0x19), 0x04, 0xC1, 0x00, 0x00, 0x01])
 	assert r[10..14] == [u8(0), 0, 0, 20], 'the snapshot is not the value at storage: ${r.hex()}'
+}
+
+// Each 0x19 subfunction is served by its own seam: a provider of snapshots alone serves 03 / 04
+// and not 06, one of extended data alone serves 06 and not 03 / 04.
+fn test_each_record_subfunction_needs_only_its_own_seam() {
+	mut m := snap_memory(1, 1)
+	mut s := snap_server(mut m, 1)
+	s.faults.extended = unsafe { nil }
+	assert rcall(mut s, [u8(0x19), 0x03]) == [u8(0x59), 0x03]
+	assert rcall(mut s, [u8(0x19), 0x04, 0xC1, 0x00, 0x00, 0x01])[0] == 0x59
+	assert rcall(mut s, [u8(0x19), 0x06, 0xC1, 0x00, 0x00, 0x01]) == [u8(0x7F), 0x19, 0x12]
+	s.faults = m.uds_ops()
+	s.faults.snapshot = unsafe { nil }
+	assert rcall(mut s, [u8(0x19), 0x03]) == [u8(0x7F), 0x19, 0x12]
+	assert rcall(mut s, [u8(0x19), 0x04, 0xC1, 0x00, 0x00, 0x01]) == [u8(0x7F), 0x19, 0x12]
+	assert rcall(mut s, [u8(0x19), 0x06, 0xC1, 0x00, 0x00, 0x01])[0] == 0x59
 }

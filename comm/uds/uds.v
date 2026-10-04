@@ -919,12 +919,15 @@ fn (mut s Server) read_dtcs(req &u8, req_len int, resp &u8) int {
 		return negative(resp, 0x19, nrc_incorrect_length)
 	}
 	sub := unsafe { req[1] }
-	records := s.faults.snapshot != unsafe { nil } && s.faults.extended != unsafe { nil }
+	// each subfunction is served by its own seam: 03 / 04 by `snapshot`, 06 by `extended`
+	snaps := s.faults.snapshot != unsafe { nil }
+	ext := s.faults.extended != unsafe { nil }
 	want := match sub {
 		0x01, 0x02 { 3 }
 		0x0A { 2 }
-		0x03 { if records { 2 } else { 0 } }
-		0x04, 0x06 { if records { 6 } else { 0 } }
+		0x03 { if snaps { 2 } else { 0 } }
+		0x04 { if snaps { 6 } else { 0 } }
+		0x06 { if ext { 6 } else { 0 } }
 		else { 0 }
 	}
 	if want == 0 {

@@ -849,3 +849,18 @@ fn test_a_claim_is_accepted_only_with_its_recorded_fingerprint() {
 	r.pass(-1, .not_tested, 0, 2)
 	assert r.slot(0).claim == 0, 'the next committed image kept the claim'
 }
+
+// A clear of what is already cleared writes nothing: the store holds that image already — the same
+// "write only when stored content changes" rule as every other write.
+fn test_repeated_clears_leave_the_journal_alone() {
+	mut r := new_rig(2)
+	r.pass(0, .failed, 1, 1)
+	assert r.req([u8(0x14), 0xFF, 0xFF, 0xFF]) == [u8(0x54)]
+	r.pass(-1, .not_tested, 0, 2) // the tombstone of the cleared snapshot
+	calls := r.f.calls
+	for _ in 0 .. 5 {
+		assert r.req([u8(0x14), 0xFF, 0xFF, 0xFF]) == [u8(0x54)]
+		assert r.req([u8(0x14), 0xC1, 0x00, 0x00]) == [u8(0x54)]
+	}
+	assert r.f.calls == calls, 'a repeated clear wrote ${r.f.calls - calls} records'
+}

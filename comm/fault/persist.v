@@ -286,6 +286,10 @@ fn (mut m Memory) persist_clear(group u32) bool {
 		return false
 	}
 	n := m.image(true, group)
+	changed, _ := m.image_change(n)
+	if !changed {
+		return true // the store already holds exactly this (a repeated clear): nothing to write
+	}
 	if !m.store.put(m.store.ctx, m.store.id, &m.scratch[0], u16(n)) {
 		m.clear_refused = true
 		return false
