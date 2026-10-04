@@ -18,7 +18,7 @@ module param
 // any width can be attacked by a constructed collision, so the header is the identity — a record is
 // restored only when its whole header matches this firmware's, byte for byte. The identity is
 // POSITIONAL — field 0, field 1 — since names are not in it (a name in the record would be a hash
-// again, or a string):
+// again, or text of unbounded length):
 //   - a field RENAMED keeps the coded value (the bytes mean what they meant, as a widened range);
 //   - a field's TYPE changed, a field added or removed, or fields of DIFFERENT types reordered (the
 //     type codes then differ by position): reverted;
