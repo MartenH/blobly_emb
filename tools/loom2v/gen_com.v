@@ -639,8 +639,19 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 		// io fn needs a timestamp to gate tx, monitor rx deadlines, or pace ISO-TP
 		mut uses_now := tx_by_msg.len > 0 || conns.len > 0 || sig_routes.len > 0
 		for msg, _ in rx_by_msg {
-			if has_deadline(m, msg, bname) {
+			if rx_monitored(m, msg, bname) {
 				uses_now = true
+			}
+		}
+		rx_msgs := rx_by_msg.keys()
+		// this bus's receive path: 0x28 gates it where a diagnostic server lives, and the bus of
+		// the node's [isotp] connection hosts the signal-status faults (the bridge is the detector)
+		owner := RxOwner{
+			fmem:    'st.fmem'
+			rx_on:   conns.map('st.conn_${snake(it.name)}.server.rx_enabled()').join(' && ')
+			faults:  m.faults.len > 0 && conns.len > 0
+			publish: fn (si SigInfo, fld string) string {
+				return 'osal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
 			}
 		}
 
@@ -658,41 +669,14 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\tsecoc_tx_${msg} secoc.TxState'
 			}
 		}
-		for msg, _ in rx_by_msg {
-			if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
-				glue << '\trx_${msg}_st com.RxState'
-			}
-			if m.frames.e2e_here(msg, bname) {
-				glue << '\te2e_rx_${msg} e2e.RxState'
-				if lost_expr(m, msg, bname, conns.len > 0).contains('e2e_hidden') {
-					glue << '\te2e_hidden_${msg} u32 // lost frames counted while 0x28 had rx off'
-					glue << '\te2e_quiet_${msg} bool // 0x28 had rx off since the last fresh frame'
-				}
-			}
-			if m.frames.secoc_here(msg, bname) {
-				glue << '\tsecoc_key_${msg} secoc.Key'
-				glue << '\tsecoc_rx_${msg} secoc.RxState'
-			}
-		}
+		glue << rx_state_fields(m, rx_msgs, bname, owner)
 		for c in conns {
 			tp := snake(c.name)
 			glue << '\tconn_${tp} diag.Connection // the node\'s diagnostic server on its ISO-TP connection'
 			if m.faults.len > 0 {
 				glue << '\tfmem fault.Memory // the node\'s fault memory: this bridge is its one writer (D2)'
 				glue << '\tfcycle_on bool // the operation-cycle signal as last seen'
-				for src in fault_sources(m) {
-					glue << '\tfsrc_${snake(src)} sig.RxStatus // ${src}\'s latest published status (signal-status faults)'
-				}
-				for i, f in m.faults {
-					if f.signal != '' {
-						glue << '\tsdeb_${i} fault.Debounce // ${f.name}: ${f.signal} ${f.on}, debounced here'
-						glue << '\tsev_${i} bool // a publication stepped it since the last pass top: skip the level step'
-						if f.on == 'lost' {
-							lt := (m.sig_of[f.signal] or { SigInfo{} }).lost_type
-							glue << '\tslost_${i} ${lt} // the lost-frame count last seen (wrapping)'
-						}
-					}
-				}
+				glue << signal_fault_fields(m)
 				for fb in fault_fbs(m) {
 					glue << '\tfrep_${snake(fb)} fault.Reports // from ${fb}\'s thread'
 					glue << '\tfctl_${snake(fb)} fault.Control // to ${fb}\'s thread'
@@ -701,9 +685,6 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			if sa_levels(m) != 0 {
 				glue << '\tsa_${tp} uds.ReferenceSecurity // 0x27 on the host: the SIM key (not a secret, decision D5)'
 			}
-		}
-		if conns.len > 0 && rx_off_latched(m, rx_by_msg.keys(), bname) {
-			glue << '\tdiag_rx_was_off bool // 0x28 had rx off (any sampling since the last restart): restart the deadlines on return'
 		}
 		for d in dests {
 			glue << '\troute_${snake(d)} can.Channel // gateway: forward to ${d}'
@@ -803,8 +784,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			for c in conns {
 				glue << '\tst.conn_${snake(c.name)}.housekeep(now)'
 			}
-			glue << rx_gate_sample(m, conns, rx_by_msg.keys(), bname, '\t', true)
-			glue << fault_pass_lines(m)
+			glue << rx_gate_lines(m, rx_msgs, bname, owner, '\t')
+			glue << fault_pass_lines(m, owner)
 			if m.faults.len > 0 {
 				// the FB faults' snapshots at once, before the drain decodes newer values
 				glue << fault_capture_lines(m, 'st.fmem', 'st.conn_${snake(conns[0].name)}', '\t')
@@ -894,125 +875,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\t\t}'
 			}
 			for msg, list in rx_by_msg {
-				// require the received length to match the PDU DLC — recv copies only
-				// the actual bytes into the reused frame, so a short same-id frame
-				// would otherwise be decoded over stale trailing bytes.
-				glue << '\t\tif rx.id == ${msg}_id && rx.len == ${msg}_dlc && rx.ext == ${msg_ext[msg]} {'
-				e2e := m.frames.e2e_here(msg, bname)
-				secoc := m.frames.secoc_here(msg, bname)
-				// protected frames are decoded only if the check passes. A frame that FAILS it — an
-				// E2E CRC error, or any SecOC failure — publishes status `integrity` to the signals that
-				// carry one (docs/diagnostics.md §3.2); an E2E REPEAT is a duplicate, not a fault, and
-				// publishes nothing (a stuck sender then reaches `timeout` through the deadline).
-				// 0x28 gates only what the application SEES: the checks themselves run on every frame,
-				// so SecOC freshness and the E2E counter keep tracking the sender and the first frame
-				// after rx is re-enabled is not judged a replay or a loss burst.
-				lost := lost_expr(m, msg, bname, conns.len > 0)
-				gate := if conns.len > 0 { 'diag_rx_ok' } else { '' }
-				mut ind := '\t\t\t'
-				if secoc {
-					glue << '${ind}if st.secoc_rx_${msg}.verify(&st.secoc_key_${msg}, &rx.data[0], int(${msg}_dlc), u16(0x${(m.frames.secoc_id[msg] or {
-						0
-					}).hex()}), ${m.frames.secoc_fresh[msg] or { 0 }}, ${m.frames.secoc_mac[msg] or { 0 }}, ${m.frames.secoc_maclen[msg] or {
-						0
-					}}).usable() {'
-					ind += '\t'
-				}
-				if e2e {
-					// composed frame: only an AUTHENTIC message reaches the E2E check (REQ-E2E-004
-					// order), and the check excludes SecOC's bytes. STATE COUPLING: secoc's freshness
-					// window has already advanced by the time E2E rejects (verify precedes).
-					chk := if secoc {
-						'check_ex(&rx.data[0], int(${msg}_dlc), u16(0x${(m.frames.e2e_id[msg] or { 0 }).hex()}), ${m.frames.e2e_crc[msg] or { 0 }}, ${m.frames.e2e_ctr[msg] or { 0 }}, ${m.frames.secoc_fresh[msg] or { 0 }}, 1, ${m.frames.secoc_mac[msg] or { 0 }}, ${m.frames.secoc_maclen[msg] or { 0 }})'
-					} else {
-						'check(&rx.data[0], int(${msg}_dlc), u16(0x${(m.frames.e2e_id[msg] or { 0 }).hex()}), ${m.frames.e2e_crc[msg] or { 0 }}, ${m.frames.e2e_ctr[msg] or { 0 }})'
-					}
-					hide := lost != '' && conns.len > 0
-					if hide {
-						glue << '${ind}lf_${msg} := st.e2e_rx_${msg}.lost_frames'
-					}
-					glue << '${ind}e2e_${msg} := st.e2e_rx_${msg}.${chk}'
-					if hide {
-						// frames missed while 0x28 has reception off were COMMANDED silence, not loss:
-						// the sequence state keeps tracking them, but the FB never sees them counted —
-						// including the gap the first fresh frame after re-enable closes, which spans
-						// the silence (rx_gate_sample marks e2e_quiet whenever it finds rx off)
-						glue << '${ind}if st.e2e_quiet_${msg} { // set by every sampling that found rx off'
-						glue << '${ind}\tst.e2e_hidden_${msg} += st.e2e_rx_${msg}.lost_frames - lf_${msg}'
-						glue << '${ind}}'
-						glue << '${ind}if diag_rx_ok && e2e_${msg}.usable() {'
-						glue << '${ind}\tst.e2e_quiet_${msg} = false'
-						glue << '${ind}}'
-					}
-					// the decision is comm/e2e's RxState.receive_ex (the SOME/IP path's rule too): a
-					// usable frame refreshes the timeout — protection-level state, like the counter,
-					// even while 0x28 has rx off — and reads late when the timeout ran out unseen; a
-					// corrupt one restarts only a timeout that fired. Suspended while a 0x28 silence
-					// is still latched: its restart (after the drain) has not run yet, and the
-					// deadline it would test is the stale pre-silence one
-					// every received E2E frame has a timeout (validate_e2e_timeouts), so the latch
-					// matters wherever a diagnostic connection can switch reception off
-					susp := if conns.len > 0 { 'st.diag_rx_was_off' } else { 'false' }
-					glue << '${ind}v_${msg} := st.e2e_rx_${msg}.receive_ex(now, e2e_${msg}, ${susp})'
-					glue << '${ind}if v_${msg} == .ok || v_${msg} == .timeout {'
-					ind += '\t'
-					if e2e_timeout(m, msg, bname) > 0 {
-						glue << '${ind}late_${msg} := v_${msg} == .timeout'
-					}
-				}
-				if gate != '' {
-					glue << '${ind}if ${gate} {'
-					ind += '\t'
-				}
-				if e2e && e2e_timeout(m, msg, bname) > 0 {
-					glue << '${ind}if late_${msg} {'
-					for sname in list {
-						si := m.sig_of[sname] or { continue }
-						fld := snake(sname)
-						glue << '${ind}\tmut ${fld} := sig.${sname}{ ${rx_status_fields(si, '.timeout', lost)[2..]} }'
-						glue << '${ind}\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
-					}
-					glue << rx_group_hooks(m, list, ind + '\t')
-					glue << '${ind}} else {'
-					ind += '\t'
-				}
-				for sname in list {
-					si := m.sig_of[sname] or { continue }
-					fld := snake(sname)
-					dec := '${si.dbc_msg}_${snake(sname)}_phys(rx.data)'
-					valassign := if si.val_type == 'bool' {
-						'${si.val_field}: ${dec} != 0.0'
-					} else {
-						'${si.val_field}: ${si.val_type}(${dec})'
-					}
-					glue << '${ind}mut ${fld} := sig.${sname}{ ${valassign}${rx_status_fields(si, '.ok', lost)} }'
-					glue << '${ind}osal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
-				}
-				glue << rx_group_hooks(m, list, ind)
-				if e2e && e2e_timeout(m, msg, bname) > 0 {
-					ind = ind[1..]
-					glue << '${ind}}'
-				}
-				if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
-					glue << '${ind}st.rx_${msg}_st.on_receive(now)'
-				}
-				if gate != '' {
-					ind = ind[1..]
-					glue << '${ind}}'
-				}
-				if e2e {
-					ind = ind[1..]
-					glue << '${ind}} else if v_${msg} == .integrity {'
-					glue << rx_integrity(m, list, msg, lost, gate, ind + '\t', false)
-					glue << '${ind}}'
-				}
-				if secoc {
-					ind = ind[1..]
-					glue << '${ind}} else {'
-					glue << rx_integrity(m, list, msg, lost, gate, ind + '\t', true)
-					glue << '${ind}}'
-				}
-				glue << '\t\t}'
+				glue << rx_frame_arm(m, msg, list, msg_ext[msg], bname, owner, '\t\t')
 			}
 			for c in conns {
 				// a completed request is served BEFORE the frames queued behind it are judged: a 0x28
@@ -1023,7 +886,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\t\t\t.request { break }'
 				if c.functional_id != 0 {
 					glue << '\t\t\t.served {'
-					glue << rx_gate_sample(m, conns, rx_by_msg.keys(), bname, '\t\t\t\t', false)
+					glue << rx_gate_lines(m, rx_msgs, bname, owner, '\t\t\t\t')
 					glue << '\t\t\t}'
 				}
 				glue << '\t\t\telse {}'
@@ -1042,51 +905,9 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\tst.conn_${tp}.pump(now, mut st.chan) // comm/diag: a refused frame aborts the answer'
 			}
 		}
-		// rx deadline crossed -> publish invalid (valid=false) signals, once. While 0x28 has rx
-		// off, silence is commanded, not a fault: no deadline fires, and every deadline restarts
-		// when rx comes back (below), so a diagnostic command never fakes a comms timeout.
-		if conns.len > 0 && rx_off_latched(m, rx_by_msg.keys(), bname) {
-			// re-sampled AFTER this pass's requests were served: a 0x28 disabling rx now suspends
-			// the deadlines before any of them can fire
-			glue << rx_gate_sample(m, conns, rx_by_msg.keys(), bname, '\t', false)
-			glue << '\tif diag_rx_ok && st.diag_rx_was_off {'
-			for msg, _ in rx_by_msg {
-				if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
-					glue << '\t\tst.rx_${msg}_st.on_receive(now)'
-				}
-				if e2e_timeout(m, msg, bname) > 0 {
-					glue << '\t\tst.e2e_rx_${msg}.arm(now)'
-				}
-			}
-			glue << '\t}'
-			glue << '\tst.diag_rx_was_off = !diag_rx_ok'
-		}
-		// Two deadlines publish the same `timeout`: the QM COM one (REQ-COM-005) and the E2E-owned
-		// one (REQ-E2E-002) — no VALID message for its period, so a stuck or corrupt-only sender
-		// runs it out too. Either may be configured alone; both suspend under 0x28 alike.
-		for msg, list in rx_by_msg {
-			dl_gate := if conns.len > 0 { 'diag_rx_ok && ' } else { '' }
-			mut expiries := []string{}
-			if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
-				expiries << 'st.rx_${msg}_st.expired(now)'
-			}
-			if e2e_timeout(m, msg, bname) > 0 {
-				expiries << 'st.e2e_rx_${msg}.expired(now)'
-			}
-			for exp in expiries {
-				glue << '\tif ${dl_gate}${exp} {'
-				lost := lost_expr(m, msg, bname, conns.len > 0)
-				for sname in list {
-					si := m.sig_of[sname] or { continue }
-					fld := snake(sname)
-					sf := rx_status_fields(si, '.timeout', lost)
-					glue << '\t\tmut ${fld} := sig.${sname}{${if sf == '' { '' } else { ' ' + sf[2..] + ' ' }}}'
-					glue << '\t\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
-				}
-				glue << rx_group_hooks(m, list, '\t\t')
-				glue << '\t}'
-			}
-		}
+		// the pass's end: the gate re-sampled after its requests, the deadlines restarted when
+		// reception is back, and polled. While 0x28 has rx off, silence is commanded, not a fault.
+		glue << rx_settle_lines(m, rx_msgs, rx_by_msg, bname, owner, '\t')
 		if conns.len > 0 {
 			// evaluated AFTER the requests of this pass were served, so a 0x28 answered just
 			// above already gates this pass's application frames
@@ -1369,25 +1190,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				})})'
 			}
 		}
-		for msg, _ in rx_by_msg {
-			if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
-				glue << '\tst.rx_${msg}_st = com.RxState{'
-				glue << '\t\ttimeout_us: ${m.frames.rx_timeout_us[msg]}'
-				glue << '\t}'
-				// armed from bridge start, not from a first frame: a sender absent since boot
-				// still reaches `timeout` (docs/diagnostics.md §7, R3)
-				glue << '\tst.rx_${msg}_st.arm(osal.now_us())'
-			}
-			if e2e_timeout(m, msg, bname) > 0 {
-				glue << '\tst.e2e_rx_${msg}.timeout_us = ${e2e_timeout(m, msg, bname)}'
-				glue << '\tst.e2e_rx_${msg}.arm(osal.now_us()) // from start, like the COM deadline'
-			}
-			if m.frames.secoc_here(msg, bname) {
-				glue << '\tst.secoc_key_${msg} = secoc.new_key(${byte16_lit(m.frames.secoc_key[msg] or {
-					[]u8{}
-				})})'
-			}
-		}
+		glue << rx_state_init(m, rx_msgs, bname, 'osal.now_us()', '\t')
 		// SecOC key for a protected source-route frame (verified before decode). rx_routes,
 		// NOT sig_routes: verify state+key live at the SOURCE (rx) side. With sig_routes a
 		// crossing left the source key uninitialized AND made the destination assign a
@@ -1416,19 +1219,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			glue << security_init_lines(m, srv, 'st.sa_${tp}.ops(u32(osal.now_us()))')
 			if m.faults.len > 0 {
 				glue << fault_slot_lines(m, 'st.fmem', '\t')
-				for i, f in m.faults {
-					if f.signal == '' {
-						continue
-					}
-					glue << '\tst.sdeb_${i} = fault.Debounce{'
-					if f.time_based {
-						glue << '\t\ttime_based: true'
-					}
-					glue << '\t\tfail_thr: ${f.fail_thr}'
-					glue << '\t\tpass_thr: ${f.pass_thr}'
-					glue << debounce_step_lines(f, '\t\t')
-					glue << '\t}'
-				}
+				glue << signal_fault_init(m, '\t')
 				glue << fault_memory_init_lines(m, 'st.fmem', srv, '\t', []string{})
 			}
 		}
@@ -1828,111 +1619,6 @@ fn security_levels(dids []DidCfg) u8 {
 	return mask
 }
 
-// rx_status_fields: the bridge-owned fields of a received signal's publish — `status` and, on an
-// E2E-protected frame, `lost` (the frames the sequence showed missing, wrapping) — or '' for a
-// signal that declares neither.
-fn rx_status_fields(si SigInfo, status string, lost string) string {
-	mut f := ''
-	if si.has_status {
-		f += ', status: ${status}'
-	}
-	if si.lost_type != '' && lost != '' {
-		f += ', lost: ${si.lost_type}(${lost})'
-	}
-	return f
-}
-
-// rx_integrity: the publish of a frame that failed its protection check — status `integrity`
-// (value zero: nothing in the frame can be trusted) to each of its signals that carries a status —
-// and a re-arm of the frame's deadline, which then runs from this frame: `integrity` holds until a
-// good frame, or until the deadline passes with none (`timeout` — silence is the newer fact).
-// Behind the 0x28 gate like any other publish.
-// `rearm_e2e`: apply the E2E receive rule here — true for a SecOC failure, which never reaches the
-// E2E check; an E2E CRC failure has already been through RxState.receive_ex.
-fn rx_integrity(m Model, list []string, msg string, lost string, gate string, ind string, rearm_e2e bool) []string {
-	mut out := []string{}
-	if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
-		out << '${ind}st.rx_${msg}_st.arm(now)' // every deadline, status or not
-	}
-	// The E2E timeout counts VALID messages only, so a corrupt frame does not refresh it — a
-	// corrupt-only sender runs it out from the last valid one. But once it HAS fired, this
-	// integrity is the newer fact, and silence after it must reach `timeout` again: re-arm then.
-	if rearm_e2e && e2e_timeout(m, msg, m.frames.frame_bus[msg] or { '' }) > 0 {
-		// the same rule as an E2E CRC failure, from the same function (a corrupt frame is a corrupt
-		// frame, whichever check caught it)
-		out << '${ind}_ = st.e2e_rx_${msg}.receive(now, .crc_error)'
-	}
-	mut i := ind
-	if gate != '' && list.any((m.sig_of[it] or { SigInfo{} }).has_status) {
-		out << '${i}if ${gate} {'
-		i += '\t'
-	}
-	for sname in list {
-		si := m.sig_of[sname] or { continue }
-		if !si.has_status {
-			continue
-		}
-		fld := snake(sname)
-		out << '${i}mut ${fld} := sig.${sname}{ ${rx_status_fields(si, '.integrity', lost)[2..]} }'
-		out << '${i}osal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
-	}
-	out << rx_group_hooks(m, list.filter((m.sig_of[it] or { SigInfo{} }).has_status), i)
-	if i != ind {
-		out << '${ind}}'
-	}
-	return out
-}
-
-// lost_expr: the E2E lost-frame count a received signal publishes — '' when the frame has no E2E
-// or none of its signals declares `lost`. Where a diagnostic server can switch reception off
-// (0x28), the frames missed meanwhile are subtracted (e2e_hidden): commanded silence is not loss.
-fn lost_expr(m Model, msg string, bname string, has_diag bool) string {
-	if !m.frames.e2e_here(msg, bname) {
-		return ''
-	}
-	if !m.sig_names.any((m.sig_of[it] or { SigInfo{} }).lost_type != ''
-		&& (m.sig_of[it] or { SigInfo{} }).dbc_msg == msg) {
-		return ''
-	}
-	if has_diag {
-		return 'st.e2e_rx_${msg}.lost_frames - st.e2e_hidden_${msg}'
-	}
-	return 'st.e2e_rx_${msg}.lost_frames'
-}
-
-// rx_gate_sample: every sampling of the 0x28 receive gate — at the top of a pass, after a
-// functional request served inside the drain, after the pass's requests — in ONE place, with the
-// rule that rides on it: whenever reception is found off, the silence is LATCHED — for the rx
-// deadlines (restarted when reception returns) and for each E2E frame whose loss count hides
-// commanded silence. So a disable and re-enable inside one drain (two suppressed functional
-// requests) is remembered like one that spans passes.
-fn rx_gate_sample(m Model, conns []IsotpConn, rx_msgs []string, bname string, ind string, decl bool) []string {
-	mut out := []string{}
-	lhs := if decl { 'mut diag_rx_ok :=' } else { 'diag_rx_ok =' }
-	out << '${ind}${lhs} ${conns.map('st.conn_${snake(it.name)}.server.rx_enabled()').join(' && ')}'
-	quiet := rx_msgs.filter(lost_expr(m, it, bname, true).contains('e2e_hidden'))
-	deadlines := rx_off_latched(m, rx_msgs, bname)
-	if quiet.len > 0 || deadlines {
-		out << '${ind}if !diag_rx_ok { // silence commanded: latch it, frame or not'
-		if deadlines {
-			out << '${ind}\tst.diag_rx_was_off = true'
-		}
-		for msg in quiet {
-			out << '${ind}\tst.e2e_quiet_${msg} = true'
-		}
-		// a watched signal's status goes stale the moment reception stops: not known again until a
-		// frame (or a restarted deadline) publishes it — reset HERE, never after the drain, so a
-		// publication after the re-enable is not overwritten
-		if m.isotp_conns.len > 0 && bname == m.isotp_conns[0].bus {
-			for src in fault_sources(m) {
-				out << '${ind}\tst.fsrc_${snake(src)} = .never_received'
-			}
-		}
-		out << '${ind}}'
-	}
-	return out
-}
-
 // e2e_timeout: the E2E-owned reception timeout of an rx frame on this bus, in µs (0 = none).
 fn e2e_timeout(m Model, msg string, bname string) int {
 	if !m.frames.e2e_here(msg, bname) {
@@ -1951,12 +1637,12 @@ fn has_deadline(m Model, msg string, bname string) bool {
 // reads the newest consumed state: the signal-status faults' levels are stepped, each fault-owning
 // FB's report cell is consumed slot by slot and the generations (and held flags) go back in its control cell.
 // (Events and the operation cycle are handled where the frame is decoded, in bus order.)
-fn fault_pass_lines(m Model) []string {
+fn fault_pass_lines(m Model, owner RxOwner) []string {
 	if m.faults.len == 0 {
 		return []string{}
 	}
 	mut out := []string{}
-	out << signal_fault_step_lines(m, '\t')
+	out << signal_fault_step_lines(m, owner, '\t')
 	for fb in fault_fbs(m) {
 		f := snake(fb)
 		out << '\tosal.${acquire_fn('triple')}(fault_rep_${f}_ch, &st.frep_${f}, u8(sizeof(st.frep_${f})))'
@@ -2041,139 +1727,6 @@ fn fault_capture_lines(m Model, fmem string, conn string, ind string) []string {
 		'${ind}\t${fmem}.capture(&${conn}.server) // the snapshot: the DIDs as 0x22 reads them now',
 		'${ind}}',
 	]
-}
-
-// rx_publish_hooks: what a signal-status fault needs from EVERY publication of a signal it
-// watches — a good decode, a deadline or E2E timeout, an integrity failure, a late frame — in one
-// place, so no publish path can be missed. Each publication IS a test result (failed, passed, or
-// not tested), stepped and consumed right here, so it lands on the correct side of every boundary
-// inside the drain: a cycle edge, a clear, a 0x28 switching reception. The pass top only steps
-// the level for a pass with no publication (a timeout holding, a sender gone quiet).
-// Called from rx_group_hooks, which also moves the operation cycle.
-fn rx_publish_hooks(m Model, sname string, fld string, ind string) []string {
-	if sname !in fault_sources(m) {
-		return []string{}
-	}
-	mut out := []string{}
-	out << '${ind}st.fsrc_${snake(sname)} = ${fld}.status'
-	for i, f in m.faults {
-		if f.signal != sname {
-			continue
-		}
-		res := match f.on {
-			'timeout', 'integrity' {
-				'if ${fld}.status == .${f.on} { fault.TestResult.failed } else if ${fld}.status == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }'
-			}
-			else {
-				// the count wraps in its own type: a gap is a small forward step, modulo
-				lt := (m.sig_of[f.signal] or { SigInfo{} }).lost_type
-				half := match lt {
-					'u8' { '0x80' }
-					'u16' { '0x8000' }
-					else { '0x8000_0000' }
-				}
-				d := '${lt}(${fld}.lost - st.slost_${i})'
-				'if ${d} != 0 && ${d} < ${half} { fault.TestResult.failed } else if ${fld}.status == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }'
-			}
-		}
-		out << '${ind}st.sdeb_${i}.apply(st.fmem.control_gen(${i}), st.fmem.control_held(${i}))'
-		out << '${ind}st.sdeb_${i}.step(${res}, now, diag_rx_ok)'
-		out << '${ind}st.fmem.consume(${i}, st.sdeb_${i}.rep)'
-		out << '${ind}st.sev_${i} = true'
-		if f.on == 'lost' {
-			out << '${ind}st.slost_${i} = ${fld}.lost'
-		}
-	}
-	return out
-}
-
-// rx_group_hooks: the fault memory's share of one publication group (the signals one frame, one
-// deadline or one integrity failure publishes together), after all of them are published. The
-// operation cycle moves where its signal is published, in bus order (an off/on pair in one drain
-// is two edges): a RISING edge before the group's results and a FALLING one after them, so a
-// frame that starts or ends the cycle and also carries a result (a gap, its own timeout) records
-// that result inside the cycle either way.
-fn rx_group_hooks(m Model, list []string, ind string) []string {
-	mut out := []string{}
-	if m.faults.len == 0 {
-		return out
-	}
-	cyc := m.fault_cycle.all_before('.')
-	cf := m.fault_cycle.all_after('.')
-	has_cycle := m.fault_cycle != '' && m.fault_cycle != fault_cycle_power && cyc in list
-	if has_cycle {
-		out << '${ind}if ${snake(cyc)}.${cf} && !st.fcycle_on {'
-		out << '${ind}\tst.fmem.cycle_start()'
-		out << '${ind}\tst.fcycle_on = true'
-		out << '${ind}}'
-	}
-	for sname in list {
-		out << rx_publish_hooks(m, sname, snake(sname), ind)
-	}
-	if has_cycle {
-		out << '${ind}if !${snake(cyc)}.${cf} && st.fcycle_on {'
-		out << '${ind}\tst.fmem.cycle_end()'
-		out << '${ind}\tst.fcycle_on = false'
-		out << '${ind}}'
-	}
-	return out
-}
-
-// signal_fault_step_lines: the pass-top step of each signal-status fault — its watched signal's
-// LEVEL (the condition still holding, a good status, or not known) — for a pass whose drain
-// published nothing (rx_publish_hooks stepped those). While the test is disabled it always steps,
-// disabled, so a time-based run never survives a 0x28 pause.
-fn signal_fault_step_lines(m Model, ind string) []string {
-	mut out := []string{}
-	for i, f in m.faults {
-		if f.signal == '' {
-			continue
-		}
-		src := 'st.fsrc_${snake(f.signal)}'
-		// lost is an event only: its level can pass, never fail
-		res := match f.on {
-			'timeout', 'integrity' {
-				'if ${src} == .${f.on} { fault.TestResult.failed } else if ${src} == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }'
-			}
-			else {
-				'if ${src} == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }'
-			}
-		}
-		// while 0x28 has reception off (or its silence is still latched) nothing is received: the
-		// level is not known, so the test is disabled, not passed or failed
-		en := if rx_off_latched(m, []string{}, m.isotp_conns[0].bus) { 'diag_rx_ok && !st.diag_rx_was_off' } else { 'diag_rx_ok' }
-		out << '${ind}if st.sev_${i} && ${en} {'
-		out << '${ind}\tst.sev_${i} = false'
-		out << '${ind}} else {'
-		out << '${ind}\tst.sev_${i} = false'
-		out << '${ind}\tst.sdeb_${i}.apply(st.fmem.control_gen(${i}), st.fmem.control_held(${i}))'
-		out << '${ind}\tst.sdeb_${i}.step(${res}, now, ${en})'
-		out << '${ind}\tst.fmem.consume(${i}, st.sdeb_${i}.rep)'
-		out << '${ind}}'
-	}
-	return out
-}
-
-// rx_off_latched: the diagnostic bridge keeps the 0x28 silence latch (diag_rx_was_off) — when a
-// received frame has a deadline to restart, or a signal-status fault watches a status that goes
-// stale during the pause. ONE predicate for the state field, the sampler and the restart block.
-fn rx_off_latched(m Model, rx_msgs []string, bname string) bool {
-	if m.isotp_conns.len > 0 && bname == m.isotp_conns[0].bus && m.faults.any(it.signal != '') {
-		return true
-	}
-	if rx_msgs.any(has_deadline(m, it, bname)) {
-		return true
-	}
-	bus := if m.isotp_conns.len > 0 { m.isotp_conns[0].bus } else { '' }
-	if rx_msgs.len == 0 && bus == bname {
-		for sname in m.sig_names {
-			si := m.sig_of[sname] or { continue }
-			if si.external && si.rx && si.bus == bus && has_deadline(m, si.dbc_msg, bus) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // --- the SOME/IP receive path's E2E and receive status (REQ-E2E-002, #299): one set of templates

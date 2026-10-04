@@ -40,7 +40,7 @@ pub fn partition_mon(core int, arg voidptr) {
 struct Bridge_can0_state {
 mut:
 	chan can.Channel
-	rx_powertrain_st com.RxState
+	rxm_powertrain com.RxMonitor // its deadlines, E2E receive state and silences (comm/com)
 	route_can1 can.Channel // gateway: forward to can1
 	rr_can1_300_s can.Frame // held forward awaiting destination tx-ready
 	rr_can1_300_s_set bool
@@ -64,13 +64,20 @@ fn io_can0_10ms(ctx voidptr) {
 			}
 		}
 		if rx.id == powertrain_id && rx.len == powertrain_dlc && rx.ext == false {
-			mut vehicle_speed := sig.VehicleSpeed{ kph: u16(powertrain_vehicle_speed_phys(rx.data)), status: .ok }
-			osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
-			st.rx_powertrain_st.on_receive(now)
+			p_powertrain := st.rxm_powertrain.received(now, true)
+			if p_powertrain != .none {
+				mut vehicle_speed := sig.VehicleSpeed{}
+				if p_powertrain == .ok {
+					vehicle_speed.kph = u16(powertrain_vehicle_speed_phys(rx.data))
+				}
+				vehicle_speed.status = rx_status_of(p_powertrain)
+				osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
+			}
 		}
 	}
-	if st.rx_powertrain_st.expired(now) {
-		mut vehicle_speed := sig.VehicleSpeed{ status: .timeout }
+	if st.rxm_powertrain.expire(now) {
+		mut vehicle_speed := sig.VehicleSpeed{}
+		vehicle_speed.status = .timeout
 		osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
 	}
 }
@@ -81,10 +88,8 @@ pub fn partition_can0(ch can.Channel, route_can1 can.Channel) {
 		chan: ch
 	}
 	st.route_can1 = route_can1
-	st.rx_powertrain_st = com.RxState{
-		timeout_us: 200000
-	}
-	st.rx_powertrain_st.arm(osal.now_us())
+	st.rxm_powertrain.com.timeout_us = 200000
+	st.rxm_powertrain.start(osal.now_us())
 	mut sched := loom.Scheduler{}
 	sched.every(10_000, io_can0_10ms, &st)
 	for {
@@ -150,4 +155,14 @@ pub fn run(can0 can.Channel, can1 can.Channel) {
 	t_can0.wait()
 	t_can1.wait()
 	t_mon.wait()
+}
+
+// rx_status_of: what com.RxMonitor answered, as the signal status it publishes
+fn rx_status_of(p com.RxPublish) sig.RxStatus {
+	return match p {
+		.none { .never_received }
+		.ok { .ok }
+		.timeout { .timeout }
+		.integrity { .integrity }
+	}
 }

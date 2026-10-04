@@ -18,8 +18,15 @@ fn test_a_group_starts_the_cycle_before_its_results_and_ends_it_after() {
 		name:      'Brake'
 		lost_type: 'u16'
 	}
+	owner := RxOwner{
+		fmem:    'st.fmem'
+		faults:  true
+		publish: fn (si SigInfo, fld string) string {
+			return ''
+		}
+	}
 	// the cycle signal is listed FIRST in the frame: order in the frame must not matter
-	out := rx_group_hooks(m, ['Ignition', 'Brake'], '\t').join('\n')
+	out := rx_group_hooks(m, ['Ignition', 'Brake'], owner, '', '\t').join('\n')
 	start := out.index('cycle_start()') or { -1 }
 	result := out.index('st.fmem.consume(0') or { -1 }
 	end := out.index('cycle_end()') or { -1 }
@@ -27,5 +34,5 @@ fn test_a_group_starts_the_cycle_before_its_results_and_ends_it_after() {
 	assert start < result, 'a rising edge must precede the group results:\n${out}'
 	assert result < end, 'a falling edge must follow the group results:\n${out}'
 	// a group without the cycle signal moves no cycle
-	assert !rx_group_hooks(m, ['Brake'], '\t').join('\n').contains('cycle_'), 'cycle moved by a group without its signal'
+	assert !rx_group_hooks(m, ['Brake'], owner, '', '\t').join('\n').contains('cycle_'), 'cycle moved by a group without its signal'
 }

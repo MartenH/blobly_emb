@@ -1,24 +1,35 @@
 module main
 
-// REQ-COM-008: a frame that fails its protection check re-arms its COM deadline (so `integrity`
-// becomes `timeout` once silence is the newer fact), and re-arms an E2E timeout only once that has
-// already fired (a corrupt-only sender must still run it out from its last VALID frame). Pinned
-// here because no committed example combines a COM deadline with a protected frame any more.
-// The E2E re-arm is rx_integrity's only for a SecOC failure; an E2E CRC failure has been through
-// RxState.receive_ex, which re-arms (comm/e2e tests that rule).
-fn test_a_failed_frame_rearms_its_deadlines() {
+// REQ-COM-008, REQ-E2E-004: a frame SecOC refuses is a protection failure like an E2E CRC error —
+// com.RxMonitor.rejected restarts its deadlines from it (comm/com tests that rule) — and it never
+// reaches E2E: only an AUTHENTIC frame is checked, with SecOC's bytes left out of the CRC. Pinned
+// here because no committed example composes the two on a received frame.
+fn test_only_an_authentic_frame_reaches_the_e2e_check() {
 	mut m := Model{}
 	m.frames.rx_timeout_us['brake'] = 300_000
 	m.frames.e2e_on['brake'] = true
+	m.frames.secoc_on['brake'] = true
 	m.frames.frame_bus['brake'] = 'can0'
 	m.frames.e2e_timeout_us['brake'] = 300_000
-	out := rx_integrity(m, []string{}, 'brake', '', '', '\t', true).join('\n')
-	assert out.contains('st.rx_brake_st.arm(now)'), out
-	assert out.contains('_ = st.e2e_rx_brake.receive(now, .crc_error)'), out
-	// after an E2E CRC failure the re-arm already happened in receive_ex: not emitted twice
-	crc := rx_integrity(m, []string{}, 'brake', '', '', '\t', false).join('\n')
-	assert !crc.contains('e2e_rx_brake'), crc
-	m.frames.rx_timeout_us['brake'] = 0
-	m.frames.e2e_timeout_us['brake'] = 0
-	assert rx_integrity(m, []string{}, 'brake', '', '', '\t', true).len == 0
+	m.frames.e2e_id['brake'] = 0x44
+	m.frames.e2e_crc['brake'] = 4
+	m.frames.e2e_ctr['brake'] = 5
+	m.frames.secoc_fresh['brake'] = 1
+	m.frames.secoc_mac['brake'] = 2
+	m.frames.secoc_maclen['brake'] = 2
+	owner := RxOwner{
+		fmem: 'st.fmem'
+		rx_on: 'st.conn_diag.server.rx_enabled()'
+		publish: fn (si SigInfo, fld string) string {
+			return ''
+		}
+	}
+	out := rx_frame_arm(m, 'brake', []string{}, false, 'can0', owner, '\t').join('\n')
+	verify := out.index('st.secoc_rx_brake.verify(') or { -1 }
+	check := out.index('st.rxm_brake.e2e.check_ex(&rx.data[0], int(brake_dlc), u16(0x44), 4, 5, 1, 1, 2, 2)') or {
+		-1
+	}
+	refused := out.index('p_brake = st.rxm_brake.rejected(now, st.rxg.on)') or { -1 }
+	assert verify >= 0 && check > verify && refused > check, out
+	assert out.contains('p_brake = st.rxm_brake.checked(now, chk_brake, st.rxg.on, st.rxg.suspended())'), out
 }

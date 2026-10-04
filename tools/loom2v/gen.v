@@ -4505,6 +4505,17 @@ fn main() {
 	if !glue.any(it.contains('app.')) {
 		glue = glue.filter(it.trim_space() != 'import app')
 	}
+	// the RxPublish -> RxStatus map, once, where a monitored frame publishes a status (gen_rx.v)
+	if glue.any(it.contains('rx_status_of(')) {
+		glue << rx_status_fn()
+	}
+	// and comm.com / comm.e2e, imported for what a config COULD use: a received frame's E2E state
+	// now lives inside com.RxMonitor, so an rx-only E2E image may name no e2e.* at all
+	for mod in ['com', 'e2e'] {
+		if !refs_module(glue, mod) {
+			glue = glue.filter(it.trim_space() != 'import comm.${mod}')
+		}
+	}
 
 	os.write_file(args[3], signals.join('\n') + '\n') or { panic('write ${args[3]}: ${err}') }
 	os.write_file(args[4], ports.join('\n') + '\n') or { panic('write ${args[4]}: ${err}') }
@@ -4569,6 +4580,26 @@ fn main() {
 	}
 
 	eprintln('loom2v: ${m.sig_names.len} signals (${bus_names.len} bus bridge), ${m.isotp_conns.len} isotp, ${m.part.by_part.len} partition(s)')
+}
+
+// refs_module: the glue names module `mod` — `mod.` at the start of an identifier, so a field of
+// the same name (`st.rxm.e2e.check`) is not a reference, nor is an import line.
+fn refs_module(glue []string, mod string) bool {
+	pat := mod + '.'
+	for line in glue {
+		if line.trim_space().starts_with('import ') {
+			continue
+		}
+		mut from := 0
+		for {
+			i := line.index_after(pat, from) or { break }
+			if i == 0 || !(line[i - 1].is_letter() || line[i - 1].is_digit() || line[i - 1] in [`_`, `.`]) {
+				return true
+			}
+			from = i + 1
+		}
+	}
+	return false
 }
 
 // did_value_width is how many bytes a live DID of value type `val_type` carries — none for a type
