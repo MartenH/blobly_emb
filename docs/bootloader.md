@@ -269,7 +269,12 @@ per step (`boot.Prog.step`, `FLASH_SECTOR` from the board's `bootmap.h`): each s
 the previous response has LEFT — on the bus the link idle and the controller drained
 (`comm/diag serve_step`), over DoIP acknowledged by the tester (`Prog.work_due`) — erases one sector
 and sends the next response (`7F 31 78` while sectors remain, `71 01 FF 00 00` after the last),
-pushed over DoIP through the mailbox (`doip_mb_push`, in flight until acknowledged). So no gap
+pushed over DoIP through the mailbox (`doip_mb_push`, with its own sequence: only THAT push's
+acknowledgement lets the next step run, never another request's answer). The gate is one
+predicate for both transports (`Prog.work_due`: the routine's OWN preceding response has left); a
+0x78 the bus loses (refused, aborted) is said again before any unit runs, and after
+`work_resend_max` lost tries the routine ends refused (`7F 31 72`) — never the work unannounced. A
+push still waiting when its connection drops is never sent to the next tester. So no gap
 between responses is longer than one sector's erase, well inside P2* (5 s). The image check (0x31
 FF01: CRC + SHA-512 + Ed25519 over the image) is answered `7F 31 78` and done in one step the same
 way. A 0x36 block is not: its 512 bytes are 16 flash-word programs (H7: 256 bits each, on the order of 100 µs at most)

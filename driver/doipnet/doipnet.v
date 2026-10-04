@@ -54,13 +54,16 @@ pub fn pass[S](mut st S, mut s doip.Server, inb &u8, out &u8) {
 // push sends a further response the server pushed to the request it answered last (a routine's
 // next responsePending, its answer): to the activated tester, as a diagnostic message. With no
 // tester activated the connection it belonged to is gone — the drop is what the server hears.
-pub fn push[S](mut st S, mut s doip.Server, resp &u8, n int, out &u8) {
+// True when it went to TCP (doip_mb_push_queue: only a push actually sent is ever acknowledged).
+pub fn push[S](mut st S, mut s doip.Server, resp &u8, n int, out &u8) bool {
 	if !s.activated {
-		return
+		return false
 	}
 	if st.send(out, s.response_message(resp, n, out)) < 0 {
 		end(mut st, mut s) // the C side recycled the connection
+		return false
 	}
+	return true
 }
 
 // end resets the framing state for the next connection, which starts unactivated.

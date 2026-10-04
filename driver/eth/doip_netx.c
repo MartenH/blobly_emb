@@ -165,9 +165,25 @@ int doip_mb_take_sent(void) {
 	return doip_mb_sent_take(&mb, state, unacked);
 }
 
+/* server thread: 1 once the response it pushed last has itself been acknowledged */
+int doip_mb_take_push_sent(void) {
+	NX_IP *ip = blob_net_ip();
+	uint32_t state = NX_TCP_CLOSED, unacked = 0u;
+	if (tcp_connected) {
+		tx_mutex_get(&ip->nx_ip_protection, TX_WAIT_FOREVER);
+		state = (uint32_t)tcp_sock.nx_tcp_socket_state;
+		unacked = (uint32_t)tcp_sock.nx_tcp_socket_transmit_sent_count;
+		tx_mutex_put(&ip->nx_ip_protection);
+	}
+	return doip_mb_push_sent_take(&mb, state, unacked);
+}
+
 /* comm thread: 1 once a connection has dropped that the request it served last came over */
 int doip_mb_take_dropped(void) {
-	return doip_mb_dropped_take(&mb);
+	tx_mutex_get(&mb_mutex, TX_WAIT_FOREVER); /* it may discard a push the doip thread is taking */
+	int r = doip_mb_dropped_take(&mb);
+	tx_mutex_put(&mb_mutex);
+	return r;
 }
 
 /* the further response the server thread pushes (a routine's responsePending, then its next one) */
@@ -188,6 +204,13 @@ int doip_mb_push_resp(const unsigned char *resp, int n) {
 	doip_mb_push(&mb);
 	tx_mutex_put(&mb_mutex);
 	return 1;
+}
+
+/* doip thread: the pushed response it took last has been handed to TCP */
+void doip_mb_push_queued(void) {
+	tx_mutex_get(&mb_mutex, TX_WAIT_FOREVER);
+	doip_mb_push_queue(&mb);
+	tx_mutex_put(&mb_mutex);
 }
 
 /* doip thread: a pushed response waiting to be sent, copied to resp; its length, or -1 */
@@ -237,7 +260,9 @@ static int stream_recycle(void) {
 	nx_tcp_server_socket_unaccept(&tcp_sock);
 	nx_tcp_server_socket_relisten(blob_net_ip(), DOIP_PORT, &tcp_sock);
 	tcp_connected = 0;
+	tx_mutex_get(&mb_mutex, TX_WAIT_FOREVER); /* the push slot is the server thread's too */
 	doip_mb_drop(&mb);
+	tx_mutex_put(&mb_mutex);
 	comm_wake();
 	return -1;
 }

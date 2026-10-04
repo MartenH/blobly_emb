@@ -216,14 +216,14 @@ fn test_a_pushed_response_goes_to_the_activated_tester() {
 	mut b := Bufs{}
 	pending := [u8(0x7F), 0x31, 0x78]
 	mut f := Fake{}
-	push(mut f, mut s, &pending[0], 3, &b.out[0])
+	assert !push(mut f, mut s, &pending[0], 3, &b.out[0])
 	assert f.sent.len == 0, 'no tester activated'
 	f.chunks = [activation()]
 	pass(mut f, mut s, &b.inb[0], &b.out[0])
-	push(mut f, mut s, &pending[0], 3, &b.out[0])
+	assert push(mut f, mut s, &pending[0], 3, &b.out[0])
 	assert f.sent.len == 2 && f.sent[1] == [u8(0x02), 0xFD, 0x80, 0x01, 0, 0, 0, 7, 0x07, 0xA0, 0x0E,
 		0x00, 0x7F, 0x31, 0x78]
 	f.fail_send = 3
-	push(mut f, mut s, &pending[0], 3, &b.out[0])
+	assert !push(mut f, mut s, &pending[0], 3, &b.out[0])
 	assert !s.activated && f.act.last() == false
 }

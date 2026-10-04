@@ -85,8 +85,11 @@ fn net_pass(now u64) {
 		g_prog.net_up(now)
 	}
 	doipnet.serve_mailbox(mut g_prog, &g_doip_req[0], &g_doip_resp[0])
-	// routine work a DoIP request started (an erase, a unit at a time): its next step once the
-	// previous response has been acknowledged, the step's response pushed to the tester
+	if doipnet.take_push_sent() {
+		g_prog.push_sent() // the routine's pushed response has itself been acknowledged
+	}
+	// routine work a DoIP request started (an erase, a unit at a time): its next step once its own
+	// preceding response has been acknowledged, the step's response pushed to the tester
 	if g_prog.work_due(boot.via_net) {
 		mut wr := [16]u8{}
 		n := g_prog.step(now, &wr[0])

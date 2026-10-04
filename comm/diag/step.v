@@ -86,9 +86,12 @@ pub fn wire_drain[H](mut ch H, clock fn () u64) {
 
 // serve_step is one whole pass of a server that owns its connection and nothing else on its bus —
 // the bootloader (boot.Prog). The server answers handle / heard / tick / reset_due / cancel_reset,
-// and work_pending / work: routine work it answered responsePending for (a flash erase, a unit at a
-// time), whose next step runs once the previous response has left the link AND the wire (a flash
-// erase stalls a single-bank chip whole; the drain is bounded by `clock`), its response sent after.
+// and, for routine work it answered responsePending for (a flash erase, a unit at a time):
+// work_awaiting (a response of the routine is on its way through the link), work_left / work_lost
+// (it left the link AND the wire — a flash erase stalls a single-bank chip whole; the drain is
+// bounded by `clock` — or a refused or aborted transfer lost it), work_pending / work (the next
+// step, once its own preceding response has left: a unit and what follows it, or the lost 0x78
+// again — never the work unannounced).
 // Returns true when the reset the server answered is due: its answer has left the link — the owner
 // then wire_drains and resets.
 pub fn serve_step[T, H](mut s T, mut l isotp.Link, rx_id u32, tx_id u32, now u64, mut ch H, req &u8, resp &u8, clock fn () u64) bool {
@@ -103,22 +106,34 @@ pub fn serve_step[T, H](mut s T, mut l isotp.Link, rx_id u32, tx_id u32, now u64
 		}
 	}
 	n := take_request(mut l, req, s.reset_due())
+	mut lost := false
 	if n > 0 {
 		s.heard(now) // a request is tester activity (S3, the stay-window)
 		rn := s.handle(req, n, resp)
 		if rn > 0 && !l.send(resp, rn) {
 			s.cancel_reset() // the answer could not be queued: never reset unanswered
+			lost = true
 		}
 	}
 	if !pump(mut l, tx_id, now, mut ch) {
 		s.cancel_reset()
+		lost = true
 	}
-	// the next step of routine work answered pending, once its previous response is on the wire
+	// a routine's response on its way: lost with the transfer, or left once out of the link and
+	// on the wire — then its next step, and that step's response
+	if s.work_awaiting() {
+		if lost {
+			s.work_lost()
+		} else if !l.busy() {
+			wire_drain(mut ch, clock)
+			s.work_left()
+		}
+	}
 	if s.work_pending() && !l.busy() {
-		wire_drain(mut ch, clock)
 		wn := s.work(now, resp)
 		if wn > 0 && (!l.send(resp, wn) || !pump(mut l, tx_id, now, mut ch)) {
 			s.cancel_reset()
+			s.work_lost()
 		}
 	}
 	if in_flight(&l) {

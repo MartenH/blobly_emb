@@ -16,6 +16,8 @@ fn C.doip_sleep_ms(int)
 fn C.doip_mb_call(&u8, int, int, &u8, int) int
 fn C.doip_mb_push_get(&u8, int) int
 fn C.doip_mb_push_resp(&u8, int) int
+fn C.doip_mb_take_push_sent() int
+fn C.doip_mb_push_queued()
 fn C.doip_mb_take(&int) int
 fn C.doip_mb_answer(int)
 fn C.doip_mb_take_sent() int
@@ -67,8 +69,8 @@ pub fn run(mut s doip.Server, count int, interval_ms int, inb &u8, out &u8) {
 	for {
 		// a response the server pushed (a routine's next one) goes out first
 		n := C.doip_mb_push_get(&pushed[0], pushed.len)
-		if n >= 0 {
-			push(mut st, mut s, &pushed[0], n, out)
+		if n >= 0 && push(mut st, mut s, &pushed[0], n, out) {
+			C.doip_mb_push_queued()
 		}
 		pass(mut st, mut s, inb, out)
 	}
@@ -112,6 +114,11 @@ pub fn serve_mailbox[T](mut s T, req &u8, resp &u8) {
 // until acknowledged, doip_mb.h); false when it does not fit the mailbox's push buffer
 pub fn push_resp(resp &u8, n int) bool {
 	return C.doip_mb_push_resp(resp, n) != 0
+}
+
+// take_push_sent: the response pushed last has itself been acknowledged (reported once)
+pub fn take_push_sent() bool {
+	return C.doip_mb_take_push_sent() != 0
 }
 
 // how long a reset waits for the answers already handed to TCP to be acknowledged

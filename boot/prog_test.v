@@ -99,6 +99,8 @@ fn ask(mut p Prog, req []u8) []u8 {
 	mut resp := []u8{len: 600}
 	mut n := p.handle(&req[0], req.len, unsafe { &resp[0] })
 	for n == 3 && resp[0] == 0x7F && resp[2] == 0x78 {
+		assert !p.work_due(via_bus), 'a step before its 0x78 left'
+		p.work_left() // the transport: the 0x78 is on the wire
 		assert p.work_due(via_bus)
 		n = p.step(0, unsafe { &resp[0] })
 	}
@@ -596,11 +598,19 @@ fn ask_net(mut p Prog, req []u8, now u64) []u8 {
 	mut resp := []u8{len: 600}
 	p.tick(now) // the serve loop ticks every pass; a network request is stamped by it
 	mut n := p.serve_remote(&req[0], req.len, false, unsafe { &resp[0] })
+	mut pushed := false
 	for n == 3 && resp[0] == 0x7F && resp[2] == 0x78 {
 		assert !p.work_due(via_net), 'a step before the pending answer was acknowledged'
-		p.remote_sent()
+		if pushed {
+			p.remote_sent() // another answer's acknowledgement is not the push's
+			assert !p.work_due(via_net), 'a step on another answer\'s acknowledgement'
+			p.push_sent()
+		} else {
+			p.remote_sent() // the routine's answer to its request
+		}
 		assert p.work_due(via_net)
 		n = p.step(now, unsafe { &resp[0] })
+		pushed = true
 	}
 	return resp[..n]
 }
@@ -1069,6 +1079,8 @@ fn test_an_erase_answers_pending_and_steps_one_unit_at_a_time() {
 	assert p.handle(&tp[0], 2, unsafe { &r2[0] }) == 3 && r2[2] == 0x21
 	mut pendings := 0
 	for step in 1 .. 10 {
+		assert !p.work_due(via_bus), 'a unit before its 0x78 left'
+		p.work_left() // the 0x78 is on the wire
 		assert p.work_due(via_bus)
 		n = p.step(u64(step) * 2_000_000, unsafe { &resp[0] })
 		assert f.erases == step, 'one unit per step'
@@ -1103,6 +1115,11 @@ fn test_a_network_erase_steps_only_on_acknowledgement() {
 	assert p.work_due(via_net)
 	assert p.step(1, unsafe { &resp[0] }) == 3 && resp[2] == 0x78
 	assert !p.work_due(via_net), 'the next step waits for this response to be acknowledged'
+	// a request pipelined behind it is answered busy and acknowledged — not the push's own
+	tp := [u8(0x3E), 0x00]
+	assert p.serve_remote(&tp[0], 2, false, unsafe { &resp[0] }) == 3 && resp[2] == 0x21
+	p.remote_sent()
+	assert !p.work_due(via_net), 'a step on another answer\'s acknowledgement'
 	p.remote_dropped()
 	assert !p.work_due(via_net) && f.erases == 1, 'nobody waits for the rest'
 }
@@ -1116,6 +1133,8 @@ fn test_the_check_routine_answers_pending() {
 	ck := [u8(0x31), 0x01, 0xFF, 0x01]
 	mut resp := []u8{len: 64}
 	assert p.handle(&ck[0], 4, unsafe { &resp[0] }) == 3 && resp[2] == 0x78
+	assert p.step(0, unsafe { &resp[0] }) == 0, 'not before the 0x78 left'
+	p.work_left()
 	assert p.step(0, unsafe { &resp[0] }) == 5
 	assert resp[..5] == [u8(0x71), 0x01, 0xFF, 0x01, 0x00]
 }
@@ -1131,4 +1150,28 @@ fn test_an_acknowledged_reset_survives_a_pipelined_request_that_drops() {
 	assert !p.reset_due(), 'B is in flight'
 	p.remote_dropped() // B's connection drops
 	assert p.reset_due(), 'the acknowledged reset is cancelled'
+}
+
+// a routine's 0x78 the bus lost (refused, aborted) goes again before any unit runs; lost every
+// time, the routine ends refused after work_resend_max tries — never the work unannounced
+fn test_a_lost_pending_answer_is_sent_again_before_any_unit() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	p.erase_unit = 0x4000
+	unlock(mut p)
+	er := [u8(0x31), 0x01, 0xFF, 0x00, u8(t_base >> 24), u8(t_base >> 16), u8(t_base >> 8),
+		u8(t_base), u8(t_size >> 24), u8(t_size >> 16), u8(t_size >> 8), u8(t_size)]
+	mut resp := []u8{len: 64}
+	p.handle(&er[0], er.len, unsafe { &resp[0] })
+	p.work_lost()
+	assert p.step(0, unsafe { &resp[0] }) == 3 && resp[2] == 0x78 && f.erases == 0, 'said again, nothing erased'
+	p.work_left()
+	assert p.step(1, unsafe { &resp[0] }) == 3 && resp[2] == 0x78 && f.erases == 1
+	for _ in 0 .. work_resend_max {
+		p.work_lost()
+		assert p.step(2, unsafe { &resp[0] }) == 3 && resp[2] == 0x78
+	}
+	p.work_lost()
+	assert p.step(3, unsafe { &resp[0] }) == 3 && resp[1] == 0x31 && resp[2] == 0x72, 'given up, refused'
+	assert f.erases == 1 && p.work == 0
 }

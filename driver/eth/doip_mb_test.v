@@ -22,8 +22,10 @@ mut:
 	drops      u32
 	drop_after u32
 	drops_seen u32
-	pushed     u32
-	push_taken u32
+	pushed        u32
+	push_taken    u32
+	push_queued   u32
+	push_reported u32
 }
 
 fn C.doip_mb_post(&C.doip_mb_t) u32
@@ -37,6 +39,8 @@ fn C.doip_mb_sent_take(&C.doip_mb_t, u32, u32) int
 fn C.doip_mb_dropped_take(&C.doip_mb_t) int
 fn C.doip_mb_push(&C.doip_mb_t)
 fn C.doip_mb_push_take(&C.doip_mb_t) int
+fn C.doip_mb_push_sent_take(&C.doip_mb_t, u32, u32) int
+fn C.doip_mb_push_queue(&C.doip_mb_t)
 
 const established = u32(5)
 const close_wait = u32(6)
@@ -110,6 +114,7 @@ mut:
 	unacked  u32
 	recycled bool // the doip thread has recycled a connection that went (it records the drop)
 	sent_on  u32  // the answer queued last on the live connection, 0 = none
+	queued   []u32 // every answer queued on the live connection: TCP acknowledges in order
 	// the server's thread: the request it served last, whether that exchange is in flight, a reset
 	// its answer announced
 	served   u32
@@ -125,9 +130,20 @@ mut:
 	drop_post u32
 	withdrawn map[u32]bool
 	reports   u32 // drops reported to the server's thread
+	// pushes: one outstanding at a time (boot.Prog pushes its next response only once the one
+	// before it is acknowledged), the push queued last on the live connection, the pushes acked
+	push_out   bool
+	push_on    u32
+	push_acked map[u32]bool
+	steps      int // pushes whose own acknowledgement let the next one go
 }
 
 fn (mut w World) server_pass() {
+	if C.doip_mb_push_sent_take(&w.m, w.state, w.unacked) == 1 {
+		assert w.push_out && w.push_acked[w.m.pushed], 'a push reported sent before ITS acknowledgement'
+		w.push_out = false
+		w.steps++
+	}
 	if C.doip_mb_sent_take(&w.m, w.state, w.unacked) == 1 {
 		assert w.served != 0 && w.acked[w.served], 'reported sent before the tester acknowledged ${w.served}'
 		w.inflight = false
@@ -143,6 +159,7 @@ fn (mut w World) server_pass() {
 		}
 		w.inflight = false
 		w.gone = true // boot.Prog.remote_dropped ends the routine: nothing more is pushed
+		w.push_out = false
 	}
 	if w.reset && !w.inflight {
 		assert w.acked[w.reset_seq], 'a reset with its answer unacknowledged'
@@ -160,7 +177,9 @@ fn (mut w World) step(op int) {
 				w.doip = .waiting
 			}
 		}
-		1 { // the server's thread takes and answers it — perhaps announcing a reset
+		1 { // the server's thread takes and answers it — perhaps announcing a reset. Its pass asks
+			// the doip thread's reports first (doipnet.serve_mailbox: sent, dropped, then take)
+			w.server_pass()
 			if C.doip_mb_waiting(&w.m) == 1 {
 				// a request pipelined behind a reset's answer is served too (acknowledged by
 				// DoIP, unanswered: boot.Prog.serve_remote) — and is in flight like any other
@@ -195,6 +214,7 @@ fn (mut w World) step(op int) {
 					C.doip_mb_queue(&w.m)
 					w.unacked = 1
 					w.sent_on = w.seq
+					w.queued << w.seq
 				} else {
 					// a send on a socket that is gone fails, and the doip thread recycles it
 					C.doip_mb_drop(&w.m)
@@ -208,7 +228,12 @@ fn (mut w World) step(op int) {
 		4 { // the tester acknowledges what is queued
 			if w.state == established && w.unacked != 0 {
 				w.unacked = 0
-				w.acked[w.sent_on] = true
+				for a in w.queued {
+					w.acked[a] = true // in order: everything queued before
+				}
+				if w.push_on != 0 {
+					w.push_acked[w.push_on] = true
+				}
 			}
 		}
 		5 { // an RST: the socket closes and NetX releases its queue, acknowledged or not
@@ -228,22 +253,27 @@ fn (mut w World) step(op int) {
 		}
 		9 { // the server's thread pushes a further response to the request it served last (a
 			// routine's next one), once the previous response has been acknowledged
-			if w.served != 0 && !w.inflight && !w.reset && !w.gone {
+			if w.served != 0 && !w.inflight && !w.push_out && !w.reset && !w.gone {
+				assert w.m.push_taken == w.m.pushed, 'a push overwrites one not yet sent'
 				C.doip_mb_push(&w.m)
-				w.inflight = true
+				w.push_out = true
 			}
 		}
-		10 { // the doip thread sends a pushed response, on the connection it has, if any
-			if w.doip != .waiting && C.doip_mb_push_take(&w.m) == 1 && w.state == established {
+		10 { // the doip thread, between requests (the top of its loop), sends a pushed response on
+			// the connection it has, if any
+			if w.doip == .idle && C.doip_mb_push_take(&w.m) == 1 && w.state == established {
 				C.doip_mb_queue(&w.m)
+				C.doip_mb_push_queue(&w.m)
 				w.unacked = 1
-				w.sent_on = w.served
+				w.push_on = w.m.pushed
 			}
 		}
 		7 { // a tester connects again
 			if w.recycled && w.state != established {
 				w.state = established
 				w.sent_on = 0
+				w.queued.clear()
+				w.push_on = 0
 			}
 		}
 		else { // the server's thread passes
@@ -272,8 +302,8 @@ fn pick(r int) int {
 		25 { 5 } // RST
 		26, 27 { 6 } // recycle
 		28, 29 { 7 } // reconnect
-		30, 31 { 9 } // push
-		32, 33 { 10 } // send a push
+		30...32 { 9 } // push
+		33...35 { 10 } // send a push
 		else { 8 } // a server pass
 	}
 }
@@ -281,11 +311,12 @@ fn pick(r int) int {
 fn test_the_mailbox_against_the_reference_model() {
 	rand.seed([u32(0xD01B), 0x2026])
 	mut total := 0
-	for run in 0 .. 200 {
+	mut steps := 0
+	for run in 0 .. 400 {
 		mut w := World{
 			state: established
 		}
-		for step in 0 .. 200 {
+		for step in 0 .. 300 {
 			w.step(pick(rand.intn(40) or { 0 }))
 			w.check(step)
 		}
@@ -310,8 +341,11 @@ fn test_the_mailbox_against_the_reference_model() {
 		}
 		w.server_pass()
 		assert !w.inflight, 'run ${run}: ${w.served} stays in flight (doip ${w.doip}, state ${w.state})'
+		assert !w.push_out, 'run ${run}: a push stays unacknowledged on a live, drained connection'
 		assert !(w.reset_ack && w.reset), 'run ${run}: an acknowledged reset never happened'
 		total += w.resets
+		steps += w.steps
 	}
 	assert total > 50, 'the walk never reached a reset'
+	assert steps > 50, 'the walk never acknowledged a push'
 }

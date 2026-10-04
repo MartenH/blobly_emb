@@ -102,6 +102,14 @@ fn (s &FakeServer) work_pending() bool {
 	return false
 }
 
+fn (s &FakeServer) work_awaiting() bool {
+	return false
+}
+
+fn (mut s FakeServer) work_left() {}
+
+fn (mut s FakeServer) work_lost() {}
+
 fn (mut s FakeServer) work(now u64, resp &u8) int {
 	return 0
 }
@@ -336,8 +344,8 @@ fn test_routine_work_steps_once_the_wire_is_drained() {
 			answers << f.data[..f.data[0] + 1].clone()
 		}
 		ch.tx.clear()
-		if !p.work_pending() {
-			break
+		if p.work == 0 {
+			break // the routine answered
 		}
 	}
 	assert g_step_pending_at_erase == [0, 0, 0, 0], 'an erase ran with a response still in the controller'
@@ -373,4 +381,93 @@ fn test_routine_work_waits_for_the_link() {
 	ch.stalled = false
 	serve_step(mut p, mut l, srx, stx, 1, mut ch, &b.req[0], &b.resp[0], zero_clock)
 	assert g_step_pending_at_erase.len == 1
+}
+
+// a routine's 0x78 the controller refuses is lost: the next pass says it again and erases nothing
+// until one has left; refused every time, the routine ends refused — never the erase unannounced
+fn test_a_refused_pending_answer_is_said_again_before_any_erase() {
+	mut p := boot.Prog{}
+	p.init()
+	p.app_base = 0x0802_0000
+	p.app_size = 0x0004_0000
+	p.erase_unit = 0x0002_0000 // two units
+	p.flash = boot.FlashOps{
+		erase: ram_erase
+		read:  ram_read
+	}
+	mut ch := &FakeChan{}
+	g_step_ch = ch
+	g_step_pending_at_erase = []int{}
+	mut l := new_link()
+	mut b := Bufs{}
+	mut resp := []u8{len: 16}
+	prog := [u8(0x10), 0x02]
+	p.handle(&prog[0], 2, unsafe { &resp[0] })
+	er := [u8(0x31), 0x01, 0xFF, 0x00, 0x08, 0x02, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00]
+	n := p.handle(&er[0], er.len, unsafe { &resp[0] })
+	ch.refuse = true
+	assert !l.send(unsafe { &resp[0] }, n) || true
+	// the 0x78 is refused on its way out: lost, said again, nothing erased
+	l.abort_tx()
+	p.work_lost()
+	serve_step(mut p, mut l, srx, stx, 0, mut ch, &b.req[0], &b.resp[0], zero_clock)
+	assert g_step_pending_at_erase.len == 0, 'erased with its 0x78 refused'
+	ch.refuse = false
+	for i in 1 .. 6 {
+		serve_step(mut p, mut l, srx, stx, u64(i), mut ch, &b.req[0], &b.resp[0], zero_clock)
+		if p.work == 0 {
+			break
+		}
+	}
+	assert g_step_pending_at_erase.len == 2, 'both units, once announced'
+	mut said := []u8{}
+	for f in ch.tx {
+		said << f.data[1]
+	}
+	assert said == [u8(0x7F), 0x7F, 0x71], 'the 0x78 again, a unit, 0x78, a unit, the answer: ${said}'
+	// refused every time: the routine ends refused, nothing erased
+	mut q := boot.Prog{}
+	q.init()
+	q.app_base = 0x0802_0000
+	q.app_size = 0x0004_0000
+	q.erase_unit = 0x0002_0000
+	q.flash = p.flash
+	g_step_pending_at_erase = []int{}
+	q.handle(&prog[0], 2, unsafe { &resp[0] })
+	q.handle(&er[0], er.len, unsafe { &resp[0] })
+	q.work_lost()
+	mut ch2 := &FakeChan{
+		refuse: true
+	}
+	g_step_ch = ch2
+	mut l2 := new_link()
+	for i in 0 .. 10 {
+		serve_step(mut q, mut l2, srx, stx, u64(i), mut ch2, &b.req[0], &b.resp[0], zero_clock)
+	}
+	assert q.work == 0 && g_step_pending_at_erase.len == 0, 'given up without erasing'
+}
+
+// the routine's first 0x78 — its answer to the request — refused by the controller is lost: the
+// pass says it again and runs nothing (here: the image check, not done unannounced)
+fn test_a_refused_first_pending_answer_holds_the_routine() {
+	mut p := boot.Prog{}
+	p.init()
+	p.app_base = 0x0802_0000
+	p.app_size = 0x0004_0000
+	p.flash = boot.FlashOps{
+		erase: ram_erase
+		read:  ram_read
+	}
+	mut resp := []u8{len: 16}
+	prog := [u8(0x10), 0x02]
+	p.handle(&prog[0], 2, unsafe { &resp[0] })
+	mut ch := &FakeChan{
+		refuse: true
+	}
+	mut l := new_link()
+	mut b := Bufs{}
+	mut t := new_link()
+	ch.rx << tester_frames(mut t, 0, [u8(0x31), 0x01, 0xFF, 0x01])
+	serve_step(mut p, mut l, srx, stx, 0, mut ch, &b.req[0], &b.resp[0], zero_clock)
+	assert p.work != 0 && p.work_resend && !p.work_ready, 'the check ran with its 0x78 refused'
 }

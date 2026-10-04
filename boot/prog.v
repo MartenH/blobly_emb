@@ -33,6 +33,9 @@ const nrc_response_pending = u8(0x78)
 const work_erase = u8(1)
 const work_check = u8(2)
 
+// how often a routine's lost 0x78 is sent again before the routine ends refused
+pub const work_resend_max = u8(3)
+
 // routine ids (0x31 sub 0x01 = start)
 pub const routine_erase = u16(0xFF00)
 pub const routine_check = u16(0xFF01)
@@ -136,6 +139,17 @@ pub mut:
 	work_addr u32
 	work_end  u32
 	erase_unit u32
+	// The ONE gate of a step, whichever transport: the routine's own preceding response has LEFT.
+	// work_out: a response of the routine is on its way (handed to the transport, not yet known to
+	// have left); work_push: it was pushed (over the network: only the push's own acknowledgement
+	// counts, never another request's). work_left / work_lost settle it: left, the next unit may
+	// run (work_ready); lost (a refused or aborted bus transfer), the 0x78 is sent again before
+	// any unit runs (work_resend) — at most work_resend_max times, then the routine ends refused.
+	work_out    bool
+	work_push   bool
+	work_ready  bool
+	work_resend bool
+	work_tries  u8
 	// the longest that wait may last: the node's link start-up allowance plus its whole
 	// announcement sequence (gen/boot_gen.h BOOT_DOIP_NET_WAIT_MS — every announcement goes out
 	// before the DoIP listener opens); 0 = net_wait_default_us
@@ -170,6 +184,37 @@ pub fn (mut p Prog) serve_remote(req &u8, req_len int, functional bool, resp &u8
 // drop (remote_dropped) then cancels the reset it announced.
 pub fn (mut p Prog) remote_sent() {
 	p.remote.sent()
+	// a routine's answer to its request is an ordinary answer: its acknowledgement (or one TCP
+	// gives after it, in order) is that the 0x78 left; a pushed response waits for its own
+	if p.work_via == via_net && !p.work_push {
+		p.work_left()
+	}
+}
+
+// push_sent: the response the routine PUSHED over the network (driver/eth/doip_mb.h) has itself
+// been acknowledged — the one thing that lets its next step run
+pub fn (mut p Prog) push_sent() {
+	if p.work_via == via_net && p.work_push {
+		p.work_left()
+	}
+}
+
+// work_left: the routine's response on its way has left (on the wire, or acknowledged)
+pub fn (mut p Prog) work_left() {
+	if p.work_out {
+		p.work_out = false
+		p.work_ready = true
+		p.work_tries = 0
+	}
+}
+
+// work_lost: the routine's response on its way was lost (a refused or aborted bus transfer): the
+// 0x78 goes again before any unit runs
+pub fn (mut p Prog) work_lost() {
+	if p.work_out {
+		p.work_out = false
+		p.work_resend = true
+	}
 }
 
 // remote_dropped: the network connection is gone. A reset it asked for whose answer never left is
@@ -207,7 +252,14 @@ fn (mut p Prog) handle_via(via u8, req &u8, req_len int, resp &u8) int {
 	}
 	n := p.dispatch(req, req_len, resp)
 	if p.work != 0 {
-		p.work_via = via // the routine just started: its responses go where its request came from
+		// the routine just started: its responses go where its request came from, the first being
+		// this answer (0x78)
+		p.work_via = via
+		p.work_out = true
+		p.work_push = false
+		p.work_ready = false
+		p.work_resend = false
+		p.work_tries = 0
 	}
 	p.owner = if p.srv.session == 0x01 { u8(0) } else { via }
 	p.remote_spoke = p.owner == via_net
@@ -358,15 +410,19 @@ pub fn (mut p Prog) tick(now u64) {
 	}
 }
 
-// work_due: routine work for `via` waits on its next step — over the network only once the
-// previous response has been acknowledged (the bus side asks once its link and wire are idle)
+// work_due: routine work for `via` waits on its next step: its own preceding response has left
+// (work_left) or was lost and goes again (work_lost) — the one gate, for both transports
 pub fn (p &Prog) work_due(via u8) bool {
-	return p.work != 0 && p.work_via == via && (via != via_net || !p.remote.inflight)
+	return p.work != 0 && p.work_via == via && (p.work_ready || p.work_resend)
 }
 
-// work_pending / work: the bus side's routine work, for comm/diag serve_step
+// work_pending / work_out_here / work: the bus side's routine work, for comm/diag serve_step
 pub fn (p &Prog) work_pending() bool {
 	return p.work_due(via_bus)
+}
+
+pub fn (p &Prog) work_awaiting() bool {
+	return p.work != 0 && p.work_via == via_bus && p.work_out
 }
 
 pub fn (mut p Prog) work(now u64, resp &u8) int {
@@ -379,13 +435,21 @@ pub fn (mut p Prog) work(now u64, resp &u8) int {
 // single-bank chip whole. Each step is tester activity; a network step's response is in flight
 // until acknowledged.
 pub fn (mut p Prog) step(now u64, resp &u8) int {
-	if p.work == 0 {
+	if !p.work_due(p.work_via) {
 		return 0
 	}
 	p.stamp(now)
-	if p.work_via == via_net {
-		p.remote.inflight = true
+	if p.work_resend {
+		// the preceding 0x78 was lost: say it again before any unit runs — or give up
+		p.work_resend = false
+		p.work_tries++
+		if p.work_tries > work_resend_max {
+			p.work = 0
+			return negative(resp, 0x31, nrc_general_programming_failure)
+		}
+		return p.pending_out(resp)
 	}
+	p.work_ready = false
 	if p.work == work_check {
 		p.work = 0
 		ok := p.check_and_mark()
@@ -405,11 +469,18 @@ pub fn (mut p Prog) step(now u64, resp &u8) int {
 	}
 	p.work_addr = next
 	if next < p.work_end {
-		return negative(resp, 0x31, nrc_response_pending)
+		return p.pending_out(resp)
 	}
 	p.work = 0
 	p.erased = true
 	return routine_rsp(resp, routine_erase, 0x00)
+}
+
+// pending_out: the routine's 0x78, on its way (pushed over the network, through the link on the bus)
+fn (mut p Prog) pending_out(resp &u8) int {
+	p.work_out = true
+	p.work_push = p.work_via == via_net
+	return negative(resp, 0x31, nrc_response_pending)
 }
 
 // end_session: back to the default session — relocked, a challenge and a download abandoned, no
