@@ -805,6 +805,10 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			}
 			glue << rx_gate_sample(m, conns, rx_by_msg.keys(), bname, '\t', true)
 			glue << fault_pass_lines(m)
+			if m.faults.len > 0 {
+				// the FB faults' snapshots at once, before the drain decodes newer values
+				glue << fault_capture_lines(m, 'st.fmem', 'st.conn_${snake(conns[0].name)}', '\t')
+			}
 		}
 		if rx_by_msg.len > 0 || conns.len > 0 || my_routes.len > 0 {
 			glue << '\tmut rx := can.Frame{}'
@@ -1026,6 +1030,10 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\t\t}'
 			}
 			glue << '\t}'
+			if m.faults.len > 0 && conns.len > 0 {
+				// and after the drain, the signal-status faults' — consumed there, in bus order
+				glue << fault_capture_lines(m, 'st.fmem', 'st.conn_${snake(conns[0].name)}', '\t')
+			}
 			// Serve the reassembled request, then send the answer — tx_ready-gated, so a response
 			// burst never overruns the Tx FIFO or blocks: at most a FIFO's worth per pass.
 			for c in conns {
@@ -1421,7 +1429,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					glue << debounce_step_lines(f, '\t\t')
 					glue << '\t}'
 				}
-				glue << fault_memory_init_lines(m, 'st.fmem', srv, '\t')
+				glue << fault_memory_init_lines(m, 'st.fmem', srv, '\t', []string{})
 			}
 		}
 		// module_host (above): no signal work, so no tick and no handler — it only has to DRAIN
@@ -2004,7 +2012,8 @@ fn fault_consume_lines(m Model, fb string, fmem string, rep string, ctl string, 
 }
 
 // fault_slot_lines: the fault memory `fmem`'s slots, one per [[fault]] in declaration order — the
-// DTC and the thresholds the memory applies.
+// DTC, the thresholds the memory applies, the snapshot (its DIDs and their sizes), the priority
+// displacement weighs, and where a persisted memory keeps the snapshot.
 fn fault_slot_lines(m Model, fmem string, ind string) []string {
 	mut out := []string{}
 	for i, f in m.faults {
@@ -2013,22 +2022,52 @@ fn fault_slot_lines(m Model, fmem string, ind string) []string {
 		if f.aging > 0 {
 			out << '${ind}${fmem}.slots[${i}].aging = u8(${f.aging})'
 		}
+		out << '${ind}${fmem}.slots[${i}].priority = u8(${f.priority})'
+		lens := fault_freeze_lens(m, f)
+		for k, d in f.freeze {
+			out << '${ind}${fmem}.slots[${i}].freeze[${k}] = u16(0x${d.hex()})'
+			out << '${ind}${fmem}.slots[${i}].freeze_len[${k}] = u8(${lens[k]})'
+		}
+		if f.freeze.len > 0 {
+			out << '${ind}${fmem}.slots[${i}].nfreeze = ${f.freeze.len}'
+			if i < m.fault_snap_ids.len && m.fault_snap_ids[i] != 0 {
+				out << '${ind}${fmem}.slots[${i}].snap_id = u16(0x${m.fault_snap_ids[i].hex()})'
+				out << '${ind}${fmem}.slots[${i}].snap_id_b = u16(0x${m.fault_snap_ids_b[i].hex()})'
+			}
+		}
 	}
 	return out
 }
 
 // fault_memory_init_lines: the configured memory `fmem` initialised and handed to the server `srv`
-// — and, for a power cycle, the cycle begun with the owner.
-fn fault_memory_init_lines(m Model, fmem string, srv string, ind string) []string {
+// — restored from its store when it is persisted (`store`, before anything else touches it) — and,
+// for a power cycle, the cycle begun with the owner.
+fn fault_memory_init_lines(m Model, fmem string, srv string, ind string, store []string) []string {
 	mut out := [
 		'${ind}${fmem}.n = ${m.faults.len}',
+		'${ind}${fmem}.cap = ${fault_entries(m)} // snapshot entries',
 		'${ind}${fmem}.init()',
 		'${ind}${srv}.faults = ${fmem}.uds_ops() // 0x19 / 0x14 / 0x85',
 	]
+	out << store
 	if m.fault_cycle == fault_cycle_power {
 		out << '${ind}${fmem}.cycle_start() // [fault_memory] cycle = "power": the cycle is this power-up'
 	}
 	return out
+}
+
+// fault_capture_lines: the snapshots an occurrence is waiting for, taken from the connection's
+// DIDs — brought up to date first, as before a 0x22 — right after the memory consumed it.
+fn fault_capture_lines(m Model, fmem string, conn string, ind string) []string {
+	if !m.faults.any(it.freeze.len > 0) {
+		return []string{}
+	}
+	return [
+		'${ind}if ${fmem}.capture_due() {',
+		'${ind}\t${conn}.refresh_now()',
+		'${ind}\t${fmem}.capture(&${conn}.server) // the snapshot: the DIDs as 0x22 reads them now',
+		'${ind}}',
+	]
 }
 
 // rx_publish_hooks: what a signal-status fault needs from EVERY publication of a signal it

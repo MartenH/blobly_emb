@@ -33,6 +33,8 @@
 module main
 
 import toml
+import comm.fault
+import nvm
 import tools.ecumodel
 
 struct NvmCfg {
@@ -295,7 +297,128 @@ fn writer_period_ms(doc toml.Doc, sname string) u32 {
 }
 
 fn nvm_on(m Model) bool {
-	return m.nvm.on && m.nvm_names.len > 0
+	return m.nvm.on && (m.nvm_names.len > 0 || fault_persist_on(m))
+}
+
+// fault_persist_on: the image keeps its fault memory in the journal — a ThreadX target's, which
+// validate_fault_target requires [nvm] for.
+fn fault_persist_on(m Model) bool {
+	return fault_target_on(m) && m.nvm.on
+}
+
+// chain_records: the journal records one value of `len` bytes occupies (the journal's own rule).
+fn chain_records(len int) int {
+	return int(nvm.records_for(u16(len)))
+}
+
+// derive_fault_nvm: the persisted fault memory's block ids, and the journal capacity it needs.
+// The STATUS IMAGE has one fixed id — it is keyed inside by DTC number, so no update to the fault
+// table moves it, and a firmware update can never prune it and resurrect cleared DTCs. Each
+// snapshot has TWO blocks, A and B (comm/fault persist.v), their ids hashes of its DTC and its schema
+// (the DIDs and their sizes), so an update that changes a snapshot restores none rather than the
+// wrong bytes; a collision with a persisted
+// signal, the status image or another snapshot is refused, naming the pin (`snapshot_ids`) that
+// resolves it — never resolved by declaration order, which an update may change.
+fn derive_fault_nvm(m Model) (u16, []u16, []u16) {
+	if !fault_persist_on(m) {
+		return 0, []u16{}, []u16{}
+	}
+	mut used := map[u16]string{}
+	for sname, id in m.nvm_ids {
+		used[id] = 'persistent signal "${sname}"'
+	}
+	status := nvm_hash16('fault_memory:status')
+	if prev := used[status] {
+		panic('loom2v: ${prev} collides with the fault memory\'s status block 0x${status.hex()} — pin the signal with `nvm_id = <1..65534>`')
+	}
+	used[status] = 'the fault memory status'
+	mut snaps := []u16{}
+	mut snaps_b := []u16{}
+	mut nsnap := 0
+	mut snap_recs := 1
+	for f in m.faults {
+		if f.freeze.len == 0 {
+			snaps << 0
+			snaps_b << 0
+			continue
+		}
+		nsnap++
+		lens := fault_freeze_lens(m, f)
+		mut schema := []string{}
+		mut body := 1
+		for i, d in f.freeze {
+			schema << '${d}=${lens[i]}'
+			body += 2 + lens[i]
+		}
+		r := chain_records(fault.snap_hdr + body)
+		if r > snap_recs {
+			snap_recs = r
+		}
+		// two blocks, A and B (persist.v: a capture writes the one the committed image does not claim)
+		ident := 'fault_snapshot:${f.dtc}:${schema.join(',')}'
+		a := if f.snapshot_ids.len == 2 { u16(f.snapshot_ids[0]) } else { nvm_hash16(ident) }
+		b := if f.snapshot_ids.len == 2 { u16(f.snapshot_ids[1]) } else { nvm_hash16(ident + ':B') }
+		for id in [a, b] {
+			if prev := used[id] {
+				// never resolved by the order the faults are declared in: an update that reorders
+				// them, or adds a colliding signal, would move a stored snapshot to another id
+				panic('loom2v: [[fault]] "${f.name}": its snapshot block 0x${id.hex()} collides with ${prev} — pin the other side (a signal with `nvm_id`), or this fault with `snapshot_ids = [0x${a.hex()}, 0x${b.hex()}]` changing only the colliding one (its blocks A and B: keeping the other as it is keeps a stored snapshot in it), and keep the pin')
+			}
+			used[id] = 'a snapshot block of [[fault]] "${f.name}"'
+		}
+		snaps << a
+		snaps_b << b
+	}
+	// the pool: a row per persisted signal, the status image and both snapshot blocks of every
+	// fault with one (a freed one stays as a tombstone), within derive_nvm's migration headroom
+	if m.nvm_names.len + 1 + 2 * nsnap > 48 {
+		panic('loom2v: ${m.nvm_names.len} persistent signals + the fault memory (${1 + 2 * nsnap} blocks) exceed the safe journal pool budget (48 of nvm.max_blocks)')
+	}
+	// capacity, the docs/nvm.md headroom rule: the live set — BOTH blocks of every snapshot whole
+	// (the committed one and the one a capture writes beside it; a tombstone waits for the image
+	// that releases its block, and refusals or power cuts can leave any of them waiting) — plus a
+	// full rewrite of it must fit one sector, so a flush never needs an erase
+	live := m.nvm_names.len + chain_records(2 + m.faults.len * fault.image_rec) + 2 * nsnap * snap_recs + 1
+	if live + live > int(m.nvm.sector_records) {
+		panic('loom2v: the journal needs ${live + live} records of sector headroom (live set ${live}: ' +
+			'${m.nvm_names.len} persistent signals + the fault memory, docs/nvm.md) but [nvm] sector_records = ${m.nvm.sector_records}')
+	}
+	return status, snaps, snaps_b
+}
+
+// fault_store_fns: the fault memory's store seam over the journal (one thread: the comm thread
+// owns both, so the seam is a plain call).
+fn fault_store_fns(m Model) []string {
+	if !fault_persist_on(m) {
+		return []string{}
+	}
+	return [
+		'',
+		'fn fmem_put(ctx voidptr, id u16, data &u8, len u16) bool {',
+		'\treturn g_nvm.put(id, data, len)',
+		'}',
+		'',
+		'fn fmem_get(ctx voidptr, id u16, out &u8, cap u16) u16 {',
+		'\treturn g_nvm.get(id, out, cap)',
+		'}',
+	]
+}
+
+// fault_store_lines: the memory wired to the journal and restored from it — after its slots are
+// configured, before the operation cycle begins and before the first report is consumed.
+fn fault_store_lines(m Model, fmem string, ind string) []string {
+	if !fault_persist_on(m) {
+		return []string{}
+	}
+	return [
+		'${ind}${fmem}.store = fault.Store{',
+		'${ind}\tput:      fmem_put',
+		'${ind}\tget:      fmem_get',
+		'${ind}\tid:       u16(0x${m.fault_status_id.hex()}) // the status image',
+		'${ind}\tretry_us: u64(${m.nvm.min_write_ms}) * 1000 // a refused write waits the system floor',
+		'${ind}}',
+		'${ind}${fmem}.restore() // the DTCs, counters and snapshots the journal holds; the interrupted cycle ended',
+	]
 }
 
 // --- emitted fragments ---------------------------------------------------------
@@ -386,8 +509,28 @@ fn nvm_boot_lines(m Model, ioc_idx map[string]int) []string {
 	for sname in m.nvm_names {
 		keep << 'u16(${m.nvm_ids[sname] or { 0 }})'
 	}
+	if fault_persist_on(m) {
+		keep << 'u16(0x${m.fault_status_id.hex()}) /* the fault memory status */'
+		for k, id in m.fault_snap_ids {
+			if id != 0 {
+				keep << 'u16(0x${id.hex()})'
+				keep << 'u16(0x${m.fault_snap_ids_b[k].hex()})'
+			}
+		}
+	}
 	g << '\t\tkeep := [${keep.join(', ')}]!'
-	g << '\t\tg_nvm.prune(&keep[0], ${m.nvm_names.len})'
+	g << '\t\tg_nvm.prune(&keep[0], ${keep.len})'
+	if !m.nm.on {
+		// no NM, so no sleep edge to erase in, and an erase at run time stalls the whole MCU on a
+		// single-bank flash for the sector's erase time (1-2 s on an H7): boot, before the kernel,
+		// is this node's ONLY erase point. A sector a compaction left behind is erased here, and
+		// past half a sector used the journal is compacted and the old sector erased here too, so
+		// a run starts with at least half a sector free — the run never needs an erase
+		g << '\t\tg_nvm.erase_pending() // the boot quiet point (no NM)'
+		g << '\t\tif g_nvm.free_records() < g_nvm.slots() / 2 && g_nvm.compact() {'
+		g << '\t\t\tg_nvm.erase_pending() // the run starts with half a sector or more free'
+		g << '\t\t}'
+	}
 	for sname in m.nvm_names {
 		si := m.sig_of[sname] or { continue }
 		id := m.nvm_ids[sname] or { 0 }
@@ -477,7 +620,9 @@ fn nvm_comm_locals(m Model, ioc_idx map[string]int) []string {
 	if m.nm.on {
 		g << '\tmut nvm_prev_nm := g_nm.state()'
 	}
-	g << '\tmut nvm_pack := [8]u8{}'
+	if m.nvm_names.len > 0 {
+		g << '\tmut nvm_pack := [8]u8{}'
+	}
 	return g
 }
 
@@ -576,6 +721,11 @@ fn nvm_flush_choreo(m Model, ioc_idx map[string]int, ind string) []string {
 		g << '${ind}\t}'
 		g << '${ind}}'
 	}
+	if fault_persist_on(m) {
+		g << '${ind}\tif !g_fmem.persist(t1, true) { // the fault memory: every change, deferred counters too'
+		g << '${ind}\t\tnvm_flush_ok = false'
+		g << '${ind}\t}'
+	}
 	g << '${ind}\tif nvm_flush_ok || nvm_pass > 0 {'
 	g << '${ind}\t\tbreak'
 	g << '${ind}\t}'
@@ -583,6 +733,13 @@ fn nvm_flush_choreo(m Model, ioc_idx map[string]int, ind string) []string {
 	g << '${ind}\t// inline compact) earns ONE quiet-point erase, then a retry'
 	g << '${ind}\tg_nvm.erase_pending()'
 	g << '${ind}}'
+	if fault_persist_on(m) && m.nm.on {
+		// no clean marker while the fault cycle's end waits for its barrier: the end's own write,
+		// in bus sleep, re-runs this choreography and lays it then
+		g << '${ind}if g_fmem.ending {'
+		g << '${ind}\tnvm_flush_ok = false'
+		g << '${ind}}'
+	}
 	g << '${ind}if nvm_flush_ok {'
 	g << '${ind}\t// clean ONLY when every value is durable (a failed mark stays unclean: retried on'
 	g << '${ind}\t// the next in-sleep write or edge); nvm_flush_ok then says values AND marker'

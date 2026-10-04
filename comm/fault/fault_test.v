@@ -207,7 +207,10 @@ fn test_read_and_clear_over_uds() {
 	assert call(mut s, [u8(0x19), 0x02, 0x08]) == [u8(0x59), 0x02, 0x7F, 0x52, 0x30, 0x00, 0x2F]
 	assert call(mut s, [u8(0x19), 0x0A]) == [u8(0x59), 0x0A, 0x7F, 0xC1, 0x00, 0x00, 0x50, 0x52,
 		0x30, 0x00, 0x2F]
-	assert call(mut s, [u8(0x19), 0x04, 0x52, 0x30, 0x00, 0x01]) == [u8(0x7F), 0x19, 0x12] // R6
+	// R6b: a DTC with no snapshot configured answers its header and no record
+	assert call(mut s, [u8(0x19), 0x04, 0x52, 0x30, 0x00, 0x01]) == [u8(0x59), 0x04, 0x52, 0x30,
+		0x00, 0x2F]
+	assert call(mut s, [u8(0x19), 0x05]) == [u8(0x7F), 0x19, 0x12]
 	assert call(mut s, [u8(0x19), 0x02]) == [u8(0x7F), 0x19, 0x13]
 	assert call(mut s, [u8(0x19), 0x82, 0x08]) == [u8(0x7F), 0x19, 0x12] // no suppression on 0x19
 	assert call(mut s, [u8(0x14), 0x12, 0x34, 0x56]) == [u8(0x7F), 0x14, 0x31]
@@ -742,11 +745,81 @@ fn note_issue(m &Memory, mut abs []FaultAbs, clock int) {
 	}
 }
 
+// RamStore: a store that keeps every block whole (the journal's power-cut behaviour is
+// persist_test.v's; here a reset is either an orderly 0x11 or power lost between owner passes).
+struct RamStore {
+mut:
+	ids  [4]u16
+	lens [4]int
+	data [4][max_block]u8
+	n    int
+}
+
+fn rs_put(ctx voidptr, id u16, d &u8, len u16) bool {
+	mut st := unsafe { &RamStore(ctx) }
+	mut k := -1
+	for i in 0 .. st.n {
+		if st.ids[i] == id {
+			k = i
+		}
+	}
+	if k < 0 {
+		k = st.n
+		st.n++
+		st.ids[k] = id
+	}
+	for b in 0 .. int(len) {
+		st.data[k][b] = unsafe { d[b] }
+	}
+	st.lens[k] = int(len)
+	return true
+}
+
+fn rs_get(ctx voidptr, id u16, out &u8, cap u16) u16 {
+	st := unsafe { &RamStore(ctx) }
+	for i in 0 .. st.n {
+		if st.ids[i] == id {
+			n := if st.lens[i] > int(cap) { int(cap) } else { st.lens[i] }
+			for b in 0 .. n {
+				unsafe {
+					out[b] = st.data[i][b]
+				}
+			}
+			return u16(n)
+		}
+	}
+	return 0
+}
+
+// stored_rs: the status image a RamStore holds.
+fn stored_rs(st &RamStore) []u8 {
+	mut b := [max_image]u8{}
+	n := rs_get(st, 0x0F00, &b[0], u16(max_image))
+	return b[..n].clone()
+}
+
+// model_memory: the model's two faults with their store, restored and its power cycle begun —
+// what the comm thread does at every start.
+fn model_memory(st &RamStore) Memory {
+	mut m := memory([u32(0xC40100), u32(0xC40200)])
+	m.store = Store{
+		ctx: st
+		put: rs_put
+		get: rs_get
+		id:  0x0F00
+	}
+	m.restore()
+	m.cycle_start()
+	return m
+}
+
 fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 	mut rng := u32(0x9E3779B9)
 	mut storms := 0
 	mut held_restarts := 0
 	mut waits := 0
+	mut resets := 0
+	mut offs := 0
 	mut clock := 0
 	for run in 0 .. 400 {
 		rng ^= rng << 13
@@ -760,8 +833,8 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 			inc:        1 + (rng >> 6) % 2
 			jump:       rng & 0x100 != 0
 		}
-		mut m := memory([u32(0xC40100), u32(0xC40200)])
-		m.cycle_start()
+		mut st := &RamStore{}
+		mut m := model_memory(st)
 		mut d := [proto, proto]
 		mut cells := [Report{}, Report{}]
 		mut ctl := Control{}
@@ -856,6 +929,10 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 					a.occ += dfails
 					a.base = a.cell
 				}
+				if m.cycle_end_due(now) {
+					m.cycle_end() // a requested end, its grace passed, after this pass's consume
+				}
+				m.persist(u64(clock), false) // the comm thread writes what changed, every pass
 			} else if op < 88 {
 				if !m.setting_off {
 					t_toggle = clock
@@ -867,13 +944,63 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 				}
 				m.set_setting(true) // 0x85 on, or the session ending
 				note_issue(m, mut abs, clock)
+			} else if op == 97 {
+				// a reset: an orderly 0x11 (the flush first) or power lost between owner passes.
+				// The memory comes back from its store, the producers restart from nothing, DTC
+				// setting is on. An occurrence is never doubled, the one an ECUReset flushed never
+				// lost, testFailedSinceLastClear exact, testFailed restarts — and nothing reported
+				// before the reset, suppressed or not, can count after it.
+				resets++
+				orderly := (rng >> 8) & 1 == 0
+				if orderly {
+					assert m.persist(u64(clock), true)
+				}
+				// what the store holds: when it records setting OFF with a cycle open, the power cut
+				// ended that cycle under suppression, which changes nothing — whether the latest
+				// state was flushed or not, the restore must give back exactly the stored bits
+				img := stored_rs(st)
+				m = model_memory(st)
+				if !orderly && img.len >= 2 && img[1] & (img_cycle_open | img_setting_off) == img_cycle_open | img_setting_off {
+					offs++
+					for k in 0 .. 2 {
+						want := img[2 + k * image_rec + 3] & persisted_bits
+						assert m.slots[k].status & persisted_bits == want, '${ctx}: power lost with setting off, and the restore moved fault ${k}: 0x${want.hex()} -> 0x${(m.slots[k].status & persisted_bits).hex()}'
+					}
+				}
+				for k in 0 .. 2 {
+					s := m.slots[k]
+					assert s.occurrence <= abs[k].occ, '${ctx}: fault ${k} came back with ${s.occurrence} occurrences, it had ${abs[k].occ}'
+					if orderly {
+						assert s.occurrence == abs[k].occ, '${ctx}: an ECUReset lost occurrences of fault ${k}'
+					}
+					d[k] = proto
+					cells[k] = Report{}
+					abs[k].occ = s.occurrence
+					abs[k].tf = false
+					abs[k].issued = map[u16]int{}
+					abs[k].issued[0] = clock
+					abs[k].last_gen = 0
+					abs[k].t_apply = clock
+					abs[k].g_apply = 0
+					abs[k].epoch++
+					abs[k].reference = ref_of(proto, false)
+					abs[k].cell = EpochMeta{
+						epoch: abs[k].epoch
+					}
+					abs[k].base = abs[k].cell
+					abs[k].spent = false
+					abs[k].pub_fresh = false
+					abs[k].rep_fresh = false
+				}
+				ctl = Control{}
+				t_toggle = clock
 			} else if op == 98 {
 				// an operation cycle boundary: while off it changes no status
 				before := [m.slots[0].status, m.slots[1].status]
-				if (rng >> 8) & 1 == 0 {
-					m.cycle_start()
-				} else {
-					m.cycle_end()
+				match (rng >> 8) % 3 {
+					0 { m.cycle_start() }
+					1 { m.cycle_end() }
+					else { m.end_cycle_after(now, 30) } // NM's sleep: the end waits for the barrier
 				}
 				if m.setting_off {
 					assert [m.slots[0].status, m.slots[1].status] == before, '${ctx}: a cycle boundary changed a status while off'
@@ -926,8 +1053,41 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 			}
 		}
 	}
-	println('fault model: ${storms} storms, ${waits} waits, ${held_restarts} held restarts')
+	println('fault model: ${storms} storms, ${waits} waits, ${held_restarts} held restarts, ${resets} resets (${offs} with setting off)')
 	assert storms > 3, 'the model never exhausted the generations'
 	assert waits > 0, 'no slot ever waited for a fresh generation'
 	assert held_restarts > 100, 'the model rarely restarted a failed debounce'
+	assert resets > 1000, 'the model rarely reset'
+	assert offs > 100, 'the model rarely lost power with setting off'
+}
+
+// The cycle-end barrier (docs/diagnostics.md §7): NM decides to sleep while a producer's dispatch
+// has qualified a failure it has not published yet. The end waits out its grace, the owner reading
+// as usual, so that report lands in the cycle it belongs to — and in the store. Ended at once, the
+// owner would read it outside any cycle and count nothing.
+fn test_a_report_published_after_the_end_was_decided_lands_in_that_cycle() {
+	mut st := &RamStore{}
+	mut m := model_memory(st)
+	mut d := counter(1, 1)
+	mut cell := Report{}
+	d.apply(m.control_gen(0), m.control_held(0))
+	d.step(.failed, 0, true) // qualified on the producer's thread ...
+	m.consume(0, cell) // ... while the owner reads the cell it has not published to yet
+	m.end_cycle_after(1000, 200) // bus sleep
+	assert m.cycle_active && !m.cycle_end_due(1100)
+	cell = d.rep // the producer publishes
+	m.consume(0, cell)
+	assert !m.cycle_end_due(1199)
+	assert m.cycle_end_due(1200)
+	m.consume(0, cell)
+	m.cycle_end()
+	assert m.slots[0].occurrence == 1 && m.slots[0].failed_cycles == 1
+	assert m.slots[0].status & (pending | confirmed) == pending | confirmed
+	assert m.persist(1200, true)
+	m = model_memory(st)
+	assert m.slots[0].occurrence == 1 && m.slots[0].status & confirmed != 0, 'the qualification never reached the store'
+	// a wake before the grace runs out ends the old cycle there and begins the next
+	m.end_cycle_after(2000, 200)
+	m.cycle_start()
+	assert m.cycle_active && !m.cycle_end_due(9999)
 }
