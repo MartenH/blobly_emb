@@ -195,6 +195,7 @@ pub fn (mut m Memory) persist(now u64, flush bool) bool {
 	if refused {
 		m.retry_at = now + m.store.retry_us
 	}
+	m.refused = refused
 	return !refused && !deferred
 }
 
@@ -223,6 +224,7 @@ fn (mut m Memory) persist_clear(group u32) bool {
 	}
 	n := m.image(true, group)
 	if !m.store.put(m.store.ctx, m.store.id, &m.scratch[0], u16(n)) {
+		m.refused = true
 		return false
 	}
 	m.commit_image(n)

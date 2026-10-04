@@ -225,6 +225,7 @@ fn test_the_fault_memory_is_persisted_in_the_journal() {
 		'g_fmem.cycle_start() // [fault_memory] cycle = "power"', 'for {',
 		'g_fmem.consume(0, g_frep_load_slow.r[0])', 'if g_fmem.capture_due() {', 'g_diag.refresh_now()',
 		'g_fmem.capture(&g_diag.server)', 'g_fmem.persist(t1, false)',
+		'if g_fmem.refused && g_nvm.pending_erase >= 0 {', 'g_nvm.erase_pending()',
 		'if g_diag.reset_due() != 0 {', 'g_fmem.consume(0, g_frep_load_slow.r[0])',
 		'if !g_fmem.persist(t1, true) {', 'C.diag_sys_reset()', 'fn fmem_put(ctx voidptr, id u16, data &u8, len u16) bool {',
 		'return g_nvm.put(id, data, len)', 'pub fn boot() {', 'if g_nvm.mounted {',
@@ -236,6 +237,7 @@ fn test_the_fault_memory_is_persisted_in_the_journal() {
 	c2, o2, g2, _ := ft_generate('persist_nm', same, ft_conn + ft_fault)
 	assert c2 == 0, o2
 	assert !g2.contains('g_nvm.erase_pending() // the boot quiet point')
+	assert !g2.contains('g_fmem.refused && g_nvm.pending_erase'), 'an NM node erased outside its sleep edges'
 	in_order(g2, ['g_fmem.persist(t1, false)', 'if g_fmem.wrote > 0 && g_nm.state() == .bus_sleep {',
 		'if !g_fmem.persist(t1, true) {', 'g_nvm.mark_clean()'])
 	// and no persistence without the storage declared

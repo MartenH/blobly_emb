@@ -5303,8 +5303,15 @@ fn fault_target_persist(m Model, ioc_idx map[string]int) []string {
 	if !fault_persist_on(m) {
 		return []string{}
 	}
-	mut g := fault_capture_lines(m, 'g_fmem', 'g_diag', '\t\t')
-	g << '\t\tg_fmem.persist(t1, false) // what changed: unwritten snapshots, the status image, tombstones'
+	mut g := ['\t\tg_fmem.persist(t1, false) // what changed: unwritten snapshots, the status image, tombstones']
+	if !m.nm.on {
+		// no NM, no sleep edge: when a compaction has left a sector to erase and the journal is
+		// refusing, this is the one runtime erase (a stall of the sector's erase time, once per
+		// sector fill) — else nothing, a 0x14 included, could be stored until the next boot
+		g << '\t\tif g_fmem.refused && g_nvm.pending_erase >= 0 {'
+		g << '\t\t\tg_nvm.erase_pending()'
+		g << '\t\t}'
+	}
 	if m.nm.on {
 		g << '\t\tif g_fmem.wrote > 0 && g_nm.state() == .bus_sleep {'
 		g << nvm_flush_choreo(m, ioc_idx, '\t\t\t')
@@ -5342,6 +5349,7 @@ fn fault_target_cycle(m Model) []string {
 		'\t\t\t} else {',
 	]
 	g << fault_target_consume(m, '\t\t\t\t')
+	g << fault_capture_lines(m, 'g_fmem', 'g_diag', '\t\t\t\t')
 	g << [
 		'\t\t\t\tg_fmem.cycle_end()',
 		'\t\t\t}',

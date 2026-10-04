@@ -34,6 +34,7 @@ module main
 
 import toml
 import comm.fault
+import nvm
 import tools.ecumodel
 
 struct NvmCfg {
@@ -305,9 +306,9 @@ fn fault_persist_on(m Model) bool {
 	return fault_target_on(m) && m.nvm.on
 }
 
-// chain_records: the journal records one value of `len` bytes occupies (nvm's chain_parts).
+// chain_records: the journal records one value of `len` bytes occupies (the journal's own rule).
 fn chain_records(len int) int {
-	return if len <= 20 { 1 } else { (len + 6 + 19) / 20 }
+	return int(nvm.records_for(u16(len)))
 }
 
 // derive_fault_nvm: the persisted fault memory's block ids, and the journal capacity it needs.
@@ -366,11 +367,12 @@ fn derive_fault_nvm(m Model) (u16, []u16) {
 	if m.nvm_names.len + 1 + nsnap > 48 {
 		panic('loom2v: ${m.nvm_names.len} persistent signals + the fault memory (${1 + nsnap} blocks) exceed the safe journal pool budget (48 of nvm.max_blocks)')
 	}
-	// capacity, the docs/nvm.md headroom rule: the live set — at most entries + 1 whole snapshots
-	// (a displacement writes the new one before the old is tombstoned), the rest tombstones — plus
-	// a full rewrite of it must fit one sector, so a flush never needs an erase
+	// capacity, the docs/nvm.md headroom rule: the live set — at most 2 x entries whole snapshots
+	// (a displacement writes the new one before its victim is tombstoned, and every entry may be
+	// displaced once in a cycle before the image that frees the victims is durable), the rest
+	// tombstones — plus a full rewrite of it must fit one sector, so a flush never needs an erase
 	entries := fault_entries(m)
-	whole := if entries + 1 < nsnap { entries + 1 } else { nsnap }
+	whole := if 2 * entries < nsnap { 2 * entries } else { nsnap }
 	live := m.nvm_names.len + chain_records(2 + m.faults.len * fault.image_rec) + whole * snap_recs +
 		(nsnap - whole) + 1
 	if live + live > int(m.nvm.sector_records) {

@@ -165,6 +165,12 @@ fn (j &Journal) slot_for(id u16) int {
 	return free
 }
 
+// records_for: the records one value of `len` bytes occupies — plain up to data_max, chained
+// beyond (the generator's capacity math asks this, so the two cannot disagree).
+pub fn records_for(len u16) u32 {
+	return if u32(len) <= data_max { u32(1) } else { chain_parts(len) }
+}
+
 // records_of: how many flash records this entry's newest value occupies.
 fn (j &Journal) records_of(i int) u32 {
 	if j.table[i].chained {

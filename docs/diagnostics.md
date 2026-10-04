@@ -431,8 +431,8 @@ entry whose DTC failed this cycle cannot be displaced) and tombstoned once when 
 write stays outstanding and is retried no sooner than `[nvm] min_write_ms` later. On a 4096-record
 sector a `cycle = "power"` node like zone_a writes a few image records per boot — on the order of a
 hundred boots per sector fill. loom2v checks the capacity at generation: the live set (persisted
-signals, the image, `entries + 1` whole snapshots — a displacement writes the new one first — and
-tombstones for the rest) and its full rewrite must fit one sector, and the journal pool must hold a
+signals, the image, `2 × entries` whole snapshots — a displacement writes the new one before its
+victim is tombstoned, and each entry may be displaced once in a cycle — and tombstones for the rest) and its full rewrite must fit one sector, and the journal pool must hold a
 row for each block.
 
 **Where writes happen.** Every comm pass after the cycle step (`fault_target_persist`), and with a
@@ -443,7 +443,10 @@ journal's sectors are the BOARD's (`bootmap.h` `NVM_A_ADDR` / `NVM_B_ADDR` / `NV
 outside the boot and application regions by `tools/vectab`), linked with the board's flash driver by
 the generator (`boards/common/nvm_map.c`, `BOARD_FLASH`, from the emitted declarations). A node
 without NM has no sleep edge: its quiet point for an erase is boot, before the kernel starts (once
-per sector fill — on the single-bank H723 an erase stalls every fetch for about a second).
+per sector fill — on the single-bank H723 an erase stalls every fetch for about a second). And
+when the journal is REFUSING with a sector awaiting its erase, the comm pass erases it there and
+then — the one runtime erase, once per sector fill — or nothing, a 0x14 included, could be stored
+until the next boot (a 0x14 refused meanwhile answers 0x72 and the tester retries).
 `nvm.Journal.put` is synchronous: an image write is ≤ 14 records (microseconds each), an inline
 compaction copies the live set — bounded, but not the incremental flash path §7 asks for.
 
