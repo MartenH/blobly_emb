@@ -24,6 +24,7 @@
 #include "nx_api.h"
 #include "netx_up.h"
 #include "doip_idle.h"
+#include "arp_glean.h"
 
 #define DOIP_PORT  13400
 #define IDENT_PER_PASS 4 /* identification requests answered per 200 ms service pass */
@@ -43,6 +44,7 @@ volatile ULONG doip_rx_bytes;
 volatile ULONG doip_tx_bytes;
 volatile ULONG doip_mb_timeouts;
 volatile ULONG doip_setup_failed; /* the sockets could not be made: DoIP is down */
+volatile ULONG doip_arp_gleaned;  /* requesters whose MAC was taken from their request (#368) */
 
 extern void blobly_doip_run(void);                                          /* generated V loop */
 extern int blobly_doip_udp(const unsigned char *req, int len, unsigned char *resp); /* generated */
@@ -339,6 +341,34 @@ void doip_eid(unsigned char eid[6]) {
 
 /* ---- threads ------------------------------------------------------------------------------ */
 
+/* the requester's MAC, from the frame that carried its request, as its ARP entry when the board has
+ * none resolved: the answer then goes straight back instead of waiting on the board's own ARP
+ * exchange, whose only retry is NX_ARP_UPDATE_RATE (10 s) later — one lost ARP packet cost the
+ * first identification after a flash, while the tester waited 1.2 s (#368). Only for a request
+ * that is answered, so a sender of junk takes no slot in the ARP cache. A resolved entry is never
+ * overwritten (the IP mutex, which a ThreadX owner may take again, holds the find and the set
+ * together, so an ARP reply the IP thread processes cannot land between them), and NetX refuses a
+ * peer it would reach through the gateway, whose frames carry the router's MAC. The IP source is
+ * not authenticated by the frame — but neither is an ARP packet, and NetX's auto entries accept
+ * any of those, resolved entries included. */
+static void learn_peer(NX_PACKET *p, ULONG peer_ip) {
+	NX_IP *ip = blob_net_ip();
+	NX_INTERFACE *ifc = &ip->nx_ip_interface[0];
+	ULONG msw = 0, lsw = 0;
+	uint32_t gm = 0, gl = 0;
+	if (!arp_glean_source(p->nx_packet_data_start, p->nx_packet_ip_header,
+	                      (uint32_t)ifc->nx_interface_physical_address_msw,
+	                      (uint32_t)ifc->nx_interface_physical_address_lsw, &gm, &gl)) {
+		return;
+	}
+	tx_mutex_get(&ip->nx_ip_protection, TX_WAIT_FOREVER);
+	if (nx_arp_hardware_address_find(ip, peer_ip, &msw, &lsw) != NX_SUCCESS &&
+	    nx_arp_dynamic_entry_set(ip, peer_ip, (ULONG)gm, (ULONG)gl) == NX_SUCCESS) {
+		doip_arp_gleaned++;
+	}
+	tx_mutex_put(&ip->nx_ip_protection);
+}
+
 /* the link poll (which also resyncs MACCR after renegotiation) and the UDP 13400 requests —
  * vehicle identification, entity status, power mode — the V loop parks in accept between
  * testers, so neither can live there */
@@ -359,8 +389,11 @@ static void svc_entry(ULONG arg) {
 			UINT peer_port = 0;
 			nx_udp_packet_info_extract(p, &peer_ip, NX_NULL, &peer_port, NX_NULL);
 			nx_packet_data_extract_offset(p, 0, req, sizeof(req), &got);
-			nx_packet_release(p);
 			int n = blobly_doip_udp(req, (int)got, resp);
+			if (n > 0) {
+				learn_peer(p, peer_ip);
+			}
+			nx_packet_release(p);
 			if (n <= 0) {
 				continue;
 			}
