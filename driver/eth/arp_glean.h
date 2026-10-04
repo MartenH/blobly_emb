@@ -21,9 +21,16 @@
 
 #define ARP_GLEAN_ETH_HDR 14
 
-/* 1 = (msw, lsw) is the unicast source MAC of a frame sent to `self` (or broadcast); 0 = none */
-static inline int arp_glean_source(const uint8_t *buf_start, const uint8_t *ip_hdr, const uint8_t self[6],
-                                   uint32_t *msw, uint32_t *lsw) {
+/* one MAC from six bytes, in NetX's split */
+static inline void arp_glean_split(const uint8_t *m, uint32_t *msw, uint32_t *lsw) {
+	*msw = ((uint32_t)m[0] << 8) | (uint32_t)m[1];
+	*lsw = ((uint32_t)m[2] << 24) | ((uint32_t)m[3] << 16) | ((uint32_t)m[4] << 8) | (uint32_t)m[5];
+}
+
+/* 1 = (msw, lsw) is the unicast source MAC of a frame sent to this station (self_msw/self_lsw,
+ * NetX's split) or to broadcast; 0 = there is none to read */
+static inline int arp_glean_source(const uint8_t *buf_start, const uint8_t *ip_hdr, uint32_t self_msw,
+                                   uint32_t self_lsw, uint32_t *msw, uint32_t *lsw) {
 	if (buf_start == 0 || ip_hdr == 0 || ip_hdr < buf_start || ip_hdr - buf_start < ARP_GLEAN_ETH_HDR) {
 		return 0;
 	}
@@ -31,20 +38,17 @@ static inline int arp_glean_source(const uint8_t *buf_start, const uint8_t *ip_h
 	if (h[12] != 0x08u || h[13] != 0x00u) {
 		return 0;
 	}
-	int to_self = 1, to_all = 1;
-	for (int i = 0; i < 6; i++) {
-		to_self &= h[i] == self[i];
-		to_all &= h[i] == 0xFFu;
-	}
-	if (!to_self && !to_all) {
+	uint32_t dm, dl, sm, sl;
+	arp_glean_split(h, &dm, &dl);
+	arp_glean_split(h + 6, &sm, &sl);
+	if (!(dm == self_msw && dl == self_lsw) && !(dm == 0xFFFFu && dl == 0xFFFFFFFFu)) {
 		return 0;
 	}
-	const uint8_t *s = h + 6;
-	if ((s[0] & 1u) != 0u || (s[0] | s[1] | s[2] | s[3] | s[4] | s[5]) == 0u) {
+	if ((sm & 0x0100u) != 0u || (sm | sl) == 0u) {
 		return 0; /* multicast / broadcast, or no address */
 	}
-	*msw = ((uint32_t)s[0] << 8) | (uint32_t)s[1];
-	*lsw = ((uint32_t)s[2] << 24) | ((uint32_t)s[3] << 16) | ((uint32_t)s[4] << 8) | (uint32_t)s[5];
+	*msw = sm;
+	*lsw = sl;
 	return 1;
 }
 
