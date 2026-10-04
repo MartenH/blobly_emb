@@ -32,6 +32,7 @@ jobs:
   test:
     name: linux • host unit tests + check + trace
     runs-on: ubuntu-latest
+    timeout-minutes: 30 # a run takes 5–7 min; a hung job otherwise holds an account-wide slot for 6 h
     steps:
       - uses: actions/checkout@v4
 
@@ -190,6 +191,7 @@ jobs:
   cross:
     name: cross • bare-metal STM32H7 images (+ the _vinit gate)
     runs-on: ubuntu-latest
+    timeout-minutes: 30 # a run takes 5–7 min; a hung job otherwise holds an account-wide slot for 6 h
     steps:
       - uses: actions/checkout@v4
 
