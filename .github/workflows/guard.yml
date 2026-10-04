@@ -23,6 +23,7 @@ jobs:
   reject-external-prs:
     if: github.event_name == 'pull_request_target' && github.event.pull_request.user.login != github.repository_owner
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       pull-requests: write
     steps:
@@ -53,6 +54,7 @@ jobs:
   commit-identity:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       # AUTHOR — who wrote the commit. Strictly the maintainer's personal address.
       ALLOWED_AUTHORS: marten.hildell@gmail.com
