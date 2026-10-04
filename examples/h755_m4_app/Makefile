@@ -48,11 +48,14 @@ ifneq ($(MAKECMDGOALS),clean)
 -include gen/loom_build.mk
 endif
 
-$(BUILD)/app.c: main.v gen/loom_gen.v $(wildcard app/*.v) $(wildcard $(REPO)/loom/*.v) | $(BUILD)
+$(BUILD)/app.c: main.v gen/loom_gen.v | $(BUILD)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
 	  -path "@vlib|@vmodules|.|examples/$(NAME)" \
-	  -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
+	  $(call v_dump,$@) -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
+	$(call v_deps,$@)
 	$(REPO)/scripts/lint_vinit.sh $@
+# what V compiled into it (tools/tools.mk v_deps)
+-include $(BUILD)/app.c.d
 
 $(BUILD)/tx/%.o: $(PORT)/src/%.S Makefile
 	@mkdir -p $(BUILD)/tx

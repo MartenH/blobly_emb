@@ -90,11 +90,14 @@ endif
 gen/loom_build.mk: gen/.stamp ;
 
 # 1) transpile the V stack to freestanding C (-enable-globals for the ThreadX TCB/stack statics).
-$(BUILD)/app.c: main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) $(wildcard $(REPO)/nvm/*.v) $(wildcard $(REPO)/boot/*.v) $(wildcard app/*.v) | $(BUILD)
+$(BUILD)/app.c: main.v gen/.stamp | $(BUILD)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
 	  -path "@vlib|@vmodules|.|examples/$(NAME)" \
-	  -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
+	  $(call v_dump,$@) -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
+	$(call v_deps,$@)
 	$(REPO)/scripts/lint_vinit.sh $@
+# what V compiled into it (tools/tools.mk v_deps)
+-include $(BUILD)/app.c.d
 
 # 2) ThreadX kernel objects (the shared ThreadX recipe).
 $(BUILD)/tx/%.o: $(PORT)/src/%.S Makefile

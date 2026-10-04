@@ -54,6 +54,20 @@ TOOL_FLAGS_load_bench   := -gc none
 # tools/loom2v/no_v_run_makefiles_test.v asks make itself.
 TOOL_GOAL := $(.DEFAULT_GOAL)
 
+# The dependencies of a target V TRANSPILES — an image's generated C (app.c), the bootloader's
+# (boot/boot.mk) — are what V compiled into it, from its own -dump-files, written by
+# scripts/vdeps.sh: never a hand list of module directories, which went stale the day a generated
+# image started importing one more (driver/doipnet). In the rule, V run from $(REPO):
+#
+#     $(BUILD)/app.c: main.v gen/.stamp | $(BUILD)
+#     	cd $(REPO) && $(V) -freestanding ... $(call v_dump,$@) -o .../$(BUILD)/app.c .../main.v
+#     	$(call v_deps,$@)
+#     -include $(BUILD)/app.c.d
+#
+# scripts/app_deps_check.sh asks make that a module's edit remakes every image importing it.
+v_dump = -dump-files $(CURDIR)/$(1).files
+v_deps = VDEPS_BASE=$(TOOL_REPO) $(TOOL_REPO)/scripts/vdeps.sh $(1) $(1).files >$(1).d.tmp && mv -f $(1).d.tmp $(1).d
+
 TOOL_REPO := $(abspath $(REPO))
 TOOL_DIR  := $(CURDIR)/bin
 TOOLS     := $(patsubst TOOL_SRC_%,%,$(filter TOOL_SRC_%,$(.VARIABLES)))

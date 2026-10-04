@@ -58,10 +58,13 @@ ifneq ($(MAKECMDGOALS),clean)
 endif
 gen/loom_build.mk: gen/.stamp ;
 
-$(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) $(wildcard $(REPO)/driver/io/*.v) $(wildcard app/*.v) | $(BUILD)
+$(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp | $(BUILD)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
 	  -path "@vlib|@vmodules|.|examples/system_full/nodes/$(NAME)" \
-	  -o examples/system_full/nodes/$(NAME)/$(BUILD)/app.c examples/system_full/main.v
+	  $(call v_dump,$@) -o examples/system_full/nodes/$(NAME)/$(BUILD)/app.c examples/system_full/main.v
+	$(call v_deps,$@)
+# what V compiled into it (tools/tools.mk v_deps)
+-include $(BUILD)/app.c.d
 
 $(BUILD)/tx/%.o: $(PORT)/src/%.S Makefile
 	@mkdir -p $(BUILD)/tx

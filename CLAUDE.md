@@ -74,6 +74,10 @@ every V file `-dump-files` reports (vlib's too), every C source and `#flag -I` d
 `v version`, the tool's flags, `$VFLAGS`), `tools.mk` and the helper. The list lives in `tools.mk`;
 `tools/loom2v/no_v_run_makefiles_test.v` changes each kind of input and asks make, pins that no
 Makefile runs `v run`, and that including `tools.mk` leaves every default goal where it was.
+The same goes for what an IMAGE transpiles: every `app.c` (and a bootloader's `boot.c`) depends on
+what V compiled into it — `$(call v_dump,$@)` on the V line, `$(call v_deps,$@)` after it,
+`-include $(BUILD)/app.c.d` (`tools.mk`, `scripts/vdeps.sh`, the writer `build_tool.sh` shares) —
+never a hand list of module directories; `scripts/app_deps_check.sh` (CI cross job) pins it.
 
 Examples use classic CAN (`[bus] fd = false`) so blobly_net (classic) can drive
 them; the driver picks classic vs CAN-FD from that flag. Integration tests live in

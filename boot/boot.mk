@@ -69,9 +69,6 @@ BOOT_LDFLAGS = $(MCU) -T $(BOOT_LD) -nostartfiles -Wl,--gc-sections \
                -Wl,--defsym,__flash_len__=$(call boot_layout,boot-size) \
                --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BOOT_DIR)/boot.map
 BOOT_SRCS    = $(BOOT_RT_SRCS) $(REPO)/boards/common/boot_glue.c $(BOARD_FLASH) $(REPO)/driver/can/can_backend.c
-BOOT_VSRC    = $(wildcard $(REPO)/boot/target/*.v $(REPO)/boot/*.v $(REPO)/bcrypto/*.v \
-               $(REPO)/comm/isotp/*.v $(REPO)/comm/uds/*.v $(REPO)/comm/diag/*.v \
-               $(REPO)/comm/doip/*.v $(REPO)/driver/doipnet/*.v $(REPO)/driver/can/*.v)
 
 boot: $(BOOT_DIR)/boot.bin
 # the node's image set is its application AND its bootloader
@@ -80,10 +77,13 @@ all: boot
 $(BOOT_DIR):
 	mkdir -p $(BOOT_DIR)
 
-$(BOOT_DIR)/boot.c: $(BOOT_VSRC) | $(BOOT_DIR)
+# what V compiles into it is its dependency list (tools/tools.mk v_deps)
+$(BOOT_DIR)/boot.c: | $(BOOT_DIR)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(BOOT_VDEFS) \
-	  -path "@vlib|@vmodules|." -o $(CURDIR)/$@ boot/target
+	  -path "@vlib|@vmodules|." $(call v_dump,$@) -o $(CURDIR)/$@ boot/target
+	$(call v_deps,$@)
 	$(REPO)/scripts/lint_vinit.sh $@
+-include $(BOOT_DIR)/boot.c.d
 
 # every header and textually included backend (can_backend.c includes can_fdcan.c) comes from the
 # compiler's own dependency output, written as the image links — no hand list to miss the next one

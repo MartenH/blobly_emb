@@ -25,7 +25,7 @@ tmp="$out.tmp.$$"
 # temporaries must not end in .d or .sig: tools.mk includes bin/.tool-*.d, and a make starting
 # while this one writes would read half a makefile
 dtmp="$out.d.tmp.$$"
-trap 'rm -f "$tmp" "$tmp.files" "$tmp.cflags" "$dtmp" "$out.sig.tmp.$$"' EXIT
+trap 'rm -f "$tmp" "$tmp.files" "$tmp.cflags" "$tmp.srcs" "$tmp.dirs" "$dtmp" "$out.sig.tmp.$$"' EXIT
 # V and FLAGS are word lists (`v -cc clang`, `-prod -gc none`), so both are split on purpose
 # shellcheck disable=SC2086
 ${V:-v} $flags -dump-files "$tmp.files" -dump-c-flags "$tmp.cflags" -o "$tmp" "$src"
@@ -35,35 +35,16 @@ cdeps=$(tr -d '"'"'" <"$tmp.cflags" | awk '
 	/^-I/ { d = substr($0, 3); sub(/^ +/, "", d); if (d != "") print "I " d; next }
 	/\.(c|h|S)$/ && $0 !~ /\.tmp\.c$/ && $0 !~ /^-/ { print "F " $0 }')
 
-# the directories: each compiled source's, and each `#flag -I` one
-srcs=$({
+# the sources: each compiled V file, and each C source the C compiler is handed; the further
+# directories: each `#flag -I` one. scripts/vdeps.sh writes the dependencies from them.
+{
 	cat "$tmp.files"
 	printf '%s\n' "$cdeps" | awk '$1 == "F" { print $2 }' | while read -r f; do
 		[ -f "$f" ] && printf '%s\n' "$f"
 	done
-} | sort -u)
-dirs=$({
-	printf '%s\n' "$srcs" | sed 's|/[^/]*$||'
-	printf '%s\n' "$cdeps" | awk '$1 == "I" { print $2 }'
-} | awk 'NF && !seen[$0]++')
-
-# every file the wildcards find NOW is named too, so a deleted one rebuilds the tool (its dummy
-# rule below), and the wildcards still catch a file added later
-all=$({
-	printf '%s\n' "$srcs"
-	printf '%s\n' "$dirs" | while read -r d; do
-		for f in "$d"/*.v "$d"/*.c "$d"/*.h; do [ -f "$f" ] && printf '%s\n' "$f"; done
-	done
-} | sort -u)
-
-{
-	printf '%s:' "$out"
-	printf '%s\n' "$all" | while read -r f; do printf ' \\\n  %s' "$f"; done
-	printf '\n'
-	printf '%s\n' "$dirs" | while read -r d; do printf '%s: $(wildcard %s/*.v %s/*.c %s/*.h)\n' "$out" "$d" "$d" "$d"; done
-	# a source that disappears must rebuild the tool, not stop make (gcc -MP)
-	printf '%s\n' "$all" | while read -r f; do printf '%s:\n' "$f"; done
-} >"$dtmp"
+} >"$tmp.srcs"
+printf '%s\n' "$cdeps" | awk '$1 == "I" { print $2 }' >"$tmp.dirs"
+"$(dirname "$0")/vdeps.sh" "$out" "$tmp.srcs" "$tmp.dirs" >"$dtmp"
 
 # Publication: the old signature goes first (no record rebuilds the tool), then the
 # dependencies, then the binary, and the new signature last — so an interruption never leaves a

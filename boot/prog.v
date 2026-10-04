@@ -145,7 +145,9 @@ pub fn (mut p Prog) serve_remote(req &u8, req_len int, functional bool, resp &u8
 	return p.handle_via(via_net, req, req_len, resp)
 }
 
-// remote_sent: the network transport has sent the answer serve_remote gave.
+// remote_sent: the answer serve_remote gave has been ACKNOWLEDGED by the tester (driver/eth/doip_mb.h)
+// — queued is not sent: an answer still in TCP's queue dies with a connection that drops, and the
+// drop (remote_dropped) then cancels the reset it announced.
 pub fn (mut p Prog) remote_sent() {
 	p.remote_inflight = false
 }
