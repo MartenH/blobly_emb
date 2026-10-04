@@ -247,7 +247,7 @@ signal = "BrakePressure"
 on     = "lost"
 
 [fault_memory]
-cycle   = "IgnitionOn.on"              # the operation cycle: ignition on -> off
+cycle = "IgnitionOn.on"                # the operation cycle: ignition on -> off
 entries = 1                            # ONE snapshot entry: the over-rev displaces the idle fault's, never the reverse
 
 # --- Function Blocks ---------------------------------------------------------

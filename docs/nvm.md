@@ -1,6 +1,10 @@
 # Persistence (non-volatile storage) — design
 
-> Status (2026-09-27): **P1 and P2 are built** — the journal engine (`nvm/`, with the
+> Status (2026-10-04): the fault memory (diagnostics.md R6b) persists in this journal — a
+> status image and per-fault snapshot blocks, the journal's sectors now the board's (`bootmap.h`
+> NVM_*, linked by the generator through `boards/common/nvm_map.c`).
+>
+> Earlier status (2026-09-27): **P1 and P2 are built** — the journal engine (`nvm/`, with the
 > power-cut fuzz) incl. chained values, and the `persist` codegen — and **P3 is in use** on the
 > ThreadX target (`examples/h755_threadx`, `system_full/nodes/domain`), its power-pull bench
 > loop not yet recorded. **P4
