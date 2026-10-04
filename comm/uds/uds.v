@@ -8,7 +8,8 @@ module uds
 // Services: 0x10 DiagnosticSessionControl, 0x11 ECUReset, 0x22 ReadDataByIdentifier (several
 // DIDs per request), 0x27 SecurityAccess (with injected SecurityOps), 0x28 CommunicationControl,
 // 0x14 / 0x19 / 0x85 over an injected FaultOps (comm/fault),
-// 0x2E WriteDataByIdentifier, 0x3E TesterPresent. Anything else -> 0x11 serviceNotSupported.
+// 0x2E WriteDataByIdentifier (a BOUND DID — a parameter — through the injected DidWrite, comm/param),
+// 0x3E TesterPresent. Anything else -> 0x11 serviceNotSupported.
 // An application server's 0x10 02 is the programming HANDOFF (boot_handoff): answered, then
 // performed by the owner as a reset into the bootloader (reset_into_boot).
 // Which of those a node answers, where, and behind which 0x27 level is the SERVICE TABLE
@@ -110,6 +111,15 @@ pub mut:
 	avail       u8 // the status availability mask; 0 = not wired (the services stay unsupported)
 }
 
+// DidWrite is the seam a bound DID's 0x2E goes through, after the server's session and security
+// gates: `write` returns the NRC (0 = accepted — the server then stores the record as the DID's
+// data and answers). comm/param builds it: length (0x13), range (0x31), then the journal (0x72).
+pub struct DidWrite {
+pub mut:
+	ctx   voidptr
+	write fn (ctx voidptr, id u16, data &u8, n int) u8
+}
+
 // The service table (Server.services): which services the server answers, in which sessions, and
 // behind which 0x27 level — AUTOSAR Dcm's service table, configured from [uds] `services`.
 pub const max_services = 16
@@ -144,13 +154,15 @@ pub const reset_into_boot = u8(0x80)
 
 // Did is one Data Identifier: constant bytes, a RAM cell (writable), and/or kept fresh from a
 // live signal by the bridge. Access is gated per DID: the session masks (0 = every session) and
-// the security level a write needs (0 = none).
+// the security level a write needs (0 = none). A BOUND writable DID is a parameter's (comm/param):
+// its 0x2E goes through Server.did_write, which validates and makes it durable first.
 pub struct Did {
 pub mut:
 	id             u16
 	data           [max_did_data]u8
 	len            u8
 	writable       bool
+	bound          bool
 	read_sessions  u8
 	write_sessions u8
 	read_security  u8
@@ -234,6 +246,8 @@ pub mut:
 	// Fault memory (0x19 / 0x14 / 0x85). 0x85's on/off state lives in the memory alone; the server
 	// turns it back on whenever the session returns to default (like 0x28).
 	faults FaultOps
+	// Parameters (0x2E on a bound DID): nil `write` = a bound DID cannot be written (0x22).
+	did_write DidWrite
 }
 
 // init puts the server in the default session with everything unlocked-state cleared, and
@@ -885,7 +899,8 @@ fn (mut s Server) write_did(req &u8, req_len int, resp &u8) int {
 	i := s.find_did(did)
 	// ISO 14229-1 0x2E order: a DID that does not exist, is not writable, or is not writable
 	// in the active session is NOT SUPPORTED for write (0x31); then security (0x33); then the
-	// record length (0x13).
+	// record length (0x13); then, for a parameter, its conditions, range (0x31) and the write
+	// itself (0x72) — the seam's.
 	if i < 0 || !s.dids[i].writable || !in_mask(s.dids[i].write_sessions, s.session) {
 		return negative(resp, 0x2E, nrc_request_out_of_range)
 	}
@@ -894,6 +909,15 @@ fn (mut s Server) write_did(req &u8, req_len int, resp &u8) int {
 	}
 	if n > max_did_data {
 		return negative(resp, 0x2E, nrc_incorrect_length)
+	}
+	if s.dids[i].bound {
+		if s.did_write.write == unsafe { nil } {
+			return negative(resp, 0x2E, nrc_conditions_not_correct)
+		}
+		nrc := s.did_write.write(s.did_write.ctx, did, unsafe { req + 3 }, n)
+		if nrc != 0 {
+			return negative(resp, 0x2E, nrc)
+		}
 	}
 	unsafe {
 		for j in 0 .. n {

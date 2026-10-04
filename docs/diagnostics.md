@@ -19,20 +19,21 @@ page is the plan to close that, in rungs that each ship and verify on their own.
 
 ## 1. Where we actually are
 
-As of R4c, R2's first steps, R6a and R6b — the rows R0 through R4c, R2, R6a and R6b changed say so; the rest is the state the plan started from.
+As of R4c, R2's first steps, R6a, R6b and R7 — the rows R0 through R4c, R2, R6a, R6b and R7 changed say so; the rest is the state the plan started from.
 
 | Piece | State | Where |
 |---|---|---|
 | UDS services | 0x10, 0x11 (two-phase: answered, then reset), 0x22, 0x27 (R1b), 0x28, 0x2E, 0x3E; everything else answers 0x11. On the host 0x11 resets the DIAGNOSTIC state only (R1); a real reset is R2. Which of them a node answers, in which sessions and behind which 0x27 level, is its **service table** (`[uds] services`, §3.1); absent, the default set — every service the build performs, in its default sessions. 0x10 02 on a `[boot]` node is the **programming handoff** (R2, §3.1): answered, then performed as a reset into the bootloader | `comm/uds/uds.v`, `tools/loom2v/gen_diag.v` |
 | Session model | enforced (R1): starts in default, S3 returns to it (`s3_ms`), every session request relocks security (re-entry included, R1b), and returning to default re-enables the communication 0x28 disabled; an application never enters the programming session: without `[boot]` 0x10 02 is refused (0x12), with it 0x10 02 hands the ECU to its bootloader, whose server opens the session | `comm/uds/uds.v`, `comm/diag/diag.v` |
-| DIDs | 16 × ≤32 B static table; 0x22 reads several DIDs per request (R1); per-DID `read` / `write` session and security gates | `comm/uds/uds.v` |
-| NRCs | 0x11 0x12 0x13 0x14 0x22 0x24 0x31 0x33 0x35 0x36 0x37 0x7F in ISO 14229-1's evaluation order (R1; the 0x27 ones R1b); functional requests withhold 0x11/0x12/0x31/0x7E/0x7F; 0x7E for a sub-function row (`"0x10 02"`, the handoff's — §3.1); no 0x78 (R6/R7) | `comm/uds/uds.v` |
+| DIDs | 16 × ≤32 B static table; 0x22 reads several DIDs per request (R1); per-DID `read` / `write` session and security gates; a DID that names a `[[param]]` is BOUND (R7): its 0x2E goes through `uds.DidWrite`, the parameter's validation and durable write, before the record changes | `comm/uds/uds.v` |
+| NRCs | 0x11 0x12 0x13 0x14 0x22 0x24 0x31 0x33 0x35 0x36 0x37 0x7F in ISO 14229-1's evaluation order (R1; the 0x27 ones R1b), and 0x72 for a parameter the journal refused (R7); functional requests withhold 0x11/0x12/0x31/0x7E/0x7F; 0x7E for a sub-function row (`"0x10 02"`, the handoff's — §3.1); no 0x78 (R6/R7) | `comm/uds/uds.v` |
 | Security access 0x27 | served on the host (R1b): levels from the DID gates, one key per seed, attempt limit + lockout delay (the count survives an ECU reset), keys through the injected `SecurityOps` (the host bridge injects the reference key; a ThreadX target the board's seam, `boards/common/diag_board.c`); the bootloader keeps 0x29 | `comm/uds/uds.v` |
 | UDS on the **target** | R2, first steps: `[isotp]` on the ThreadX comm thread (the one on `[telemetry].bus`) — the same `comm/diag.Connection` the host bridge runs; constant DIDs, and live DIDs on the node's own local OUTPUTS (the cells the comm thread already reads — an input's cell is its FB's, one reader per cell); 0x27 with a TRNG seed from the board (`boards/common/diag_board.c`, weak) and the OEM's `diag_sa_key_ok` — no default is linked, so a gated node without one fails to link; blobly_net's public reference key only by name (`[uds] security_key = "reference"`, the bench's); bench-verified on all three `system_full` CAN nodes — domain (H755, `examples/system_full/test/diag_domain.lua`), the gateway sysnode (H735) and zone_a (H723, on the CAN-FD edge bus with classic-sized ISO-TP, TX_DL = 8) (`diag_nodes.lua`). 0x11 answered, then performed by the comm thread once the controller has sent the answer (bounded `tx_idle`, REQ-BOOT-012), the 0x27 failed-key counts carried across it in a reset-surviving keep cell (`diag_board.c`, D3 SRAM4), so a reset between guesses buys nothing — on domain and zone_a by `diag_domain.lua` / `diag_nodes.lua`; on sysnode, whose 0x11 is gated behind level 1 (a `[doip]` node, REQ-NET-012) so a CAN tester locked out cannot reset it, by `doip_sysnode.lua` (a DoIP unlock earned first, the keys spent from CAN; bench-run 2026-10-02). The **programming handoff** (`[boot]`): 0x10 02 answered 0x50 02 with the bootloader session's P2/P2*, then the boot request cell written and the MCU reset by the same path 0x11 takes — the CAN drain, the DoIP `doip_tx_pending()` wait, the NvM flush, the 0x27 keep cell — gated by its own `"0x10 02"` row (extended by default) and the application's conditions seam (`boot_handoff_ok`, weak, allowing — REQ-BOOT-015); generation- and host-tested; every `system_full` CAN node (domain, sysnode, zone_a) declares it and runs behind its own bootloader, built from the same config (docs/bootloader.md) — bench run pending (`test/boot_bench.sh`, `test/boot_handoff.lua`). Not yet: live DIDs on inputs, the failed-key count across a power cycle, 0x28 | `tools/loom2v/gen_diag.v`, `boards/common/boot_handoff.c` |
 | UDS config | split along the standards: `[uds]` — the ISO 14229 server (`s3_ms`, `security_attempts`, `security_delay_ms`, `security_key`, the `services` table) — and its transports, `[isotp]` (ISO 15765-2: `bus`, `rx_id`, `tx_id`, `functional_id`, `bs`, `stmin_ms`; one per node, a table) and `[doip]` (ISO 13400); + `[[did]]` (ascii / bytes / signal / writable, `read` / `write` gates). The old `[[isotp]]` array carrying server keys is refused with the move it needs | `tools/ecucheck/gen.v`, `tools/ecumodel/model.v` |
 | Rx signal status | `status = "RxStatus"` (never_received / ok / timeout / integrity) and the E2E `lost` count, bridge-owned (R3a; on CAN the host bridge only, on the SOME/IP receive path both, bridge-owned and never on the wire, on the host and the ThreadX eth thread alike, and sysgen gives both to a generated E2E receiver); the COM deadline runs from bridge start (re-arming it on NM wake is R5's: the host bridge has no NM) and from a frame that failed its check; E2E has its own sender-loss timeout, required on every received E2E frame, refreshed only by a valid message and independent of the COM deadline (R3b; on CAN and, since #299, on the SOME/IP receive path — host and ThreadX — where an eth rx signal carries the same `status`); the target's CAN comm thread rejects status, rx deadlines and E2E ("phase 6b-2b", R5) | `tools/loom2v/gen_com.v`, `gen.v` |
 | Fault memory / DTCs | R4a + R4b: `[[fault]]` generated on the host — the FB's fault port, debounce on its thread with monotonic counters, the fault memory on the diagnostic bridge (status byte through operation cycles from `[fault_memory] cycle`, confirmation, aging, clears by generation, 0x85 suppression), 0x19 01/02/0A, 0x14, 0x85; RAM only. R4c: signal-status faults (`signal` / `on` = timeout, integrity, lost), the bridge as detector. R6a: FB-tested faults on a **ThreadX target** — the same debounce on the FB's thread, the same `comm/fault` memory on the comm thread (D2), the report / control cells on the byte IOC (`boards/common/iocb.c`), 0x19 01/02/0A, 0x14, 0x85 through the one server (DoIP included); RAM only; demonstrated on `system_full` zone_a (`test/faults_zone_a.lua`). R6b: snapshots (`freeze`, captured from the server's DIDs at the occurrence that allocates an entry), extended data (occurrence, aging, failed-cycle counters), displacement by priority over `[fault_memory] entries`, 0x19 03/04/06 on both owners; on the target the memory PERSISTED in the NvM journal (§3.3 "Storage, as built") — `[nvm]` required, the interrupted cycle ended at restore, 0x14 durable before it is answered (0x72 otherwise); bench suite `test/faults_zone_a_persist.lua` (run pending). Not yet: signal-status faults on the target (needs R5), faults on a satellite core or in a multi-thread partition, a cycle signal on the target | `comm/fault/` (`fault.v`, `entry.v`, `persist.v`), `tools/loom2v/gen.v`, `gen_com.v` |
-| Persistence | journal engine + `persist = "now" / "shutdown"` signals, ThreadX only, one journal per node, 20 B records with 634 B chains; the fault memory's status image and snapshots (R6b); the journal's sectors are the board's (`bootmap.h` NVM_*, `boards/common/nvm_map.c`, linked by the generator); DID write path (NvM "P4") not built | `nvm/`, `tools/loom2v/gen_nvm.v` |
+| Persistence | journal engine + `persist = "now" / "shutdown"` signals, ThreadX only, one journal per node, 20 B records with 634 B chains; the fault memory's status image and snapshots (R6b); the parameters (R7, the DID write path NvM called "P4"); the journal's sectors are the board's (`bootmap.h` NVM_*, `boards/common/nvm_map.c`, linked by the generator) | `nvm/`, `tools/loom2v/gen_nvm.v` |
+| Parameters | R7: `[[param]]` on a ThreadX target — read-only In fields an FB names in its `reads`, published by the comm thread into an IOC cell; one journal record each, its block its DID (assigned, not hashed) and its header stating the structure exactly by position (field count, types, a declared `version`); coded with 0x2E on the `[[did]]` that names it (length 0x13, range 0x31, durable before the answer, 0x72 on a refusal, an unchanged value writes nothing), read back with 0x22; `apply` = next dispatch or next start; revalidated against the range at restore; a status DID (`param_status`); demonstrated on `system_full` zone_a (`SteerLimit`, bench suite `test/param_zone_a.lua`, run pending). Not yet: the host bridge, a satellite partition's FBs | `comm/param/`, `tools/loom2v/gen_param.v` |
 | Operation cycle / ECU state | the fault memory's operation cycle follows a declared bool signal on the host (`[fault_memory] cycle`, R4b); on a ThreadX target it follows NM — wake begins it, bus sleep ends it (D3's default, R6a) — and on either owner `cycle = "power"` makes it the power cycle (a node with neither NM nor a cycle signal); a cycle SIGNAL on the target is not generated yet; `ecu/` (lifecycle, mode arbiter) is still an unused library; NM states exist | `tools/loom2v/gen.v`, `gen_com.v`, `ecu/`, `comm/nm/` |
 | Cross-thread transports | last-value cells only (seqlock / double / triple, xioc); `bulk` is the one FIFO | `osal/`, `boards/common/` |
 | Tester (blobly_net) | client: 0x10 0x22 0x2E 0x3E, **0x27 with a reference key (seed XOR 0xFF)**; since N1 / N2 also 0x11 0x14 0x28 0x85, functional addressing, and 0x19 01/02/0A decoded into a DTC model with named status bits (Lua `diag:dtcs` / `supported_dtcs` / `dtc_count` / `clear_dtcs` / `dtc_setting`, `check.dtc`); its simulated server answers 0x19 01/02/0A, 0x14, 0x85. N3: 0x19 03/04/06 decoded (Lua `diag:snapshot_ids` / `snapshot` / `extended`, `check.snapshot` / `check.extended`). Not yet: a DTC view (N4) | `blobly_net modules/uds` |
@@ -544,8 +545,101 @@ apply   = "next_dispatch"    # or "reset" for parameters that shape start-up
 The DID binding has ONE source: the `[[did]]` that names the parameter (`param = ...`, §3.1);
 `[[param]]` does not repeat it. The consumer sees a **read-only In field**, indistinguishable from a signal that never changes. The
 value is a persisted record with a compiled default; the write path is the DID binding NvM calls P4
-("writable DIDs backed by blocks"), which is **built first** in this rung — it does not exist yet.
+("writable DIDs backed by blocks").
 Parameters are runtime-only: generation stays one binary for all variants.
+
+**As built (R7)** — `comm/param` (runtime), `tools/loom2v/gen_param.v` (wiring), a ThreadX target:
+
+```toml
+[[param]]
+name    = "SteerLimit"
+fields  = { deg = "u16" }                   # 1..2 fields: bool, u8/u16/u32, i8/i16/i32
+default = { deg = 360 }                     # required, every field, in range
+range   = { deg = { min = 0, max = 360 } }  # optional per field; absent = the type's own
+apply   = "reset"                           # or "next_dispatch" (the default)
+version = 0                                 # bump when a field's MEANING changes, types the same
+
+[[did]]
+id    = 0x0110
+param = "SteerLimit"                        # 0x2E codes it, 0x22 reads it back
+write = { session = ["extended"], security = 1 }
+
+[[did]]
+id           = 0x0111
+param_status = true                         # one byte per parameter: 0 default, 1 coded, 2 reverted
+```
+
+- **Who reads it.** An FB names the parameter in a handler's `reads`, like any input; there is no
+  `to` — the reads are the one statement of who consumes it, and a second list could disagree with
+  them. A parameter no handler reads is refused (it codes nothing), as is a handler that writes one.
+  Its value rides one IOC cell `{a, b}` (so at most two fields), the comm thread its one writer; the
+  readers sit on one thread (the cell's one reader context) on the image that owns the journal.
+- **Identity — exact, never hashed.** One journal record per parameter: `[format | the parameter's
+  version | field count | each field's type code | each field big-endian at its width]`, ≤ 13 B —
+  one record. The block id is ASSIGNED, never derived: the parameter's DID — a unique 16-bit id,
+  bounded where it is read — or a pinned `nvm_id` where it collides with another block (generation
+  refuses a collision, and DID 0xFFFF, which the journal reserves); kept in the prune keep-set. A
+  name hash would let firmware B's new parameter inherit firmware A's retired one's coding when the
+  names hashed alike (codex on #376); an assignment cannot, and a parameter on another DID finds
+  nothing — the old block is pruned. A DID REUSED for a different parameter of the same types is the
+  author's statement, and needs a `version` bump. The block only places the record. What the
+  record IS, the header states exactly, and a record is restored only when its whole header matches
+  this firmware's byte for byte: a hash of ANY width can be attacked with a constructed collision
+  (codex found one in a 32-bit fold on #376), a stated structure cannot. The identity is therefore
+  **POSITIONAL**: fields are identified by position — the count, the type at each position, and the
+  `version` — never by name (a name in the record would be a hash again, or a string). So:
+  - a field **renamed** keeps the coded value (the bytes mean what they meant, as with a widened
+    range), and the parameters' declaration order moves nothing;
+  - a field's **type** changed, a field **added or removed**, or fields of **different types
+    reordered** (the type at a position then differs): the old record is refused — status
+    `reverted`, never the old bytes read under the new structure, and never a coding silently gone
+    (a layout-derived block id would have pruned it and read `default`);
+  - fields of the **same type reordered** are indistinguishable from both being renamed, so the old
+    values are taken **by position** (`{ low, high }` → `{ high, low }`, both u16, swaps them) —
+    like any change of **meaning** with the same types (a field that now counts in other units), it
+    is the author's to say: bump the parameter's `version` (`version = 1`, a u8, default 0), and the
+    old record reverts.
+- **The range is not identity — it is revalidated.** A range is not a layout: the stored bytes mean
+  the same thing under a new one, and a vehicle's coding must not be lost to an update that only
+  widens it. So a restored value is checked against THIS firmware's range before any FB sees it:
+  outside it (a range an update narrowed) the compiled default runs and the status says `reverted`
+  (§7, R7). A widened range keeps the coding.
+- **0x2E**, after the DID's own gates (0x31 for a DID not writable in this session, 0x33 without its
+  level) and the service row's: 0x13 for a record of the wrong length, 0x31 for a field out of range,
+  then the journal — and only once it has accepted the record do the 0x22 record, the status and
+  (for `next_dispatch`) the FB's cell change. A refused put answers **0x72** and changes nothing in
+  this run (§7, R6 / R7) — nor in the journal, unless the flash took the record and only its
+  read-back failed (`nvm.Journal.put` false is UNCONFIRMED, the journal's limit, as for 0x14): so
+  after a 0x72 the next write is stored whatever it holds, and re-writing the old value makes it
+  certain again. Generation refuses a parameter DID a tester could code from the default session
+  with no 0x27 level (its write gate and the 0x2E row both open). A value equal to the one the journal holds writes nothing: a tester polling 0x2E
+  costs no wear; the first write of a never-coded parameter is stored even when it equals the
+  default, so an update that changes the default does not move a vehicle coded to the old one. The
+  write is one synchronous journal record (an inline compaction at a sector's end copies the live
+  set, no erase), well inside P2 — so no 0x78; on a node without NM a put past the sector's second
+  fill is refused until the next boot, which a tester sees as 0x72.
+- **When it takes effect** — per parameter: `next_dispatch` publishes the coded value into the FB's
+  cell in the pass that wrote it; `reset` leaves the FB on the value it started with until the next
+  power-up or ECUReset (coding that shapes start-up). 0x22 reads the CODED value either way.
+- **At start**, after the journal's mount and prune and before the kernel: every parameter read back,
+  revalidated and published, so the first dispatch reads it. Status per parameter — it describes the
+  CODING, as 0x22 does: `0` default (nothing stored), `1` coded (a value of this layout, in range;
+  for `reset`, possibly coded since this start and in use from the next), `2` reverted (another
+  layout, out of range, or the journal unreadable).
+- **Over DoIP** a parameter DID is a state-changing write: REQ-NET-012's rule for writable DIDs
+  applies (a level on its write gate or on the 0x2E row), and the unlock is the network's own.
+- **One DID per parameter**, and a parameter is at most two fields: a coding RECORD — several
+  parameters behind one DID, written whole — is not built (#288's open question; the one-cell
+  transport is what bounds a parameter today). Nothing a parameter holds shapes generation: one
+  binary serves every variant.
+- **Write budget**: tester-driven only — one record per accepted change, none for a repeat. Not in
+  the wear model (no FB writes it). An NM node that codes in bus sleep re-runs the flush
+  choreography after it (REQ-NVM-014).
+- **Proof**: `comm/param/param_test.v` (gates, validation, apply, unchanged writes, refusals, layout
+  and range updates, and a power-cut fuzz against a reference model of what was acknowledged),
+  `tools/loom2v/param_target_test.v` (the wiring and every refusal), and on the bench
+  `examples/system_full/test/param_zone_a.lua`: zone_a's `SteerLimit` coded to 100 with 0x2E —
+  SteeringAngle still sweeps past it until an ECUReset, then never passes 100 on the bus.
 
 ## 4. Rungs
 
@@ -563,7 +657,7 @@ and — from R2 on — a bench verification on `examples/system_full` recorded i
 | **R4** | Faults on the host: `[[fault]]`, FB fault port, generated debounce, fault memory in RAM, status byte, operation cycle, enable conditions, 0x19 01/02/0A, 0x14, 0x85; signal-status faults from R3; syscheck DTC uniqueness | host e2e: fail → pending → confirmed → cleared → aged | R1, R3, N2 |
 | **R5** | Target COM checks ("phase 6b-2b"): rx deadlines + E2E/SecOC on the comm thread, so R3's status reaches FBs on silicon (the signal-status DTCs on silicon are R6's, once faults run on the target) | bench: pull a sender, corrupt a frame, FB sees the status | R2, R3 |
 | **R6** | Fault memory persisted (diagnostic ids in the prune keep-set) + freeze frames (size-checked against the response limit) + extended data + displacement; 0x19 03/04/06; faults on the target, incl. the owner → satellite control path. **R6a (built):** FB-tested faults on a ThreadX target, RAM only — the memory on the comm thread, cells on the byte IOC, cycle from NM or "power", 0x19 01/02/0A / 0x14 / 0x85. **R6b (built):** persistence, snapshots, extended data, displacement, 0x19 03/04/06 | R6a: generation tests (`tools/loom2v/fault_target_test.v`) + bench on zone_a (`test/faults_zone_a.lua`: fail → confirmed → passing → cleared, 0x85 off records nothing). Rest: bench: fault, power-cycle, read back with snapshot; clear with 0x78 | R2, R4, N3 |
-| **R7** | Parameters (#288): NvM P4 DID write path, `[[param]]`, range check, `apply` | bench: code a variant, reset, FB sees it | R1b, R2 |
+| **R7** | Parameters (#288): NvM P4 DID write path, `[[param]]`, range check, `apply`. **Built** (§3.4 "As built"): ThreadX target, zone_a's `SteerLimit` | bench: code a variant, reset, FB sees it (`test/param_zone_a.lua`, run pending) | R1b, R2 |
 
 R3 and R1 can run in parallel; R5 and R6 can run in parallel after R2.
 
@@ -627,17 +721,17 @@ done until its obligations hold under their tests. §3 fixes the shape; this tab
 | R3 | An E2E sequence gap (`lost`) is visible to the application, not only counted: a published loss counter (or a degraded status) (REQ-E2E-002). | host e2e: a single skipped counter reaches the FB |
 | R4 | … and it is a fault source: `[[fault]] on = "lost"`. | host e2e: a single skipped counter raises its DTC |
 | R4 | 0x85 suppression records nothing after the positive "off" and replays no suppressed occurrence after "on". *Met through the clear generation* (§3.3, #364 — R4a's consumer-only version replayed a debounce saturated while off): status is frozen where readings are consumed, and "on" starts a fresh generation the producer applies by restarting its debounce; the accepted costs are that a qualification published before "off" but not yet read (≤ one owner pass) is not recorded, and that a result held across "on" completes again only once it debounces from zero. | unit: off, fail, on — nothing recorded, nothing replayed |
-| R6 / R7 | Live state changes only after durability: a persisted 0x2E (parameters, `apply = "next_dispatch"`) and a persisted 0x14 stage their RAM change until the journal accepts the write; on refusal (0x72) both live and durable state are unchanged. *0x14 met in R6b* (the cleared image is put before RAM changes). | `persist_test.v` `test_a_refused_clear_answers_0x72_and_changes_nothing`; fault-injection tests asserting the current-run value, not only the stored one |
+| R6 / R7 | Live state changes only after durability: a persisted 0x2E (parameters, `apply = "next_dispatch"`) and a persisted 0x14 stage their RAM change until the journal accepts the write; on refusal (0x72) both live and durable state are unchanged. *0x14 met in R6b* (the cleared image is put before RAM changes); *0x2E met in R7* (the record, status and cell change only after the put). | `persist_test.v` `test_a_refused_clear_answers_0x72_and_changes_nothing`; `comm/param/param_test.v` `test_a_refused_write_answers_0x72_and_changes_nothing` (the cell and the 0x22 record, not only the stored value) |
 | R0 | Physical diagnostic ids are unique per BUS, not per system: REQ-TOPO-002 and `tools/sysmodel/checks.v` (which today put every allocation and ISO-TP connection id in one global map) are revised to key physical ids by bus and to allow a shared functional id. | syscheck tests: the same physical id on two separate buses passes; twice on one bus fails |
 | R4 | The tested state is lossless like the occurrences: a monotonic tested-count per fault (not a last-value `tested` flag), so a fast producer's single evaluation followed by `.not_tested` is never lost to the test-not-completed bits or aging. | unit: one evaluation then `.not_tested`, read once late |
 | R4 / R6 | Every list-producing 0x19 response fits the transport: generation bounds 0x19 02 / 0A (all DTCs × 4 B) and 03 (all snapshot ids) against the message limit with its header, and refuses a fault table that could exceed it. | generation test at the boundary |
 | R6 | Snapshot and extended-data records carry stable on-wire record numbers — snapshot record 0x01 per DTC (one snapshot per fault), extended data 0x01 occurrence counter, 0x02 aging counter — with 0xFF (all) supported, and the numbering carried in the manifest for the tester. *Met in R6b* but for the manifest: the numbers and widths are fixed (0x03 = failed cycles added) and blobly_net knows them (`blobly_ext_records`). | unit: 0x19 03 / 04 / 06 with explicit and 0xFF record numbers; N3 decodes them |
 | R0 | A functional id may be shared with OTHER functional ids on its bus, never with a physical request or response id there — checked in syscheck across the whole bus (loom2v checks the node's own ids). | syscheck test: a functional id equal to another node's physical id on the same bus fails |
 | R6 | The clear epoch has a stable block identity like the entries (fixed / schema-derived, collision-handled, in the prune keep-set), so a firmware update can never prune it and resurrect cleared entries. *Met in R6b by removing the epoch:* the status image, one value with a fixed id keyed by DTC number, IS the clear. | power-cycle test across a firmware update that reorders faults |
-| R6 / R7 | Persistent writes never block the comm thread: `nvm.Journal.put` is synchronous (a full chain, or a compaction), so persisted 0x2E / 0x14 / fault-memory writes go through a bounded incremental flash path, with 0x78 covering the wait. *Not met (R6b):* fault-memory writes are synchronous but bounded — an image ≤ 17 records, a 0x14 one image; an inline compaction copies the live set — and no 0x78 is sent. | bench: CAN rx/tx, NM and 0x78 timing continue during a worst-case chain write and a compaction |
+| R6 / R7 | Persistent writes never block the comm thread: `nvm.Journal.put` is synchronous (a full chain, or a compaction), so persisted 0x2E / 0x14 / fault-memory writes go through a bounded incremental flash path, with 0x78 covering the wait. *Not met (R6b):* fault-memory writes are synchronous but bounded — an image ≤ 17 records, a 0x14 one image; an inline compaction copies the live set — and no 0x78 is sent. *R7 the same:* a parameter's 0x2E is one synchronous record (an inline compaction at a sector's end copies the live set), no 0x78. | bench: CAN rx/tx, NM and 0x78 timing continue during a worst-case chain write and a compaction |
 | R6 | Automatic fault-memory writes (qualification, cycle end) that the journal refuses are kept dirty and retried with bounded pacing — including in the sleep flush — rather than waiting for the next event, since no request is there to receive a 0x72. *Met in R6b* (paced by `[nvm] min_write_ms`; a flush always tries). | `persist_test.v` `test_a_refused_write_is_retried_after_the_pause`; fault-injection: a refused qualification write survives a later power cycle |
-| R7 | Parameters get the entries' identity rules: a stable, schema-derived, collision-handled block id in the prune keep-set, so a firmware update that reorders or adds parameters never restores one parameter's bytes into another. | power-cycle across a reordering update |
-| R7 | A restored parameter is revalidated against the CURRENT range before the FB first sees it; out of range → the compiled default (and a flag the tester can read), so a range narrowed by an update is never bypassed. | update test narrowing a range below a stored value |
+| R7 | Parameters get the entries' identity rules: a stable, schema-derived, collision-handled block id in the prune keep-set, so a firmware update that reorders or adds parameters never restores one parameter's bytes into another. *Met in R7:* the block id is ASSIGNED — the parameter's DID, or a pin (a collision is refused) — never a hash, so a retired parameter's record is never inherited by a new one, and the record's header states its structure exactly and by position — field count, the type at each position, a declared `version` — so an update that changes a type at a position or the count, or bumps the version, refuses the old bytes and says `reverted`; a reorder of same-type fields needs the version bump (without it values are taken by position); no hash is trusted for identity. | `tools/loom2v/param_target_test.v` `test_a_parameters_identity_is_its_name_and_its_exact_header`; `comm/param/param_test.v` `test_a_record_is_restored_only_under_its_exact_header` |
+| R7 | A restored parameter is revalidated against the CURRENT range before the FB first sees it; out of range → the compiled default (and a flag the tester can read), so a range narrowed by an update is never bypassed. *Met in R7:* the status DID reads `reverted` (2). | `comm/param/param_test.v` `test_a_restored_value_is_revalidated_against_this_firmwares_range` |
 | R6 | Signal-status faults (timeout / integrity / lost) raise their DTCs on silicon — moved here from R5, which proves only the FB-visible status. | bench: pull a sender → its DTC reads back over 0x19 |
 | R2 | NM stays awake for a diagnostic exchange in ANY session: a request-scoped keep-awake vote from the first frame of a request until its final response has drained (diagnostic frames do not refresh NM), in addition to the session-scoped vote. | bench: a multi-frame 0x22 in the default session started near the NM timeout completes |
 | R3 / R5 | An E2E-protected signal detects total sender loss inside the E2E mechanism itself (REQ-E2E-002): `e2e.RxState` gains its own deadline (`on_valid` / `expired`) and publishes the loss, independent of the QM COM deadline. | host (R3) and bench (R5): sender removed, loss seen with the COM deadline disabled |

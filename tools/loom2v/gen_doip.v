@@ -32,8 +32,8 @@ fn parse_doip(doc toml.Doc) DoipCfg {
 	return DoipCfg{
 		on:         true
 		address:    (dm['address'] or { toml.Any('') }).string()
-		logical:    int((dm['logical_address'] or { toml.Any(0) }).int())
-		functional: int((dm['functional_address'] or { toml.Any(0) }).int())
+		logical:    toml_int(dm, 'logical_address', 0, 0, 0xFFFF, '[doip]')
+		functional: toml_int(dm, 'functional_address', 0, 0, 0xFFFF, '[doip]')
 		policy:     policy
 		not_int:    not_int
 	}
