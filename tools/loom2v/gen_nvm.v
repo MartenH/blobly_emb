@@ -68,11 +68,7 @@ fn parse_nvm(doc toml.Doc) NvmCfg {
 // nvm_range: a bounded positive [nvm] integer — a negative typo must fail
 // generation, not wrap through a u32 cast into "never writes for 49 days".
 fn nvm_range(nm map[string]toml.Any, key string, def int, lo int, hi int) u32 {
-	v := int((nm[key] or { toml.Any(def) }).int())
-	if v < lo || v > hi {
-		panic('loom2v: [nvm] ${key} = ${v} is out of range (${lo}..${hi})')
-	}
-	return u32(v)
+	return u32(toml_int(nm, key, def, lo, hi, '[nvm]'))
 }
 
 // field_width: packed bytes of one signal field (persist supports unsigned scalars).
@@ -297,7 +293,7 @@ fn writer_period_ms(doc toml.Doc, sname string) u32 {
 }
 
 fn nvm_on(m Model) bool {
-	return m.nvm.on && (m.nvm_names.len > 0 || fault_persist_on(m))
+	return m.nvm.on && (m.nvm_names.len > 0 || fault_persist_on(m) || (m.target.threadx && m.params.len > 0))
 }
 
 // fault_persist_on: the image keeps its fault memory in the journal — a ThreadX target's, which
@@ -334,25 +330,16 @@ fn derive_fault_nvm(m Model) (u16, []u16, []u16) {
 	used[status] = 'the fault memory status'
 	mut snaps := []u16{}
 	mut snaps_b := []u16{}
-	mut nsnap := 0
-	mut snap_recs := 1
 	for f in m.faults {
 		if f.freeze.len == 0 {
 			snaps << 0
 			snaps_b << 0
 			continue
 		}
-		nsnap++
 		lens := fault_freeze_lens(m, f)
 		mut schema := []string{}
-		mut body := 1
 		for i, d in f.freeze {
 			schema << '${d}=${lens[i]}'
-			body += 2 + lens[i]
-		}
-		r := chain_records(fault.snap_hdr + body)
-		if r > snap_recs {
-			snap_recs = r
 		}
 		// two blocks, A and B (persist.v: a capture writes the one the committed image does not claim)
 		ident := 'fault_snapshot:${f.dtc}:${schema.join(',')}'
@@ -369,21 +356,54 @@ fn derive_fault_nvm(m Model) (u16, []u16, []u16) {
 		snaps << a
 		snaps_b << b
 	}
-	// the pool: a row per persisted signal, the status image and both snapshot blocks of every
-	// fault with one (a freed one stays as a tombstone), within derive_nvm's migration headroom
-	if m.nvm_names.len + 1 + 2 * nsnap > 48 {
-		panic('loom2v: ${m.nvm_names.len} persistent signals + the fault memory (${1 + 2 * nsnap} blocks) exceed the safe journal pool budget (48 of nvm.max_blocks)')
-	}
-	// capacity, the docs/nvm.md headroom rule: the live set — BOTH blocks of every snapshot whole
-	// (the committed one and the one a capture writes beside it; a tombstone waits for the image
-	// that releases its block, and refusals or power cuts can leave any of them waiting) — plus a
-	// full rewrite of it must fit one sector, so a flush never needs an erase
-	live := m.nvm_names.len + chain_records(2 + m.faults.len * fault.image_rec) + 2 * nsnap * snap_recs + 1
-	if live + live > int(m.nvm.sector_records) {
-		panic('loom2v: the journal needs ${live + live} records of sector headroom (live set ${live}: ' +
-			'${m.nvm_names.len} persistent signals + the fault memory, docs/nvm.md) but [nvm] sector_records = ${m.nvm.sector_records}')
-	}
 	return status, snaps, snaps_b
+}
+
+// check_journal_capacity: everything the journal keeps — the persisted signals, the fault memory
+// and the parameters — against the pool and the sector, ONCE, after every block is derived. The
+// pool: a row per block (a fault's two snapshot blocks both: a freed one stays as a tombstone),
+// within derive_nvm's migration headroom. The sector, the docs/nvm.md headroom rule: the live set
+// plus a full rewrite of it fits one sector, so a flush never needs an erase.
+fn check_journal_capacity(m Model) {
+	if !nvm_on(m) {
+		return
+	}
+	fblocks := if fault_persist_on(m) { 1 + 2 * m.faults.filter(it.freeze.len > 0).len } else { 0 }
+	what := '${m.nvm_names.len} persistent signals + the fault memory (${fblocks} blocks) + ${m.params.len} parameters'
+	if m.nvm_names.len + fblocks + m.params.len > 48 {
+		panic('loom2v: ${what} exceed the safe journal pool budget (48 of nvm.max_blocks)')
+	}
+	live := m.nvm_names.len + fault_live_records(m) + m.params.len + 1
+	if live + live > int(m.nvm.sector_records) {
+		panic('loom2v: the journal needs ${live + live} records of sector headroom (live set ${live}: ${what}, docs/nvm.md) but [nvm] sector_records = ${m.nvm.sector_records}')
+	}
+}
+
+// fault_live_records: the journal records the persisted fault memory keeps live — the status image
+// and BOTH blocks of every snapshot whole, each at the largest snapshot's size (the committed one
+// and the one a capture writes beside it; a tombstone waits for the image that releases its block,
+// and refusals or power cuts can leave any of them waiting). 0 without a persisted memory.
+fn fault_live_records(m Model) int {
+	if !fault_persist_on(m) {
+		return 0
+	}
+	mut nsnap := 0
+	mut snap_recs := 1
+	for f in m.faults {
+		if f.freeze.len == 0 {
+			continue
+		}
+		nsnap++
+		mut body := 1
+		for n in fault_freeze_lens(m, f) {
+			body += 2 + n
+		}
+		r := chain_records(fault.snap_hdr + body)
+		if r > snap_recs {
+			snap_recs = r
+		}
+	}
+	return chain_records(2 + m.faults.len * fault.image_rec) + 2 * nsnap * snap_recs
 }
 
 // fault_store_fns: the fault memory's store seam over the journal (one thread: the comm thread
@@ -517,6 +537,9 @@ fn nvm_boot_lines(m Model, ioc_idx map[string]int) []string {
 				keep << 'u16(0x${m.fault_snap_ids_b[k].hex()})'
 			}
 		}
+	}
+	for p in m.params {
+		keep << 'u16(0x${p.id.hex()}) /* [[param]] ${p.name} */'
 	}
 	g << '\t\tkeep := [${keep.join(', ')}]!'
 	g << '\t\tg_nvm.prune(&keep[0], ${keep.len})'

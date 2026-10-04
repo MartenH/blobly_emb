@@ -685,8 +685,8 @@ fn check_signals_dissolved(s System) []Issue {
 			if _ := s.signal_by_name(r) {
 				continue
 			}
-			if r in n.view.local_signals {
-				continue // a node-local (io) input — the node's own
+			if r in n.view.local_signals || r in n.view.params {
+				continue // a node-local (io) input or a parameter — the node's own
 			}
 			issues << Issue{
 				severity: .error

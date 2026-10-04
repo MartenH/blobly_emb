@@ -54,6 +54,41 @@ TOOL_FLAGS_load_bench   := -gc none
 # tools/loom2v/no_v_run_makefiles_test.v asks make itself.
 TOOL_GOAL := $(.DEFAULT_GOAL)
 
+# The dependencies of a target V TRANSPILES — an image's generated C (app.c), the bootloader's
+# (boot/boot.mk) — are what V compiled into it, from its own -dump-files, written by
+# scripts/vdeps.sh: never a hand list of module directories, which went stale the day a generated
+# image started importing one more (driver/doipnet). In the rule, V run from $(REPO):
+#
+#     TRANSPILE_FLAGS = -freestanding ... -path "..."
+#     $(BUILD)/app.c: main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) \
+#                     $(call v_sign,$(BUILD)/app.c,$(TRANSPILE_FLAGS)) | $(BUILD)
+#     	cd $(REPO) && $(V) $(TRANSPILE_FLAGS) $(call v_dump,$@) -o .../$(BUILD)/app.c .../main.v
+#     	$(call v_deps,$@)
+#     -include $(BUILD)/app.c.d
+#
+# scripts/app_deps_check.sh asks make that a module's edit remakes every image importing it.
+#
+# A target with no record is remade, whatever its age: the record is what makes it current (a
+# build from before the record existed, or one whose recording failed). Name the target's
+# $(call v_unrecorded,<target>) as a prerequisite; v_deps failing removes the C it was recording,
+# so the C and its record exist together or not at all.
+v_dump = -dump-files $(CURDIR)/$(1).files
+v_deps = { VDEPS_BASE=$(TOOL_REPO) $(TOOL_REPO)/scripts/vdeps.sh $(1) $(1).files >$(1).d.tmp && mv -f $(1).d.tmp $(1).d; } || { rm -f $(1) $(1).d.tmp; exit 1; }
+v_unrecorded = $(if $(wildcard $(1).d),,v-unrecorded)
+#
+# How a transpile is run is an input too, as a tool's compiler is (tool_sig above): the V command,
+# its binary and version, the flags the rule passes — the image's defines among them
+# (-d boot_doip, -d loom_max_tasks) — and $(VFLAGS). $(call v_sign,<target>,<flags>) keeps that in
+# <target>.sig, rewritten while make reads the Makefile and only when it differs, and names it as
+# a prerequisite: a changed define or compiler remakes the C. The rule's recipe runs V with the
+# same <flags>, so the signature is what was actually run.
+v_sigtext = $(strip $(V) | $(TOOL_V_PATH) | $(TOOL_V_VERSION) | $(1) | $(VFLAGS))
+v_sign = $(if $(call tool_same,$(call v_sigtext,$(2)),$(strip $(if $(wildcard $(1).sig),$(file <$(1).sig)))),,$(shell mkdir -p $(dir $(1)))$(file >$(1).sig,$(call v_sigtext,$(2))))$(1).sig
+.PHONY: v-unrecorded
+v-unrecorded: ;
+# the signature is written while make reads the Makefile; never made on its own
+%.c.sig: ;
+
 TOOL_REPO := $(abspath $(REPO))
 TOOL_DIR  := $(CURDIR)/bin
 TOOLS     := $(patsubst TOOL_SRC_%,%,$(filter TOOL_SRC_%,$(.VARIABLES)))
@@ -79,7 +114,7 @@ tool_sig = $(strip $(TOOL_DIR)/.tool-$(1) | $(V) | $(TOOL_V_PATH) | $(TOOL_V_VER
 tool_same = $(and $(findstring $(1),$(2)),$(findstring $(2),$(1)))
 tool_recorded = $(and $(wildcard $(TOOL_DIR)/.tool-$(1).d),$(call tool_same,$(call tool_sig,$(1)),$(strip $(if $(wildcard $(TOOL_DIR)/.tool-$(1).sig),$(file <$(TOOL_DIR)/.tool-$(1).sig)))))
 
-$(TOOL_DIR)/.tool-%: $(TOOL_REPO)/tools/tools.mk $(TOOL_REPO)/scripts/build_tool.sh
+$(TOOL_DIR)/.tool-%: $(TOOL_REPO)/tools/tools.mk $(TOOL_REPO)/scripts/build_tool.sh $(TOOL_REPO)/scripts/vdeps.sh
 	@test -n "$(TOOL_SRC_$*)" || { echo "tools.mk: no tool named '$*'"; exit 1; }
 	V="$(V)" TOOL_SIG='$(call tool_sig,$*)' $(TOOL_REPO)/scripts/build_tool.sh $@ "$(TOOL_FLAGS_$*)" $(call tool_src,$*)
 # the records are written by the build above, never made on their own

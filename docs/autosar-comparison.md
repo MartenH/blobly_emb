@@ -39,6 +39,7 @@ lock-free, no-alloc — and skips the rest.
 | Multiple instantiation, connector remap, port-defined arg values | RTE config surface | — | 🚫 skip |
 | Atomic multi-signal update | COM signal groups / shadow buffers | per-PDU pack | 🚫 skip (PDU pack already atomic) |
 | Measurement & calibration | MCD / XCP | — | 🚫 skip (separate concern) |
+| Variant coding — per-vehicle parameters, coded in the workshop | NvM blocks behind DCM `WriteDataByIdentifier`, read via RTE calibration/NvM ports | `[[param]]`: an FB's read-only In field, one NvM journal record (`comm/param`), coded with 0x2E on the `[[did]]` that names it, range-checked before storage and again at restore | ✅ have — GENERATED on a ThreadX target (R7 of [diagnostics.md](diagnostics.md)); not on the host bridge |
 
 ## Why the planned ones are missing (and what they'd take)
 

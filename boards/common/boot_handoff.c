@@ -5,7 +5,8 @@
  *
  *   boot_handoff_request — the boot request cell, written right before the reset (the answer is
  *                          already on the wire, REQ-BOOT-012), so the boot manager stays and
- *                          serves the programming session instead of jumping back here.
+ *                          serves the programming session instead of jumping back here — held by
+ *                          the transport the handoff was asked over (net: DoIP).
  *   boot_handoff_ok      — the application's conditions (REQ-BOOT-015): 0 answers the request
  *                          conditionsNotCorrect (0x22) and nothing is handed off. WEAK and allowing:
  *                          only the application knows its state model, and it overrides this in
@@ -18,8 +19,8 @@
 #endif
 #include "bootcell.h"
 
-void boot_handoff_request(void) {
-	bootcell_request(BOOTCELL_REQ_HANDOFF);
+void boot_handoff_request(int net) {
+	bootcell_request(net ? BOOTCELL_REQ_HANDOFF_NET : BOOTCELL_REQ_HANDOFF);
 }
 
 __attribute__((weak)) int boot_handoff_ok(void) {

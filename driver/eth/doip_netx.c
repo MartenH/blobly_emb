@@ -1,6 +1,7 @@
 /* driver/eth/doip_netx.c — DoIP's transport on a ThreadX + NetX node whose diagnostic server lives
- * on the CAN comm thread (loom2v `[doip]`, docs/diagnostics.md). Sockets and threads only: DoIP
- * framing is comm/doip and the UDS server is comm/diag, both tested V.
+ * on another thread — the CAN comm thread (loom2v `[doip]`, docs/diagnostics.md), or the
+ * bootloader's serve loop. Sockets and threads only: DoIP framing is comm/doip, its loop
+ * driver/doipnet and the UDS server comm/diag (boot.Prog in the bootloader), all tested V.
  *
  *   doip_net_create  — from tx_application_define: NetX through the shared bring-up (netx_up.c, at
  *                      the node's one address — SOME/IP may be on it too), TCP, and two threads.
@@ -11,8 +12,10 @@
  *   doip_net_timers  — before doip_net_create: the ISO 13400 inactivity limits ([doip]).
  *   doip_net_seed    — from the comm thread, once it has the TRNG: NetX draws TCP initial sequence
  *                      numbers from rand(), and predictable ones make a session spoofable.
- *   doip_stream_*    — the TCP byte pipe the V loop drives (one tester at a time, ISO 13400 idle
- *                      limits), doip_udp_broadcast / doip_eid / doip_sleep_ms beside it.
+ *   doip_stream_*    — the TCP byte pipe the V loop (driver/doipnet) drives (one tester at a time,
+ *                      ISO 13400 idle limits), doip_udp_broadcast / doip_eid / doip_sleep_ms beside it.
+ *                      The node's bootloader links this file too (boot/boot.mk, boards/common/boot_net.c):
+ *                      there the boot's serve loop is the thread that answers the mailbox.
  *   doip_mb_*        — the mailbox that carries one request to the comm thread and its answer back:
  *                      the server has ONE owner thread. The doip thread posts and waits; the comm
  *                      thread serves it at the top of its next pass, woken (comm_wake). One mutex
@@ -25,6 +28,7 @@
 #include "netx_up.h"
 #include "doip_idle.h"
 #include "arp_glean.h"
+#include "doip_mb.h"
 
 #define DOIP_PORT  13400
 #define IDENT_PER_PASS 4 /* identification requests answered per 200 ms service pass */
@@ -36,6 +40,7 @@ static UCHAR svc_thread_stack[2048] __attribute__((aligned(8)));
 static TX_THREAD doip_thread;
 static TX_THREAD svc_thread;
 static NX_TCP_SOCKET tcp_sock;
+static volatile UINT tcp_connected; /* read by the svc and comm threads too */
 static NX_UDP_SOCKET udp_sock;
 static volatile UINT sockets_up;
 
@@ -67,16 +72,8 @@ static unsigned char *mb_resp;
 static int mb_req_len;
 static int mb_functional;
 static int mb_resp_len;
-static ULONG mb_posted;        /* sequence of the request posted */
-static ULONG mb_answered;      /* sequence of the request answered */
-static ULONG mb_returned;      /* the doip thread: the last answer handed to the V loop */
-/* what the doip thread reports, by SEQUENCE, so a report about an earlier answer or connection is
- * never read as one about the request the comm thread answered last */
-static volatile ULONG mb_sent_seq;   /* the last answer handed to TCP */
-static volatile ULONG mb_drops;      /* connections dropped */
-static volatile ULONG mb_drop_after; /* the request posted last when the latest one dropped */
-static ULONG mb_sent_seen;           /* the comm thread's last reading of each */
-static ULONG mb_drops_seen;
+/* the sequence rules: doip_mb.h, host-tested against a reference model (doip_mb_test.v) */
+static doip_mb_t mb;
 
 void doip_mb_init(unsigned char *req_buf, unsigned char *resp_buf) {
 	mb_req = req_buf;
@@ -94,7 +91,7 @@ int doip_mb_call(const unsigned char *req, int len, int functional, unsigned cha
 	}
 	mb_req_len = len;
 	mb_functional = functional;
-	ULONG seq = ++mb_posted;
+	uint32_t seq = doip_mb_post(&mb);
 	tx_mutex_put(&mb_mutex);
 	comm_wake();
 	ULONG deadline = tx_time_get() + MS_TICKS(MB_TIMEOUT_MS);
@@ -103,7 +100,7 @@ int doip_mb_call(const unsigned char *req, int len, int functional, unsigned cha
 		UINT got = (left == 0u || left > MS_TICKS(MB_TIMEOUT_MS))
 			? TX_NO_INSTANCE : tx_semaphore_get(&mb_done, left);
 		tx_mutex_get(&mb_mutex, TX_WAIT_FOREVER);
-		if (mb_answered == seq) {
+		if (doip_mb_collect(&mb, seq)) {
 			int n = mb_resp_len;
 			if (n > cap) {
 				n = -1;
@@ -111,15 +108,13 @@ int doip_mb_call(const unsigned char *req, int len, int functional, unsigned cha
 			for (int i = 0; i < n; i++) {
 				resp[i] = mb_resp[i];
 			}
-			mb_returned = seq;
 			tx_mutex_put(&mb_mutex);
 			return n;
 		}
 		if (got != TX_SUCCESS) {
 			/* not taken in time: withdraw it — the comm thread is not serving it (it would hold
-			 * the mutex), so marking it answered is all it takes */
-			mb_answered = seq;
-			mb_resp_len = -1;
+			 * the mutex), so it is settled, and never counts as served */
+			doip_mb_withdraw(&mb, seq);
 			tx_mutex_put(&mb_mutex);
 			doip_mb_timeouts++;
 			return -1;
@@ -134,7 +129,7 @@ int doip_mb_take(int *functional) {
 	if (mb_req == NX_NULL || tx_mutex_get(&mb_mutex, TX_NO_WAIT) != TX_SUCCESS) {
 		return -1;
 	}
-	if (mb_answered == mb_posted) {
+	if (!doip_mb_waiting(&mb)) {
 		tx_mutex_put(&mb_mutex);
 		return -1;
 	}
@@ -146,34 +141,97 @@ int doip_mb_take(int *functional) {
  * Releases the mailbox. */
 void doip_mb_answer(int n) {
 	mb_resp_len = n;
-	mb_answered = mb_posted;
+	doip_mb_serve(&mb);
 	tx_mutex_put(&mb_mutex);
 	tx_semaphore_put(&mb_done);
 }
 
-/* comm thread: 1 once the answer it gave last has been handed to TCP */
+/* comm thread: 1 once the answer it served last has been ACKNOWLEDGED by the tester (doip_mb.h: a
+ * reset waits for it, and an answer still queued dies with a connection that drops) */
+#if NX_TCP_ESTABLISHED != DOIP_MB_TCP_ESTABLISHED || NX_TCP_CLOSE_WAIT != DOIP_MB_TCP_CLOSE_WAIT
+#error "doip_mb.h: its TCP state numbers are not NetX's"
+#endif
 int doip_mb_take_sent(void) {
-	ULONG s = mb_sent_seq;
-	int r = s == mb_answered && s != mb_sent_seen;
-	mb_sent_seen = s;
+	NX_IP *ip = blob_net_ip();
+	/* the socket's state and its transmit queue, read together under the IP instance's mutex (the
+	 * IP thread changes both); a connection the doip thread has not opened reads as closed */
+	uint32_t state = NX_TCP_CLOSED, unacked = 0u;
+	if (tcp_connected) {
+		tx_mutex_get(&ip->nx_ip_protection, TX_WAIT_FOREVER);
+		state = (uint32_t)tcp_sock.nx_tcp_socket_state;
+		unacked = (uint32_t)tcp_sock.nx_tcp_socket_transmit_sent_count;
+		tx_mutex_put(&ip->nx_ip_protection);
+	}
+	return doip_mb_sent_take(&mb, state, unacked);
+}
+
+/* server thread: 1 once the response it pushed last has itself been acknowledged */
+int doip_mb_take_push_sent(void) {
+	NX_IP *ip = blob_net_ip();
+	uint32_t state = NX_TCP_CLOSED, unacked = 0u;
+	if (tcp_connected) {
+		tx_mutex_get(&ip->nx_ip_protection, TX_WAIT_FOREVER);
+		state = (uint32_t)tcp_sock.nx_tcp_socket_state;
+		unacked = (uint32_t)tcp_sock.nx_tcp_socket_transmit_sent_count;
+		tx_mutex_put(&ip->nx_ip_protection);
+	}
+	return doip_mb_push_sent_take(&mb, state, unacked);
+}
+
+/* comm thread: 1 once a connection has dropped that the request it served last came over */
+int doip_mb_take_dropped(void) {
+	tx_mutex_get(&mb_mutex, TX_WAIT_FOREVER); /* it may discard a push the doip thread is taking */
+	int r = doip_mb_dropped_take(&mb);
+	tx_mutex_put(&mb_mutex);
 	return r;
 }
 
-/* comm thread: 1 once a connection has dropped that the request it answered last came over — a
- * drop older than that request belongs to a tester whose state is already superseded */
-int doip_mb_take_dropped(void) {
-	ULONG d = mb_drops;
-	int r = d != mb_drops_seen && mb_drop_after >= mb_answered;
-	mb_drops_seen = d;
-	return r;
+/* the further response the server thread pushes (a routine's responsePending, then its next one) */
+#define MB_PUSH_MAX 16
+static unsigned char mb_push[MB_PUSH_MAX];
+static int mb_push_len;
+
+/* server thread: push a further response to the request it served last; 0 = too long */
+int doip_mb_push_resp(const unsigned char *resp, int n) {
+	if (n < 1 || n > MB_PUSH_MAX) {
+		return 0;
+	}
+	tx_mutex_get(&mb_mutex, TX_WAIT_FOREVER);
+	for (int i = 0; i < n; i++) {
+		mb_push[i] = resp[i];
+	}
+	mb_push_len = n;
+	doip_mb_push(&mb);
+	tx_mutex_put(&mb_mutex);
+	return 1;
+}
+
+/* doip thread: the pushed response it took last has been handed to TCP */
+void doip_mb_push_queued(void) {
+	tx_mutex_get(&mb_mutex, TX_WAIT_FOREVER);
+	doip_mb_push_queue(&mb);
+	tx_mutex_put(&mb_mutex);
+}
+
+/* doip thread: a pushed response waiting to be sent, copied to resp; its length, or -1 */
+int doip_mb_push_get(unsigned char *resp, int cap) {
+	int n = -1;
+	tx_mutex_get(&mb_mutex, TX_WAIT_FOREVER);
+	if (mb_push_len <= cap && doip_mb_push_take(&mb)) {
+		n = mb_push_len;
+		for (int i = 0; i < n; i++) {
+			resp[i] = mb_push[i];
+		}
+	}
+	tx_mutex_put(&mb_mutex);
+	return n;
 }
 
 /* ---- the TCP byte pipe -------------------------------------------------------------------- */
 
-static volatile UINT tcp_connected; /* read by the svc and comm threads too */
 static NX_PACKET *rx_pending; /* partially consumed receive (packet > caller's buf) */
 static ULONG rx_pending_off;
-static UINT listening;        /* the TCP listener is opened by the first receive (doip_stream_recv) */
+static volatile UINT listening; /* the TCP listener is opened by the first receive (doip_stream_recv) */
 
 /* ISO 13400 inactivity: T_TCP_Initial_Inactivity (default 2 s: a connection that never activates
  * routing must not hold the one server socket — measured from ACCEPT, so trickled bytes don't
@@ -202,8 +260,9 @@ static int stream_recycle(void) {
 	nx_tcp_server_socket_unaccept(&tcp_sock);
 	nx_tcp_server_socket_relisten(blob_net_ip(), DOIP_PORT, &tcp_sock);
 	tcp_connected = 0;
-	mb_drop_after = mb_posted;
-	mb_drops++;
+	tx_mutex_get(&mb_mutex, TX_WAIT_FOREVER); /* the push slot is the server thread's too */
+	doip_mb_drop(&mb);
+	tx_mutex_put(&mb_mutex);
 	comm_wake();
 	return -1;
 }
@@ -266,6 +325,12 @@ int doip_stream_recv(unsigned char *buf, int max, unsigned int timeout_ticks) {
 	return (int)got;
 }
 
+/* doip_net_ready: 1 once the TCP listener is open — from then a tester can connect (read by the
+ * bootloader's serve loop: a session handed off over DoIP is timed from here, boot.Prog.net_up) */
+int doip_net_ready(void) {
+	return listening ? 1 : 0;
+}
+
 /* the TCP_DATA sockets open now (0 or 1), for entity status asked over UDP — read from the svc
  * thread, a word the doip thread writes */
 int doip_stream_open(void) {
@@ -294,7 +359,7 @@ int doip_stream_send(const unsigned char *buf, int len) {
 	}
 	doip_tx_bytes += (ULONG)len;
 	doip_idle_tx(&idle, (uint32_t)tx_time_get()); /* an answer in time restarts T_TCP_General */
-	mb_sent_seq = mb_returned;
+	doip_mb_queue(&mb);
 	comm_wake();
 	return len;
 }

@@ -32,3 +32,12 @@ buses:
     enabled: true
     databases:
       - ../edge.dbc
+
+  # sysnode's DoIP entity (system.toml: 192.168.0.50, logical 0x07A0, tester 0x0E00) — its
+  # application's and, after a handoff over DoIP, its bootloader's (boot_handoff.lua sysnode-doip)
+  - name: sysnode_ip
+    network: system_full
+    adapter: doip
+    address: 192.168.0.50:13400
+    tester_address: "0x0E00"
+    ecu_address: "0x07A0"

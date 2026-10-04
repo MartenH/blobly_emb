@@ -90,7 +90,7 @@ thread = "front_thread"
   [[fb.handler]]
   name      = "on_50ms"
   period_ms = 50
-  reads     = ["RawSteer", "VehicleSpeed", "HeadlightCmd", "LedLevel", "UserButton"]
+  reads     = ["RawSteer", "VehicleSpeed", "HeadlightCmd", "LedLevel", "UserButton", "SteerLimit"]
   writes    = ["SteeringAngle", "HeadlightLed", "BreathLed"] # trailing comment terminates nested block (vlang/v#27684)
 
 # SafetyMonitor receives the chassis node's protected SafetyCmd (system.toml; on the bench blobly_net
@@ -107,6 +107,21 @@ thread = "front_thread"
   period_ms = 50
   reads     = ["SafetyCmd"]
   writes    = ["SafetyView"] # trailing comment terminates nested block (vlang/v#27684)
+
+# --- A parameter (docs/diagnostics.md §3.4, R7): variant coding ------------------------------------
+# The most SteerLimiter ever puts on the wire, coded per vehicle: an In field the limiter reads like
+# any input (it cannot write it), kept in the NvM journal below, coded with 0x2E on DID 0x0110 (the
+# extended session and 0x27 level 1, as the DID says) and read back with 0x22. "reset": a coded
+# limit takes effect at the next start — power-up or ECUReset — as coding that shapes a vehicle's
+# behaviour usually must; until then the limiter keeps the one it started with, while 0x22 already
+# reads the coded one. Uncoded, the limit is 360 (no limit: the sweep tops out at 355), so a coded
+# 100 shows on the bus as a SteeringAngle that never passes 100 (test/param_zone_a.lua).
+[[param]]
+name    = "SteerLimit"
+fields  = { deg = "u16" }
+default = { deg = 360 }
+range   = { deg = { min = 0, max = 360 } }   # refused at 0x2E (0x31) and at restore
+apply   = "reset"
 
 # --- Faults (docs/diagnostics.md §3.3, R6): a fault memory on the TARGET ----------------------
 # SteerLimiter tests the VehicleSpeed it receives (domain -> gateway -> here) for plausibility each
@@ -210,6 +225,18 @@ ascii = "system_full"
 [[did]]
 id     = 0xF1A0
 signal = "SteeringAngle"
+
+# the SteerLimit parameter: written (coded) only in extended AND with level 1 unlocked; read anywhere
+[[did]]
+id    = 0x0110
+param = "SteerLimit"
+write = { session = ["extended"], security = 1 }
+
+# every parameter's status, one byte each: 0 the default (uncoded), 1 coded, 2 reverted (a stored
+# value this firmware refused — another layout, or outside a narrowed range)
+[[did]]
+id           = 0x0111
+param_status = true
 
 # writable only in extended AND with security level 1 unlocked (0x27, the board's key seam)
 [[did]]

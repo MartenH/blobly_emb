@@ -119,7 +119,7 @@ fn parse_eth_frames(doc toml.Doc, eth string, sig_of map[string]SigInfo) []EthFr
 				fr.e2e_tmo_us = ms_to_us(tv.i64(), 'eth frame "${fname}": e2e.timeout_ms')
 			}
 			fr.e2e_on = true
-			fr.e2e_id = int((evm['data_id'] or { toml.Any(0) }).int())
+			fr.e2e_id = toml_int(evm, 'data_id', 0, 0, 0xFFFF, 'eth frame "${fname}" e2e')
 			off += 2 // the appended counter + CRC trailer (docs/someip.md)
 		}
 		fr.len = off
