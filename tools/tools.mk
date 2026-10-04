@@ -59,14 +59,22 @@ TOOL_GOAL := $(.DEFAULT_GOAL)
 # scripts/vdeps.sh: never a hand list of module directories, which went stale the day a generated
 # image started importing one more (driver/doipnet). In the rule, V run from $(REPO):
 #
-#     $(BUILD)/app.c: main.v gen/.stamp | $(BUILD)
+#     $(BUILD)/app.c: main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) | $(BUILD)
 #     	cd $(REPO) && $(V) -freestanding ... $(call v_dump,$@) -o .../$(BUILD)/app.c .../main.v
 #     	$(call v_deps,$@)
 #     -include $(BUILD)/app.c.d
 #
 # scripts/app_deps_check.sh asks make that a module's edit remakes every image importing it.
+#
+# A target with no record is remade, whatever its age: the record is what makes it current (a
+# build from before the record existed, or one whose recording failed). Name the target's
+# $(call v_unrecorded,<target>) as a prerequisite; v_deps failing removes the C it was recording,
+# so the C and its record exist together or not at all.
 v_dump = -dump-files $(CURDIR)/$(1).files
-v_deps = VDEPS_BASE=$(TOOL_REPO) $(TOOL_REPO)/scripts/vdeps.sh $(1) $(1).files >$(1).d.tmp && mv -f $(1).d.tmp $(1).d
+v_deps = { VDEPS_BASE=$(TOOL_REPO) $(TOOL_REPO)/scripts/vdeps.sh $(1) $(1).files >$(1).d.tmp && mv -f $(1).d.tmp $(1).d; } || { rm -f $(1) $(1).d.tmp; exit 1; }
+v_unrecorded = $(if $(wildcard $(1).d),,v-unrecorded)
+.PHONY: v-unrecorded
+v-unrecorded: ;
 
 TOOL_REPO := $(abspath $(REPO))
 TOOL_DIR  := $(CURDIR)/bin

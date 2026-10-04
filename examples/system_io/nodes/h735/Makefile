@@ -59,7 +59,7 @@ ifneq ($(MAKECMDGOALS),clean)
 endif
 
 # 2) transpile the V stack (shared main.v + this node's app/) to freestanding C.
-$(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp | $(BUILD)
+$(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) | $(BUILD)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
 	  -path "@vlib|@vmodules|.|examples/system_io/nodes/h735" \
 	  $(call v_dump,$@) -o examples/system_io/nodes/h735/$(BUILD)/app.c examples/system_io/main.v

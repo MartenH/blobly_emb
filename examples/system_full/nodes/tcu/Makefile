@@ -89,7 +89,7 @@ CFLAGS += $(LOOM_NET_DEFS) # the network the config sizes (driver/eth/netx_up.c)
 gen/loom_build.mk: gen/.stamp ;
 
 # 1) transpile the V stack to freestanding C (-enable-globals: ThreadX TCB/stack statics).
-$(BUILD)/app.c: main.v gen/.stamp | $(BUILD)
+$(BUILD)/app.c: main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) | $(BUILD)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
 	  -path "@vlib|@vmodules|.|$(EX)" \
 	  $(call v_dump,$@) -o $(EX)/$(BUILD)/app.c $(EX)/main.v

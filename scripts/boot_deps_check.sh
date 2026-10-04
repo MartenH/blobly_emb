@@ -25,6 +25,13 @@ for ecu in examples/*/nodes/*/ecu.toml examples/*/ecu.toml; do
 		fi
 		make -C "$d" boot >/dev/null 2>&1 || { echo "boot_deps_check: $d: rebuild failed"; fail=1; }
 	done
+	# without its record (boot/boot.mk v_deps) the generated C is not current, whatever its age
+	rm -f "$d/build/boot/boot.c.d"
+	if make -C "$d" -q boot >/dev/null 2>&1; then
+		echo "boot_deps_check: $d: the bootloader's C without its record reads as up to date"
+		fail=1
+	fi
+	make -C "$d" boot >/dev/null 2>&1 || { echo "boot_deps_check: $d: rebuild failed"; fail=1; }
 	echo "boot_deps_check: $d ok"
 done
 exit $fail

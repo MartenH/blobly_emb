@@ -16,6 +16,8 @@ PORT     = $(TX)/ports/cortex_m4/gnu
 
 BOARD := h755zi
 include $(REPO)/boards/$(BOARD)/board.mk
+# repo tools and the V-transpile dependency rule (tools/tools.mk)
+include $(REPO)/tools/tools.mk
 
 # TX_ENABLE_EXECUTION_CHANGE_NOTIFY: this core records its OWN thread/ISR trace
 # (trace_hooks.c — the same recorder as the M7, its ring in this image's bss).
@@ -48,7 +50,7 @@ ifneq ($(MAKECMDGOALS),clean)
 -include gen/loom_build.mk
 endif
 
-$(BUILD)/app.c: main.v gen/loom_gen.v | $(BUILD)
+$(BUILD)/app.c: main.v gen/loom_gen.v $(call v_unrecorded,$(BUILD)/app.c) | $(BUILD)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
 	  -path "@vlib|@vmodules|.|examples/$(NAME)" \
 	  $(call v_dump,$@) -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
