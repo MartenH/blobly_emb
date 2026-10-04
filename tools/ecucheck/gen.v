@@ -26,6 +26,7 @@ enum Typ {
 	id_range // an inclusive [lo, hi] pair of CAN ids (an NM peers range)
 	namedmap // a table of arbitrary-named sub-tables (e.g. [bus.<name>])
 	str_map  // a table of arbitrary string->string (e.g. signal fields)
+	val_map  // a table of arbitrary name -> integer or bool (e.g. a [[param]]'s defaults)
 	id       // a CAN id: an integer literal OR a bus.dbc message name (string)
 }
 
@@ -81,6 +82,7 @@ fn specs() map[string]map[string]Key {
 			'boot':      sub(.tbl, false, 'boot') // the node runs behind the bootloader: 0x10 02 hands over to it
 			'did':       sub(.arr, false, 'did')
 			'fault':        sub(.arr, false, 'fault') // docs/diagnostics.md §3.3
+			'param':        sub(.arr, false, 'param') // docs/diagnostics.md §3.4
 			'fault_memory': sub(.tbl, false, 'fault_memory')
 			'route':     sub(.arr, false, 'route')
 			'io':        sub(.tbl, false, 'io')
@@ -297,6 +299,18 @@ fn specs() map[string]map[string]Key {
 			'snapshot_id': k(.int) // refused by loom2v with the move to snapshot_ids
 			'snapshot_ids': k(.int_arr) // pins the snapshot's two journal blocks [A, B] (only to resolve a reported collision)
 		}
+		'param':      {
+			'name':    req(.str)
+			'fields':  sub(.str_map, true, '') // 1..2 fields: bool, u8/u16/u32, i8/i16/i32
+			'default': sub(.val_map, true, '') // every field's compiled default, in range
+			'range':   sub(.namedmap, false, 'param_range') // per field; absent = the type's
+			'apply':   k(.str) // next_dispatch (default) | reset
+			'nvm_id':  k(.int) // pins the journal block (only to resolve a reported collision)
+		}
+		'param_range': {
+			'min': k(.int)
+			'max': k(.int)
+		}
 		'fault_debounce': {
 			'kind':    k(.str) // counter (default) | time
 			'fail':    k(.int)
@@ -354,6 +368,8 @@ fn specs() map[string]map[string]Key {
 			'bytes':    k(.str)
 			'writable': k(.boolean)
 			'signal':   k(.str)
+			'param':    k(.str) // the [[param]] this DID codes (0x2E) and reads back (0x22)
+			'param_status': k(.boolean) // one byte per [[param]]: default / coded / reverted
 			'read':     sub(.tbl, false, 'did_access') // { session = [...], security = N }
 			'write':    sub(.tbl, false, 'did_access')
 		}
@@ -401,6 +417,7 @@ fn label(ctx string) string {
 		'route_from' { '[[route]] from' }
 		'route_to' { '[[route]] to' }
 		'did_access' { '[[did]] read/write' }
+		'param_range' { '[[param]] range' }
 		'import', 'telemetry', 'trace', 'target', 'someip' { '[${ctx}]' }
 		else { '[[${ctx}]]' }
 	}
@@ -477,6 +494,13 @@ fn check_table(m map[string]toml.Any, ctx string, sp map[string]map[string]Key, 
 					}
 				}
 			}
+			.val_map {
+				for fk, fv in v.as_map() {
+					if fv !is i64 && fv !is bool {
+						errs << '${label(ctx)} "${name}": "${fk}" must be an integer or a bool, got ${actual(fv)}'
+					}
+				}
+			}
 			else {}
 		}
 	}
@@ -505,7 +529,7 @@ fn type_ok(v toml.Any, typ Typ) bool {
 		.arr {
 			v is []toml.Any
 		}
-		.tbl, .namedmap, .str_map {
+		.tbl, .namedmap, .str_map, .val_map {
 			v is map[string]toml.Any
 		}
 		.str_arr {
@@ -545,7 +569,7 @@ fn type_name(typ Typ) string {
 		.id { 'a CAN id (integer) or a bus.dbc message name (string)' }
 		.boolean { 'a boolean' }
 		.arr { 'an array of tables' }
-		.tbl, .namedmap { 'a table' }
+		.tbl, .namedmap, .val_map { 'a table' }
 		.str_arr { 'an array of strings' }
 		.int_arr { 'an array of integers' }
 		.id_range { 'an inclusive [lo, hi] pair of CAN ids' }
