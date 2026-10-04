@@ -516,3 +516,20 @@ fn test_a_node_with_no_can_serves_diagnostics_over_doip_alone() {
 	h := os.read_file(os.join_path(tmp, 'boot_gen.h')) or { panic(err) }
 	assert h.contains('#define BOOT_CAN_IDX -1') && h.contains('#define BOOT_DOIP 1'), h
 }
+
+// a DoIP-only node's server runs on the eth thread, which does not run the fault memory: [[fault]]
+// is refused by name rather than answering 0x19 from a memory nothing fills (#377)
+fn test_a_doip_only_node_refuses_faults_by_name() {
+	ecu := eth_only_node.replace('[[fb]]\nname   = "Src"', '[[fb]]\nname   = "Src"\nfaults = ["Stuck"]') + '
+[[fault]]
+name     = "Stuck"
+dtc      = 0xC40100
+from     = "Src.on_100ms"
+debounce = { kind = "counter", fail = 3, pass = 3 }
+
+[fault_memory]
+cycle = "power"
+'
+	code, out, _, _ := generate_ecu('doip_only_fault', ecu)
+	assert code != 0 && out.contains('[[fault]] on a node with no CAN (DoIP only)') && out.contains('#377'), out
+}

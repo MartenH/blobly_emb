@@ -5079,6 +5079,12 @@ fn validate_faults(m Model, doc toml.Doc) {
 	if m.target.on && !m.target.threadx {
 		panic('loom2v: [[fault]] on a bare-metal [target] — the fault memory runs on a ThreadX comm thread (docs/diagnostics.md R6); use kind = "threadx"')
 	}
+	if diag_doip_only(m) {
+		// the server is the eth thread's there, and the fault memory's lifecycle (debounce intake,
+		// the operation cycle) runs on the CAN comm thread alone: 0x19/0x14/0x85 would answer from
+		// a memory nothing fills
+		panic('loom2v: [[fault]] on a node with no CAN (DoIP only): its diagnostic server runs on the eth thread, which does not run the fault memory yet (#377)')
+	}
 	if m.isotp_conns.len != 1 {
 		panic('loom2v: [[fault]] needs the node\'s diagnostic server — an [isotp] connection — to serve 0x19 / 0x14 / 0x85')
 	}
