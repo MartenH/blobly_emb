@@ -65,7 +65,7 @@ TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
 # board bring-up (asm + board.c) + the exec-change trace recorder, the shared recorder from
 # boards/common (trace_hooks.c is driver-independent — pure recorder).
 BSP = $(BOARD_BSP_THREADX) $(LOOM_GLUE_SRCS) target_ext.c $(REPO)/boards/common/trace_hooks.c \
-      $(BOARD_DIR)/flash.c $(LOOM_FAULT_SRCS)
+      $(LOOM_FAULT_SRCS)
 
 all: $(BUILD)/$(NAME).bin
 

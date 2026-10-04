@@ -1,0 +1,255 @@
+module fault
+
+// Snapshots (freeze frames), extended data and displacement (docs/diagnostics.md §3.3, R6b).
+//
+// A DTC that declares `freeze` DIDs gets a SNAPSHOT at the occurrence that finds it without one:
+// the declared DIDs' values, read from the diagnostic server's own DID table — the values 0x22
+// returns — by the owner right after the pass that consumed the occurrence (capture). That is at
+// most one owner pass after the qualifying dispatch: the producer's thread does not carry the
+// values across, because a snapshot is far larger than its report cell. One snapshot per DTC
+// (ISO 14229-1 snapshot record 0x01), kept until the DTC is cleared, ages out, heals before
+// confirming, or is displaced; a later occurrence does not overwrite it — the first failure is the
+// evidence a workshop wants.
+//
+// Snapshots live in ENTRIES, `cap` of them, fewer than the DTCs when the configuration says so.
+// The status byte and the counters of EVERY DTC are kept whatever happens to its entry: an entry
+// holds only the snapshot, the one large thing. When every entry is taken, a new snapshot
+// DISPLACES one (victim, below) or is not stored.
+//
+// Extended data (0x19 06) is the DTC's counters, records with fixed numbers and widths that the
+// tester decodes without a description file:
+//   0x01 occurrence counter    2 bytes, big-endian, saturating at 0xFFFF
+//   0x02 aging counter         1 byte (passing cycles counted toward aging out)
+//   0x03 failed-cycle counter  1 byte, saturating at 0xFF (failed cycles toward confirmation)
+
+import comm.uds
+
+pub const max_entries = 8 // snapshot entries one memory holds
+pub const max_freeze = 4 // DIDs one snapshot names
+// the snapshot record body (0x19 04, after the record number): the DID count, then each DID's
+// identifier and data
+pub const max_snapshot = 1 + max_freeze * (2 + uds.max_did_data)
+pub const snapshot_record = u8(0x01) // the one snapshot record number
+pub const ext_records = u8(3) // extended data records 0x01 .. 0x03
+
+// Entry is one snapshot entry: the DTC (slot) holding it, its allocation stamp, and the record body.
+pub struct Entry {
+pub mut:
+	used    bool
+	slot    int
+	stamp   u32
+	durable bool // written to the store since it was captured
+	len     int
+	data    [max_snapshot]u8
+}
+
+// snap_len: the body length slot i's snapshot has — fixed by its configuration.
+pub fn (m &Memory) snap_len(i int) int {
+	s := &m.slots[i]
+	mut n := 1
+	for k in 0 .. s.nfreeze {
+		n += 2 + int(s.freeze_len[k])
+	}
+	return n
+}
+
+// capture_due: an occurrence is waiting for its snapshot — the owner refreshes the live DIDs and
+// calls capture.
+pub fn (m &Memory) capture_due() bool {
+	for i in 0 .. m.n {
+		if m.slots[i].snap_due {
+			return true
+		}
+	}
+	return false
+}
+
+// capture takes every due snapshot from the server's DID table (refreshed by the owner just
+// before): each declared DID's current bytes, zero-filled to its declared size when the server
+// holds fewer (a live DID nothing has published yet), so the record always has its fixed shape.
+pub fn (mut m Memory) capture(srv &uds.Server) {
+	for i in 0 .. m.n {
+		if !m.slots[i].snap_due {
+			continue
+		}
+		m.slots[i].snap_due = false
+		if m.slots[i].nfreeze == 0 || m.slots[i].entry != 0 {
+			continue
+		}
+		k := m.allocate(i)
+		if k < 0 {
+			continue // full, and nothing may be displaced for it
+		}
+		mut e := &m.entries[k]
+		e.data[0] = u8(m.slots[i].nfreeze)
+		mut o := 1
+		for f in 0 .. m.slots[i].nfreeze {
+			id := m.slots[i].freeze[f]
+			w := int(m.slots[i].freeze_len[f])
+			e.data[o] = u8(id >> 8)
+			e.data[o + 1] = u8(id)
+			o += 2
+			mut d := -1
+			for j in 0 .. srv.ndid {
+				if srv.dids[j].id == id {
+					d = j
+					break
+				}
+			}
+			for b in 0 .. w {
+				e.data[o + b] = if d >= 0 && b < int(srv.dids[d].len) { srv.dids[d].data[b] } else { u8(0) }
+			}
+			o += w
+		}
+		e.len = o
+	}
+}
+
+// allocate gives slot i an entry: a free one, else the victim's. -1 = none may be taken.
+fn (mut m Memory) allocate(i int) int {
+	mut k := -1
+	for j in 0 .. m.cap {
+		if !m.entries[j].used {
+			k = j
+			break
+		}
+	}
+	if k < 0 {
+		k = m.victim(i)
+		if k < 0 {
+			return -1
+		}
+		m.slots[m.entries[k].slot].entry = 0 // displaced: its snapshot goes, its status and counters stay
+		m.displaced++
+	}
+	m.entries[k].used = true
+	m.entries[k].slot = i
+	m.entries[k].stamp = m.next_stamp
+	m.entries[k].durable = false
+	m.entries[k].len = 0
+	m.next_stamp++
+	m.slots[i].entry = k + 1
+	return k
+}
+
+// victim: the entry a new snapshot for slot i may displace, -1 = none. Never one whose DTC failed
+// in THIS operation cycle (it is the evidence of now — and two DTCs failing alternately could
+// otherwise displace each other at every occurrence), never an active confirmed one (testFailed
+// and confirmedDTC: the fault a workshop is there for), and never a MORE important one (a lower
+// priority number). Among the rest: the least important first, then one not currently failed,
+// then the oldest.
+fn (m &Memory) victim(i int) int {
+	want := prio(m.slots[i].priority)
+	mut best := -1
+	for j in 0 .. m.cap {
+		if !m.entries[j].used {
+			continue
+		}
+		st := m.slots[m.entries[j].slot].status
+		if st & test_failed_this_cycle != 0 || st & (test_failed | confirmed) == test_failed | confirmed {
+			continue
+		}
+		if prio(m.slots[m.entries[j].slot].priority) < want {
+			continue
+		}
+		if best < 0 || m.displaces_before(j, best) {
+			best = j
+		}
+	}
+	return best
+}
+
+// displaces_before: entry a goes before entry b — less important, then passive, then older.
+fn (m &Memory) displaces_before(a int, b int) bool {
+	sa := &m.slots[m.entries[a].slot]
+	sb := &m.slots[m.entries[b].slot]
+	pa := prio(sa.priority)
+	pb := prio(sb.priority)
+	if pa != pb {
+		return pa > pb
+	}
+	fa := sa.status & test_failed != 0
+	fb := sb.status & test_failed != 0
+	if fa != fb {
+		return !fa
+	}
+	return m.entries[a].stamp < m.entries[b].stamp
+}
+
+fn prio(p u8) int {
+	return if p == 0 { 255 } else { int(p) }
+}
+
+// free_entry drops slot i's snapshot entry (clear, aging, healing).
+fn (mut m Memory) free_entry(i int) {
+	k := m.slots[i].entry - 1
+	if k >= 0 {
+		m.entries[k].used = false
+		m.entries[k].durable = false
+	}
+	m.slots[i].entry = 0
+}
+
+// snapshot_of copies slot i's snapshot record body into out (nil = only ask) and returns its
+// length; 0 = none stored.
+pub fn (m &Memory) snapshot_of(i int, out &u8, cap int) int {
+	if i < 0 || i >= m.n || m.slots[i].entry == 0 {
+		return 0
+	}
+	e := &m.entries[m.slots[i].entry - 1]
+	if out == unsafe { nil } {
+		return e.len
+	}
+	if e.len > cap {
+		return -1
+	}
+	for b in 0 .. e.len {
+		unsafe {
+			out[b] = e.data[b]
+		}
+	}
+	return e.len
+}
+
+// extended_of writes slot i's extended data record `rec` into out and returns its length; 0 = no
+// such record (0x01 .. ext_records).
+pub fn (m &Memory) extended_of(i int, rec u8, out &u8) int {
+	if i < 0 || i >= m.n {
+		return 0
+	}
+	s := &m.slots[i]
+	match rec {
+		0x01 {
+			unsafe {
+				out[0] = u8(s.occurrence >> 8)
+				out[1] = u8(s.occurrence)
+			}
+			return 2
+		}
+		0x02 {
+			unsafe {
+				out[0] = s.aging_count
+			}
+			return 1
+		}
+		0x03 {
+			unsafe {
+				out[0] = s.failed_cycles
+			}
+			return 1
+		}
+		else {
+			return 0
+		}
+	}
+}
+
+fn ops_snapshot(ctx voidptr, i int, out &u8, cap int) int {
+	m := unsafe { &Memory(ctx) }
+	return m.snapshot_of(i, out, cap)
+}
+
+fn ops_extended(ctx voidptr, i int, rec u8, out &u8) int {
+	m := unsafe { &Memory(ctx) }
+	return m.extended_of(i, rec, out)
+}

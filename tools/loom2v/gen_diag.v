@@ -653,6 +653,11 @@ fn diag_target_reset(m Model, ioc_idx map[string]int) []string {
 		'\t\t\tdiag.wire_drain(mut ch, diag_now_us) // REQ-BOOT-012: the answer on the wire, bounded',
 	]
 	g << doip_reset_wait(m)
+	if fault_persist_on(m) {
+		// the results the FBs reported since the pass top, and their snapshots, before the flush
+		g << fault_target_consume(m, '\t\t\t')
+		g << fault_capture_lines(m, 'g_fmem', 'g_diag', '\t\t\t')
+	}
 	if nvm_on(m) {
 		// an orderly shutdown, as a sleep edge is: every persisted value durable and the journal
 		// marked clean — a tester's reset must not cost calibration the way a power cut would. A

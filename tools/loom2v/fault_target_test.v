@@ -24,6 +24,9 @@ name     = "LoadImplausible"
 dtc      = 0xC40100
 from     = "LoadSlow.on_100ms"
 debounce = { kind = "counter", fail = 3, pass = 3 }
+
+[nvm]
+min_write_ms = 1000
 '
 
 const ft_bin = os.join_path(os.temp_dir(), 'loom2v_fault_target_${os.getpid()}_${time.now().unix_nano()}')
@@ -197,6 +200,80 @@ fn test_the_power_cycle_begins_with_the_comm_thread() {
 	c2, o2, _, _ := ft_generate('nocycle', no_nm, ft_conn + ft_fault)
 	assert c2 != 0
 	assert o2.contains('needs an operation cycle: [nm]'), o2
+}
+
+// The fault memory on the target is persisted (R6b): wired to the journal and restored from it
+// before the power cycle begins, written every pass after the cycle's step, flushed with the
+// persisted signals at every quiet point (the ECUReset included, after the latest reports and
+// their snapshots), its blocks in the prune keep-set, a node without NM erasing at boot — and the
+// journal's storage and flash driver linked by the generator, never named in a Makefile.
+fn test_the_fault_memory_is_persisted_in_the_journal() {
+	no_nm := fn (src string) string {
+		at := src.index('[nm]') or { panic('no [nm]') }
+		end := src.index_after('\n\n', at) or { panic('no end of [nm]') }
+		return src[..at] + src[end + 2..]
+	}
+	snap := ft_conn + '[[did]]\nid    = 0xF190\nascii = "BLOBLY"\n' + ft_fault.replace('fail = 3, pass = 3 }',
+		'fail = 3, pass = 3 }\nfreeze   = [0xF190]\npriority = 7') + '\n[fault_memory]\ncycle = "power"\n'
+	code, out, glue, mk := ft_generate('persist', no_nm, snap)
+	assert code == 0, out
+	in_order(glue, ['fn comm_thread_entry', 'g_fmem.slots[0].priority = u8(7)', 'g_fmem.slots[0].freeze[0] = u16(0xf190)',
+		'g_fmem.slots[0].freeze_len[0] = u8(6)', 'g_fmem.slots[0].nfreeze = 1', 'g_fmem.slots[0].snap_id = u16(0x',
+		'g_fmem.cap = 1', 'g_fmem.init()', 'g_fmem.store = fault.Store{', 'g_fmem.restore()',
+		'g_fmem.cycle_start() // [fault_memory] cycle = "power"', 'for {',
+		'g_fmem.consume(0, g_frep_load_slow.r[0])', 'if g_fmem.capture_due() {', 'g_diag.refresh_now()',
+		'g_fmem.capture(&g_diag.server)', 'g_fmem.persist(t1, false)',
+		'if g_diag.reset_due() != 0 {', 'g_fmem.consume(0, g_frep_load_slow.r[0])',
+		'if !g_fmem.persist(t1, true) {', 'C.diag_sys_reset()', 'fn fmem_put(ctx voidptr, id u16, data &u8, len u16) bool {',
+		'return g_nvm.put(id, data, len)', 'pub fn boot() {', 'if g_nvm.mounted {',
+		'keep := [', '/* the fault memory status */', 'g_nvm.prune(&keep[0], 2)',
+		'g_nvm.erase_pending() // the boot quiet point (no NM)'])
+	assert mk.contains(r'$(REPO)/boards/common/nvm_map.c $(BOARD_FLASH)'), mk
+	// with NM: no erase at boot (the sleep edges are the quiet points), and a write made in bus
+	// sleep re-lays the clean marker through the whole choreography
+	c2, o2, g2, _ := ft_generate('persist_nm', same, ft_conn + ft_fault)
+	assert c2 == 0, o2
+	assert !g2.contains('g_nvm.erase_pending() // the boot quiet point')
+	in_order(g2, ['g_fmem.persist(t1, false)', 'if g_fmem.wrote > 0 && g_nm.state() == .bus_sleep {',
+		'if !g_fmem.persist(t1, true) {', 'g_nvm.mark_clean()'])
+	// and no persistence without the storage declared
+	c3, o3, _, _ := ft_generate('nonvm', same, ft_conn + ft_fault.all_before('[nvm]'))
+	assert c3 != 0
+	assert o3.contains('[[fault]] on the target needs [nvm]'), o3
+}
+
+// A snapshot names this node's DIDs, at most max_freeze of them, each readable wherever 0x19 is —
+// never a side door around a DID's gate (docs/diagnostics.md §7) — and the entries are bounded.
+fn test_snapshot_declarations_are_checked() {
+	did := '[[did]]\nid    = 0xF190\nascii = "BLOBLY"\n[[did]]\nid    = 0xF191\nascii = "X"\nread  = { session = ["extended"] }\n'
+	cases := {
+		'unknown':  ['freeze = [0xF1A9]', 'is not a [[did]] of this node']
+		'twice':    ['freeze = [0xF190, 0xF190]', 'names DID 0xf190 twice']
+		'gated':    ['freeze = [0xF191]', 'is not readable in every session 0x19 is served in']
+		'many':     ['freeze = [0xF190, 0xF191, 1, 2, 3]', 'a snapshot holds at most 4']
+		'priority': ['priority = 0', 'priority 0 must be 1']
+	}
+	for name, c in cases {
+		code, out, _, _ := ft_generate('snap_${name}', same, ft_conn + did + ft_fault.replace('fail = 3, pass = 3 }',
+			'fail = 3, pass = 3 }\n' + c[0]))
+		assert code != 0, name
+		assert out.contains(c[1]), '${name}: ${out}'
+	}
+	for entries, msg in {
+		'0': 'entries = 0 must be 1 .. 8'
+		'9': 'entries = 9 must be 1 .. 8'
+	} {
+		code, out, _, _ := ft_generate('entries_${entries}', same, ft_conn + did + ft_fault.replace('fail = 3, pass = 3 }',
+			'fail = 3, pass = 3 }\nfreeze = [0xF190]') + '\n[fault_memory]\nentries = ${entries}\n')
+		assert code != 0 && out.contains(msg), out
+	}
+	code, out, _, _ := ft_generate('entries_nosnap', same, ft_conn + ft_fault + '\n[fault_memory]\nentries = 1\n')
+	assert code != 0 && out.contains('no [[fault]] declares a snapshot'), out
+	// a journal too small for the fault memory and its rewrite headroom
+	wide := '[[did]]\nid    = 0xF192\nascii = "${'W'.repeat(32)}"\n'
+	c2, o2, _, _ := ft_generate('tiny', same, ft_conn + wide + ft_fault.replace('fail = 3, pass = 3 }',
+		'fail = 3, pass = 3 }\nfreeze = [0xF192]') + 'sector_records = 8\n')
+	assert c2 != 0 && o2.contains('records of sector headroom'), o2
 }
 
 fn test_what_the_target_does_not_generate_yet_is_refused() {

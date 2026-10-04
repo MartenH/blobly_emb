@@ -109,3 +109,39 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-013"
+title = "Fault snapshots"
+text = "A DTC configured with a snapshot shall have the values of its declared data identifiers, as a read of those identifiers returns them, captured at the occurrence that finds it with no stored snapshot; the snapshot shall be kept until the DTC is cleared, ages out, heals before confirming or is displaced, and shall be reported by the read-DTC snapshot identification and snapshot-record-by-DTC-number subfunctions. A snapshot shall name only identifiers readable in every session the read-DTC service is served in, behind no security level that service does not itself require."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-014"
+title = "Fault extended data"
+text = "The diagnostic server shall report, per DTC and by extended data record number, its occurrence counter, its aging counter and its failed-operation-cycle counter, each with a fixed width that saturates at its maximum rather than wrapping, and shall refuse an unknown DTC or record number."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-015"
+title = "Snapshot displacement"
+text = "When every snapshot entry is taken, a new snapshot shall displace the least important stored one — among equals, one whose DTC is not currently failed before one that is, then the oldest — and never one more important than the new DTC, one whose DTC failed in the current operation cycle, or one whose DTC is failed and confirmed; when none may be displaced, the new snapshot is not stored, and a DTC without a snapshot keeps its status and counters."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-016"
+title = "Persistent fault memory"
+text = "On a target the fault memory shall keep each DTC's pendingDTC, confirmedDTC, testNotCompletedSinceLastClear and testFailedSinceLastClear bits, its counters and its snapshot across a reset and a power loss, restore them by DTC number, and end the operation cycle a power loss interrupted with the results that cycle had collected. It shall write only when the stored content changes, never once per debounce step; acknowledge a clear only once the cleared state is stored; and, after a power loss at any point of a write, restore either the state before that write or the state it was writing, never doubling an occurrence nor claiming a snapshot it does not hold."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"

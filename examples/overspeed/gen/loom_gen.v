@@ -212,6 +212,10 @@ fn io_can0_10ms(ctx voidptr) {
 	st.fctl_engine_monitor.gen[1] = st.fmem.control_gen(1)
 	st.fctl_engine_monitor.held[1] = st.fmem.control_held(1)
 	osal.ioc_publish(fault_ctl_engine_monitor_ch, &st.fctl_engine_monitor, u8(sizeof(st.fctl_engine_monitor)))
+	if st.fmem.capture_due() {
+		st.conn_diag.refresh_now()
+		st.fmem.capture(&st.conn_diag.server) // the snapshot: the DIDs as 0x22 reads them now
+	}
 	mut rx := can.Frame{}
 	for st.chan.recv(mut rx) {
 		if rx.id == powertrain_id && rx.len == powertrain_dlc && rx.ext == false {
@@ -527,14 +531,27 @@ pub fn partition_can0(ch can.Channel) {
 	st.fmem.slots[0].dtc = u32(0x21900) // EngineOverRev
 	st.fmem.slots[0].confirm = u8(1)
 	st.fmem.slots[0].aging = u8(2)
+	st.fmem.slots[0].priority = u8(1)
+	st.fmem.slots[0].freeze[0] = u16(0xf1a0)
+	st.fmem.slots[0].freeze_len[0] = u8(2)
+	st.fmem.slots[0].freeze[1] = u16(0xf190)
+	st.fmem.slots[0].freeze_len[1] = u8(19)
+	st.fmem.slots[0].nfreeze = 2
 	st.fmem.slots[1].dtc = u32(0x50600) // EngineIdleLow
 	st.fmem.slots[1].confirm = u8(1)
+	st.fmem.slots[1].priority = u8(128)
+	st.fmem.slots[1].freeze[0] = u16(0xf1a0)
+	st.fmem.slots[1].freeze_len[0] = u8(2)
+	st.fmem.slots[1].nfreeze = 1
 	st.fmem.slots[2].dtc = u32(0xc12100) // BrakeMsgTimeout
 	st.fmem.slots[2].confirm = u8(1)
+	st.fmem.slots[2].priority = u8(128)
 	st.fmem.slots[3].dtc = u32(0xc41800) // BrakeMsgIntegrity
 	st.fmem.slots[3].confirm = u8(1)
+	st.fmem.slots[3].priority = u8(128)
 	st.fmem.slots[4].dtc = u32(0xc41801) // BrakeMsgLost
 	st.fmem.slots[4].confirm = u8(1)
+	st.fmem.slots[4].priority = u8(128)
 	st.sdeb_2 = fault.Debounce{
 		fail_thr: 1
 		pass_thr: 1
@@ -551,6 +568,7 @@ pub fn partition_can0(ch can.Channel) {
 		jump: true
 	}
 	st.fmem.n = 5
+	st.fmem.cap = 1 // snapshot entries
 	st.fmem.init()
 	st.conn_diag.server.faults = st.fmem.uds_ops() // 0x19 / 0x14 / 0x85
 	mut sched := loom.Scheduler{}

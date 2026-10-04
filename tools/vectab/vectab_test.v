@@ -339,3 +339,50 @@ fn test_no_vector_table_outside_the_boards() {
 		}
 	}
 }
+
+// bootmap_defs: a bootmap.h's plain `#define NAME 0x...u` values.
+fn bootmap_defs(path string) map[string]u64 {
+	mut out := map[string]u64{}
+	for l in (os.read_file(path) or { panic(err) }).split_into_lines() {
+		f := l.fields()
+		if f.len >= 3 && f[0] == '#define' && f[2].starts_with('0x') {
+			out[f[1]] = f[2].trim_right('u').u64()
+		}
+	}
+	return out
+}
+
+// The NvM journal (boards/common/nvm_map.c) lives in two whole flash sectors of the board, outside
+// the boot and the application regions — so a download or `make flash` can never erase it, and
+// the app can never be linked over it. Each board that names them is checked.
+fn test_the_journal_lies_outside_the_boot_and_app_regions() {
+	flash_end := {
+		'h723':   u64(0x08100000)
+		'h735dk': u64(0x08100000)
+		'h755zi': u64(0x08200000)
+	}
+	mut checked := 0
+	for board in os.ls(os.join_path(repo, 'boards')) or { panic(err) } {
+		bm := os.join_path(repo, 'boards', board, 'bootmap.h')
+		if !os.is_file(bm) {
+			continue
+		}
+		d := bootmap_defs(bm)
+		if 'NVM_A_ADDR' !in d {
+			continue
+		}
+		size := d['NVM_SIZE']
+		assert size == 0x20000, '${bm}: NVM_SIZE is not one 128 KB sector'
+		app_end := d['APP_BASE'] + d['APP_SIZE']
+		end := flash_end[board] or { panic('${bm}: no flash size known for ${board}') }
+		for name in ['NVM_A_ADDR', 'NVM_B_ADDR'] {
+			a := d[name]
+			assert a % size == 0, '${bm}: ${name} 0x${a.hex()} is not sector-aligned'
+			assert a + size <= end, '${bm}: ${name} lies past the end of the flash'
+			assert a + size <= d['BOOT_BASE'] || a >= app_end, '${bm}: ${name} 0x${a.hex()} overlaps the boot or the application region (0x${d['BOOT_BASE'].hex()}..0x${app_end.hex()})'
+		}
+		assert d['NVM_A_ADDR'] != d['NVM_B_ADDR'], '${bm}: both journal sectors are one'
+		checked++
+	}
+	assert checked >= 2, 'checked only ${checked} journal layouts'
+}

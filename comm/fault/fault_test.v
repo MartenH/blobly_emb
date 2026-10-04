@@ -207,7 +207,10 @@ fn test_read_and_clear_over_uds() {
 	assert call(mut s, [u8(0x19), 0x02, 0x08]) == [u8(0x59), 0x02, 0x7F, 0x52, 0x30, 0x00, 0x2F]
 	assert call(mut s, [u8(0x19), 0x0A]) == [u8(0x59), 0x0A, 0x7F, 0xC1, 0x00, 0x00, 0x50, 0x52,
 		0x30, 0x00, 0x2F]
-	assert call(mut s, [u8(0x19), 0x04, 0x52, 0x30, 0x00, 0x01]) == [u8(0x7F), 0x19, 0x12] // R6
+	// R6b: a DTC with no snapshot configured answers its header and no record
+	assert call(mut s, [u8(0x19), 0x04, 0x52, 0x30, 0x00, 0x01]) == [u8(0x59), 0x04, 0x52, 0x30,
+		0x00, 0x2F]
+	assert call(mut s, [u8(0x19), 0x05]) == [u8(0x7F), 0x19, 0x12]
 	assert call(mut s, [u8(0x19), 0x02]) == [u8(0x7F), 0x19, 0x13]
 	assert call(mut s, [u8(0x19), 0x82, 0x08]) == [u8(0x7F), 0x19, 0x12] // no suppression on 0x19
 	assert call(mut s, [u8(0x14), 0x12, 0x34, 0x56]) == [u8(0x7F), 0x14, 0x31]
@@ -742,11 +745,73 @@ fn note_issue(m &Memory, mut abs []FaultAbs, clock int) {
 	}
 }
 
+// RamStore: a store that keeps every block whole (the journal's power-cut behaviour is
+// persist_test.v's; here a reset is either an orderly 0x11 or power lost between owner passes).
+struct RamStore {
+mut:
+	ids  [4]u16
+	lens [4]int
+	data [4][max_block]u8
+	n    int
+}
+
+fn rs_put(ctx voidptr, id u16, d &u8, len u16) bool {
+	mut st := unsafe { &RamStore(ctx) }
+	mut k := -1
+	for i in 0 .. st.n {
+		if st.ids[i] == id {
+			k = i
+		}
+	}
+	if k < 0 {
+		k = st.n
+		st.n++
+		st.ids[k] = id
+	}
+	for b in 0 .. int(len) {
+		st.data[k][b] = unsafe { d[b] }
+	}
+	st.lens[k] = int(len)
+	return true
+}
+
+fn rs_get(ctx voidptr, id u16, out &u8, cap u16) u16 {
+	st := unsafe { &RamStore(ctx) }
+	for i in 0 .. st.n {
+		if st.ids[i] == id {
+			n := if st.lens[i] > int(cap) { int(cap) } else { st.lens[i] }
+			for b in 0 .. n {
+				unsafe {
+					out[b] = st.data[i][b]
+				}
+			}
+			return u16(n)
+		}
+	}
+	return 0
+}
+
+// model_memory: the model's two faults with their store, restored and its power cycle begun —
+// what the comm thread does at every start.
+fn model_memory(st &RamStore) Memory {
+	mut m := memory([u32(0xC40100), u32(0xC40200)])
+	m.store = Store{
+		ctx: st
+		put: rs_put
+		get: rs_get
+		id:  0x0F00
+	}
+	m.restore()
+	m.cycle_start()
+	return m
+}
+
 fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 	mut rng := u32(0x9E3779B9)
 	mut storms := 0
 	mut held_restarts := 0
 	mut waits := 0
+	mut resets := 0
 	mut clock := 0
 	for run in 0 .. 400 {
 		rng ^= rng << 13
@@ -760,8 +825,8 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 			inc:        1 + (rng >> 6) % 2
 			jump:       rng & 0x100 != 0
 		}
-		mut m := memory([u32(0xC40100), u32(0xC40200)])
-		m.cycle_start()
+		mut st := &RamStore{}
+		mut m := model_memory(st)
 		mut d := [proto, proto]
 		mut cells := [Report{}, Report{}]
 		mut ctl := Control{}
@@ -856,6 +921,7 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 					a.occ += dfails
 					a.base = a.cell
 				}
+				m.persist(u64(clock), false) // the comm thread writes what changed, every pass
 			} else if op < 88 {
 				if !m.setting_off {
 					t_toggle = clock
@@ -867,6 +933,45 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 				}
 				m.set_setting(true) // 0x85 on, or the session ending
 				note_issue(m, mut abs, clock)
+			} else if op == 97 {
+				// a reset: an orderly 0x11 (the flush first) or power lost between owner passes.
+				// The memory comes back from its store, the producers restart from nothing, DTC
+				// setting is on. An occurrence is never doubled, the one an ECUReset flushed never
+				// lost, testFailedSinceLastClear exact, testFailed restarts — and nothing reported
+				// before the reset, suppressed or not, can count after it.
+				resets++
+				orderly := (rng >> 8) & 1 == 0
+				if orderly {
+					assert m.persist(u64(clock), true)
+				}
+				m = model_memory(st)
+				for k in 0 .. 2 {
+					s := m.slots[k]
+					assert s.occurrence <= abs[k].occ, '${ctx}: fault ${k} came back with ${s.occurrence} occurrences, it had ${abs[k].occ}'
+					if orderly {
+						assert s.occurrence == abs[k].occ, '${ctx}: an ECUReset lost occurrences of fault ${k}'
+					}
+					d[k] = proto
+					cells[k] = Report{}
+					abs[k].occ = s.occurrence
+					abs[k].tf = false
+					abs[k].issued = map[u16]int{}
+					abs[k].issued[0] = clock
+					abs[k].last_gen = 0
+					abs[k].t_apply = clock
+					abs[k].g_apply = 0
+					abs[k].epoch++
+					abs[k].reference = ref_of(proto, false)
+					abs[k].cell = EpochMeta{
+						epoch: abs[k].epoch
+					}
+					abs[k].base = abs[k].cell
+					abs[k].spent = false
+					abs[k].pub_fresh = false
+					abs[k].rep_fresh = false
+				}
+				ctl = Control{}
+				t_toggle = clock
 			} else if op == 98 {
 				// an operation cycle boundary: while off it changes no status
 				before := [m.slots[0].status, m.slots[1].status]
@@ -926,8 +1031,9 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 			}
 		}
 	}
-	println('fault model: ${storms} storms, ${waits} waits, ${held_restarts} held restarts')
+	println('fault model: ${storms} storms, ${waits} waits, ${held_restarts} held restarts, ${resets} resets')
 	assert storms > 3, 'the model never exhausted the generations'
 	assert waits > 0, 'no slot ever waited for a fresh generation'
 	assert held_restarts > 100, 'the model rarely restarted a failed debounce'
+	assert resets > 1000, 'the model rarely reset'
 }
