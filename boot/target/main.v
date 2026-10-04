@@ -172,8 +172,9 @@ fn serve_loop() {
 			C.boot_info_normal()
 			C.boot_sys_reset() // no request pending -> the boot jumps to the app
 		}
-		if !diag.in_flight(&g_link) {
-			rest() // nothing in flight on the bus: give the rest of the image its turn
-		}
+		// every pass yields: the serve loop is above the network threads, so skipping the rest while
+		// a CAN exchange is in flight (a lost Consecutive Frame, a Flow Control that never comes)
+		// would starve DoIP. A tick bounds CAN polling far inside ISO-TP's N_Cr / N_Bs.
+		rest()
 	}
 }
