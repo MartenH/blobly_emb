@@ -77,8 +77,23 @@ local function boot_up(d, n)
   error("the bootloader never answered F180 on the application's ids")
 end
 
+-- the application, waited for: a node a previous test just reset is still coming up, and over DoIP
+-- its listener opens only after the boot announcements (driver/eth/doip_netx.c)
+local function app_up(n)
+  for _ = 1, up_tries(n) do
+    local ok, d = pcall(function()
+      local c = diag(n)
+      c:read_did(0xF190)
+      return c
+    end)
+    if ok then return d end
+    sleep_ms(100)
+  end
+  error("the application did not answer before the handoff")
+end
+
 local function handoff(n)
-  local d = diag(n)
+  local d = app_up(n)
   d:session(0x01)
   local ver = be32(d:read_did(0xF195))
   check.equal(d:read_did(0xF190), n.ident, "the application answers before the handoff")
