@@ -4902,7 +4902,7 @@ struct FaultCfg {
 	aging      int
 	freeze     []int // the snapshot: [[did]]s captured at the failure that allocates an entry
 	priority   int   // displacement: 1 = the most important .. 255
-	snapshot_id int  // the snapshot's journal block, pinned (0 = derived from the DTC and schema)
+	snapshot_ids []int // the snapshot's two journal blocks A, B pinned (empty = derived from the DTC and schema)
 	// a SIGNAL-STATUS fault (R4c): no FB tests it — the diagnostic bridge is the detector, from the
 	// named received signal's status: on = "timeout" | "integrity" | "lost"
 	signal string
@@ -4918,12 +4918,21 @@ fn parse_faults(doc toml.Doc) []FaultCfg {
 		for d in (m['freeze'] or { toml.Any([]toml.Any{}) }).array() {
 			freeze << int(d.i64())
 		}
-		snapshot_id := (m['snapshot_id'] or { toml.Any(0) }).i64()
-		if 'snapshot_id' in m && (snapshot_id < 1 || snapshot_id > 0xFFFD) {
-			panic('loom2v: [[fault]] "${name}": snapshot_id ${snapshot_id} must be 1..65533 (its two blocks are that id and the next)')
+		if 'snapshot_id' in m {
+			panic('loom2v: [[fault]] "${name}": `snapshot_id` is `snapshot_ids = [A, B]` — both of the snapshot\'s blocks')
 		}
-		if 'snapshot_id' in m && freeze.len == 0 {
-			panic('loom2v: [[fault]] "${name}": snapshot_id pins a snapshot block, but the fault declares no `freeze`')
+		mut snapshot_ids := []int{}
+		for v in (m['snapshot_ids'] or { toml.Any([]toml.Any{}) }).array() {
+			snapshot_ids << int(v.i64())
+		}
+		if 'snapshot_ids' in m {
+			if snapshot_ids.len != 2 || snapshot_ids[0] == snapshot_ids[1]
+				|| snapshot_ids.any(it < 1 || it > 0xFFFE) {
+				panic('loom2v: [[fault]] "${name}": snapshot_ids must be two distinct ids in 1..65534 — blocks A and B')
+			}
+			if freeze.len == 0 {
+				panic('loom2v: [[fault]] "${name}": snapshot_ids pins snapshot blocks, but the fault declares no `freeze`')
+			}
 		}
 		priority := (m['priority'] or { toml.Any(default_fault_priority) }).i64()
 		if priority < 1 || priority > 255 {
@@ -5015,7 +5024,7 @@ fn parse_faults(doc toml.Doc) []FaultCfg {
 			on:         on
 			freeze:     freeze
 			priority:   int(priority)
-			snapshot_id: int(snapshot_id)
+			snapshot_ids: snapshot_ids
 		}
 	}
 	return out

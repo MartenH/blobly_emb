@@ -449,22 +449,41 @@ fn test_snapshot_ids_do_not_depend_on_declaration_order() {
 	assert ids1[0] != ids1[1] && ids1[0] != b1[0]
 }
 
-// A collision is refused at generation, naming the pin, rather than resolved by declaration
-// order; a pinned id is used as given.
+// A collision is refused at generation, naming the pin — both blocks' CURRENT ids — rather than
+// resolved by declaration order; pinned ids are used as given. Pinning a deployed fault at its
+// current [A, B] changes neither block, so a committed image that claims B keeps its snapshot.
 fn test_a_snapshot_id_collision_is_refused_and_a_pin_resolves_it() {
 	did := '[[did]]\nid    = 0xF190\nascii = "BLOBLY"\n'
-	first := nvm_hash16('fault_snapshot:${0xC40100}:${0xF190}=6')
-	second := '\n[[fault]]\nname     = "LoadLow"\ndtc      = 0xC40101\nfrom     = "LoadSlow.on_100ms"\nfreeze   = [0xF190]\nsnapshot_id = ${first}\n'
+	ident := 'fault_snapshot:${0xC40100}:${0xF190}=6'
+	first_a := nvm_hash16(ident)
+	first_b := nvm_hash16(ident + ':B')
+	second := '\n[[fault]]\nname     = "LoadLow"\ndtc      = 0xC40101\nfrom     = "LoadSlow.on_100ms"\nfreeze   = [0xF190]\nsnapshot_ids = [${first_a}, 4243]\n'
 	base := ft_conn + did + ft_fault.replace('fail = 3, pass = 3 }', 'fail = 3, pass = 3 }\nfreeze = [0xF190]')
 	code, out, _, _ := ft_generate('snapcollide', same, base.replace('[nvm]', second + '\n[nvm]'))
-	assert code != 0 && out.contains('collides with a snapshot block of [[fault]] "LoadImplausible"')
-		&& out.contains('snapshot_id'), out
-	c2, o2, g2, _ := ft_generate('snappin', same, base.replace('[nvm]', second.replace('${first}',
+	assert code != 0 && out.contains('collides with a snapshot block of [[fault]] "LoadImplausible"'), out
+	// the message names BOTH current ids, so a pin can keep the block that is not colliding
+	assert out.contains('snapshot_ids = [0x${first_a.hex()}, 0x${u16(4243).hex()}]'), out
+	c2, o2, g2, _ := ft_generate('snappin', same, base.replace('[nvm]', second.replace('${first_a}',
 		'4242') + '\n[nvm]'))
 	assert c2 == 0, o2
 	assert g2.contains('g_fmem.slots[1].snap_id = u16(0x${u16(4242).hex()})')
 	assert g2.contains('g_fmem.slots[1].snap_id_b = u16(0x${u16(4243).hex()})')
-	assert g2.contains('g_fmem.slots[0].snap_id = u16(0x${first.hex()})')
+	// the deployed fault pinned at its current ids: both blocks where they were
+	pinned := ft_fault.replace('fail = 3, pass = 3 }', 'fail = 3, pass = 3 }\nfreeze = [0xF190]\nsnapshot_ids = [${first_a}, ${first_b}]')
+	c3, o3, g3, _ := ft_generate('snapkeep', same, ft_conn + did + pinned)
+	assert c3 == 0, o3
+	assert g3.contains('g_fmem.slots[0].snap_id = u16(0x${first_a.hex()})')
+	assert g3.contains('g_fmem.slots[0].snap_id_b = u16(0x${first_b.hex()})')
+	// the old single-id key says what it became; a pin needs both ids, distinct
+	for bad, msg in {
+		'snapshot_id = 7':          'is `snapshot_ids = [A, B]`'
+		'snapshot_ids = [7]':       'two distinct ids'
+		'snapshot_ids = [7, 7]':    'two distinct ids'
+	} {
+		c4, o4, _, _ := ft_generate('snapbad', same, ft_conn + did + ft_fault.replace('fail = 3, pass = 3 }',
+			'fail = 3, pass = 3 }\nfreeze = [0xF190]\n' + bad))
+		assert c4 != 0 && o4.contains(msg), '${bad}: ${o4}'
+	}
 }
 
 // The journal budget holds EVERY snapshot block whole, not only the entries' worth: a tombstone

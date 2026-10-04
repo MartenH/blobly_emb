@@ -294,7 +294,8 @@ fn specs() map[string]map[string]Key {
 			'aging':    k(.int) // passing cycles to age out (default 0 = never)
 			'freeze':   k(.int_arr) // the snapshot: [[did]] ids captured at the failure (0x19 04)
 			'priority': k(.int) // displacement when the snapshot entries are full: 1 (most important) .. 255
-			'snapshot_id': k(.int) // pins the snapshot's two journal blocks, that id and the next (only to resolve a reported collision)
+			'snapshot_id': k(.int) // refused by loom2v with the move to snapshot_ids
+			'snapshot_ids': k(.int_arr) // pins the snapshot's two journal blocks [A, B] (only to resolve a reported collision)
 		}
 		'fault_debounce': {
 			'kind':    k(.str) // counter (default) | time

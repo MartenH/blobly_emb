@@ -165,7 +165,9 @@ the FB never calls a service API.
   ThreadX node, FB-tested faults debounced on the FB thread, the fault memory on the comm thread,
   0x19 01/02/0A, 0x14, 0x85, operation cycle from NM or `cycle = "power"` — run on zone_a's bench
   (`test/faults_zone_a.lua`, 5/5). *R6b built:* the memory persisted in the NvM journal (a status
-  image keyed by DTC number + one snapshot block per fault, tombstoned when freed; the interrupted
+  image keyed by DTC number + TWO snapshot blocks per fault (A / B: a capture writes the one the committed
+  image does not claim, so no claimed block is ever overwritten — twice the snapshot storage in the
+  journal), tombstoned when released; the interrupted
   cycle ended at restore; 0x14 durable before it is answered), snapshots from the server's DIDs
   (`freeze`), extended data (occurrence / aging / failed cycles), displacement by `priority` over
   `[fault_memory] entries`, 0x19 03/04/06 on both owners; zone_a persisted (bench suite

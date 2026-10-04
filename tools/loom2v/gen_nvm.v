@@ -317,7 +317,7 @@ fn chain_records(len int) int {
 // snapshot has TWO blocks, A and B (comm/fault persist.v), their ids hashes of its DTC and its schema
 // (the DIDs and their sizes), so an update that changes a snapshot restores none rather than the
 // wrong bytes; a collision with a persisted
-// signal, the status image or another snapshot is refused, naming the pin (`snapshot_id`) that
+// signal, the status image or another snapshot is refused, naming the pin (`snapshot_ids`) that
 // resolves it — never resolved by declaration order, which an update may change.
 fn derive_fault_nvm(m Model) (u16, []u16, []u16) {
 	if !fault_persist_on(m) {
@@ -356,13 +356,13 @@ fn derive_fault_nvm(m Model) (u16, []u16, []u16) {
 		}
 		// two blocks, A and B (persist.v: a capture writes the one the committed image does not claim)
 		ident := 'fault_snapshot:${f.dtc}:${schema.join(',')}'
-		a := if f.snapshot_id != 0 { u16(f.snapshot_id) } else { nvm_hash16(ident) }
-		b := if f.snapshot_id != 0 { u16(f.snapshot_id + 1) } else { nvm_hash16(ident + ':B') }
+		a := if f.snapshot_ids.len == 2 { u16(f.snapshot_ids[0]) } else { nvm_hash16(ident) }
+		b := if f.snapshot_ids.len == 2 { u16(f.snapshot_ids[1]) } else { nvm_hash16(ident + ':B') }
 		for id in [a, b] {
 			if prev := used[id] {
 				// never resolved by the order the faults are declared in: an update that reorders
 				// them, or adds a colliding signal, would move a stored snapshot to another id
-				panic('loom2v: [[fault]] "${f.name}": its snapshot block 0x${id.hex()} collides with ${prev} — pin the other side (a signal with `nvm_id`), or this fault with `snapshot_id = 0x${a.hex()}` if 0x${(a + 1).hex()} is free (its blocks are that id and the next: pinning its current block A keeps a stored snapshot), and keep the pin')
+				panic('loom2v: [[fault]] "${f.name}": its snapshot block 0x${id.hex()} collides with ${prev} — pin the other side (a signal with `nvm_id`), or this fault with `snapshot_ids = [0x${a.hex()}, 0x${b.hex()}]` changing only the colliding one (its blocks A and B: keeping the other as it is keeps a stored snapshot in it), and keep the pin')
 			}
 			used[id] = 'a snapshot block of [[fault]] "${f.name}"'
 		}

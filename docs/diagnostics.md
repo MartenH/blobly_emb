@@ -293,9 +293,9 @@ the clear generation the producer has acted on (below): between two readings of 
 the delta is the difference; the FIRST reading of a new generation counts from zero, because the
 producer reset its counters when it applied that generation. A reset is never read as a negative
 delta or a phantom occurrence, and occurrences between the reset and the first read are not lost.
-`snapshot` is the **freeze frame**, copied by the generated debounce at the qualifying dispatch from
-the values its thread reads — so it describes the instant of qualification, not a later pass of the
-consumer. Its size is bounded by the cell (the IOC payload limit, minus the fields above); a larger
+`snapshot` is the **freeze frame** — *as planned*, copied by the generated debounce at the qualifying
+dispatch; *as built (R6b)* it is NOT in the report: a snapshot is the DID values at storage, in the
+first owner pass after the report ("Snapshots, as built", below). Its size is bounded by the cell (the IOC payload limit, minus the fields above); a larger
 snapshot needs the `bulk` path and is refused by generation until then. Nothing is lost across a slow read and
 **no queued transport is needed** (the alternative, a per-thread event FIFO on the `bulk` rings, is the fallback
 if a use case needs the exact order of qualifications — decision D1).
@@ -397,7 +397,7 @@ ride the same bus-sleep flush choreography as persisted signals.
 - TWO **snapshot blocks**, A and B, per fault with `freeze` — their ids hashed from the DTC and
   the snapshot's schema (the DIDs and their sizes), so an update that changes a snapshot restores
   none rather than the wrong bytes; each block also carries the schema's fingerprint, checked on
-  restore, so a pinned id (`snapshot_id`: A is that id, B the next) kept across such an update
+  restore, so pinned ids (`snapshot_ids = [A, B]`) kept across such an update
   restores none either. A collision is refused at generation, naming the pin — never resolved by
   declaration order, which an update may change. A block holds the DTC, an allocation stamp, the
   fingerprint and the record body; a released one is rewritten as a 1-byte TOMBSTONE.
@@ -488,9 +488,6 @@ first copies the live set (an inline compaction, no erase). zone_a: one 1-record
 a 1-record image, a live set of a few records — a handful of programs per pass, well under a
 millisecond. Never an erase at run time. `nvm.Journal.put` is synchronous, so this is bounded but
 not the incremental flash path §7 asks for.
-
-A producer publishes its fault report AFTER the handler's outputs, so a snapshot of a DID the same
-handler writes holds this dispatch's value.
 
 **Snapshots, as built.** Captured on the OWNER, not the producer: in the pass that consumes the
 occurrence (on the host after the receive drain, where the signal-status faults are consumed; never for a DTC whose failure a cycle end or a clear in that pass already removed), the owner refreshes the live DIDs (as before a 0x22) and copies the declared DIDs into an
