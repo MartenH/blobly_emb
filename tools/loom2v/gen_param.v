@@ -16,7 +16,7 @@
 //
 // An FB reads it by naming it in a handler's `reads`, like any input — there is no `to`: the
 // reads are the one statement of who consumes it. Its journal block is a hash of its name; its
-// record carries a fingerprint of its layout (comm/param). On a ThreadX target the comm thread is the one
+// record states its structure exactly — field count, each type, its `version` (comm/param). On a ThreadX target the comm thread is the one
 // writer of each parameter's IOC cell (the rx-signal path's shape): it publishes the restored value
 // before the kernel starts, and a coded one after the journal has accepted it.
 module main
@@ -43,9 +43,9 @@ struct ParamCfg {
 	fields      []ParamField
 	apply_reset bool
 	nvm_id      u16 // a pinned block id (0 = derived)
+	version     u8  // bumped when a field's MEANING changes with its type unchanged (comm/param)
 mut:
 	id  u16 // its journal block (derive_param_nvm)
-	fp  u32 // its layout's fingerprint (param_fp)
 	did int // the [[did]] that codes it
 }
 
@@ -63,7 +63,7 @@ fn param_type(typ string) ?(int, bool, i64, i64) {
 	}
 }
 
-const param_keys = ['name', 'fields', 'default', 'range', 'apply', 'nvm_id']
+const param_keys = ['name', 'fields', 'default', 'range', 'apply', 'nvm_id', 'version']
 
 fn parse_params(doc toml.Doc) []ParamCfg {
 	mut out := []ParamCfg{}
@@ -85,7 +85,11 @@ fn parse_params(doc toml.Doc) []ParamCfg {
 		dm := (pm['default'] or {
 			panic('loom2v: [[param]] "${name}" needs a `default` for every field — what an uncoded vehicle runs is stated, never assumed')
 		}).as_map()
-		rm := (pm['range'] or { toml.Any(map[string]toml.Any{}) }).as_map()
+		rv := pm['range'] or { toml.Any(map[string]toml.Any{}) }
+		if rv !is map[string]toml.Any {
+			panic('loom2v: [[param]] "${name}" range must be a table of fields, e.g. range = { deg = { min = 0, max = 360 } }')
+		}
+		rm := rv.as_map()
 		for k, _ in dm {
 			if k !in fm {
 				panic('loom2v: [[param]] "${name}" default names "${k}", which is not one of its fields')
@@ -110,6 +114,9 @@ fn parse_params(doc toml.Doc) []ParamCfg {
 			if r := rm[fname] {
 				if typ == 'bool' {
 					panic('loom2v: [[param]] "${name}" field "${fname}" is a bool — it has no range to narrow')
+				}
+				if r !is map[string]toml.Any {
+					panic('loom2v: [[param]] "${name}" range "${fname}" must be { min, max } — a bare value would silently mean the whole ${typ} range')
 				}
 				rr := r.as_map()
 				for rk, _ in rr {
@@ -154,6 +161,10 @@ fn parse_params(doc toml.Doc) []ParamCfg {
 		if apply !in ['next_dispatch', 'reset'] {
 			panic('loom2v: [[param]] "${name}" apply = "${apply}" — "next_dispatch" (the FB\'s next dispatch after the write) or "reset" (the next start)')
 		}
+		ver := (pm['version'] or { toml.Any(0) }).i64()
+		if ver < 0 || ver > 255 {
+			panic('loom2v: [[param]] "${name}" version = ${ver} is out of range (0..255)')
+		}
 		pin := (pm['nvm_id'] or { toml.Any(0) }).i64()
 		if pin < 0 || pin > 65534 {
 			panic('loom2v: [[param]] "${name}" nvm_id = ${pin} is out of range (0 = derived, 1..65534 = pin)')
@@ -166,6 +177,7 @@ fn parse_params(doc toml.Doc) []ParamCfg {
 			fields:      fields
 			apply_reset: apply == 'reset'
 			nvm_id:      u16(pin)
+			version:     u8(ver)
 		}
 	}
 	if out.len > param.max_params {
@@ -180,26 +192,6 @@ fn field_ident_ok(s string) bool {
 		return false
 	}
 	return s.bytes().all((it >= `a` && it <= `z`) || (it >= `0` && it <= `9`) || it == `_`)
-}
-
-// param_fp: the layout's 32-bit fingerprint (FNV-1a), under the record format's version, so a new
-// format never reads an old one's hash as its own. comm/param stores the structure beside it, so a
-// collision must also agree field by field to be confused.
-fn param_fp(p ParamCfg) u32 {
-	mut h := u32(0x811C_9DC5)
-	for b in '${param.record_version}:${param_layout(p)}'.bytes() {
-		h ^= u32(b)
-		h *= 16777619
-	}
-	return h
-}
-
-// param_layout: a parameter's LAYOUT — each field's name and type in declaration order, the order
-// the record, the DID and the cell carry them. Its fingerprint hashes it; its block id hashes only
-// the name, so a layout change finds the old record and refuses it (status `reverted`) rather than
-// finding nothing. The range is in neither (comm/param: a stored value is revalidated against it).
-fn param_layout(p ParamCfg) string {
-	return '${p.name}:${p.fields.map('${it.name}=${it.typ}').join(',')}'
 }
 
 fn (p ParamCfg) width() int {
@@ -314,8 +306,7 @@ fn validate_params(mut m Model, doc toml.Doc) {
 	}
 }
 
-// derive_param_nvm: each parameter's journal block and its layout's fingerprint, refused on a
-// collision with any other block, naming the pin that resolves it (the capacity with them in it is
+// derive_param_nvm: each parameter's journal block, refused on a collision with any other block, naming the pin that resolves it (the capacity with them in it is
 // check_journal_capacity's).
 fn derive_param_nvm(mut m Model) {
 	if m.params.len == 0 {
@@ -341,7 +332,6 @@ fn derive_param_nvm(mut m Model) {
 		}
 		used[id] = '[[param]] "${p.name}"'
 		m.params[i].id = id
-		m.params[i].fp = param_fp(p)
 	}
 }
 
@@ -420,7 +410,9 @@ fn param_config_lines(m Model) []string {
 	for i, p in m.params {
 		g << '\tg_param.p[${i}].did = u16(0x${p.did.hex()}) // ${p.name}'
 		g << '\tg_param.p[${i}].id = u16(0x${p.id.hex()})'
-		g << '\tg_param.p[${i}].fp = u32(0x${p.fp.hex()})'
+		if p.version != 0 {
+			g << '\tg_param.p[${i}].version = ${p.version} // the record holds it: a bump reverts a stored value'
+		}
 		g << '\tg_param.p[${i}].nfields = ${p.fields.len}'
 		if p.apply_reset {
 			g << '\tg_param.p[${i}].apply_reset = true // takes effect at the next start'

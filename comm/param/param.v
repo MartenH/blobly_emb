@@ -10,17 +10,19 @@ module param
 //
 // One journal value per parameter, under its own block id:
 //
-//   [ version | layout fingerprint (4) | field count | each field's type code | each field,
+//   [ format | the parameter's version | field count | each field's type code | each field,
 //     big-endian, at its width ]
 //
-// The block id is derived from the parameter's NAME (pinnable on a collision), so declaration order
-// and layout never move it; the record carries a 32-bit FINGERPRINT of the LAYOUT — its fields'
-// names, types and order, which is the byte order of the record and the DID — AND the structure
-// itself (field count, each field's type code), so a hash collision must also agree field by field
-// to be confused. A firmware update that changes the layout finds a record it refuses, and says so (status `reverted`), rather than finding
-// nothing or misreading it. The RANGE is in neither: a range is not a layout, the stored bytes still
-// mean the same thing under a new range, and a workshop's coding must not be lost to an update that
-// only widens one.
+// The block id is derived from the parameter's NAME (pinnable on a collision generation refuses),
+// so declaration order never moves it. What a record IS is stated EXACTLY, never hashed: a hash of
+// any width can be attacked by a constructed collision, so the header is the identity — a record is
+// restored only when its whole header matches this firmware's, byte for byte:
+//   - a field RENAMED keeps the coded value (the bytes mean what they meant, as a widened range);
+//   - a field's TYPE changed, the ORDER changed, a field added or removed: reverted;
+//   - a change of MEANING with the same types (a field that now counts in other units) is said by
+//     bumping the parameter's declared `version`: reverted.
+// The RANGE is not in it: a range is not a layout, the stored bytes still mean the same thing under
+// a new range, and a workshop's coding must not be lost to an update that only widens one.
 // Instead every restored value is REVALIDATED against this firmware's range before an FB sees it
 // (§7, R7): out of range — a range narrowed by an update — and the compiled default stands, with
 // the parameter's status saying so (`reverted`), so a narrowed range is never bypassed.
@@ -47,10 +49,10 @@ import comm.uds
 
 pub const max_params = 8 // per node: one diagnostic server
 pub const max_fields = 2 // a parameter rides one {a, b} IOC cell to its FBs
-pub const record_version = u8(2) // 2: a 32-bit fingerprint and the structure written out
-pub const record_fixed = 6 // version, fingerprint (4), field count
+pub const record_format = u8(3) // 3: the exact header (2 held a 32-bit layout hash, 1 a 16-bit one)
+pub const record_fixed = 3 // format, the parameter's version, field count
 pub const max_value = max_fields * 4
-pub const max_record = record_fixed + max_fields + max_value // 16 B: one journal record
+pub const max_record = record_fixed + max_fields + max_value // 13 B: one journal record
 pub const nrc_general_programming_failure = u8(0x72)
 
 // Status, per parameter, as the status DID reports it (one byte each, declaration order).
@@ -86,7 +88,7 @@ pub struct Param {
 pub mut:
 	did         u16 // the DID that codes and reads it
 	id          u16 // its journal block
-	fp          u32 // its layout's fingerprint (32-bit), stored in the record
+	version     u8 // the declared `version`: bumped when a field's MEANING changes, types the same
 	nfields     int
 	fields      [max_fields]Field
 	apply_reset bool // the value takes effect at the next start, not the next dispatch
@@ -114,9 +116,8 @@ pub mut:
 	wrote      int // journal writes since the owner last asked (take_wrote)
 }
 
-// type_code: field f's type as the record states it — width, signedness, bool — so a record is
-// applied only when its STRUCTURE matches too, not on the fingerprint alone: a hash collides, and
-// two layouts that collide must also agree field by field to be confused.
+// type_code: field f's type as the record states it — width, signedness, bool: one code per type
+// a field may have (bool, u8, u16, u32, i8, i16, i32), so equal codes are equal types.
 fn (p &Param) type_code(f int) u8 {
 	fl := p.fields[f]
 	return fl.width | (if fl.signed { u8(0x10) } else { u8(0) }) | (if fl.boolean { u8(0x20) } else { u8(0) })
@@ -124,12 +125,9 @@ fn (p &Param) type_code(f int) u8 {
 
 // header writes the record's fixed part and type codes into rec and returns its length.
 fn (p &Param) header(mut rec [max_record]u8) int {
-	rec[0] = record_version
-	rec[1] = u8(p.fp >> 24)
-	rec[2] = u8(p.fp >> 16)
-	rec[3] = u8(p.fp >> 8)
-	rec[4] = u8(p.fp)
-	rec[5] = u8(p.nfields)
+	rec[0] = record_format
+	rec[1] = p.version
+	rec[2] = u8(p.nfields)
 	for f in 0 .. p.nfields {
 		rec[record_fixed + f] = p.type_code(f)
 	}

@@ -90,7 +90,9 @@ struct Schema {
 mut:
 	steer_max   i64 = 360
 	steer_def   i64 = 360
-	steer_fp    u32 = 0x5151_0001 // the layout's fingerprint; another layout under a pinned id: another fp
+	steer_ver   u8 // SteerLimit's declared version
+	steer_two   bool // an update gives SteerLimit a second field
+	trailer_two bool // an update gives TrailerFitted a second field, a u8
 	trailer_id  u16 = 0x2002
 	offset_x_lo i64 = -100
 	steer_i16   bool // an update makes SteerLimit's field an i16 under the SAME fingerprint
@@ -147,7 +149,7 @@ fn (mut r Rig) reboot() {
 	r.ps.p[steer] = Param{
 		did:     0x0110
 		id:      0x2001
-		fp:      r.sch.steer_fp
+		version: r.sch.steer_ver
 		nfields: 1
 	}
 	r.ps.p[steer].fields[0] = Field{
@@ -156,13 +158,21 @@ fn (mut r Rig) reboot() {
 		max:   r.sch.steer_max
 		def:   r.sch.steer_def
 	}
+	if r.sch.steer_two {
+		r.ps.p[steer].nfields = 2
+		r.ps.p[steer].fields[1] = Field{
+			width: 1
+			min:   0
+			max:   9
+			def:   0
+		}
+	}
 	if r.sch.steer_i16 {
 		r.ps.p[steer].fields[0].signed = true // the same width and fingerprint, another type
 	}
 	r.ps.p[trailer] = Param{
 		did:         0x0111
 		id:          r.sch.trailer_id
-		fp:          0x7272
 		nfields:     1
 		apply_reset: true
 	}
@@ -173,10 +183,18 @@ fn (mut r Rig) reboot() {
 		max:   1
 		def:   0
 	}
+	if r.sch.trailer_two {
+		r.ps.p[trailer].nfields = 2
+		r.ps.p[trailer].fields[1] = Field{
+			width: 1
+			min:   0
+			max:   255
+			def:   0
+		}
+	}
 	r.ps.p[offset] = Param{
 		did:     0x0112
 		id:      0x2003
-		fp:      0x0FF5
 		nfields: 2
 	}
 	r.ps.p[offset].fields[0] = Field{
@@ -362,46 +380,51 @@ fn test_a_refused_write_answers_0x72_and_changes_nothing() {
 	assert r.cell_a[steer] == 100 && r.cell_a[trailer] == 0 // durable unchanged
 }
 
-fn test_another_layout_is_never_applied() {
+// the header is the identity, exactly: every change below reverts SteerLimit's coding (and only
+// its own), and nothing else does — a rename is invisible to it (no name is in the record) and keeps
+// the coding, which the control at the end shows
+fn test_a_record_is_restored_only_under_its_exact_header() {
+	for change in ['type', 'count', 'version'] {
+		mut r := new_rig()
+		r.unlock()
+		assert r.write(0x0110, [u8(0x00), 0x64])[0] == 0x6E
+		assert r.write(0x0111, [u8(0x01)])[0] == 0x6E
+		match change {
+			'type' { r.sch.steer_i16 = true } // u16 -> i16: the same width
+			'count' { r.sch.steer_two = true } // a field added
+			else { r.sch.steer_ver = 1 } // the same types, a new meaning
+		}
+		r.reboot()
+		assert r.status(steer) == status_reverted, change
+		assert r.cell_a[steer] == 360, change // the default, never the old bytes
+		assert r.status(trailer) == status_coded && r.cell_a[trailer] == 1, change
+		// a write under the new header is stored even when it equals the default (nothing of this
+		// header is durable), and from then on is the coding
+		r.unlock()
+		puts := r.puts
+		assert r.write(0x0110, if change == 'count' { [u8(0x01), 0x68, 0x00] } else { [u8(0x01), 0x68] })[0] == 0x6E
+		assert r.puts == puts + 1, change
+		assert r.status(steer) == status_coded, change
+	}
+	// the field count and the length are each checked, though either would catch most of this: an
+	// old record [bool = 1] reads byte for byte like the start of [bool, u8]'s header (the bool's
+	// value 0x01 is a u8's type code), so only the count and the length tell them apart
+	mut t := new_rig()
+	t.unlock()
+	assert t.write(0x0111, [u8(0x01)])[0] == 0x6E
+	t.sch.trailer_two = true
+	t.reboot()
+	assert t.status(trailer) == status_reverted && t.cell_a[trailer] == 0 && t.cell_b[trailer] == 0
+	// the control: the same header after a restart — a renamed field, a new range — is applied
 	mut r := new_rig()
 	r.unlock()
 	assert r.write(0x0110, [u8(0x00), 0x64])[0] == 0x6E
-	assert r.write(0x0111, [u8(0x01)])[0] == 0x6E
-	// an update changes SteerLimit's layout under its pinned id: the fingerprint refuses the old
-	// bytes — the default, and the status says the coding was dropped
-	r.sch.steer_fp = 0x5151_0002
-	// and moves TrailerFitted's block (a layout change unpinned: a new hash): nothing found
-	r.sch.trailer_id = 0x2F02
-	r.reboot()
-	assert r.cell_a[steer] == 360
-	assert r.read(0x0110) == [u8(0x01), 0x68]
-	assert r.status(steer) == status_reverted
-	assert r.cell_a[trailer] == 0
-	assert r.status(trailer) == status_default
-	// a write under the new layout is stored even when it equals the default (nothing of this
-	// schema is durable), and from then on is the coding
-	r.unlock()
-	puts := r.puts
-	assert r.write(0x0110, [u8(0x01), 0x68])[0] == 0x6E
-	assert r.puts == puts + 1
-	assert r.status(steer) == status_coded
-}
-
-// a fingerprint collision is not enough: the record states the structure too. An update makes
-// SteerLimit an i16 and (constructed) its fingerprint is unchanged — a hash that collided. The
-// stored u16 is refused, not read as an i16.
-fn test_a_colliding_fingerprint_with_another_structure_is_refused() {
-	mut r := new_rig()
-	r.unlock()
-	assert r.write(0x0110, [u8(0x00), 0x64])[0] == 0x6E
-	r.sch.steer_i16 = true
-	r.reboot()
-	assert r.status(steer) == status_reverted
-	assert r.cell_a[steer] == 360
-	// the same structure under the same fingerprint is applied (the control)
-	r.sch.steer_i16 = false
 	r.reboot()
 	assert r.status(steer) == status_coded && r.cell_a[steer] == 100
+	// a block moved (an unpinned rename of the parameter itself): nothing found, the default
+	r.sch.trailer_id = 0x2F02
+	r.reboot()
+	assert r.status(trailer) == status_default
 }
 
 fn test_a_restored_value_is_revalidated_against_this_firmwares_range() {

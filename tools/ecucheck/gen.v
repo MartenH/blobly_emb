@@ -305,6 +305,7 @@ fn specs() map[string]map[string]Key {
 			'default': sub(.val_map, true, '') // every field's compiled default, in range
 			'range':   sub(.namedmap, false, 'param_range') // per field; absent = the type's
 			'apply':   k(.str) // next_dispatch (default) | reset
+			'version': k(.int) // 0..255, default 0: bump when a field's meaning changes, types the same
 			'nvm_id':  k(.int) // pins the journal block (only to resolve a reported collision)
 		}
 		'param_range': {
@@ -483,7 +484,13 @@ fn check_table(m map[string]toml.Any, ctx string, sp map[string]map[string]Key, 
 				}
 			}
 			.namedmap {
-				for _, nv in v.as_map() {
+				for nk, nv in v.as_map() {
+					// every entry is a table of its own: a bare value would be read as an empty one,
+					// silently (`range = { deg = 100 }` meaning the whole type's range)
+					if nv !is map[string]toml.Any {
+						errs << '${label(ctx)} "${name}": "${nk}" must be a table, got ${actual(nv)}'
+						continue
+					}
 					check_table(nv.as_map(), key.sub, sp, mut errs)
 				}
 			}

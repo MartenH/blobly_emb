@@ -127,11 +127,26 @@ fn in_order(text string, steps []string) {
 	}
 }
 
-// the id and fingerprint loom2v gave parameter `idx`, from the glue
-fn id_fp(glue string, idx int) (string, string) {
+// the block id loom2v gave parameter `idx`, and what its record header is made of — the field
+// count, each field's width / signedness / bool, the version — from the glue
+fn id_header(glue string, idx int) (string, string) {
 	a := glue.index('g_param.p[${idx}].id = ') or { return '', '' }
-	b := glue.index('g_param.p[${idx}].fp = ') or { return '', '' }
-	return glue[a..glue.index_after('\n', a) or { a }], glue[b..glue.index_after('\n', b) or { b }]
+	id := glue[a..glue.index_after('\n', a) or { a }]
+	mut h := []string{}
+	for l in glue.split_into_lines() {
+		t := l.trim_space()
+		if t.starts_with('g_param.p[${idx}].nfields') || t.starts_with('g_param.p[${idx}].version') {
+			h << t.all_before(' //')
+		}
+	}
+	block := glue.all_after('g_param.p[${idx}].nfields').all_before('g_param.p[${idx + 1}].did').all_before('g_param.n =')
+	for l in block.split_into_lines() {
+		t := l.trim_space()
+		if t.starts_with('width:') || t.starts_with('signed:') || t.starts_with('boolean:') {
+			h << t
+		}
+	}
+	return id, h.join(';')
 }
 
 fn test_parameters_are_restored_before_the_kernel_and_bound_on_the_comm_thread() {
@@ -170,34 +185,34 @@ fn test_parameters_are_restored_before_the_kernel_and_bound_on_the_comm_thread()
 	assert o.manifest.contains(',reset,x:i8:-128..127=-3'), o.manifest
 }
 
-// a block id follows the NAME and the fingerprint the LAYOUT: declaration order and a range move
-// neither, a field type moves only the fingerprint — so the old record is found and refused
-fn test_a_parameters_identity_is_its_name_and_its_layout() {
+// the block follows the NAME; the record header is the STRUCTURE, exactly. Declaration order, a
+// range and a field's name move neither; a type, the order, or a version bump changes the header
+fn test_a_parameters_identity_is_its_name_and_its_exact_header() {
 	o1 := pt_generate('id1', reads_params, pt_conn + pt_param)
 	assert o1.code == 0, o1.out
-	id0, fp0 := id_fp(o1.glue, 0)
-	// the two declared the other way round (LoadCap is p[1] now), and LoadCap's range changed
+	id0, h0 := id_header(o1.glue, 0)
+	assert h0 == 'g_param.p[0].nfields = 2;width:  2;width:  1;boolean: true', h0
+	// declared the other way round (LoadCap is p[1] now), its range changed, a field renamed
 	loadcap := pt_param.all_before('[[param]]\nname    = "Trim"')
 	trim := '[[param]]\nname    = "Trim"' + pt_param.all_after('[[param]]\nname    = "Trim"').all_before('[[did]]')
 	dids := '[[did]]' + pt_param.all_after('[[did]]')
-	trim_first := '\n' + trim + loadcap.replace('min = 10, max = 1000', 'min = 0, max = 900') + dids
-	o2 := pt_generate('id2', reads_params, pt_conn + trim_first)
+	moved := '\n' + trim + loadcap.replace('min = 10, max = 1000', 'min = 0, max = 900').replace('iters', 'count') + dids
+	o2 := pt_generate('id2', reads_params, pt_conn + moved)
 	assert o2.code == 0, o2.out
-	id1, fp1 := id_fp(o2.glue, 1)
-	assert id1.all_after('= ') == id0.all_after('= '), 'the block moved with the declaration order or the range'
-	assert fp1.all_after('= ') == fp0.all_after('= ')
-	assert id0.all_after('= ') != fp0.all_after('= '), 'the fingerprint is the block id: a pin would check nothing'
-	o3 := pt_generate('id3', reads_params, pt_conn + pt_param.replace('iters = "u16"', 'iters = "u32"'))
-	assert o3.code == 0, o3.out
-	id3, fp3 := id_fp(o3.glue, 0)
-	assert id3.all_after('= ') == id0.all_after('= '), 'a layout change moved the block: the old record would be pruned, not refused'
-	assert fp3.all_after('= ') != fp0.all_after('= '), 'a layout change kept the fingerprint: the old bytes would be read as the new layout'
-	// the field ORDER is layout too: it is the order of the bytes in the record and the DID
-	o4 := pt_generate('id4', reads_params, pt_conn + pt_param.replace('fields  = { iters = "u16", strict = "bool" }',
-		'fields  = { strict = "bool", iters = "u16" }'))
-	assert o4.code == 0, o4.out
-	_, fp4 := id_fp(o4.glue, 0)
-	assert fp4.all_after('= ') != fp0.all_after('= ')
+	id1, h1 := id_header(o2.glue, 1)
+	assert id1.all_after('= ') == id0.all_after('= '), 'the block moved with the declaration order, the range or a field name'
+	assert h1.replace('[1]', '[0]') == h0, 'a rename or a range changed the header: the coding would be lost'
+	for name, edit in {
+		'type':    pt_param.replace('iters = "u16"', 'iters = "i16"')
+		'order':   pt_param.replace('fields  = { iters = "u16", strict = "bool" }', 'fields  = { strict = "bool", iters = "u16" }')
+		'version': pt_param.replace('range   = {', 'version = 1\nrange   = {')
+	} {
+		o := pt_generate('id_${name}', reads_params, pt_conn + edit)
+		assert o.code == 0, o.out
+		id, h := id_header(o.glue, 0)
+		assert id.all_after('= ') == id0.all_after('= '), '${name} moved the block: the old record would be pruned, not refused'
+		assert h != h0, '${name} left the header as it was: the old bytes would be read under it'
+	}
 }
 
 fn test_what_generation_refuses() {
@@ -243,6 +258,12 @@ fn test_what_generation_refuses() {
 			'param = "Workload"'), 'and [[signal]] "Workload" are one identifier']
 		'pin wraps':        [pt_conn + pt_param.replace('apply   = "reset"', 'apply   = "reset"\nnvm_id  = 0x100000001'),
 			'nvm_id = 4294967297 is out of range']
+		'scalar range':     [pt_conn + pt_param.replace('range   = { iters = { min = 10, max = 1000 } }', 'range   = { iters = 100 }'),
+			'range "iters" must be { min, max }']
+		'range not table':  [pt_conn + pt_param.replace('range   = { iters = { min = 10, max = 1000 } }', 'range   = 100'),
+			'range must be a table of fields']
+		'bad version':      [pt_conn + pt_param.replace('range   = {', 'version = 300\nrange   = {'),
+			'version = 300 is out of range']
 		'duplicate did':    [pt_conn + pt_param + '\n[[did]]\nid = 0x0111\nbytes = "00"\nwrite = { session = ["default"] }\n',
 			'[[did]] 0x111 is declared twice']
 		'no isotp':         [pt_conn.all_after('functional_id = 0x7DF') + pt_param.all_before('[[did]]'),
@@ -269,36 +290,6 @@ fn test_what_generation_refuses() {
 			'name      = "LoadFast"\nthread    = "other"\n  [[fb.handler]]\n  name      = "on_10ms"\n  period_ms = 10\n  reads     = ["Trim"]')
 	}, pt_conn + pt_param)
 	assert two.code != 0 && two.out.contains('parameter "Trim" is read on threads'), two.out
-}
-
-// the fingerprint is 32 bits over the whole layout: two layouts the old 16-bit fold confused
-// (found here by search) are told apart
-fn test_two_layouts_the_16_bit_fold_confused_get_different_fingerprints() {
-	mk := fn (fname string) ParamCfg {
-		return ParamCfg{
-			name:   'SteerLimit'
-			fields: [ParamField{
-				name: fname
-				typ:  'u16'
-			}]
-		}
-	}
-	mut seen := map[u16]string{}
-	mut a := ''
-	mut b := ''
-	for i in 0 .. 100000 {
-		f := 'f${i}'
-		h := nvm_hash16('param-layout:${param_layout(mk(f))}')
-		if prev := seen[h] {
-			a = prev
-			b = f
-			break
-		}
-		seen[h] = f
-	}
-	assert a != '', 'no 16-bit collision found to test with'
-	assert nvm_hash16('param-layout:${param_layout(mk(a))}') == nvm_hash16('param-layout:${param_layout(mk(b))}')
-	assert param_fp(mk(a)) != param_fp(mk(b)), 'layouts ${a} and ${b} share a fingerprint'
 }
 
 // a 0x2E service row gating the write is the gate a parameter DID without its own needs
