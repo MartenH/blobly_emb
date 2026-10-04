@@ -28,6 +28,7 @@
 #include "netx_up.h"
 #include "doip_idle.h"
 #include "arp_glean.h"
+#include "doip_mb.h"
 
 #define DOIP_PORT  13400
 #define IDENT_PER_PASS 4 /* identification requests answered per 200 ms service pass */
@@ -39,6 +40,7 @@ static UCHAR svc_thread_stack[2048] __attribute__((aligned(8)));
 static TX_THREAD doip_thread;
 static TX_THREAD svc_thread;
 static NX_TCP_SOCKET tcp_sock;
+static volatile UINT tcp_connected; /* read by the svc and comm threads too */
 static NX_UDP_SOCKET udp_sock;
 static volatile UINT sockets_up;
 
@@ -154,11 +156,13 @@ void doip_mb_answer(int n) {
 	tx_semaphore_put(&mb_done);
 }
 
-/* comm thread: 1 once the answer it gave last has been handed to TCP */
+/* comm thread: 1 once the answer it gave last has been ACKNOWLEDGED by the tester (doip_mb.h: a
+ * reset waits for it, and an answer still queued dies with a connection that drops) */
 int doip_mb_take_sent(void) {
-	ULONG s = mb_sent_seq;
-	int r = s == mb_answered && s != mb_sent_seen;
-	mb_sent_seen = s;
+	uint32_t seen = (uint32_t)mb_sent_seen;
+	int r = doip_mb_sent_take((uint32_t)mb_sent_seq, (uint32_t)mb_answered, &seen, tcp_connected ? 1 : 0,
+	                          (uint32_t)tcp_sock.nx_tcp_socket_transmit_sent_count);
+	mb_sent_seen = seen;
 	return r;
 }
 
@@ -173,7 +177,6 @@ int doip_mb_take_dropped(void) {
 
 /* ---- the TCP byte pipe -------------------------------------------------------------------- */
 
-static volatile UINT tcp_connected; /* read by the svc and comm threads too */
 static NX_PACKET *rx_pending; /* partially consumed receive (packet > caller's buf) */
 static ULONG rx_pending_off;
 static volatile UINT listening; /* the TCP listener is opened by the first receive (doip_stream_recv) */

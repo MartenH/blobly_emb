@@ -3,6 +3,12 @@ module boot
 import bcrypto
 import rand
 
+// the target's rule for when a DoIP answer counts as sent (acknowledged), driven by the model walk
+#flag -I @VMODROOT/driver/eth
+#include "doip_mb.h"
+
+fn C.doip_mb_sent_take(u32, u32, &u32, int, u32) int
+
 // @verifies REQ-BOOT-005, REQ-BOOT-008, REQ-BOOT-009
 // The full programming session against RAM-backed FlashOps: the same session
 // logic the target and the vcan simulator run, REQ-checked at the byte level.
@@ -886,6 +892,14 @@ fn test_two_transports_against_the_reference_model() {
 	mut m := fresh_model()
 	mut now := u64(0)
 	mut resets := 0
+	// the DoIP connection under the mailbox, as driver/eth/doip_netx.c keeps it: the answer handed
+	// to TCP last and the one given last (sequence numbers), what was reported, the connection and
+	// its unacknowledged bytes — `sent` is reported through doip_mb.h, the target's own rule
+	mut answered := u32(0)
+	mut queued := u32(0)
+	mut seen := u32(0)
+	mut connected := 1
+	mut unacked := u32(0)
 	for step in 0 .. 1000 {
 		op := rand.intn(12) or { 0 }
 		now += u64(rand.intn(400_000) or { 0 })
@@ -898,12 +912,21 @@ fn test_two_transports_against_the_reference_model() {
 				got := shape(ask_via(mut p, via, req, now))
 				want := m.request(via, req, now)
 				assert got == want, 'step ${step}: ${req[0]:02X} via ${via}: got ${got} want ${want}'
+				if via == via_net {
+					// answered, and handed to TCP over the connection the request came on
+					answered++
+					queued = answered
+					connected = 1
+					unacked = 1
+				}
 			}
 			8 {
-				p.remote_sent()
-				m.inflight = false
+				unacked = 0 // the tester acknowledged what is queued
 			}
 			9 {
+				// the connection drops — its unacknowledged bytes with it — and the drop is reported
+				connected = 0
+				unacked = 0
 				p.remote_dropped()
 				m.dropped()
 			}
@@ -912,12 +935,20 @@ fn test_two_transports_against_the_reference_model() {
 			}
 			else {}
 		}
+		// the serve loop's mailbox pass: an answer is sent once acknowledged on a live connection
+		if C.doip_mb_sent_take(queued, answered, &seen, connected, unacked) == 1 {
+			assert connected == 1 && unacked == 0
+			p.remote_sent()
+			m.inflight = false
+		}
 		p.tick(now)
 		m.tick(now)
 		assert p.srv.session == m.session, 'step ${step}: session'
 		assert p.unlocked == m.unlocked, 'step ${step}: unlock'
 		assert p.reset_due() == m.reset_due(), 'step ${step}: reset due'
 		if p.reset_due() {
+			// never with a network answer queued unacknowledged (the reset would kill it)
+			assert !(m.remote && unacked != 0), 'step ${step}: reset with its answer unacknowledged'
 			// the owner resets the MCU: both start over
 			p = new_prog(mut f)
 			m = fresh_model()

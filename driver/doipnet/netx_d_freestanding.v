@@ -103,7 +103,9 @@ pub fn serve_mailbox[T](mut s T, req &u8, resp &u8) {
 // how long a reset waits for the answers already handed to TCP to be acknowledged
 pub const tx_drain_us = u64(500_000)
 
-// drain_tx: before the MCU resets, the DoIP answers already handed to TCP leave it — bounded by
+// drain_tx: before the MCU resets, the DoIP answers already handed to TCP leave it — the reset's own
+// answer was acknowledged before the reset became due (driver/eth/doip_mb.h); this covers any
+// other still queued — bounded by
 // tx_drain_us on `clock`, as the bus drain is (a peer that never acknowledges gets the reset all
 // the same). Sleeps a tick a turn, so the network threads below the caller can send.
 pub fn drain_tx(clock fn () u64) {
