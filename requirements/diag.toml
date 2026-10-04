@@ -145,3 +145,12 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-017"
+title = "Parameters (variant coding)"
+text = "A node shall carry declared parameters — values its FBs read as ordinary inputs and never write — each with a compiled default and a range, coded by a tester with 0x2E on the one DID that names it, behind that DID's session and security gates, and read back with 0x22. A write outside the range or of the wrong length shall be refused before anything is stored (0x31 / 0x13); an accepted write shall be durable before it is answered and before any FB sees it, a refused store answers 0x72 and changes nothing, and a write of the value already stored writes nothing. A parameter shall take effect at the FB's next dispatch, or at the next start when declared so. At start each parameter is restored before any FB dispatches: a stored value of another layout is never applied, a stored value outside this firmware's range is not applied, and in both cases the compiled default runs and the parameter's status says so. After a power loss at any point of a write, a parameter shall restore either the value last acknowledged or the one being written."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"

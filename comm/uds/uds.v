@@ -8,7 +8,8 @@ module uds
 // Services: 0x10 DiagnosticSessionControl, 0x11 ECUReset, 0x22 ReadDataByIdentifier (several
 // DIDs per request), 0x27 SecurityAccess (with injected SecurityOps), 0x28 CommunicationControl,
 // 0x14 / 0x19 / 0x85 over an injected FaultOps (comm/fault),
-// 0x2E WriteDataByIdentifier, 0x3E TesterPresent. Anything else -> 0x11 serviceNotSupported.
+// 0x2E WriteDataByIdentifier (a BOUND DID — a parameter — through the injected DidWrite, comm/param),
+// 0x3E TesterPresent. Anything else -> 0x11 serviceNotSupported.
 // An application server's 0x10 02 is the programming HANDOFF (boot_handoff): answered, then
 // performed by the owner as a reset into the bootloader (reset_into_boot).
 // Which of those a node answers, where, and behind which 0x27 level is the SERVICE TABLE

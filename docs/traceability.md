@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 204 | 112 | 32 | 60 | 0 |
+| 205 | 112 | 33 | 60 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -69,6 +69,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-014 | QM | test | covered | faults.lua (pending), faults_zone_a_persist.lua (pending), records_test.v (pass) |
 | REQ-DIAG-015 | QM | test | covered | faults.lua (pending), records_test.v (pass) |
 | REQ-DIAG-016 | QM | test | covered | faults_zone_a_persist.lua (pending), persist_test.v (pass) |
+| REQ-DIAG-017 | QM | test | covered | param_target_test.v (pass), param_test.v (pass), param_zone_a.lua (pending) |
 | REQ-E2E-001 | B | test | verified | e2e_test.v (pass) |
 | REQ-E2E-002 | B | test | verified | e2e_test.v (pass) |
 | REQ-E2E-003 | B | test | verified | e2e_test.v (pass) |
@@ -278,6 +279,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-014 | | | | | | | | | | | | | | | | | · | ✓ | | | |
 | REQ-DIAG-015 | | | | | | | | | | | | | | | | | · | ✓ | | | |
 | REQ-DIAG-016 | | | | | | | | | | | | | | | | | · | ✓ | | | |
+| REQ-DIAG-017 | | | | | | | | | | | | | | | | | · | ✓ | | | |
 | REQ-E2E-001 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-E2E-002 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-E2E-003 | | | | | | | | | | | | | | | | | | ✓ | | | |
