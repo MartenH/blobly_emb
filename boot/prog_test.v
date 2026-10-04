@@ -7,7 +7,17 @@ import rand
 #flag -I @VMODROOT/driver/eth
 #include "doip_mb.h"
 
-fn C.doip_mb_sent_take(u32, u32, &u32, u32, u32) int
+@[typedef]
+struct C.doip_mb_t {
+	served u32
+}
+
+fn C.doip_mb_post(&C.doip_mb_t) u32
+fn C.doip_mb_serve(&C.doip_mb_t)
+fn C.doip_mb_queue(&C.doip_mb_t)
+fn C.doip_mb_drop(&C.doip_mb_t)
+fn C.doip_mb_sent_take(&C.doip_mb_t, u32, u32) int
+fn C.doip_mb_dropped_take(&C.doip_mb_t) int
 
 // @verifies REQ-BOOT-005, REQ-BOOT-008, REQ-BOOT-009
 // The full programming session against RAM-backed FlashOps: the same session
@@ -682,7 +692,7 @@ fn test_a_functional_network_request_is_acknowledged_unanswered() {
 
 // The handoff over DoIP: the application answered 50 02 and reset, and the tester reconnects once
 // the boot's network is up. S3 does not run before then — no tester can reach the boot — and runs
-// in full from then; a network that never comes up gives the ECU back within net_wait_us.
+// in full from then; a network that never comes up gives the ECU back within net_wait_default_us.
 fn test_a_session_handed_off_over_the_network_waits_for_the_network() {
 	mut f := &TestFlash{}
 	t0 := u64(1_000)
@@ -708,16 +718,16 @@ fn test_a_session_handed_off_over_the_network_waits_for_the_network() {
 	assert q.srv.session == 0x01
 	assert q.idle_return_due(up + idle_return_us + 1, t0)
 
-	// a network that never comes up: the session ends at net_wait_us, and the ECU goes back
+	// a network that never comes up: the session ends at net_wait_default_us, and the ECU goes back
 	mut r := new_prog(mut f)
 	r.open_handed_off(t0, via_net)
-	r.tick(t0 + net_wait_us)
+	r.tick(t0 + net_wait_default_us)
 	assert r.srv.session == 0x02
-	r.tick(t0 + net_wait_us + 1)
+	r.tick(t0 + net_wait_default_us + 1)
 	assert r.srv.session == 0x01
-	assert r.idle_return_due(t0 + net_wait_us + 1, t0), 'parked past the bound'
+	assert r.idle_return_due(t0 + net_wait_default_us + 1, t0), 'parked past the bound'
 	// net_up after the bound changes nothing
-	r.net_up(t0 + net_wait_us + 2)
+	r.net_up(t0 + net_wait_default_us + 2)
 	assert r.srv.session == 0x01
 
 	// over the bus there is nothing to wait for: S3 from the handoff
@@ -759,6 +769,24 @@ fn test_a_slow_acknowledgement_holds_s3() {
 	assert ask_net(mut q, [u8(0x3E), 0x00], 0)[0] == 0x7E
 	q.tick(5 * idle_return_us)
 	assert !q.idle_return_due(5 * idle_return_us, 0)
+}
+
+// the most a valid [doip] policy announces (doip.announce_total_max_ms, 10 x 1000 ms) plus a slow
+// link start-up: the node's bound covers it, so the handed-off session is still there when the
+// listener opens at the last moment the policy allows
+fn test_the_network_wait_covers_the_longest_announcement_sequence() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	link_ms := u64(5000) // loom2v doip_link_allowance_ms
+	p.net_wait_us = (link_ms + 10 * 1000) * 1000 // BOOT_DOIP_NET_WAIT_MS at the policy maximum
+	p.open_handed_off(0, via_net)
+	up := p.net_wait_us // the listener opens at the very end of the wait
+	p.tick(up)
+	assert p.srv.session == 0x02, 'the wait ran out before a valid policy could open the listener'
+	p.net_up(up)
+	p.tick(up + s3_server_us)
+	assert p.srv.session == 0x02
+	assert ask_net(mut p, [u8(0x29), 0x01], up + s3_server_us)[..2] == [u8(0x69), 0x01]
 }
 
 // a reset the network asked for is not cancelled by a bus answer the controller refused
@@ -915,12 +943,10 @@ fn test_two_transports_against_the_reference_model() {
 	mut m := fresh_model()
 	mut now := u64(0)
 	mut resets := 0
-	// the DoIP connection under the mailbox, as driver/eth/doip_netx.c keeps it: the answer handed
-	// to TCP last and the one given last (sequence numbers), what was reported, the connection and
-	// its unacknowledged bytes — `sent` is reported through doip_mb.h, the target's own rule
-	mut answered := u32(0)
-	mut queued := u32(0)
-	mut seen := u32(0)
+	// the DoIP mailbox and connection under the serve loop, through the target's own rules
+	// (driver/eth/doip_mb.h; its protocol has its own model, driver/eth/doip_mb_test.v): the
+	// connection and its unacknowledged bytes
+	mut mb := C.doip_mb_t{}
 	mut connected := 1
 	mut unacked := u32(0)
 	for step in 0 .. 1000 {
@@ -932,14 +958,17 @@ fn test_two_transports_against_the_reference_model() {
 			0...7 {
 				via := if rand.intn(2) or { 0 } == 0 { via_bus } else { via_net }
 				req := reqs[rand.intn(reqs.len) or { 0 }]
+				if via == via_net {
+					connected = 1 // a tester connects (again)
+					C.doip_mb_post(&mb)
+				}
 				got := shape(ask_via(mut p, via, req, now))
 				want := m.request(via, req, now)
 				assert got == want, 'step ${step}: ${req[0]:02X} via ${via}: got ${got} want ${want}'
 				if via == via_net {
-					// answered, and handed to TCP over the connection the request came on
-					answered++
-					queued = answered
-					connected = 1
+					// served, and its answer handed to TCP over the connection it came on
+					C.doip_mb_serve(&mb)
+					C.doip_mb_queue(&mb)
 					unacked = 1
 				}
 			}
@@ -947,23 +976,28 @@ fn test_two_transports_against_the_reference_model() {
 				unacked = 0 // the tester acknowledged what is queued
 			}
 			9 {
-				// the connection drops — its unacknowledged bytes with it — and the drop is reported
+				// the connection drops — its unacknowledged bytes with it — and the doip thread
+				// recycles it
 				connected = 0
 				unacked = 0
-				p.remote_dropped()
-				m.dropped()
+				C.doip_mb_drop(&mb)
 			}
 			10 {
 				now += s3_server_us
 			}
 			else {}
 		}
-		// the serve loop's mailbox pass: an answer is sent once acknowledged on a live connection
+		// the serve loop's mailbox pass (doipnet.serve_mailbox): an answer is sent once acknowledged
+		// on a live connection, and a drop is reported
 		state := if connected == 1 { u32(5) } else { u32(1) } // ESTABLISHED / CLOSED (NetX)
-		if C.doip_mb_sent_take(queued, answered, &seen, state, unacked) == 1 {
+		if C.doip_mb_sent_take(&mb, state, unacked) == 1 {
 			assert connected == 1 && unacked == 0
 			p.remote_sent()
 			m.inflight = false
+		}
+		if C.doip_mb_dropped_take(&mb) == 1 {
+			p.remote_dropped()
+			m.dropped()
 		}
 		p.tick(now)
 		m.tick(now)

@@ -72,16 +72,8 @@ static unsigned char *mb_resp;
 static int mb_req_len;
 static int mb_functional;
 static int mb_resp_len;
-static ULONG mb_posted;        /* sequence of the request posted */
-static ULONG mb_answered;      /* sequence of the request answered */
-static ULONG mb_returned;      /* the doip thread: the last answer handed to the V loop */
-/* what the doip thread reports, by SEQUENCE, so a report about an earlier answer or connection is
- * never read as one about the request the comm thread answered last */
-static volatile ULONG mb_sent_seq;   /* the last answer handed to TCP */
-static volatile ULONG mb_drops;      /* connections dropped */
-static volatile ULONG mb_drop_after; /* the request posted last when the latest one dropped */
-static ULONG mb_sent_seen;           /* the comm thread's last reading of each */
-static ULONG mb_drops_seen;
+/* the sequence rules: doip_mb.h, host-tested against a reference model (doip_mb_test.v) */
+static doip_mb_t mb;
 
 void doip_mb_init(unsigned char *req_buf, unsigned char *resp_buf) {
 	mb_req = req_buf;
@@ -99,7 +91,7 @@ int doip_mb_call(const unsigned char *req, int len, int functional, unsigned cha
 	}
 	mb_req_len = len;
 	mb_functional = functional;
-	ULONG seq = ++mb_posted;
+	uint32_t seq = doip_mb_post(&mb);
 	tx_mutex_put(&mb_mutex);
 	comm_wake();
 	ULONG deadline = tx_time_get() + MS_TICKS(MB_TIMEOUT_MS);
@@ -108,7 +100,7 @@ int doip_mb_call(const unsigned char *req, int len, int functional, unsigned cha
 		UINT got = (left == 0u || left > MS_TICKS(MB_TIMEOUT_MS))
 			? TX_NO_INSTANCE : tx_semaphore_get(&mb_done, left);
 		tx_mutex_get(&mb_mutex, TX_WAIT_FOREVER);
-		if (mb_answered == seq) {
+		if (doip_mb_collect(&mb, seq)) {
 			int n = mb_resp_len;
 			if (n > cap) {
 				n = -1;
@@ -116,15 +108,13 @@ int doip_mb_call(const unsigned char *req, int len, int functional, unsigned cha
 			for (int i = 0; i < n; i++) {
 				resp[i] = mb_resp[i];
 			}
-			mb_returned = seq;
 			tx_mutex_put(&mb_mutex);
 			return n;
 		}
 		if (got != TX_SUCCESS) {
 			/* not taken in time: withdraw it — the comm thread is not serving it (it would hold
-			 * the mutex), so marking it answered is all it takes */
-			mb_answered = seq;
-			mb_resp_len = -1;
+			 * the mutex), so it is settled, and never counts as served */
+			doip_mb_withdraw(&mb, seq);
 			tx_mutex_put(&mb_mutex);
 			doip_mb_timeouts++;
 			return -1;
@@ -139,7 +129,7 @@ int doip_mb_take(int *functional) {
 	if (mb_req == NX_NULL || tx_mutex_get(&mb_mutex, TX_NO_WAIT) != TX_SUCCESS) {
 		return -1;
 	}
-	if (mb_answered == mb_posted) {
+	if (!doip_mb_waiting(&mb)) {
 		tx_mutex_put(&mb_mutex);
 		return -1;
 	}
@@ -151,12 +141,12 @@ int doip_mb_take(int *functional) {
  * Releases the mailbox. */
 void doip_mb_answer(int n) {
 	mb_resp_len = n;
-	mb_answered = mb_posted;
+	doip_mb_serve(&mb);
 	tx_mutex_put(&mb_mutex);
 	tx_semaphore_put(&mb_done);
 }
 
-/* comm thread: 1 once the answer it gave last has been ACKNOWLEDGED by the tester (doip_mb.h: a
+/* comm thread: 1 once the answer it served last has been ACKNOWLEDGED by the tester (doip_mb.h: a
  * reset waits for it, and an answer still queued dies with a connection that drops) */
 #if NX_TCP_ESTABLISHED != DOIP_MB_TCP_ESTABLISHED || NX_TCP_CLOSE_WAIT != DOIP_MB_TCP_CLOSE_WAIT
 #error "doip_mb.h: its TCP state numbers are not NetX's"
@@ -172,19 +162,12 @@ int doip_mb_take_sent(void) {
 		unacked = (uint32_t)tcp_sock.nx_tcp_socket_transmit_sent_count;
 		tx_mutex_put(&ip->nx_ip_protection);
 	}
-	uint32_t seen = (uint32_t)mb_sent_seen;
-	int r = doip_mb_sent_take((uint32_t)mb_sent_seq, (uint32_t)mb_answered, &seen, state, unacked);
-	mb_sent_seen = seen;
-	return r;
+	return doip_mb_sent_take(&mb, state, unacked);
 }
 
-/* comm thread: 1 once a connection has dropped that the request it answered last came over — a
- * drop older than that request belongs to a tester whose state is already superseded */
+/* comm thread: 1 once a connection has dropped that the request it served last came over */
 int doip_mb_take_dropped(void) {
-	ULONG d = mb_drops;
-	int r = d != mb_drops_seen && mb_drop_after >= mb_answered;
-	mb_drops_seen = d;
-	return r;
+	return doip_mb_dropped_take(&mb);
 }
 
 /* ---- the TCP byte pipe -------------------------------------------------------------------- */
@@ -220,8 +203,7 @@ static int stream_recycle(void) {
 	nx_tcp_server_socket_unaccept(&tcp_sock);
 	nx_tcp_server_socket_relisten(blob_net_ip(), DOIP_PORT, &tcp_sock);
 	tcp_connected = 0;
-	mb_drop_after = mb_posted;
-	mb_drops++;
+	doip_mb_drop(&mb);
 	comm_wake();
 	return -1;
 }
@@ -318,7 +300,7 @@ int doip_stream_send(const unsigned char *buf, int len) {
 	}
 	doip_tx_bytes += (ULONG)len;
 	doip_idle_tx(&idle, (uint32_t)tx_time_get()); /* an answer in time restarts T_TCP_General */
-	mb_sent_seq = mb_returned;
+	doip_mb_queue(&mb);
 	comm_wake();
 	return len;
 }
