@@ -28,12 +28,16 @@ pub mut:
 	quiet  bool
 	hidden u32 // lost frames counted while quiet (wrapping, like lost_frames)
 	seen   u32 // e2e.lost_frames as of the last checked frame
+	// the current silence has been published: both deadlines are one silence, so the second to run
+	// out says nothing new. Re-armed by a frame that moved a deadline, or a restart.
+	reported bool
 }
 
 // start arms both deadlines at the owner's start: a sender absent since then times out too.
 pub fn (mut r RxMonitor) start(now u64) {
 	r.com.arm(now)
 	r.e2e.arm(now)
+	r.reported = false
 }
 
 // silenced: a sampling of the reception gate found it off (UDS 0x28, or the network asleep).
@@ -64,6 +68,9 @@ pub fn (mut r RxMonitor) checked(now u64, st e2e.Status, gate bool, receiving bo
 		r.quiet = false
 	}
 	v := r.e2e.receive_ex(now, st, suspended)
+	if v != .none {
+		r.reported = false // a frame that moved a deadline: a silence after it is a new one
+	}
 	match v {
 		.ok, .timeout {
 			if !gate {
@@ -88,6 +95,7 @@ pub fn (mut r RxMonitor) received(now u64, gate bool) RxPublish {
 		return .none
 	}
 	r.com.on_receive(now)
+	r.reported = false
 	return .ok
 }
 
@@ -96,6 +104,7 @@ pub fn (mut r RxMonitor) received(now u64, gate bool) RxPublish {
 pub fn (mut r RxMonitor) rejected(now u64, gate bool) RxPublish {
 	r.com.arm(now)
 	_ = r.e2e.receive(now, .crc_error)
+	r.reported = false
 	return if gate { RxPublish.integrity } else { RxPublish.none }
 }
 
@@ -103,14 +112,21 @@ pub fn (mut r RxMonitor) rejected(now u64, gate bool) RxPublish {
 pub fn (mut r RxMonitor) restart(now u64) {
 	r.com.on_receive(now)
 	r.e2e.arm(now)
+	r.reported = false
 }
 
-// expire polls both deadlines (each fires once, on its edge): true = publish `timeout`. One
-// silence is one publication, whichever deadline saw it first or both at once.
+// expire polls both deadlines (each fires once, on its own edge): true = publish `timeout`. One
+// silence is ONE publication — the first deadline to run out reports it, and the other, running
+// out later in the same silence (a shorter COM deadline beside a longer E2E timeout), says nothing
+// until a frame or a restart has re-armed them.
 pub fn (mut r RxMonitor) expire(now u64) bool {
 	c := r.com.expired(now)
 	e := r.e2e.expired(now)
-	return c || e
+	if (c || e) && !r.reported {
+		r.reported = true
+		return true
+	}
+	return false
 }
 
 // RxGate is a bus's reception gate, sampled by its owner wherever it can change: on = the

@@ -445,3 +445,53 @@ fn test_the_comm_pass_runs_in_one_order() {
 		'g_fmem.persist(t1, false)', // ... the journal write
 	])
 }
+
+// rt_generate_raw runs loom2v on an ecu.toml and DBC given whole
+fn rt_generate_raw(name string, ecu string, dbc string) (int, string) {
+	tmp := os.join_path(os.temp_dir(), 'rx_target_${name}_${os.getpid()}')
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	os.mkdir_all(tmp) or { panic(err) }
+	os.write_file(os.join_path(tmp, 'ecu.toml'), ecu) or { panic(err) }
+	os.write_file(os.join_path(tmp, 'bus.dbc'), dbc) or { panic(err) }
+	r := os.execute('${rt_bin} ${os.join_path(tmp, 'ecu.toml')} ${os.join_path(tmp, 'bus.dbc')} ' + '${os.join_path(tmp, 'sig.v')} ${os.join_path(tmp, 'ports.v')} ${os.join_path(tmp, 'gen.v')}')
+	return r.exit_code, r.output
+}
+
+// A frame fits its bus (frame_len_refusal) — asked for EVERY frame before any path splits: a
+// received one the COM receive rule checks (which skips the lean copy's limits), a lean received
+// one, a transmitted one, and the frame a raw route forwards. A 12-byte frame on a classic bus is
+// never sent or never matched; a 9-byte one on an FD bus arrives as 12 and is never matched.
+fn test_every_frame_fits_its_bus() {
+	assert frame_len_refusal(8, false) == none
+	assert frame_len_refusal(12, false) != none
+	assert frame_len_refusal(12, true) == none
+	assert frame_len_refusal(9, true) != none
+	big := 'BO_ 291 CmdFrame: 12 Tester\n SG_ Command : 0|32@1+ (1,0) [0|4294967295] "" SUT\n SG_ CmdCrc : 32|8@1+ (1,0) [0|255] "" SUT\n SG_ CmdCtr : 40|4@1+ (1,0) [0|15] "" SUT'
+	cases := {
+		'checked': with_status
+		'lean':    fn (src string) string {
+			return src
+		}
+	}
+	for name, edit in cases {
+		code, out, _ := rt_generate('len_${name}', edit, '', false)
+		assert code == 0, '${name}: ${out}'
+		src := rt_one_thread(os.read_file(os.join_path(rt_fixture, 'ecu.toml')) or { panic(err) })
+		dbc := (os.read_file(os.join_path(rt_fixture, 'bus.dbc')) or { panic(err) }).replace('BO_ 291 CmdFrame: 4 Tester\n SG_ Command : 0|32@1+ (1,0) [0|4294967295] "" SUT', big)
+		c2, o2 := rt_generate_raw('len_${name}_big', edit(src), dbc)
+		assert c2 != 0, '${name}: a 12-byte frame on a classic bus generated'
+		assert o2.contains('frame "cmd_frame" on bus "can0" is 12 bytes on a classic bus'), o2
+	}
+	// a transmitted one
+	src := rt_one_thread(os.read_file(os.join_path(rt_fixture, 'ecu.toml')) or { panic(err) })
+	dbc := (os.read_file(os.join_path(rt_fixture, 'bus.dbc')) or { panic(err) }).replace('BO_ 512 WorkloadFrame: 4 SUT', 'BO_ 512 WorkloadFrame: 12 SUT')
+	c3, o3 := rt_generate_raw('len_tx', src, dbc)
+	assert c3 != 0 && o3.contains('frame "workload_frame" on bus "can0" is 12 bytes on a classic bus'), o3
+	// the frame a raw route forwards, onto a classic destination
+	route := '[import]\ndbc = "bus.dbc"\n\n[bus.can0]\ninterface = "vcan0"\nfd = true\n\n[bus.can1]\ninterface = "vcan1"\nfd = false\n\n[[route]]\nfrom = { bus = "can0", frame = "BigFrame" }\nto   = { bus = "can1" }\n'
+	rdbc := 'VERSION ""\nBU_: A B\nBO_ 300 BigFrame: 12 A\n SG_ V : 0|32@1+ (1,0) [0|0] "" B\n'
+	c4, o4 := rt_generate_raw('len_route', route, rdbc)
+	assert c4 != 0 && o4.contains('forwarded onto bus "can1" is 12 bytes on a classic bus'), o4
+}

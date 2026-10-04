@@ -39,6 +39,7 @@ mut:
 	// what the steps observed
 	closed_publications int // a value published while 0x28 had reception off
 	publications        int
+	timeouts            int // `timeout` publications: each one steps the timeout fault's debounce
 	consumed_late       bool // a consume after this pass's persist step: its snapshot waits a pass
 	persisted_due       bool // a persist found a snapshot still due
 }
@@ -81,6 +82,9 @@ fn new_model() PassModel {
 // hooks: the signal-status faults' share of one publication (rx_publish_hooks)
 fn (mut p PassModel) publish(r com.RxPublish, persisted bool) {
 	p.publications++
+	if r == .timeout {
+		p.timeouts++
+	}
 	if !p.rx_on {
 		p.closed_publications++
 	}
@@ -251,4 +255,17 @@ fn test_frames_in_an_nm_sleep_count_no_loss() {
 	p.tx.counter = (p.tx.counter + 2) % 15
 	p.pass(10_000, 0, [Ev.good, .good])
 	assert p.mon.lost() == 0
+}
+
+// A COM deadline and E2E's own timeout of different lengths are one silence: one `timeout`
+// publication, so the timeout fault's debounce is stepped once for it, not once per deadline.
+fn test_one_silence_is_one_debounce_step() {
+	mut p := new_model()
+	p.mon.com.timeout_us = 100_000
+	p.mon.start(0)
+	p.nmm.request(0)
+	for _ in 0 .. 100 {
+		p.pass(10_000, 0, [])
+	}
+	assert p.timeouts == 1, 'one silence stepped the debounce ${p.timeouts} times'
 }

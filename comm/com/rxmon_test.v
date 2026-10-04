@@ -49,6 +49,7 @@ mut:
 	e2e     e2e.RxState
 	was_off bool // the 0x28 silence latch (diag_rx_was_off)
 	awake   bool = true // the network as last sampled: asleep, a frame ends no silence
+	said    bool // this silence's timeout was published: the other deadline running out later adds nothing
 	quiet   bool // e2e_quiet
 	hidden  u32 // e2e_hidden
 	pubs    []Pub
@@ -76,6 +77,7 @@ fn (mut r Ref) frame(now u64, f [64]u8, forged bool, rx_ok bool) {
 		if r.cfg.e2e && r.cfg.e2e_us > 0 {
 			_ = r.e2e.receive(now, .crc_error)
 		}
+		r.said = false
 		if rx_ok {
 			r.publish(.integrity)
 		}
@@ -91,6 +93,9 @@ fn (mut r Ref) frame(now u64, f [64]u8, forged bool, rx_ok bool) {
 			r.quiet = false
 		}
 		v := r.e2e.receive_ex(now, chk, r.was_off)
+		if v != .none {
+			r.said = false
+		}
 		if v == .ok || v == .timeout {
 			if rx_ok {
 				r.publish(if v == .timeout { RxPublish.timeout } else { RxPublish.ok })
@@ -109,6 +114,7 @@ fn (mut r Ref) frame(now u64, f [64]u8, forged bool, rx_ok bool) {
 		return
 	}
 	if rx_ok {
+		r.said = false
 		r.publish(.ok)
 		if r.cfg.com_us > 0 {
 			r.com.on_receive(now)
@@ -126,12 +132,15 @@ fn (mut r Ref) after(now u64, rx_on bool, awake bool) {
 		if r.cfg.e2e_us > 0 {
 			r.e2e.arm(now)
 		}
+		r.said = false
 	}
 	r.was_off = silent
-	// the two deadlines, polled in turn; one silence is one publication
+	// the two deadlines, polled in turn; one silence is one publication, whichever of them sees it
+	// first — the other running out later in the same silence adds nothing
 	c := !silent && r.com.expired(now)
 	e := !silent && r.e2e.expired(now)
-	if c || e {
+	if (c || e) && !r.said {
+		r.said = true
 		r.publish(.timeout)
 	}
 }
@@ -379,6 +388,34 @@ fn test_both_deadlines_running_out_together_publish_once() {
 	mut m := mon(100_000, 100_000)
 	assert m.expire(200_000)
 	assert !m.expire(300_000)
+}
+
+// One silence is one publication even when the two deadlines differ: a COM deadline of 100 ms and
+// an E2E timeout of 300 ms each run out once, and only the first says so — so a signal-status
+// fault debounced on each publication steps once per silence. A frame re-arms both.
+fn test_two_deadlines_of_different_lengths_publish_one_silence_once() {
+	mut m := mon(100_000, 300_000)
+	mut said := 0
+	mut t := u64(0)
+	for t < 1_000_000 {
+		t += 10_000
+		if m.expire(t) {
+			said++
+		}
+	}
+	assert said == 1, 'one silence published ${said} times'
+	m.received(t, true) // a frame (no E2E on it here): the next silence is a new one
+	mut s := Sender{}
+	f := protected(mut s, 0)
+	m.checked(t, m.e2e.check(&f[0], dlc, data_id, crc_pos, ctr_pos), true, true, false)
+	said = 0
+	for _ in 0 .. 100 {
+		t += 10_000
+		if m.expire(t) {
+			said++
+		}
+	}
+	assert said == 1
 }
 
 fn test_a_valid_frame_after_an_unseen_e2e_timeout_is_late() {

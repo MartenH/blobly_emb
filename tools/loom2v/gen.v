@@ -450,6 +450,22 @@ fn (r Route) xr_ch() string {
 // fdcan_index_of strips the single FDCAN index digit ("can0" -> "0") the driver's
 // blob_can_open reads (name[0]-'0'). loom2v already validated the telem bus this way; a
 // gateway's route buses are validated the same when the extra channels are opened.
+// frame_len_refusal: why a frame of `dlc` bytes cannot ride a CAN bus that is `fd` (or not) — none
+// when it can. The ONE statement of the rule every frame goes through before any path splits (a
+// signal's frame, TX or RX, checked or lean, and both ends of a route): a classic bus carries at
+// most 8 bytes, and on an FD bus only the lengths a DLC expresses arrive — the FDCAN receiver
+// reports the canonical wire length (9 bytes arrive as 12) and every matcher compares rx.len to
+// the literal DLC, so either mismatch is a frame that is never sent or never matched.
+fn frame_len_refusal(dlc int, fd bool) ?string {
+	if !fd && dlc > 8 {
+		return '${dlc} bytes on a classic bus (fd = false carries at most 8)'
+	}
+	if fd && !fd_len_ok(dlc) {
+		return '${dlc} bytes — not a representable CAN-FD length (0..8, 12, 16, 20, 24, 32, 48, 64)'
+	}
+	return none
+}
+
 // fd_len_ok: is `n` a length CAN-FD can carry (the DLC set the driver's len_to_dlc maps 1:1)?
 fn fd_len_ok(n int) bool {
 	return n <= 8 || n == 12 || n == 16 || n == 20 || n == 24 || n == 32 || n == 48 || n == 64
@@ -1563,6 +1579,15 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 		}
 	}
 	for r in m.routes {
+		// both ends of every route — a signal route's two frames, or the one frame a raw route
+		// forwards unchanged — fit their buses (frame_len_refusal, the one rule)
+		to_dlc := if r.signal == '' { r.from_dlc } else { r.to_dlc }
+		if why := frame_len_refusal(r.from_dlc, bus_fd[r.from_bus] or { false }) {
+			panic('route: source frame "${r.from_frame}" on bus "${r.from_bus}" is ${why}')
+		}
+		if why := frame_len_refusal(to_dlc, bus_fd[r.to_bus] or { false }) {
+			panic('route: frame ${if r.signal == '' { r.from_frame } else { r.to_frame }} forwarded onto bus "${r.to_bus}" is ${why}')
+		}
 		if r.signal == '' {
 			continue
 		}
@@ -1638,24 +1663,6 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 		// destination channel. Cross-core: generated as the sanctioned crossing instead — the
 		// value rides an IOC channel to the DESTINATION bridge, which composes and transmits
 		// on its own channel (REQ-TOPO-010; frame routes were already rejected at parse).
-		// a classic (non-FD) bus caps the DLC at 8 on BOTH ends: the source can never
-		// receive a >8 frame it requires by len, and the socket rejects a >8 send.
-		if !(bus_fd[r.from_bus] or { false }) && r.from_dlc > 8 {
-			panic('route: source frame "${r.from_frame}" is ${r.from_dlc} bytes but bus "${r.from_bus}" is classic (fd = false, DLC <= 8)')
-		}
-		if !(bus_fd[r.to_bus] or { false }) && r.to_dlc > 8 {
-			panic('route: destination frame "${r.to_frame}" is ${r.to_dlc} bytes but bus "${r.to_bus}" is classic (fd = false, DLC <= 8)')
-		}
-		// A length the FD DLC set cannot represent (9..11, 13..15, 17..19, ... — the CAN-FD
-		// lengths are 0..8, 12, 16, 20, 24, 32, 48, 64) is rejected by blob_can_send at runtime;
-		// the forwarder would drop the frame yet still count it, a silent loss (codex emb#267). A
-		// classic bus (<=8) is already covered above; only an FD-length frame needs the check.
-		if (bus_fd[r.from_bus] or { false }) && !fd_len_ok(r.from_dlc) {
-			panic('route: source frame "${r.from_frame}" is ${r.from_dlc} bytes — not a representable CAN-FD length (0..8, 12, 16, 20, 24, 32, 48, 64)')
-		}
-		if (bus_fd[r.to_bus] or { false }) && !fd_len_ok(r.to_dlc) {
-			panic('route: destination frame "${r.to_frame}" is ${r.to_dlc} bytes — not a representable CAN-FD length (0..8, 12, 16, 20, 24, 32, 48, 64)')
-		}
 		// the destination frame must not ALSO be a COM tx frame ON THE SAME BUS — a
 		// [[signal]] to a bus makes its DBC message an implicit cyclic transmitter even
 		// with no [[frame]].tx (so it is not in m.frames.tx_mode). Two writers of one
@@ -1795,15 +1802,14 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 			frame_src[key] = r.from_bus
 		}
 	}
-	// Every EXTERNAL signal (COM tx/rx, not just routes) on an FD bus must carry a representable
-	// CAN-FD length: the FDCAN receiver reports the canonical wire length (a 9-byte DBC arrives as
-	// 12), but the generated matcher compares rx.len to the literal dbc_dlc, so a non-canonical DLC
-	// on an FD bus is matched by nothing and every such frame is silently dropped (codex emb#267).
+	// every EXTERNAL signal's frame on a CAN bus — COM tx and rx, host and target, before any of
+	// those paths splits — fits its bus (frame_len_refusal, the one rule)
 	for _, si in m.sig_of {
-		if si.external && (bus_fd[si.bus] or { false }) && !fd_len_ok(si.dbc_dlc) {
-			panic('signal "${si.dbc_msg}" on FD bus "${si.bus}" has DLC ${si.dbc_dlc} — not a ' +
-				'representable CAN-FD length (0..8, 12, 16, 20, 24, 32, 48, 64); the rx matcher would ' +
-				'never match the canonical wire length')
+		if !si.external || (m.bus_kind[si.bus] or { 'can' }) != 'can' {
+			continue
+		}
+		if why := frame_len_refusal(si.dbc_dlc, bus_fd[si.bus] or { false }) {
+			panic('signal "${si.name}": frame "${si.dbc_msg}" on bus "${si.bus}" is ${why}')
 		}
 	}
 }
@@ -4255,19 +4261,8 @@ fn main() {
 						'"${tx_m}" is not generated — the comm producer sends purely cyclically (no ' +
 						'event/mixed/triggered or min_delay_ms); use mode = "cyclic"')
 				}
-				// >8 bytes needs CAN-FD. On a classic bus the backend rejects it; on an FD bus a
-				// canonical DLC (12..64) is fine (validate_signal_routes_model already rejected a
-				// non-canonical FD length). si.bus == m.telem.bus here (checked above). #267.
-				tx_sig_bus_fd := if bc := doc.value_opt('bus') {
-					(bc.as_map()[si.bus] or { toml.Any(map[string]toml.Any{}) }).as_map()['fd'] or { toml.Any(false) }
-				} else {
-					toml.Any(false)
-				}.bool()
-				if !tx_sig_bus_fd && si.dbc_dlc > 8 {
-					panic('loom2v: [target] kind="threadx" comm thread: TX message "${si.dbc_msg}" DLC ' +
-						'${si.dbc_dlc} > 8 (CAN-FD sized) on classic bus "${si.bus}"; use a <= 8-byte ' +
-						'frame or set the bus fd = true')
-				}
+				// the frame fits its bus: frame_len_refusal, asked for every frame in
+				// validate_signal_routes_model before this path splits
 				if si.remote {
 					// remote TX (satellite -> bus): the satellite image publishes into the signal's
 					// xioc slot; the comm producer polls it (xcore_produce_drain) — no owner IOC cell.
