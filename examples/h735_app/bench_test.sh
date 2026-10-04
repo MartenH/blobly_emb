@@ -3,8 +3,8 @@
 # (docs/trace-multicore.md §5.0) — examples/h735_app on the STM32H735G-DK, over SWD only.
 #
 # No CAN adapter and no host command: the generated superloop ARMS the ring at boot, and the
-# Governor ramps Load past its 500 us budget within the first second, so the overrun trigger
-# freezes the ring by itself. This script flashes the image, resets it, and reads that frozen
+# Load handler's periodic spike (every 512th run, ~0.5 s) runs past its 500 us budget, so the
+# overrun trigger freezes the ring by itself. This script flashes the image, resets it, and reads that frozen
 # window straight out of RAM (g_trace_ring, in-RAM trace.Record), asserting what only a working
 # runner produces:
 #

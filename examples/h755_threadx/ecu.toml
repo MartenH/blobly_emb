@@ -1,8 +1,6 @@
-# h735_threadx: the SAME FBs + Loom + CpuLoad telemetry as examples/h735_app, but the
-# [target] kind is "threadx" — loom2v wraps the FB superloop in a real ThreadX thread
-# (created by tx_application_define, paced by tx_thread_sleep) instead of the bare-metal
-# inline superloop. This is P3c-1 phase 6a: the generated counterpart of the hand-written
-# the retired hand-written threadx_h735 (#344). Trace + the comm thread come in 6b.
+# h755_threadx: FBs + Loom + CpuLoad telemetry on [target] kind "threadx" — loom2v wraps the
+# FB work in real ThreadX threads (created by tx_application_define, paced by tx_thread_sleep),
+# with a comm thread owning the bus, trace, the CAN shell, NM, NvM and a CM4 satellite.
 #
 # NOTE: no inline comments inside [[...]] tables — a comment in a nested table trips V's
 # TOML parser (drops the next key). See vlang/v#27684.
@@ -124,7 +122,7 @@ dump_fc        = 0x7E6
 # with no demand and a silent cluster it times out to bus_sleep. request=true keeps it
 # requested from boot; `nm rel` in the shell releases it (demo: watch 0x512 stop).
 [nm]
-node  = 0x13           # the H735 bench node is 0x12 — distinct ids for a future two-node bus
+node  = 0x13
 alive = 0x513          # = peers base + node, spelled out for the wire docs
 peers = [0x500, 0x53F] # the cluster's NM id range
 

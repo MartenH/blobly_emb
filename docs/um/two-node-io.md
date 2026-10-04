@@ -3,12 +3,15 @@
 The smallest end-to-end blobly network: press a button on one node, an LED lights
 on another. It exercises the whole stack — GPIO in → FB → CAN → FB → GPIO out —
 across two independently-generated images on one bus, and every piece is config.
-Both example nodes are generated from their own `ecu.toml`; nothing here is
-hand-written wiring. Design: [../io.md](../io.md), [add-a-signal.md](add-a-signal.md).
+The system is [`examples/system_io`](../../examples/system_io): one `system.toml`
+declares the shared frame and each node's `ecu.toml` is generated from it plus that
+node's own io and FBs; nothing here is hand-written wiring. Design:
+[../io.md](../io.md), [add-a-signal.md](add-a-signal.md),
+[system-from-nodes.md](system-from-nodes.md).
 
 ## The two nodes
 
-| | `examples/h755_io` (tx) | `examples/h735_io_lamp` (rx) |
+| | `system_io/nodes/h755` (tx) | `system_io/nodes/h735` (rx) |
 |---|---|---|
 | board | NUCLEO-H755ZI-Q | STM32H735G-DK |
 | in | B1 user button `PC13` → `ButtonLamp` FB | `ButtonState` 0x310 → `RemoteLamp` FB |
@@ -16,7 +19,9 @@ hand-written wiring. Design: [../io.md](../io.md), [add-a-signal.md](add-a-signa
 | bus | publishes `ButtonState` 0x310 (100 ms cyclic) | consumes it |
 
 The shared contract is one CAN frame — **`ButtonState` / 0x310**, carrying
-`BtnPressed` — declared in each node's DBC. On the tx side the button is a signal
+`BtnPressed` — declared once in `system.toml` (`body.dbc`). `examples/h755_io` is the
+same tx node written as a complete `ecu.toml` with its own DBC; it talks to the
+`h735` node unchanged, since the two meet only at the frame id. On the tx side the button is a signal
 `from = "io"`; the `ButtonLamp` FB reads it, writes the green LED (`to = "io"`)
 AND the bus frame. On the rx side `BtnPressed` arrives `from = "can0"`, the
 `RemoteLamp` FB copies it to `LedRemote` (`to = "io"`). Neither app knows the
@@ -45,16 +50,14 @@ LEDs are active-high, so it declares nothing — the same signal, two wirings.
 ## Build, flash, run
 
 ```sh
-make -C examples/h755_io          # tx
-make -C examples/h735_io_lamp     # rx
+make -C examples/system_io        # gen-system, then both node images
 ```
 
 Two ST-Links on the bench — flash each by serial (`st-info --probe` lists them):
 
 ```sh
-st-flash --serial <H755-serial> write examples/h755_io/build/h755_io.bin 0x08000000
-st-flash --serial <H735-serial> write examples/h735_io_lamp/build/h735_io_lamp.bin 0x08000000
-st-flash --serial <each> reset
+make -C examples/system_io flash-h755 H755_SERIAL=<H755-serial>
+make -C examples/system_io flash-h735 H735_SERIAL=<H735-serial>
 ```
 
 Both transceivers on the **same CANH/CANL pair** as the PCAN adapter — three nodes,
@@ -66,8 +69,8 @@ cansend can0 310#01000000   # fake a press from the PC — the H735 lamp lights 
 ```
 
 Then **press B1 on the H755**: its green LED and the H735's lamp both track the
-button. First silicon run of a blobly two-node network — user-verified on the
-bench (emb#150).
+button. First run on silicon as the hand-written pair (emb#150), then as
+`system_io` with NM alive on 0x511/0x513 beside it.
 
 ## What this proves
 
@@ -78,4 +81,5 @@ bench (emb#150).
 - Board wiring (pad polarity, which LED, active-high vs -low) lives in the point
   declaration and the boards layer — never in the application signal.
 - Two images built from two `ecu.toml`s interoperate on nothing but a shared
-  frame id, exactly as a real vehicle bus does.
+  frame id, exactly as a real vehicle bus does — the standalone `h755_io` and
+  the generated `h735` node are such a pair.

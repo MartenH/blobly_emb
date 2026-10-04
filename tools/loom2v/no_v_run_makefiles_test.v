@@ -214,7 +214,7 @@ fn test_including_tools_mk_keeps_every_default_goal() {
 			n++
 		}
 	}
-	assert n >= 76, 'asked make about only ${n / 2} Makefiles'
+	assert n >= 72, 'asked make about only ${n / 2} Makefiles'
 }
 
 // make_q: does make consider `target` up to date? (`-q` runs no recipe and builds nothing)

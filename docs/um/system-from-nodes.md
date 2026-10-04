@@ -4,13 +4,12 @@ Once you have more than one ECU, the cross-node contract — the bus, its DBC, t
 NM cluster, and the signals that cross the wire — belongs to *the system*, not to
 any one node. `system.toml` is where you declare it **once**; `tools/sysgen`
 lowers it into a complete `gen-<node>.toml` per node by merging that system
-contract with each node's authored internals. `two-node-io.md` shows the older
-*manual* way (each node authors its own DBC and they meet at a frame id); this
+contract with each node's authored internals. The *manual* way is a node that
+authors its own DBC and meets the others at a frame id (`examples/h755_io`); this
 page is the **dissolved** way, where nobody re-declares the shared contract.
 
-Worked example: [`examples/system_io`](../../examples/system_io) — the same
-button→lamp behaviour as the `h755_io` + `h735_io_lamp` pair, but the cross-node
-signal is declared once. Design rationale: [../multi-node.md](../multi-node.md).
+Worked example: [`examples/system_io`](../../examples/system_io) — the button→lamp
+demo ([two-node-io.md](two-node-io.md)), the cross-node signal declared once. Design rationale: [../multi-node.md](../multi-node.md).
 
 ```sh
 make gen-system SYSTEM=examples/system_io/system.toml   # sysgen -> gen-<node>.toml

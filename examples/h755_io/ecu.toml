@@ -2,7 +2,7 @@
 # on-board points — B1 user button (PC13), LD1 green (PB0), LD2 yellow (PE1) — as
 # ordinary signals. ButtonLamp mirrors the button onto the green LED AND publishes
 # the same value as BtnPressed on the bus (ButtonState 0x310, cyclic 100 ms) — the
-# tx half of the cross-node button demo (examples/h735_io_lamp is the rx half).
+# tx half of the cross-node button demo (examples/system_io's h735 node is the rx half).
 # Heartbeat toggles the yellow LED every 500 ms, so the io output path is
 # bench-observable without touching anything. The bus signal turns the comm thread
 # on (loom2v: comm owns CAN, the FBs stay off the bus); CpuLoad on 0x7E0 doubles
@@ -64,7 +64,7 @@ fields = { on = "bool" }
 from = "app"
 to   = "io"
 
-# BtnPressed: the button state onto the bus (rx side: examples/h735_io_lamp).
+# BtnPressed: the button state onto the bus (rx side: examples/system_io's h735 node).
 # The DBC carries it as a 32-bit unsigned value (0/1) at bit 0 — the target
 # comm thread's lean codec only encodes trivial u32@0 signals (loom2v).
 [[signal]]

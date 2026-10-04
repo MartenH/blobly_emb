@@ -5,7 +5,7 @@ import ports
 // ButtonLamp: mirror the user button onto the green LED — the io input -> FB ->
 // io output round trip, observable with one finger on B1 — and publish the same
 // value as BtnPressed (ButtonState on the bus): the tx half of the cross-node
-// button demo (examples/h735_io_lamp mirrors it onto its own LED).
+// button demo (examples/system_io's h735 node mirrors it onto its own LED).
 pub struct ButtonLamp {
 pub mut:
 	lit bool

@@ -174,7 +174,9 @@ date = "2026-07-18"
 # thread (System Timer/load_fast/load_mid/ctrl_slow/comm) with priority, state, and a
 # real stack high-water (e.g. comm 2588/4096) after the TX_STACK_FILL-aware scan; uptime
 # and the unknown-command echo answered too. examples/h735_threadx on the STM32H735G-DK
-# vs PCAN, one raw frame in on 0x7F0, ISO-TP response on 0x7F1/0x7F2.
+# vs PCAN, one raw frame in on 0x7F0, ISO-TP response on 0x7F1/0x7F2. That example was
+# retired in #340; the same generated shell and built-in commands (boards/common/
+# shell_glue.c) run in examples/h755_threadx and system_full's domain.
 [[review]]
 id = "h735-shell-hardware"
 method = "review"
@@ -194,7 +196,8 @@ verifies = ["REQ-SHELL-005"]
 approved_by = "Claude bench session — STM32H735G-DK vs PCAN-USB Pro FD"
 date = "2026-07-12"
 
-# NM live on the bench (examples/h735_threadx vs PCAN on can0): alive 0x512 at 10 Hz with
+# NM live on the bench (examples/h735_threadx — retired in #340; the generated NM runs on
+# system_full's sysnode and domain — vs PCAN on can0): alive 0x512 at 10 Hz with
 # CBV active-wakeup from boot; shell `nm rel` -> ready_sleep -> timeout -> bus_sleep with
 # the transmitter SILENT; a peer NM frame (0x507) woke it passively (CBV ready-to-sleep,
 # no active-wakeup) and it re-slept when the cluster went quiet; `nm req` re-woke it

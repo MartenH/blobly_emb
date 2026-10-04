@@ -3967,7 +3967,7 @@ fn main() {
 	// [target] kind selects the on-target emitter: 'baremetal' is the single-core inline
 	// superloop (P3c-0); 'threadx' (P3c-1) wraps the same FB/telemetry work in a real
 	// ThreadX thread paced by tx_thread_sleep (the preemptive-RTOS target — see
-	// examples/h735_threadx).
+	// examples/h755_threadx).
 	if m.target.on && m.has_external && !m.target.threadx {
 		panic('loom2v: [target] baremetal does not support external/bus signals yet ' +
 			'(every [[signal]] must be partition-local: from == to). The ThreadX target does — ' +

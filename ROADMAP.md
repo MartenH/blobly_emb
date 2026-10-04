@@ -41,7 +41,15 @@ Rungs — each folds a feature-set AND retires the matching examples, one review
    system.toml, #343), SOME/IP on sysnode (a member of `tel`, #343), and all three examples retired
    (#342; h735_someip in #348, its E2E receive bench moved to tcu). The NvM-backed DID remains
 
-Kept standalone (not features of a running system): `bulk_bench` (host micro-bench), `minimal`.
+Kept standalone (not features of a running system): `bulk_bench` (host micro-bench), `minimal`,
+and `h735_app` — the one bare-metal target (`[target] kind = "baremetal"`), so the single-core
+superloop emitter and its P3c-0 trace runner stay built, bench-tested and verified.
+
+Retired without a rung (#340): `h735_io_lamp` (its rx node is `system_io`'s `h735`) and
+`h735_threadx` (the same demo runs as `h755_threadx`; the H735 ThreadX image is sysnode; the
+loom2v target tests generate from its config, kept as `tools/loom2v/testdata/threadx_node`). The
+CAN shell and the exec-hook trace now run on silicon on the H755 only (`h755_threadx`, domain):
+no H735 image carries them until sysnode gains a `[shell]` / `[trace]`.
 
 ---
 
