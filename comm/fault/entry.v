@@ -2,11 +2,15 @@ module fault
 
 // Snapshots (freeze frames), extended data and displacement (docs/diagnostics.md §3.3, R6b).
 //
-// A DTC that declares `freeze` DIDs gets a SNAPSHOT at the occurrence that finds it without one:
-// the declared DIDs' values, read from the diagnostic server's own DID table — the values 0x22
-// returns — by the owner right after the pass that consumed the occurrence (capture). That is at
-// most one owner pass after the qualifying dispatch: the producer's thread does not carry the
-// values across, because a snapshot is far larger than its report cell. One snapshot per DTC
+// A DTC that declares `freeze` DIDs gets a SNAPSHOT at the occurrence that finds it without one.
+// What it holds is DEFINED as the declared DIDs' values AT STORAGE — read from the diagnostic
+// server's own DID table, the values 0x22 returns, in the owner pass that consumes the qualifying
+// report (capture, called in that same pass) — as AUTOSAR's Dem captures a freeze frame when it
+// processes the event, not at detection. So it describes the conditions at most one owner-pass
+// interval after the report was published (on a ThreadX target the comm loop's wait: 10 ticks,
+// 10 ms at tick_ms = 1, plus the pass itself), not the qualifying dispatch: a producer that
+// dispatches several times meanwhile has moved its outputs on. The values are not carried in the
+// report — a snapshot is far larger than the 64-byte report cell. One snapshot per DTC
 // (ISO 14229-1 snapshot record 0x01), kept until the DTC is cleared, ages out, heals before
 // confirming, or is displaced; a later occurrence does not overwrite it — the first failure is the
 // evidence a workshop wants.
@@ -70,7 +74,8 @@ pub fn (m &Memory) capture_due() bool {
 }
 
 // capture takes every due snapshot from the server's DID table (refreshed by the owner just
-// before): each declared DID's current bytes, zero-filled to its declared size when the server
+// before), in the owner pass that consumed the occurrence — the snapshot is the values AT STORAGE,
+// at most one owner-pass interval after the report (see the module doc for the bound): each declared DID's current bytes, zero-filled to its declared size when the server
 // holds fewer (a live DID nothing has published yet), so the record always has its fixed shape.
 pub fn (mut m Memory) capture(srv &uds.Server) {
 	for i in 0 .. m.n {

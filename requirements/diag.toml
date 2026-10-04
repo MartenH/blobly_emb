@@ -113,7 +113,7 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-DIAG-013"
 title = "Fault snapshots"
-text = "A DTC configured with a snapshot shall have the values of its declared data identifiers, as a read of those identifiers returns them, captured at the occurrence that finds it with no stored snapshot; the snapshot shall be kept until the DTC is cleared, ages out, heals before confirming or is displaced, and shall be reported by the read-DTC snapshot identification and snapshot-record-by-DTC-number subfunctions. A snapshot shall name only identifiers readable in every session the read-DTC service is served in, behind no security level that service does not itself require."
+text = "A DTC configured with a snapshot shall have the values of its declared data identifiers, as a read of those identifiers returns them, stored in the first fault-memory pass after the occurrence that finds it with no stored snapshot — the values at storage, at most one fault-memory pass interval after the occurrence was reported; the snapshot shall be kept until the DTC is cleared, ages out, heals before confirming or is displaced, and shall be reported by the read-DTC snapshot identification and snapshot-record-by-DTC-number subfunctions. A snapshot shall name only identifiers readable in every session the read-DTC service is served in, behind no security level that service does not itself require."
 status = "draft"
 method = "test"
 asil = "QM"

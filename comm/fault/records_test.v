@@ -335,3 +335,21 @@ fn test_no_snapshot_for_a_failure_no_longer_stored() {
 	m.capture(&s)
 	assert m.slots[0].entry == 0 && !m.capture_due()
 }
+
+// The snapshot is the values AT STORAGE: taken in the owner pass that consumes the qualifying
+// report — a DID that moved between the report and that pass shows its new value, one that moves
+// after the pass does not reach the stored snapshot.
+fn test_a_snapshot_holds_the_values_at_storage() {
+	mut m := snap_memory(1, 1)
+	mut s := snap_server(mut m, 10) // the qualifying dispatch sees speed 10
+	mut d := rcounter(1, 1)
+	m.cycle_start()
+	d.apply(m.control_gen(0), m.control_held(0))
+	d.step(.failed, 0, true) // the report is published ...
+	set_speed(mut s, 20) // ... the producer dispatches again before the owner pass ...
+	m.consume(0, d.rep) // ... and the owner pass that consumes it stores the snapshot
+	m.capture(&s)
+	set_speed(mut s, 30)
+	r := rcall(mut s, [u8(0x19), 0x04, 0xC1, 0x00, 0x00, 0x01])
+	assert r[10..14] == [u8(0), 0, 0, 20], 'the snapshot is not the value at storage: ${r.hex()}'
+}

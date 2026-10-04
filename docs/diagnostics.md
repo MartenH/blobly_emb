@@ -480,8 +480,14 @@ handler writes holds this dispatch's value.
 
 **Snapshots, as built.** Captured on the OWNER, not the producer: in the pass that consumes the
 occurrence (on the host after the receive drain, where the signal-status faults are consumed; never for a DTC whose failure a cycle end or a clear in that pass already removed), the owner refreshes the live DIDs (as before a 0x22) and copies the declared DIDs into an
-entry (`comm/fault/entry.v` `capture`) — at most one owner pass after the qualifying dispatch, since a
-snapshot is far larger than a producer's report cell. Each DID is captured at its declared size (a
+entry (`comm/fault/entry.v` `capture`). **What a snapshot means is DEFINED**: the declared DIDs'
+values AT STORAGE, taken in the first owner pass after the qualifying report — as AUTOSAR's Dem
+captures a freeze frame when it processes the event, not at detection — so at most one owner-pass
+interval after the report was published: on a ThreadX target the comm loop blocks at most 10 ticks
+between passes (1 while a stream is in flight), so 10 ms at `tick_ms = 1` (zone_a) plus the pass
+itself; on the host, one bridge pass (10 ms). A producer that dispatches several times in that
+interval has moved its outputs on, and the snapshot shows the later values. The values are not
+carried in the report: a snapshot is far larger than the 64-byte report cell. Each DID is captured at its declared size (a
 constant's bytes, a live value's width), zero-filled while nothing has published it, so a record
 always has its fixed shape. One snapshot per DTC (record 0x01), taken at the occurrence that finds it
 without one and kept until the DTC is cleared, ages out, heals before confirming (a cycle end that
