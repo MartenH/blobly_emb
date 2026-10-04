@@ -131,7 +131,7 @@ does not yet read as "no trace" on the blobly_net side.
 
 **Also gated now:** the STM32H7 cross builds — **every image, ThreadX and NetX Duo included** —
 in their own CI job: apt's `gcc-arm-none-eabi` plus `make deps` (all three sources, about ten
-seconds of cloning), then 16 images in a few minutes — 13 applications and the bootloaders of the three `[boot]` nodes (the loop visits 15 directories: `system_full/` and `system_io/` build their nodes). Two passes, generate-then-build: a
+seconds of cloning), then 17 STM32H7 images, 13 applications and 4 bootloaders (the cross loop visits 15 directories: `system_full/` and `system_io/` build their nodes; the bootloaders are the `[boot]` nodes'; `scripts/image_count_check.sh` holds these numbers to the tree), in a few minutes. Two passes, generate-then-build: a
 satellite image like `h755_m4_app` has no `gen` target because its OWNER's generation writes the
 `xcore_gen.h` it includes, so a from-clean build in directory order reaches it first and fails. Each one ends in
 **`scripts/lint_vinit.sh`**, which the example Makefiles invoke and which can only run on the

@@ -49,7 +49,7 @@ jobs:
       #
       # Bump .v-version deliberately, and re-run the full local gate on the new compiler:
       #   host  — make deps-cmsis && v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot examples
-      #   cross — the 16 STM32H7 images, 13 applications and 3 bootloaders (the loop in the cross job below visits 15 directories; system_full/ and system_io/ build their nodes)
+      #   cross — the 17 STM32H7 images, 13 applications and 4 bootloaders (the cross loop visits 15 directories; system_full/ and system_io/ build their nodes)
       - name: Install V (pinned prebuilt release, see .v-version)
         run: |
           set -euo pipefail
@@ -209,7 +209,7 @@ jobs:
       #
       # Bump .v-version deliberately, and re-run the full local gate on the new compiler:
       #   host  — make deps-cmsis && v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot examples
-      #   cross — the 16 STM32H7 images, 13 applications and 3 bootloaders (the loop in the cross job below visits 15 directories; system_full/ and system_io/ build their nodes)
+      #   cross — the 17 STM32H7 images, 13 applications and 4 bootloaders (the cross loop visits 15 directories; system_full/ and system_io/ build their nodes)
       - name: Install V (pinned prebuilt release, see .v-version)
         run: |
           set -euo pipefail
@@ -276,3 +276,7 @@ jobs:
       # list of module directories. Asks make, after the builds.
       - name: The images track every V source (scripts/app_deps_check.sh)
         run: scripts/app_deps_check.sh
+
+      # The inventory the guide and this file state is what the loop above builds (#374).
+      - name: The stated image counts match the tree (scripts/image_count_check.sh)
+        run: scripts/image_count_check.sh
