@@ -231,7 +231,7 @@ route through `commit-msg`.
 
 ## Working rules
 
-The loop, in this order — not two of the three, and not a different order:
+The loop, in this order — not a subset, and not a different order:
 
 1. **Build it**, and verify it the way the change is actually used (on target or in the sim,
    not just "it compiles").
@@ -242,10 +242,18 @@ The loop, in this order — not two of the three, and not a different order:
    a policy centralised and then duplicated a round later, an unlocked read of state another
    thread replaces — were all visible in the diff without running anything. Look for exactly
    those, plus any claim in a doc the change just made false.
-3. **`@codex review`**, iterated until clean before merging. Before the first request run
+3. **`scripts/codex_local_review.sh`** — codex on this machine (`gpt-6.1-sol`, high effort, about
+   10 minutes; `--astra` for a risky change) over the committed branch. It refuses a dirty tree,
+   because the review runs the tests in it, and prints its findings. Fix them, then ask GitHub:
+   each GitHub round is a ~10-minute wait, so anything a local review can find is found for free.
+   Its prompt asks for every defect, on purpose: `codex review`'s default prompt reports a short
+   list and misses most of what GitHub's codex finds. It does NOT replace `@codex review`, which
+   still finds defects that need protocol knowledge, and a clean local run proves nothing. Its
+   P3s include out-of-range inputs; an input no caller can produce is not worth code to refuse.
+4. **`@codex review`**, iterated until clean before merging. Before the first request run
    `scripts/review_preflight.sh`; start every round with `scripts/request_codex_review.sh <pr>
    --post` and watch it with the command that prints. Do not hand-roll the polling.
-4. **React 👍/👎 on every finding, and answer every thread** — see below. A round is not handled
+5. **React 👍/👎 on every finding, and answer every thread** — see below. A round is not handled
    until each of its findings carries a reaction and a reply.
 
 Three things that make the loop work:
