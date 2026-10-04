@@ -120,6 +120,10 @@ pub mut:
 	// a session handed off over the network: S3 does not time it until the boot's own network is
 	// up (net_up) — no tester can reach the boot before — and at most net_wait_us
 	await_net bool
+	// the longest that wait may last: the node's link start-up allowance plus its whole
+	// announcement sequence (gen/boot_gen.h BOOT_DOIP_NET_WAIT_MS — every announcement goes out
+	// before the DoIP listener opens); 0 = net_wait_default_us
+	net_wait_us u64
 }
 
 // the transports a request reaches the programming server over: the bus (ISO-TP on CAN) and the
@@ -291,8 +295,9 @@ pub const idle_return_us = u64(10_000_000)
 
 // The longest a session handed off over the network waits for the boot's own network (PHY
 // auto-negotiation, NetX, the vehicle announcements) before S3 times it from the handoff as usual
-// — a network that never comes up must not park the ECU in its bootloader (REQ-BOOT-014).
-pub const net_wait_us = u64(10_000_000)
+// — a network that never comes up must not park the ECU in its bootloader (REQ-BOOT-014). The
+// node's own bound (Prog.net_wait_us) covers its announcement sequence; this is the default.
+pub const net_wait_default_us = u64(10_000_000)
 
 // tick expires the diagnostic session on tester silence (REQ-BOOT-013): back to
 // the default session, security re-locked, a half-done download abandoned (the
@@ -305,7 +310,8 @@ pub fn (mut p Prog) tick(now u64) {
 		// stay-window, as a bus exchange in flight does (comm/diag serve_step)
 		p.heard_via(via_net, now)
 	}
-	if p.await_net && elapsed(now, p.last_rx_us) > net_wait_us {
+	wait := if p.net_wait_us != 0 { p.net_wait_us } else { net_wait_default_us }
+	if p.await_net && elapsed(now, p.last_rx_us) > wait {
 		p.await_net = false // the network never came: time the session from the handoff
 	}
 	if p.srv.session != 0x01 && !p.await_net && p.heard && elapsed(now, p.last_rx_us) > s3_server_us {

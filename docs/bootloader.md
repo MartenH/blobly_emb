@@ -231,11 +231,15 @@ probes the dead connection and reconnects into the same handle) and goes on with
 0x10 02. **The time is bounded**: S3 does not run on a session handed off over DoIP until the boot's
 DoIP listener is open (`doip_net_ready`, `Prog.net_up`) — no tester can speak before the PHY has
 negotiated and the announcements are out, a few seconds — and runs in full from then; a network that
-never comes up stops the wait at `net_wait_us` (10 s), after which S3 and the stay-window give the
+never comes up stops the wait at the node's bound (`BOOT_DOIP_NET_WAIT_MS`: a 5 s link start-up
+allowance plus the whole announcement sequence its `[doip]` configures — 15 s at the policy's
+maximum), after which S3 and the stay-window give the
 ECU back to its application. The cell value is new (`BOOTCELL_REQ_HANDOFF_NET`): a bootloader
 older than this binding reads it as a bench request and serves the bus only, so a `[doip]` node's
 application and bootloader go on together (`make flash` writes both). `boot/prog_test.v` holds the rules against a reference model of
-interleaved bus and network requests, drops and resets.
+interleaved bus and network requests, drops and resets; the mailbox's own sequence rules
+(`driver/eth/doip_mb.h` — served vs withdrawn, queued, acknowledged on a live socket, dropped) have
+theirs in `driver/eth/doip_mb_test.v`.
 
 **Dual-bank caveat for P4:** a full-bank swap swaps the bootloader out with the app —
 so bank-swap activation means either boot duplicated at the base of BOTH banks, or

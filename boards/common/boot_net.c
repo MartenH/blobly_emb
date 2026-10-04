@@ -91,6 +91,7 @@ uint16_t boot_doip_logical(void) { return BOOT_DOIP_LOGICAL; }
 uint16_t boot_doip_functional(void) { return BOOT_DOIP_FUNCTIONAL; }
 int boot_doip_announce_count(void) { return BOOT_DOIP_ANNOUNCE_COUNT; }
 int boot_doip_announce_ms(void) { return BOOT_DOIP_ANNOUNCE_MS; }
+uint32_t boot_doip_net_wait_ms(void) { return BOOT_DOIP_NET_WAIT_MS; }
 
 void boot_doip_vin(uint8_t *out) {
 	for (int i = 0; i < 17; i++) {
