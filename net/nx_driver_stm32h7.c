@@ -82,6 +82,8 @@ static void nx_driver_receive(void) {
 		packet->nx_packet_address.nx_packet_interface_ptr = nx_driver_interface;
 
 		if (ether_type == NX_ETHERNET_IP || ether_type == NX_ETHERNET_IPV6) {
+			/* the header STAYS in the buffer in front of the IP header: driver/eth/arp_glean.h
+			 * reads a request's source MAC back from it (#368) */
 			packet->nx_packet_prepend_ptr += NX_ETHERNET_SIZE;
 			packet->nx_packet_length -= NX_ETHERNET_SIZE;
 			_nx_ip_packet_deferred_receive(nx_driver_ip, packet);
