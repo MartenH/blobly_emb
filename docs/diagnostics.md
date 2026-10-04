@@ -470,13 +470,24 @@ re-runs the whole choreography, so the clean marker never sits below a record it
 journal's sectors are the BOARD's (`bootmap.h` `NVM_A_ADDR` / `NVM_B_ADDR` / `NVM_SIZE`, checked
 outside the boot and application regions by `tools/vectab`), linked with the board's flash driver by
 the generator (`boards/common/nvm_map.c`, `BOARD_FLASH`, from the emitted declarations). A node
-without NM has no sleep edge: its quiet point for an erase is boot, before the kernel starts (once
-per sector fill — on the single-bank H723 an erase stalls every fetch for about a second). And
-when the journal is REFUSING with a sector awaiting its erase, the comm pass erases it there and
-then — the one runtime erase, once per sector fill — or nothing, a 0x14 included, could be stored
-until the next boot (a 0x14 refused meanwhile answers 0x72 and the tester retries).
-`nvm.Journal.put` is synchronous: an image write is ≤ 17 records (microseconds each), an inline
-compaction copies the live set — bounded, but not the incremental flash path §7 asks for.
+without NM has no sleep edge, and on the single-bank H723 an erase stalls EVERY instruction fetch
+— every thread, CAN reception, routing, diagnostics — for the sector's erase time (1–2 s), so such a
+node never erases at run time: boot, before the kernel starts, is its only erase point. There the
+sector a compaction left behind is erased, and past half a sector used the journal is compacted
+and the old sector erased too, so every run starts with at least half a sector (2048 records on
+zone_a) free. A run that writes more than the rest of the sector compacts inline (copies, no
+erase) once; past a second fill its writes are refused until the next boot (a 0x14 then answers
+0x72). On an NM node erases happen only in the sleep edges' choreography. (The ECUReset path's
+flush may still erase — after the answer, with the MCU about to restart.)
+
+**Worst-case comm-thread stall** from the fault memory, per pass: every 32-byte record it programs
+stalls the MCU on a single-bank flash for one program operation (tens of µs on the H7). A pass
+writes at most the unwritten snapshots (≤ `entries` blocks of ≤ 8 records), one image (≤ 17
+records for 32 faults) and the tombstones (1 record each), and a write that fills the sector
+first copies the live set (an inline compaction, no erase). zone_a: one 1-record snapshot block,
+a 1-record image, a live set of a few records — a handful of programs per pass, well under a
+millisecond. Never an erase at run time. `nvm.Journal.put` is synchronous, so this is bounded but
+not the incremental flash path §7 asks for.
 
 A producer publishes its fault report AFTER the handler's outputs, so a snapshot of a DID the same
 handler writes holds this dispatch's value.

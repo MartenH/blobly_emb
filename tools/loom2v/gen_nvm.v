@@ -521,10 +521,15 @@ fn nvm_boot_lines(m Model, ioc_idx map[string]int) []string {
 	g << '\t\tkeep := [${keep.join(', ')}]!'
 	g << '\t\tg_nvm.prune(&keep[0], ${keep.len})'
 	if !m.nm.on {
-		// no NM, so no sleep edge to erase in: boot, before the kernel, is this node's quiet point —
-		// a sector a compaction left behind is erased here, once per sector fill (seconds of a
-		// single-bank flash's erase, which would stall every thread at run time)
+		// no NM, so no sleep edge to erase in, and an erase at run time stalls the whole MCU on a
+		// single-bank flash for the sector's erase time (1-2 s on an H7): boot, before the kernel,
+		// is this node's ONLY erase point. A sector a compaction left behind is erased here, and
+		// past half a sector used the journal is compacted and the old sector erased here too, so
+		// a run starts with at least half a sector free — the run never needs an erase
 		g << '\t\tg_nvm.erase_pending() // the boot quiet point (no NM)'
+		g << '\t\tif g_nvm.free_records() < g_nvm.slots() / 2 && g_nvm.compact() {'
+		g << '\t\t\tg_nvm.erase_pending() // the run starts with half a sector or more free'
+		g << '\t\t}'
 	}
 	for sname in m.nvm_names {
 		si := m.sig_of[sname] or { continue }

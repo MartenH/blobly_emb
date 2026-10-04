@@ -250,7 +250,7 @@ pub mut:
 	scratch  [max_block]u8 // an image or a snapshot block being built
 	retry_at u64 // a refused write is retried no sooner than this
 	wrote    int  // writes the last persist / clear made (the owner re-lays its clean marker)
-	refused  bool // the store refused a write since the last persist, a 0x14's included (the owner may make room)
+	refused  bool // the store refused a write since the last persist, a 0x14's included (observability)
 	clear_refused bool // a 0x14 the store refused, carried into the next persist's `refused`
 }
 

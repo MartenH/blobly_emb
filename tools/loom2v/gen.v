@@ -5318,15 +5318,9 @@ fn fault_target_persist(m Model, ioc_idx map[string]int) []string {
 	if !fault_persist_on(m) {
 		return []string{}
 	}
+	// never an erase here: on a node without NM the journal erases only at boot, before the kernel
+	// (nvm_boot_lines), and one with NM only in its sleep edges' choreography
 	mut g := ['\t\tg_fmem.persist(t1, false) // what changed: unwritten snapshots, the status image, tombstones']
-	if !m.nm.on {
-		// no NM, no sleep edge: when a compaction has left a sector to erase and the journal is
-		// refusing, this is the one runtime erase (a stall of the sector's erase time, once per
-		// sector fill) — else nothing, a 0x14 included, could be stored until the next boot
-		g << '\t\tif g_fmem.refused && g_nvm.pending_erase >= 0 {'
-		g << '\t\t\tg_nvm.erase_pending()'
-		g << '\t\t}'
-	}
 	if m.nm.on {
 		g << '\t\tif g_fmem.wrote > 0 && g_nm.state() == .bus_sleep {'
 		g << nvm_flush_choreo(m, ioc_idx, '\t\t\t')

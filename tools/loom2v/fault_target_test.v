@@ -227,12 +227,16 @@ fn test_the_fault_memory_is_persisted_in_the_journal() {
 		'g_fmem.cycle_start() // [fault_memory] cycle = "power"', 'for {',
 		'g_fmem.consume(0, g_frep_load_slow.r[0])', 'if g_fmem.capture_due() {', 'g_diag.refresh_now()',
 		'g_fmem.capture(&g_diag.server)', 'g_fmem.persist(t1, false)',
-		'if g_fmem.refused && g_nvm.pending_erase >= 0 {', 'g_nvm.erase_pending()',
 		'if g_diag.reset_due() != 0 {', 'g_fmem.consume(0, g_frep_load_slow.r[0])',
 		'if !g_fmem.persist(t1, true) {', 'C.diag_sys_reset()', 'fn fmem_put(ctx voidptr, id u16, data &u8, len u16) bool {',
 		'return g_nvm.put(id, data, len)', 'pub fn boot() {', 'if g_nvm.mounted {',
 		'keep := [', '/* the fault memory status */', 'g_nvm.prune(&keep[0], 3)',
-		'g_nvm.erase_pending() // the boot quiet point (no NM)'])
+		'g_nvm.erase_pending() // the boot quiet point (no NM)',
+		'if g_nvm.free_records() < g_nvm.slots() / 2 && g_nvm.compact() {', 'g_nvm.erase_pending()'])
+	// the run itself never erases: a single-bank erase stalls the whole MCU for 1-2 s
+	// (the ECUReset path's flush may still erase: after the answer, with the MCU about to restart)
+	run := glue.all_after('fn comm_thread_entry').all_before('if g_diag.reset_due() != 0 {')
+	assert !run.contains('erase_pending()'), 'an erase at run time'
 	assert mk.contains(r'$(REPO)/boards/common/nvm_map.c $(BOARD_FLASH)'), mk
 	// with NM: no erase at boot (the sleep edges are the quiet points), and a write made in bus
 	// sleep re-lays the clean marker through the whole choreography
