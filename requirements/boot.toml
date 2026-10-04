@@ -164,3 +164,12 @@ status = "draft"
 method = "analysis"
 asil = "QM"
 derives = "SYS-REQ-SEC-001"
+
+[[req]]
+id = "REQ-BOOT-019"
+title = "Reprogramming over the network transport"
+text = "A node whose application serves diagnostics over DoIP shall be reprogrammable over DoIP as well as over its bus: the boot manager serves the same programming session as the same DoIP entity (address, logical address, identification and routing-activation policy), and the application's handoff asked over DoIP opens that session for the network tester, who reconnects. While one transport holds a non-default session the other is refused, so an authentication earned over one is never used over the other; a reset asked over the network waits for its answer and is abandoned with a connection that drops first; and a session handed off over the network is not timed until the boot's network is reachable, for at most a bounded wait, after which the stay-window applies (REQ-BOOT-014)."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"

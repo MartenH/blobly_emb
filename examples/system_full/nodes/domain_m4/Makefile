@@ -17,6 +17,8 @@ PORT     = $(TX)/ports/cortex_m4/gnu
 
 BOARD := h755zi
 include $(REPO)/boards/$(BOARD)/board.mk
+# repo tools and the V-transpile dependency rule (tools/tools.mk)
+include $(REPO)/tools/tools.mk
 
 # TX_ENABLE_EXECUTION_CHANGE_NOTIFY: this core records its OWN thread/ISR trace (trace_hooks.c).
 CFLAGS  = $(MCU_CM4) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
@@ -48,11 +50,14 @@ ifneq ($(MAKECMDGOALS),clean)
 -include gen/loom_build.mk
 endif
 
-$(BUILD)/app.c: main.v gen/loom_gen.v $(wildcard app/*.v) $(wildcard $(REPO)/loom/*.v) | $(BUILD)
-	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
-	  -path "@vlib|@vmodules|.|$(MOD)" \
-	  -o $(MOD)/$(BUILD)/app.c $(MOD)/main.v
+# how V is run for it — also its signature (tools/tools.mk v_sign)
+TRANSPILE_FLAGS = -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) -path "@vlib|@vmodules|.|$(MOD)"
+$(BUILD)/app.c: main.v gen/loom_gen.v $(call v_unrecorded,$(BUILD)/app.c) $(call v_sign,$(BUILD)/app.c,$(TRANSPILE_FLAGS)) | $(BUILD)
+	cd $(REPO) && $(V) $(TRANSPILE_FLAGS) $(call v_dump,$@) -o $(MOD)/$(BUILD)/app.c $(MOD)/main.v
+	$(call v_deps,$@)
 	$(REPO)/scripts/lint_vinit.sh $@
+# what V compiled into it (tools/tools.mk v_deps)
+-include $(BUILD)/app.c.d
 
 $(BUILD)/tx/%.o: $(PORT)/src/%.S Makefile
 	@mkdir -p $(BUILD)/tx

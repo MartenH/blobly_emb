@@ -24,6 +24,7 @@
 #define APP_BASE 0x08020000u
 #define APP_SIZE 0x000A0000u /* sectors 1..5 (640 KB) */
 #define APP_VECTORS (APP_BASE + 0x400u)
+#define FLASH_SECTOR 0x00020000u /* the erase unit: the boot erases the app a sector per step */
 
 /* The NvM journal's sector pair (docs/nvm.md; boards/common/nvm_map.c): sectors 6 + 7. ONE bank,
  * so a program or an erase stalls every instruction fetch until it completes — a 32-byte record

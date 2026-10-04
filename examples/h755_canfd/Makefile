@@ -13,6 +13,8 @@ SIZE     = $(CROSS)size
 GDB      = $(CROSS)gdb
 V       ?= v
 REPO     = ../..
+# repo tools and the V-transpile dependency rule (tools/tools.mk)
+include $(REPO)/tools/tools.mk
 
 ifeq ($(DEBUG),1)
   OPT  = -Og
@@ -45,10 +47,14 @@ all: $(BUILD)/canfd.bin
 
 # 1) transpile the V echo loop to freestanding C (run from repo root so `import
 #    driver.can` resolves via -path; output back into build/).
-$(BUILD)/canfd.c: main.v | $(BUILD)
-	cd $(REPO) && $(V) $(VDBG) -freestanding -gc none -no-bounds-checking -path "@vlib|@vmodules|." \
-	  -o examples/h755_canfd/$(BUILD)/canfd.c examples/h755_canfd/main.v
+# how V is run for it — also its signature (tools/tools.mk v_sign)
+TRANSPILE_FLAGS = $(VDBG) -freestanding -gc none -no-bounds-checking -path "@vlib|@vmodules|."
+$(BUILD)/canfd.c: main.v $(call v_unrecorded,$(BUILD)/canfd.c) $(call v_sign,$(BUILD)/canfd.c,$(TRANSPILE_FLAGS)) | $(BUILD)
+	cd $(REPO) && $(V) $(TRANSPILE_FLAGS) $(call v_dump,$@) -o examples/h755_canfd/$(BUILD)/canfd.c examples/h755_canfd/main.v
+	$(call v_deps,$@)
 	$(REPO)/scripts/lint_vinit.sh $@
+# what V compiled into it (tools/tools.mk v_deps)
+-include $(BUILD)/canfd.c.d
 
 # 2) cross-compile + link: V output + the shared bare-metal startup (boards/common) + board shim + CAN backend
 $(BUILD)/canfd.elf: $(CSRC) linker.ld | $(BUILD)

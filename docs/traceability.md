@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 205 | 112 | 33 | 60 | 0 |
+| 206 | 113 | 33 | 60 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -33,6 +33,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BOOT-016 | QM | test | verified | prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass) |
 | REQ-BOOT-017 | QM | test | verified | ed25519_interop_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), sha512_test.v (pass) |
 | REQ-BOOT-018 | QM | analysis | uncovered | — |
+| REQ-BOOT-019 | QM | test | verified | doip_mb_test.v (pass), prog_test.v (pass) |
 | REQ-BULK-001 | QM | test | verified | bulk_test.v (pass) |
 | REQ-BULK-002 | QM | test | verified | bulk_test.v (pass) |
 | REQ-BULK-003 | QM | test | verified | bulk-ring-silicon (approved), bulk_test.v (pass) |
@@ -122,7 +123,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NET-004 | QM | test | verified | h735-eth-hardware (approved) |
 | REQ-NET-005 | QM | test | verified | h735-udp-hardware (approved) |
 | REQ-NET-006 | QM | test | verified | h735-tcp-hardware (approved) |
-| REQ-NET-007 | QM | test | verified | doip_test.v (pass), entity_test.v (pass), h735-doip-hardware (approved), sysnode-doip-hardware (approved) |
+| REQ-NET-007 | QM | test | verified | doip_test.v (pass), doipnet_test.v (pass), entity_test.v (pass), h735-doip-hardware (approved), sysnode-doip-hardware (approved) |
 | REQ-NET-008 | QM | test | uncovered | — |
 | REQ-NET-009 | QM | test | uncovered | — |
 | REQ-NET-010 | QM | test | uncovered | — |
@@ -243,6 +244,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BOOT-016 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BOOT-017 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BOOT-018 | | | | | | | | | | | | | | | | | | | | | |
+| REQ-BOOT-019 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BULK-001 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BULK-002 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BULK-003 | | | | | | | | | | | | | | ✓ | | | | ✓ | | | |

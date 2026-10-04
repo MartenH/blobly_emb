@@ -89,11 +89,14 @@ CFLAGS += $(LOOM_NET_DEFS) # the network the config sizes (driver/eth/netx_up.c)
 gen/loom_build.mk: gen/.stamp ;
 
 # 1) transpile the V stack to freestanding C (-enable-globals: ThreadX TCB/stack statics).
-$(BUILD)/app.c: main.v gen/.stamp $(wildcard app/*.v) $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) | $(BUILD)
-	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
-	  -path "@vlib|@vmodules|.|$(EX)" \
-	  -o $(EX)/$(BUILD)/app.c $(EX)/main.v
+# how V is run for it — also its signature (tools/tools.mk v_sign)
+TRANSPILE_FLAGS = -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) -path "@vlib|@vmodules|.|$(EX)"
+$(BUILD)/app.c: main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) $(call v_sign,$(BUILD)/app.c,$(TRANSPILE_FLAGS)) | $(BUILD)
+	cd $(REPO) && $(V) $(TRANSPILE_FLAGS) $(call v_dump,$@) -o $(EX)/$(BUILD)/app.c $(EX)/main.v
+	$(call v_deps,$@)
 	$(REPO)/scripts/lint_vinit.sh $@
+# what V compiled into it (tools/tools.mk v_deps)
+-include $(BUILD)/app.c.d
 
 # 2) ThreadX + NetX kernel/stack objects.
 $(BUILD)/tx/%.o: $(TX_PORT)/src/%.S Makefile

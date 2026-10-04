@@ -214,10 +214,11 @@ pub mut:
 	// knows no vehicle state, and only the application can.
 	handoff_ok fn () bool
 	// handoff_elsewhere: this request arrived over a transport the bootloader does not serve, so
-	// the handoff is refused with conditionsNotCorrect (0x22): the bootloader answers on CAN only,
-	// and a handoff over DoIP would reset the ECU out from under a tester whose TCP connection dies
-	// with it. comm/diag sets it while serving a remote request (Connection.handoff_remote). False
-	// is the zero value, on purpose: a freestanding image never runs a field default.
+	// the handoff is refused with conditionsNotCorrect (0x22): a handoff over DoIP to a bootloader
+	// that answers on CAN only would reset the ECU out from under a tester whose TCP connection
+	// dies with it, and leave it nothing to reconnect to. comm/diag sets it while serving a remote
+	// request (unless Connection.handoff_remote). False is the zero value, on purpose: a
+	// freestanding image never runs a field default.
 	handoff_elsewhere bool
 	// Sub-function rows: a service's sub-function gated beyond its service row (AUTOSAR's
 	// sub-service table) — the sessions it is accepted from (0x7E otherwise) and the 0x27 level it

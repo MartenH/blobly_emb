@@ -28,7 +28,7 @@ cell."* Sending bulk as a signal is the mistake this page exists to prevent.
 | ECU → ECU, one frame | CAN frame (`driver/can`) | 8 B classic / **64 B** FD | ✅ derived |
 | ECU → ECU, a PDU | COM (`comm/com`) | **64 B** (`com.max_pdu`) | ✅ derived |
 | ECU → ECU, bulk | ISO-TP (`comm/isotp`) — host/sim, and a `threadx` target's comm thread (constant and own-output DIDs there so far) | **520 B** (`isotp.max_payload`) | ✅ config |
-| ECU → ECU, firmware | UDS `0x34`/`0x36`×N/`0x37` over **ISO-TP** (the DoIP endpoint serves diagnostics only today — `boot.Prog` has no DoIP binding yet) | image-sized, block-paced | ✅ bootloader |
+| ECU → ECU, firmware | UDS `0x34`/`0x36`×N/`0x37` over **ISO-TP**, or over **DoIP** on a `[doip]` node (its bootloader is its DoIP entity too) | image-sized, block-paced | ✅ bootloader |
 | Ethernet event | SOME/IP notification (`comm/someip`) over UDP — **NetX Duo** on target, POSIX socket on host | **64 B** | ✅ config |
 | Ethernet RPC reply | SOME/IP response, same UDP path | **1024 B** (`max_rpc`) | ✅ config |
 | Ethernet diagnostics | DoIP (`comm/doip`) over **NetX TCP** — a module + service thread, not an app path | 256 B *frame* (`doip.max_msg`, header-inclusive) → **244 B** usable UDS data (8 B DoIP header + 4 B addresses); a bigger message is rejected and the stream closed | ✅ `[doip]` in `ecu.toml` (a ThreadX node): the node's one UDS server over TCP as well as ISO-TP |

@@ -1,12 +1,15 @@
 module main
 
 // The boot manager image (docs/bootloader.md) — ONE source for every board and every node. Bare
-// metal, no kernel, one superloop: decide, and either jump (happy path, from near-reset state —
-// clocks and CAN never touched) or stay and serve the UDS programming session (boot.Prog) over
-// ISO-TP. Nothing here names a board or a node: the flash layout and the cells are the board's
-// (bootmap.h), the bus, the ids and the keys the node's (gen/boot_gen.h, written by loom2v from
-// its [boot] + [isotp]), both read through boards/common/boot_glue.c. So a tester addresses the
-// application and then its bootloader identically — same bus, same ids, same frame format.
+// metal, no kernel on the decision: decide, and either jump (happy path, from near-reset state —
+// clocks and buses never touched) or stay and serve the UDS programming session (boot.Prog). Nothing
+// here names a board or a node: the flash layout and the cells are the board's (bootmap.h), the
+// bus, the ids and the keys the node's (gen/boot_gen.h, written by loom2v from its [boot] + [isotp]
+// and [doip]), both read through boards/common/boot_glue.c. So a tester addresses the application
+// and then its bootloader identically — same bus, same ids, same frame format; same DoIP entity.
+// Where it serves: on a node with no DoIP the bus is the one transport and the stay path is a bare
+// superloop (serve_notd_boot_doip.v); on a [doip] node the stay path enters ThreadX so the
+// application's network seam serves DoIP beside the bus (serve_d_boot_doip.v, boards/common/boot_net.c).
 // Built per node by boot/boot.mk (`make boot`), which a [boot] node's gen/loom_build.mk includes.
 import boot
 import comm.diag
@@ -15,7 +18,6 @@ import driver.can
 
 fn C.board_clock_init()
 fn C.boot_park_satellite()
-fn C.board_timebase_init()
 fn C.board_can_clock_pins_init() // the FDCAN kernel clock + pin AF: blob_can_open does NOT mux pins
 fn C.board_now_us() u64
 fn C.boot_take_request(handoff &u32) u32
@@ -26,6 +28,7 @@ fn C.boot_jump_app()
 fn C.boot_sys_reset()
 fn C.boot_app_base() u32
 fn C.boot_app_size() u32
+fn C.boot_erase_unit() u32
 fn C.boot_rx_id() u32
 fn C.boot_tx_id() u32
 fn C.boot_can_idx() int
@@ -65,6 +68,11 @@ __global (
 	g_link isotp.Link
 	g_req  [isotp.max_payload]u8
 	g_rsp  [isotp.max_payload]u8
+	// the decision's facts the serve loop needs: entered by request, over a valid app, and — for a
+	// handoff — the transport holding the session it opens (boot.via_*; 0 = none)
+	g_requested bool
+	g_app_ok    bool
+	g_handoff   u32
 )
 
 fn main() {
@@ -75,12 +83,11 @@ fn main() {
 	// run with the satellite free to start
 	C.boot_park_satellite()
 	// --- the boot decision, from near-reset state (REQ-BOOT-001/002/010) ---
-	mut handoff := u32(0)
-	requested := C.boot_take_request(&handoff) != 0
+	g_requested = C.boot_take_request(&g_handoff) != 0
 	// slot-bounded: a bit-rotted/torn header can keep the valid mark while its length field
 	// points past the app region — check_image_slot rejects that before crc32 walks off flash
-	app_ok := boot.check_image_slot(unsafe { &u8(app_base) }, app_size) // memory-mapped flash
-	if boot.decide(requested, app_ok) == .run_app {
+	g_app_ok = boot.check_image_slot(unsafe { &u8(app_base) }, app_size) // memory-mapped flash
+	if boot.decide(g_requested, g_app_ok) == .run_app {
 		C.boot_info_normal()
 		C.boot_jump_app() // never returns; nothing was initialized
 	}
@@ -88,20 +95,7 @@ fn main() {
 	// --- stay: programming mode (REQ-BOOT-004: always reachable) ---
 	C.boot_info_no_app()
 	C.board_clock_init()
-	C.board_timebase_init() // board_now_us reads DWT: without it `now` is frozen and nothing expires
-	boot_t0 := C.board_now_us() // REQ-BOOT-014: the stay-window baseline
 	C.board_can_clock_pins_init()
-	req_id := C.boot_rx_id()
-	rsp_id := C.boot_tx_id()
-	mut ch := can.Channel{}
-	// the node's diagnostic bus, opened as the application opens it (an FD bus in FD mode, so
-	// the answers carry the frame format the application's do)
-	idx := C.boot_can_idx()
-	ifname := if idx == 1 { '1' } else if idx == 2 { '2' } else { '0' } // the driver's one-digit index
-	if !ch.open(ifname, C.boot_can_fd() != 0) {
-		for {} // no bus, nothing to serve — parked, but flashable over SWD
-	}
-
 	g_prog.flash = boot.FlashOps{
 		erase:   fl_erase
 		program: fl_program
@@ -109,11 +103,6 @@ fn main() {
 	}
 	// EXPLICIT init: field defaults are _vinit work — freestanding never runs it
 	g_prog.init() // default session
-	if handoff != 0 {
-		// the application answered 0x10 02 already: the tester holds a programming session, and
-		// this server opens it rather than make it ask twice (the session survives the handoff)
-		g_prog.open_handed_off(boot_t0)
-	}
 	// two trust anchors — image vs session, different custody (examples/keys/README.md); the
 	// node's own, from its [boot]
 	C.boot_keys(&g_prog.image_key[0], &g_prog.session_key[0])
@@ -123,39 +112,71 @@ fn main() {
 	g_link.stmin = C.boot_stmin()
 	g_prog.app_base = app_base
 	g_prog.app_size = app_size
+	g_prog.erase_unit = C.boot_erase_unit() // a sector per step, a 0x78 between (Prog.step)
 	// identification (REQ-BOOT-009): F180 = bootloader version, F181 = app state, F195 = the
 	// valid installed image's sw_version at boot (0 when there is none) — the DID the application
 	// answers too
-	g_prog.srv.dids[0].id = 0xF180
-	g_prog.srv.dids[0].data[0] = 0x00
-	g_prog.srv.dids[0].data[1] = 0x02
-	g_prog.srv.dids[0].len = 2
-	g_prog.srv.dids[1].id = 0xF181
-	g_prog.srv.dids[1].data[0] = if app_ok { u8(1) } else { 0 }
-	g_prog.srv.dids[1].len = 1
+	bl := [u8(0x00), 0x02]!
+	g_prog.add_did(0xF180, &bl[0], 2)
+	state := [u8(if g_app_ok { 1 } else { 0 })]!
+	g_prog.add_did(0xF181, &state[0], 1)
 	hdr := boot.parse_header(unsafe { &u8(app_base) })
-	ver := if app_ok { hdr.sw_version } else { u32(0) } // a version that cannot run is no version
-	g_prog.srv.dids[2].id = 0xF195
-	g_prog.srv.dids[2].data[0] = u8(ver >> 24)
-	g_prog.srv.dids[2].data[1] = u8(ver >> 16)
-	g_prog.srv.dids[2].data[2] = u8(ver >> 8)
-	g_prog.srv.dids[2].data[3] = u8(ver)
-	g_prog.srv.dids[2].len = 4
-	g_prog.srv.ndid = 3
+	ver := if g_app_ok { hdr.sw_version } else { u32(0) } // a version that cannot run is no version
+	vb := [u8(ver >> 24), u8(ver >> 16), u8(ver >> 8), u8(ver)]!
+	g_prog.add_did(0xF195, &vb[0], 4)
+	serve() // never returns: the serve loop, on its transports (the serve_*_boot_doip.v variant)
+}
 
+// serve_loop runs the programming session until a reset: on the node's diagnostic bus — opened as
+// the application opens it, an FD bus in FD mode so the answers carry the application's frame
+// format — and, on a [doip] node, over DoIP (net_pass). Its frame holds the channel for good: on a
+// [doip] node it is the boot thread's.
+fn serve_loop() {
+	mut ch := can.Channel{}
+	idx := C.boot_can_idx()
+	ifname := if idx == 1 { '1' } else if idx == 2 { '2' } else { '0' } // the driver's one-digit index
+	can_ok := ch.open(ifname, C.boot_can_fd() != 0)
+	if !can_ok && !net_serves() {
+		for {} // no transport, nothing to serve — parked, but flashable over SWD
+	}
+	rx_id := C.boot_rx_id()
+	tx_id := C.boot_tx_id()
+	boot_t0 := C.board_now_us() // REQ-BOOT-014: the stay-window baseline
+	if g_handoff != 0 {
+		// the application answered 0x10 02 already: the tester holds a programming session, and
+		// this server opens it rather than make it ask twice (the session survives the handoff),
+		// held by the transport it was asked over
+		g_prog.open_handed_off(boot_t0, u8(g_handoff))
+	}
 	for {
 		now := C.board_now_us()
-		// the transport side is comm/diag's, the application's own: intake, the busy guard, the
-		// answer pumped with a refusal aborting it, S3 held while an exchange is in flight
-		if diag.serve_step(mut g_prog, mut g_link, req_id, rsp_id, now, mut ch, &g_req[0], &g_rsp[0]) {
-			diag.wire_drain(mut ch, now_us) // REQ-BOOT-012: the answer on the wire, bounded
+		net_pass(now) // the network's reports and its request, if this node serves DoIP
+		// the bus side is comm/diag's, the application's own: intake, the busy guard, the answer
+		// pumped with a refusal aborting it, S3 held while an exchange is in flight
+		mut due := false
+		if can_ok {
+			due = diag.serve_step(mut g_prog, mut g_link, rx_id, tx_id, now, mut ch, &g_req[0],
+				&g_rsp[0], now_us)
+		} else {
+			g_prog.tick(now)
+			due = g_prog.reset_due()
+		}
+		if due {
+			if can_ok {
+				diag.wire_drain(mut ch, now_us) // REQ-BOOT-012: the answer on the wire, bounded
+			}
+			net_drain() // ... and out of TCP's transmit queue, bounded
 			C.boot_info_programmed()
 			C.boot_sys_reset()
 		}
 		// REQ-BOOT-014: entered by request over a VALID app + tester silence -> back to the app
-		if requested && app_ok && g_prog.idle_return_due(now, boot_t0) {
+		if g_requested && g_app_ok && g_prog.idle_return_due(now, boot_t0) {
 			C.boot_info_normal()
 			C.boot_sys_reset() // no request pending -> the boot jumps to the app
 		}
+		// every pass yields: the serve loop is above the network threads, so skipping the rest while
+		// a CAN exchange is in flight (a lost Consecutive Frame, a Flow Control that never comes)
+		// would starve DoIP. A tick bounds CAN polling far inside ISO-TP's N_Cr / N_Bs.
+		rest()
 	}
 }

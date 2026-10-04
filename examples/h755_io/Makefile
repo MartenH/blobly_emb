@@ -68,11 +68,14 @@ endif
 gen/loom_build.mk: gen/.stamp ;
 
 # 1) transpile the V stack to freestanding C (-enable-globals for the ThreadX TCB/stack statics).
-$(BUILD)/app.c: main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) $(wildcard $(REPO)/driver/io/*.v) $(wildcard app/*.v) | $(BUILD)
-	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
-	  -path "@vlib|@vmodules|.|examples/$(NAME)" \
-	  -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
+# how V is run for it — also its signature (tools/tools.mk v_sign)
+TRANSPILE_FLAGS = -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) -path "@vlib|@vmodules|.|examples/$(NAME)"
+$(BUILD)/app.c: main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) $(call v_sign,$(BUILD)/app.c,$(TRANSPILE_FLAGS)) | $(BUILD)
+	cd $(REPO) && $(V) $(TRANSPILE_FLAGS) $(call v_dump,$@) -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
+	$(call v_deps,$@)
 	$(REPO)/scripts/lint_vinit.sh $@
+# what V compiled into it (tools/tools.mk v_deps)
+-include $(BUILD)/app.c.d
 
 # 2) ThreadX kernel objects (same as examples/h755_threadx).
 $(BUILD)/tx/%.o: $(PORT)/src/%.S Makefile

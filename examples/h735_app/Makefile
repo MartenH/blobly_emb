@@ -60,11 +60,14 @@ gen/.stamp: ecu.toml bus.dbc $(wildcard app/*.v) $(TOOL_ecucheck) $(TOOL_loom2v)
 #    freestanding C (-enable-globals: the trace module + ring live in __global). Run from
 #    the repo root so `import loom/comm.telem/driver.can` resolve via `.` and the local
 #    `import gen/app/ports/sig` via examples/$(NAME).
-$(BUILD)/app.c: main.v gen/.stamp | $(BUILD)
-	cd $(REPO) && $(V) $(VDBG) -freestanding -gc none -no-bounds-checking -enable-globals \
-	  -path "@vlib|@vmodules|.|examples/$(NAME)" \
-	  -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
+# how V is run for it — also its signature (tools/tools.mk v_sign)
+TRANSPILE_FLAGS = $(VDBG) -freestanding -gc none -no-bounds-checking -enable-globals -path "@vlib|@vmodules|.|examples/$(NAME)"
+$(BUILD)/app.c: main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) $(call v_sign,$(BUILD)/app.c,$(TRANSPILE_FLAGS)) | $(BUILD)
+	cd $(REPO) && $(V) $(TRANSPILE_FLAGS) $(call v_dump,$@) -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
+	$(call v_deps,$@)
 	$(REPO)/scripts/lint_vinit.sh $@
+# what V compiled into it (tools/tools.mk v_deps)
+-include $(BUILD)/app.c.d
 
 # 2) cross-compile + link: V output + startup + board shim + CAN backend
 $(BUILD)/app.elf: $(CSRC) $(BOARD_LD_BARE) | $(BUILD)
