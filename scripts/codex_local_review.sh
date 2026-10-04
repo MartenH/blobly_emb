@@ -79,7 +79,7 @@ read -r -a v_cmd <<< "${V:-v}"
 v_bin=$(command -v "${v_cmd[0]:-v}" || true)
 v_run=${V:-$v_bin}
 probe_note="Put any probe or scratch files under /tmp, never in the repository."
-gates="the host unit tests \`$v_run -enable-globals test <module>/\` for the touched modules (CI runs comm driver tools ecu loom nvm wdg bcrypto boot, and examples), \`make lint\` (no-alloc + isolation, must pass), \`make check\`, \`make syscheck SYSTEM=<file>\` for each examples/*/system.toml the change can affect (the cross-node checks; a bare \`make syscheck\` checks only examples/system_bench, CI loops over every one) and \`make trace-check\`. tools/vectab needs the CMSIS headers under third_party/; if they are absent, skip it rather than fetching them. Do not flash or touch hardware (never \`make hwtest\` or \`make flash\`)"
+gates="the host unit tests \`$v_run -enable-globals test <module>/\` for the touched modules (CI runs comm driver tools ecu loom nvm wdg bcrypto boot, and examples), \`make lint\` (no-alloc + isolation, must pass), \`make check\`, \`make syscheck SYSTEM=<file>\` for each examples/*/system.toml the change can affect (the cross-node checks; a bare \`make syscheck\` checks only examples/system_bench, CI loops over every one) and \`make trace-check\`; and build every example the change can affect as CI's loop does (\`make -C <dir> all\` for a host example, \`make -C <dir> gen\` for a cross one, generated outputs unchanged afterwards), since \`v test examples\` compiles only the examples that have tests. tools/vectab needs the CMSIS headers under third_party/; if they are absent, skip it rather than fetching them. Do not flash or touch hardware (never \`make hwtest\` or \`make flash\`)"
 if [ -n "$v_bin" ] && [ -x "$v_bin" ]; then
 	v_note="The V compiler is \`$v_run\` ($("$v_bin" version 2>/dev/null || echo 'version unknown'); CI pins $(tr -d '[:space:]' < .v-version)). Do not look for other V installations. Where they bear on the change, run $gates. A change to generated code must leave \`gen/\` outputs that regeneration reproduces. Network sockets are allowed, so the UDP/TCP tests can run. $probe_note"
 else
@@ -112,7 +112,7 @@ if [ "$dry_run" = 1 ]; then
 	exit 0
 fi
 
-mkdir -p "$reviews"
+mkdir -p "$reviews" "$HOME/.vmodules/.cache" # a writable root that does not exist stops the sandbox
 # Whatever the review's outcome, a working tree it changed must not pass unnoticed: a moved HEAD or
 # a dirty tree is exit 4 even when the review itself also failed.
 dirty_check() {
