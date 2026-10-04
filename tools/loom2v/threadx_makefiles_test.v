@@ -149,6 +149,10 @@ fn test_the_glue_defines_every_symbol_the_generator_declares() {
 	for sym in boot_glue_syms {
 		assert sym in boot_defs || boot_src.contains('__attribute__((weak)) int ${sym}('), 'boards/common/boot_handoff.c does not define ${sym}'
 	}
+	nvm_defs := c_definitions(glue_src('nvm_map.c'))
+	for sym in nvm_glue_syms {
+		assert sym in nvm_defs, 'boards/common/nvm_map.c does not define ${sym}'
+	}
 	mut bm := Model{}
 	bm.boot.on = true
 	bm.isotp_conns = [IsotpConn{}]
@@ -198,6 +202,8 @@ fn test_no_c_file_redefines_the_glue() {
 	glue << c_definitions(glue_src('shell_glue.c'))
 	glue << c_definitions(glue_src('boot_handoff.c')) // its weak conditions seam is for overriding
 	assert 'boot_handoff_request' in glue && 'boot_handoff_ok' !in glue
+	glue << c_definitions(glue_src('nvm_map.c'))
+	assert 'nvm_map_a' in glue
 	mut files := []string{}
 	for mk in threadx_makefiles() {
 		files << os.walk_ext(os.dir(mk), '.c')
@@ -208,6 +214,7 @@ fn test_no_c_file_redefines_the_glue() {
 		if f.ends_with(os.join_path('boards', 'common', 'comm_glue.c'))
 			|| f.ends_with(os.join_path('boards', 'common', 'shell_glue.c'))
 			|| f.ends_with(os.join_path('boards', 'common', 'boot_handoff.c'))
+			|| f.ends_with(os.join_path('boards', 'common', 'nvm_map.c'))
 			|| f.contains('/build/') {
 			continue
 		}
@@ -236,6 +243,16 @@ fn test_the_glue_list_follows_the_declarations() {
 	for sym in boot_glue_syms {
 		assert glue_build_lines(['fn C.${sym}()'], false) == 'LOOM_GLUE_SRCS = ' +
 			r'$(REPO)/boards/common/boot_handoff.c' + '\n', sym
+	}
+	// the journal: where it lives (the board's bootmap.h), and the board's flash driver
+	mut nm := Model{}
+	nm.nvm.on = true
+	nm.nvm_names = ['Odo']
+	assert glue_build_lines(nvm_c_decls(nm), false) == 'LOOM_GLUE_SRCS = ' +
+		r'$(REPO)/boards/common/nvm_map.c $(BOARD_FLASH)' + '\n'
+	for d in nvm_c_decls(nm).filter(it.starts_with('fn C.')) {
+		name := d['fn C.'.len..].all_before('(')
+		assert name in nvm_glue_syms || name in flash_driver_syms, 'nvm_c_decls declares C.${name}, which no glue list names'
 	}
 }
 

@@ -128,6 +128,49 @@ test("Faults: a confirmed DTC ages out after two passing operation cycles", func
   check.equal(status(d) & 0x0C, 0, "pending / confirmed survived two passing cycles")
 end)
 
+-- Snapshots and extended data (R6b): each engine fault captures the speed DID (0xF1A0) at the
+-- failure that gives it an entry — the over-rev the ECU id (0xF190) too — and the memory holds ONE
+-- entry ([fault_memory] entries = 1), so the over-rev (priority 1) displaces the idle fault's
+-- snapshot once that one is passive and from an earlier cycle. 0x19 06: 01 occurrences (2 bytes),
+-- 02 aging, 03 failed cycles. Raw bytes, so this suite needs nothing from the tester's decoder.
+-- @verifies REQ-DIAG-013 REQ-DIAG-014 REQ-DIAG-015
+test("Faults: a snapshot at the failure, extended data, and displacement by priority", function()
+  local d = diag()
+  ignition(true)
+  d:raw(fromhex("14 FF FF FF"))
+  rpm(3000, 60)
+  check.equal(tohex(d:raw(fromhex("19 03"))), "59 03", "a snapshot listed after a clear")
+  rpm(100, 100) -- EngineIdleLow fails: it takes the one entry
+  check.equal(tohex(d:raw(fromhex("19 03"))), "59 03 05 06 00 01")
+  local idle = d:raw(fromhex("19 04 05 06 00 01"))
+  check.equal(tohex(idle:sub(1, 5)), "59 04 05 06 00")
+  check.equal(tohex(idle:sub(7, 10)), "01 01 F1 A0", "record 0x01, one DID, the speed")
+  check.equal(#idle, 12)
+  rpm(7000, 100) -- the over-rev fails in the SAME cycle: the idle entry failed in it, so it stays
+  check.equal(tohex(d:raw(fromhex("19 03"))), "59 03 05 06 00 01", "displaced this cycle's evidence")
+  rpm(3000, 60)
+  ignition(false); ignition(true) -- a new cycle: the idle fault passes, the over-rev fails again
+  rpm(3000, 60)
+  rpm(7000, 100)
+  check.equal(tohex(d:raw(fromhex("19 03"))), "59 03 02 19 00 01", "the important fault did not displace")
+  local over = d:raw(fromhex("19 04 02 19 00 FF"))
+  check.equal(tohex(over:sub(1, 5)), "59 04 02 19 00")
+  check.equal(tohex(over:sub(7, 10)), "01 02 F1 A0")
+  check.equal(tohex(over:sub(13, 14)), "F1 90")
+  check.equal(over:sub(15), "BLOBLY-OVERSPEED-01")
+  log("0x19 04 over-rev: " .. tohex(over))
+  check.equal(tohex(d:raw(fromhex("19 04 05 06 00 01"))):sub(1, 14), "59 04 05 06 00", "the displaced DTC is still known")
+  check.equal(#d:raw(fromhex("19 04 05 06 00 01")), 6, "the displaced snapshot is still served")
+  local ext = d:raw(fromhex("19 06 02 19 00 FF"))
+  check.equal(tohex(ext:sub(1, 5)), "59 06 02 19 00")
+  check.equal(tohex(ext:sub(7)), "01 00 02 02 00 03 02", "occurrences 2, aging 0, failed cycles 2")
+  log("0x19 06 over-rev: " .. tohex(ext))
+  check.nrc(0x31, function() d:raw(fromhex("19 06 02 19 00 FE")) end)
+  check.nrc(0x31, function() d:raw(fromhex("19 04 12 34 56 01")) end)
+  d:raw(fromhex("14 FF FF FF"))
+  rpm(3000, 60)
+end)
+
 -- Signal-status faults on BrakePressure (frame 0x301, E2E: data_id 0x44, CRC byte 4, counter low
 -- nibble of byte 5, its own 300 ms timeout) — raised by the bridge, no FB code.
 -- stamped with blobly_net's AUTOSAR E2E Profile 1 (e2e.p01_protect), the same profile the app checks

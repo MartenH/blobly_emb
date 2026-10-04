@@ -31,7 +31,8 @@ examples/<name>/   a FREESTANDING app (own Makefile, `make all`):
                        COM bus bridge + run() ┘   bus endpoints -> rx/tx codec)
 loom/   the Loom: scheduler (the de-AUTOSAR'd "RTE")
 comm/   comms stack: com, e2e (AUTOSAR E2E Profile 1), secoc (AES-CMAC), isotp (15765-2), uds (14229), nm,
-        fault (debounce + fault memory behind 0x19/0x14/0x85), diag (the UDS server on its ISO-TP
+        fault (debounce + fault memory behind 0x19/0x14/0x85; snapshots, extended data, displacement
+        and its persistence in the NvM journal — entry.v, persist.v), diag (the UDS server on its ISO-TP
         connection and the order a pass runs it — the host bridge calls it; the ThreadX comm
         thread from R2; its transport step — intake, busy guard, pump/abort, S3 hold, wire
         drain — is step.v, which the bootloader runs whole as serve_step)
@@ -148,7 +149,9 @@ manager program (`boot/target/main.v`, `boards/common/boot_glue.c`) built for th
 at the app slot, `make image SW_VERSION=<n>`, and `make flash` = boot + factory image
 (`threadx_makefiles_test.v` pins that). The system_full CAN nodes all run that way, so
 **`make flash` on domain / sysnode / zone_a writes the boot at 0x08000000 and the app at
-0x08020000** — not one image at 0x08000000 any more.
+0x08020000** — not one image at 0x08000000 any more. zone_a's NvM journal (its persisted fault memory) is
+flash sectors 6 + 7 (`boards/h723/bootmap.h` NVM_*, outside the app region, which is sectors 1..5):
+`make flash` never erases it, so DTCs survive a reflash — clear them with 0x14.
 
 **CI pins the V compiler** to the release tag in `.v-version` (currently `0.5.2`), installed as the
 **prebuilt** `v_linux.zip` release asset in both jobs. It used to install master HEAD, so an upstream

@@ -92,7 +92,11 @@ pub mut:
 
 // FaultOps is the fault-memory seam 0x19 / 0x14 / 0x85 are answered through (comm/fault builds
 // it; docs/diagnostics.md §3.3). Nil `entry` = 0x19 and 0x14 are not supported; nil `set_setting`
-// = 0x85 is not. `entry(i)` returns DTC (3 bytes) << 8 | status for i in 0 .. count().
+// = 0x85 is not; nil `snapshot` / `extended` = 0x19 03/04 / 06 are not. `entry(i)` returns DTC
+// (3 bytes) << 8 | status for i in 0 .. count(). `snapshot(i, out, cap)` copies DTC i's snapshot
+// record 0x01 body (out nil = only its length; 0 = none stored, -1 = larger than cap);
+// `extended(i, rec, out, cap)` writes extended data record `rec` (1 .. ext_records) into out, at most
+// `cap` bytes, and returns its length (0 = no such record, -1 = longer than cap).
 pub struct FaultOps {
 pub mut:
 	ctx         voidptr
@@ -100,6 +104,9 @@ pub mut:
 	entry       fn (ctx voidptr, i int) u32
 	clear       fn (ctx voidptr, group u32) u8 // the NRC, 0 = cleared
 	set_setting fn (ctx voidptr, on bool)
+	snapshot    fn (ctx voidptr, i int, out &u8, cap int) int
+	extended    fn (ctx voidptr, i int, rec u8, out &u8, cap int) int
+	ext_records u8 // extended data records 0x01 .. ext_records
 	avail       u8 // the status availability mask; 0 = not wired (the services stay unsupported)
 }
 
@@ -902,21 +909,39 @@ fn (mut s Server) write_did(req &u8, req_len int, resp &u8) int {
 	return 3
 }
 
-// read_dtcs (0x19) — the subfunctions R4 serves (D6): 0x01 reportNumberOfDTCByStatusMask, 0x02
-// reportDTCByStatusMask, 0x0A reportSupportedDTC. A DTC matches a mask when (status & mask &
-// availability) != 0. The response must fit the owner's buffer (0x14 otherwise), checked before
-// anything is written. 0x19 has no suppressPosRsp: bit 7 makes the subfunction unsupported.
+// read_dtcs (0x19) — the subfunctions served (D6): 0x01 reportNumberOfDTCByStatusMask, 0x02
+// reportDTCByStatusMask, 0x0A reportSupportedDTC, and with snapshots / extended data (R6b) 0x03
+// reportDTCSnapshotIdentification, 0x04 reportDTCSnapshotRecordByDTCNumber, 0x06
+// reportDTCExtDataRecordByDTCNumber. A DTC matches a mask when (status & mask & availability) != 0.
+// The response must fit the owner's buffer (0x14 otherwise), checked before anything is written.
+// 0x19 has no suppressPosRsp: bit 7 makes the subfunction unsupported.
 fn (mut s Server) read_dtcs(req &u8, req_len int, resp &u8) int {
 	if req_len < 2 {
 		return negative(resp, 0x19, nrc_incorrect_length)
 	}
 	sub := unsafe { req[1] }
-	if sub != 0x01 && sub != 0x02 && sub != 0x0A {
+	// each subfunction is served by its own seam: 03 / 04 by `snapshot`, 06 by `extended`
+	snaps := s.faults.snapshot != unsafe { nil }
+	ext := s.faults.extended != unsafe { nil }
+	want := match sub {
+		0x01, 0x02 { 3 }
+		0x0A { 2 }
+		0x03 { if snaps { 2 } else { 0 } }
+		0x04 { if snaps { 6 } else { 0 } }
+		0x06 { if ext { 6 } else { 0 } }
+		else { 0 }
+	}
+	if want == 0 {
 		return negative(resp, 0x19, nrc_subfunction_not_supported)
 	}
-	want := if sub == 0x0A { 2 } else { 3 }
 	if req_len != want {
 		return negative(resp, 0x19, nrc_incorrect_length)
+	}
+	if sub == 0x03 {
+		return s.snapshot_ids(resp)
+	}
+	if sub == 0x04 || sub == 0x06 {
+		return s.dtc_records(sub, req, resp)
 	}
 	avail := s.faults.avail
 	mask := if sub == 0x0A { u8(0xFF) } else { unsafe { req[2] } & avail }
@@ -961,6 +986,115 @@ fn (mut s Server) read_dtcs(req &u8, req_len int, resp &u8) int {
 			resp[o + 3] = u8(e) // the status (for 0x0A, all bits as maintained)
 		}
 		o += 4
+	}
+	return o
+}
+
+// snapshot_ids (0x19 03): every DTC with a stored snapshot, each with its record number (0x01 —
+// one snapshot per DTC).
+fn (mut s Server) snapshot_ids(resp &u8) int {
+	n := s.faults.count(s.faults.ctx)
+	mut hits := 0
+	for i in 0 .. n {
+		if s.faults.snapshot(s.faults.ctx, i, unsafe { nil }, 0) > 0 {
+			hits++
+		}
+	}
+	if 2 + 4 * hits > s.cap() {
+		return negative(resp, 0x19, nrc_response_too_long)
+	}
+	unsafe {
+		resp[0] = 0x59
+		resp[1] = 0x03
+	}
+	mut o := 2
+	for i in 0 .. n {
+		if s.faults.snapshot(s.faults.ctx, i, unsafe { nil }, 0) <= 0 {
+			continue
+		}
+		e := s.faults.entry(s.faults.ctx, i)
+		unsafe {
+			resp[o] = u8(e >> 24)
+			resp[o + 1] = u8(e >> 16)
+			resp[o + 2] = u8(e >> 8)
+			resp[o + 3] = 0x01 // DTCSnapshotRecordNumber
+		}
+		o += 4
+	}
+	return o
+}
+
+// dtc_records (0x19 04 / 06): one DTC's snapshot record (0x01, or 0xFF for all) or extended data
+// records (1 .. ext_records, or 0xFF for all), after the DTC and its status. An unknown DTC or a
+// record number the server does not define is requestOutOfRange; a defined record that is not
+// stored is simply absent from the answer.
+fn (mut s Server) dtc_records(sub u8, req &u8, resp &u8) int {
+	dtc := unsafe { u32(req[2]) << 16 | u32(req[3]) << 8 | u32(req[4]) }
+	rec := unsafe { req[5] }
+	n := s.faults.count(s.faults.ctx)
+	mut i := -1
+	mut e := u32(0)
+	for j in 0 .. n {
+		e = s.faults.entry(s.faults.ctx, j)
+		if e >> 8 == dtc {
+			i = j
+			break
+		}
+	}
+	if i < 0 {
+		return negative(resp, 0x19, nrc_request_out_of_range)
+	}
+	defined := if sub == 0x04 {
+		rec == 0x01 || rec == 0xFF
+	} else {
+		rec == 0xFF || (rec >= 1 && rec <= s.faults.ext_records)
+	}
+	if !defined {
+		return negative(resp, 0x19, nrc_request_out_of_range)
+	}
+	cap := s.cap()
+	unsafe {
+		resp[0] = 0x59
+		resp[1] = sub
+		resp[2] = u8(dtc >> 16)
+		resp[3] = u8(dtc >> 8)
+		resp[4] = u8(dtc)
+		resp[5] = u8(e) & s.faults.avail
+	}
+	mut o := 6
+	if sub == 0x04 {
+		len := s.faults.snapshot(s.faults.ctx, i, unsafe { nil }, 0)
+		if len > 0 {
+			if o + 1 + len > cap {
+				return negative(resp, 0x19, nrc_response_too_long)
+			}
+			unsafe {
+				resp[o] = 0x01
+			}
+			if s.faults.snapshot(s.faults.ctx, i, unsafe { &resp[o + 1] }, cap - o - 1) != len {
+				return negative(resp, 0x19, nrc_response_too_long)
+			}
+			o += 1 + len
+		}
+		return o
+	}
+	first := if rec == 0xFF { u8(1) } else { rec }
+	last := if rec == 0xFF { s.faults.ext_records } else { rec }
+	for r in first .. last + 1 {
+		// straight into the response, bounded by what is left of it (a record that does not exist
+		// needs no room)
+		room := if cap - o - 1 > 0 { cap - o - 1 } else { 0 }
+		len := s.faults.extended(s.faults.ctx, i, r, unsafe { &resp[o + 1] }, room)
+		if len < 0 || len > room {
+			return negative(resp, 0x19, nrc_response_too_long)
+		}
+		if len == 0 {
+			continue
+		}
+		unsafe {
+			resp[o] = r
+		}
+		o += 1 + len
 	}
 	return o
 }

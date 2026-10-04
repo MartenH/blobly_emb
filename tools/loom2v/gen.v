@@ -1285,6 +1285,7 @@ mut:
 	dids         []DidCfg
 	faults       []FaultCfg // [[fault]] in declaration order = the fault memory's slot order
 	fault_cycle  string     // [fault_memory] cycle = "Signal.field" (bool) or "power" — the operation cycle ('' = NM's, D3)
+	fault_entries int       // [fault_memory] entries: the snapshot entries (default: one per fault with `freeze`, at most fault.max_entries)
 	part         PartMap
 	telem        TelemetryCfg
 	target       TargetCfg
@@ -1309,6 +1310,12 @@ mut:
 	nvm       NvmCfg
 	nvm_names []string
 	nvm_ids   map[string]u16
+	// the persisted fault memory's journal blocks (derive_fault_nvm): its status image, and each
+	// fault's snapshot (0 = the fault has no `freeze`)
+	fault_status_id u16
+	fault_snap_ids  []u16
+	fault_snap_ids_b []u16 // each fault's second snapshot block (persist.v A / B)
+	fault_grace_us  u64 // the cycle-end barrier: twice the longest period of a fault-testing handler
 	bulk      []BulkPoolCfg
 }
 
@@ -1506,6 +1513,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		dids:         parse_dids(doc)
 		faults:       parse_faults(doc)
 		fault_cycle:  parse_fault_cycle(doc)
+		fault_entries: parse_fault_entries(doc)
 		part:         part
 		telem:        parse_telemetry(doc)
 		target:       parse_target(doc)
@@ -2860,6 +2868,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << diag_target_nm_hold(m)
 				glue << nm_produce_drain(m)
 				glue << fault_target_cycle(m)
+				glue << fault_target_persist(m, ioc_idx)
 				if m.nm.on {
 					// REQ-COM-007: every producer below gates on this — the bus is
 					// SILENT in sleep; NM's own drain is exempt (its state machine
@@ -3040,6 +3049,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << '// tx_application_define above). main.v does the board bring-up then calls this —'
 			glue << '// referencing it also forces this module (incl. tx_application_define) to link.'
 			glue << nvm_flash_wrappers(m)
+			glue << fault_store_fns(m)
 			glue << 'pub fn boot() {'
 			if has_satellite(m) {
 				// release the parked satellite core BEFORE the kernel: it waits on XCORE_CLK_MAGIC
@@ -3441,7 +3451,6 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 				}
 				glue << '\tmut outp := ports.${cname}Out{}'
 				glue << '\tst.${field}.${hname}(inp, mut outp)'
-				glue << fault_step_lines(m, cname, hname)
 				for w in writes {
 					wn := w.string()
 					si := m.sig_of[wn] or { SigInfo{} }
@@ -3504,6 +3513,10 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 						glue << '\tosal.${publish_fn(si.transport)}(${snake(wn)}_ch, &outp.${snake(wn)}, u8(sizeof(outp.${snake(wn)})))'
 					}
 				}
+				// the fault report AFTER the outputs: a snapshot the owner takes on reading it then
+				// sees this dispatch's outputs, not the previous one's (a fault may freeze a DID its
+				// own handler writes — zone_a's SteerLimiter and SteeringAngle)
+				glue << fault_step_lines(m, cname, hname)
 				glue << '}'
 				if multi {
 					all_regs['${part}/${fb_thr[cname]}'] << '\tsched.every(${period_us}, ${gname}, &st)'
@@ -3732,6 +3745,8 @@ fn main() {
 	// (rebound to the existing locals so it stays unchanged). (Step (a): parse -> model.)
 	mut m := build_model(doc, dbc)
 	m.nvm_names, m.nvm_ids = derive_nvm(mut m, doc)
+	m.fault_status_id, m.fault_snap_ids, m.fault_snap_ids_b = derive_fault_nvm(m)
+	m.fault_grace_us = fault_grace_us(m, doc)
 	validate_doip(m)
 
 	// [trace]: ThreadX streams the exec hooks (gen_trace.v); every other shape serves comm/trace's
@@ -4885,6 +4900,9 @@ struct FaultCfg {
 	enable     []string // "Signal.field" (bool) the handler reads
 	confirm    int
 	aging      int
+	freeze     []int // the snapshot: [[did]]s captured at the failure that allocates an entry
+	priority   int   // displacement: 1 = the most important .. 255
+	snapshot_ids []int // the snapshot's two journal blocks A, B pinned (empty = derived from the DTC and schema)
 	// a SIGNAL-STATUS fault (R4c): no FB tests it — the diagnostic bridge is the detector, from the
 	// named received signal's status: on = "timeout" | "integrity" | "lost"
 	signal string
@@ -4896,10 +4914,29 @@ fn parse_faults(doc toml.Doc) []FaultCfg {
 	for f in ecumodel.toml_arr(doc, 'fault') {
 		m := f.as_map()
 		name := (m['name'] or { toml.Any('') }).string()
-		for later in ['freeze', 'priority'] {
-			if later in m {
-				panic('loom2v: [[fault]] "${name}": `${later}` needs the persistent fault memory (rung R6, docs/diagnostics.md) — not generated yet')
+		mut freeze := []int{}
+		for d in (m['freeze'] or { toml.Any([]toml.Any{}) }).array() {
+			freeze << int(d.i64())
+		}
+		if 'snapshot_id' in m {
+			panic('loom2v: [[fault]] "${name}": `snapshot_id` is `snapshot_ids = [A, B]` — both of the snapshot\'s blocks')
+		}
+		mut snapshot_ids := []int{}
+		for v in (m['snapshot_ids'] or { toml.Any([]toml.Any{}) }).array() {
+			snapshot_ids << int(v.i64())
+		}
+		if 'snapshot_ids' in m {
+			if snapshot_ids.len != 2 || snapshot_ids[0] == snapshot_ids[1]
+				|| snapshot_ids.any(it < 1 || it > 0xFFFE) {
+				panic('loom2v: [[fault]] "${name}": snapshot_ids must be two distinct ids in 1..65534 — blocks A and B')
 			}
+			if freeze.len == 0 {
+				panic('loom2v: [[fault]] "${name}": snapshot_ids pins snapshot blocks, but the fault declares no `freeze`')
+			}
+		}
+		priority := (m['priority'] or { toml.Any(default_fault_priority) }).i64()
+		if priority < 1 || priority > 255 {
+			panic('loom2v: [[fault]] "${name}": priority ${priority} must be 1 (the most important) .. 255')
 		}
 		signal := (m['signal'] or { toml.Any('') }).string()
 		on := (m['on'] or { toml.Any('') }).string()
@@ -4985,14 +5022,26 @@ fn parse_faults(doc toml.Doc) []FaultCfg {
 			aging:      int(aging)
 			signal:     signal
 			on:         on
+			freeze:     freeze
+			priority:   int(priority)
+			snapshot_ids: snapshot_ids
 		}
 	}
 	return out
 }
 
+// default_fault_priority: a [[fault]] without `priority` — the middle of AUTOSAR's 1..255
+const default_fault_priority = 128
+
 fn parse_fault_cycle(doc toml.Doc) string {
 	fm := doc.value_opt('fault_memory') or { return '' }
 	return (fm.as_map()['cycle'] or { toml.Any('') }).string()
+}
+
+// parse_fault_entries: [fault_memory] entries, -1 when absent (validate_fault_snapshots defaults it)
+fn parse_fault_entries(doc toml.Doc) int {
+	fm := doc.value_opt('fault_memory') or { return -1 }
+	return int((fm.as_map()['entries'] or { toml.Any(-1) }).i64())
 }
 
 // fault_fbs: the FBs that own faults, in first-declaration order — each gets one report cell (its
@@ -5074,6 +5123,7 @@ fn validate_faults(m Model, doc toml.Doc) {
 			}
 		}
 	}
+	validate_fault_snapshots(m)
 	if m.target.on {
 		validate_fault_target(m)
 		return
@@ -5088,6 +5138,90 @@ fn validate_faults(m Model, doc toml.Doc) {
 	cs := m.sig_of[m.fault_cycle.all_before('.')] or { SigInfo{} }
 	if !(cs.external && cs.rx && cs.bus == m.isotp_conns[0].bus) {
 		panic('loom2v: [fault_memory] cycle "${m.fault_cycle}" must be a signal received on the diagnostic bus "${m.isotp_conns[0].bus}" — the bridge that owns the fault memory reads it')
+	}
+}
+
+// fault_freeze_lens: the byte size of each of fault f's snapshot DIDs — a constant DID's bytes, a
+// live one's value width — the fixed shape its snapshot record has (comm/fault capture zero-fills
+// or cuts a DID to it).
+fn fault_freeze_lens(m Model, f FaultCfg) []int {
+	mut out := []int{}
+	for id in f.freeze {
+		mut n := 0
+		for d in m.dids {
+			if d.id == id {
+				n = if d.signal != '' {
+					did_value_width((m.sig_of[d.signal] or { SigInfo{} }).val_type) or { 0 }
+				} else {
+					d.bytes.len
+				}
+			}
+		}
+		out << n
+	}
+	return out
+}
+
+// fault_entries: the snapshot entries the memory holds — declared, or one per fault with a
+// snapshot (at most fault.max_entries).
+fn fault_entries(m Model) int {
+	if m.fault_entries >= 0 {
+		return m.fault_entries
+	}
+	n := m.faults.filter(it.freeze.len > 0).len
+	return if n > fault.max_entries { fault.max_entries } else { n }
+}
+
+// validate_fault_snapshots: every owner's snapshot rules. A snapshot names declared [[did]]s,
+// each at most once, at most fault.max_freeze of them, none empty. And it is no side door around
+// DID access (docs/diagnostics.md §7): 0x19 04 hands out what the DIDs hold under 0x19's own
+// gate, so each DID must be readable in every session 0x19 is served in, behind no 0x27 level but
+// the one 0x19's row itself demands.
+fn validate_fault_snapshots(m Model) {
+	row, _ := svc_row(m, 0x19)
+	// a 0 mask is every session — every one an application server enters (never programming)
+	app := uds.in_default | uds.in_extended | uds.in_safety
+	served := if row.sessions == 0 { app } else { row.sessions & app }
+	mut snaps := 0
+	for f in m.faults {
+		if f.freeze.len == 0 {
+			continue
+		}
+		snaps++
+		if f.freeze.len > fault.max_freeze {
+			panic('loom2v: [[fault]] "${f.name}": freeze names ${f.freeze.len} DIDs — a snapshot holds at most ${fault.max_freeze} (comm/fault max_freeze)')
+		}
+		mut seen := []int{}
+		for id in f.freeze {
+			if id in seen {
+				panic('loom2v: [[fault]] "${f.name}": freeze names DID 0x${id.hex()} twice')
+			}
+			seen << id
+			d := m.dids.filter(it.id == id)
+			if d.len == 0 {
+				panic('loom2v: [[fault]] "${f.name}": freeze DID 0x${id.hex()} is not a [[did]] of this node — a snapshot is read from the diagnostic server\'s own DIDs')
+			}
+			readable := if d[0].read_sessions == 0 { app } else { d[0].read_sessions }
+			if readable & served != served {
+				panic('loom2v: [[fault]] "${f.name}": freeze DID 0x${id.hex()} is not readable in every session 0x19 is served in — 0x19 04 would hand it out where 0x22 refuses it')
+			}
+			if d[0].read_security != 0 && d[0].read_security != row.security {
+				panic('loom2v: [[fault]] "${f.name}": freeze DID 0x${id.hex()} is read behind 0x27 level ${d[0].read_security}, which 0x19 does not demand — 0x19 04 would hand it out without the unlock')
+			}
+		}
+		for i, n in fault_freeze_lens(m, f) {
+			if n == 0 {
+				panic('loom2v: [[fault]] "${f.name}": freeze DID 0x${f.freeze[i].hex()} holds no bytes — nothing to capture')
+			}
+		}
+	}
+	if m.fault_entries >= 0 {
+		if snaps == 0 {
+			panic('loom2v: [fault_memory] entries: no [[fault]] declares a snapshot (`freeze`) to keep in them')
+		}
+		if m.fault_entries < 1 || m.fault_entries > fault.max_entries {
+			panic('loom2v: [fault_memory] entries = ${m.fault_entries} must be 1 .. ${fault.max_entries} (comm/fault max_entries)')
+		}
 	}
 }
 
@@ -5113,6 +5247,9 @@ fn validate_fault_target(m Model) {
 	}
 	if m.fault_cycle != '' && m.fault_cycle != fault_cycle_power {
 		panic('loom2v: [fault_memory] cycle "${m.fault_cycle}": a cycle signal on the target is not generated yet — the comm thread decodes no bool it could watch; leave cycle out for NM (D3) or write cycle = "power"')
+	}
+	if !m.nvm.on {
+		panic('loom2v: [[fault]] on the target needs [nvm] — the fault memory keeps its DTCs, counters and snapshots in the NvM journal across resets and power loss (docs/diagnostics.md §3.3); declare the storage')
 	}
 	cells := eth_iocb_idx(m).len + 2 * fault_fbs(m).len
 	if cells > iocb_pool_n {
@@ -5165,7 +5302,8 @@ fn fault_target_init(m Model) []string {
 		return []string{}
 	}
 	mut g := fault_slot_lines(m, 'g_fmem', '\t')
-	g << fault_memory_init_lines(m, 'g_fmem', 'g_diag.server', '\t')
+	g << fault_memory_init_lines(m, 'g_fmem', 'g_diag.server', '\t', fault_store_lines(m, 'g_fmem',
+		'\t'))
 	return g
 }
 
@@ -5176,7 +5314,28 @@ fn fault_target_pass(m Model) []string {
 	if !fault_target_on(m) {
 		return []string{}
 	}
-	return fault_target_consume(m, '\t\t')
+	mut g := fault_target_consume(m, '\t\t')
+	g << fault_capture_lines(m, 'g_fmem', 'g_diag', '\t\t')
+	return g
+}
+
+// fault_target_persist: what the memory changed this pass, written to the journal — after the
+// operation cycle's step, before the NvM service's sleep-edge flush. A write made while the bus
+// sleeps re-runs the whole flush choreography, so the journal's clean marker never sits below a
+// record it does not cover (REQ-NVM-014's rule, the persisted signals' own).
+fn fault_target_persist(m Model, ioc_idx map[string]int) []string {
+	if !fault_persist_on(m) {
+		return []string{}
+	}
+	// never an erase here: on a node without NM the journal erases only at boot, before the kernel
+	// (nvm_boot_lines), and one with NM only in its sleep edges' choreography
+	mut g := ['\t\tg_fmem.persist(t1, false) // what changed: unwritten snapshots, the status image, tombstones']
+	if m.nm.on {
+		g << '\t\tif g_fmem.wrote > 0 && g_nm.state() == .bus_sleep {'
+		g << nvm_flush_choreo(m, ioc_idx, '\t\t\t')
+		g << '\t\t}'
+	}
+	return g
 }
 
 // fault_target_consume: every fault-owning FB's reports read and consumed, and the clear
@@ -5200,21 +5359,62 @@ fn fault_target_cycle(m Model) []string {
 	if !fault_target_on(m) || !m.nm.on || m.fault_cycle != '' {
 		return []string{}
 	}
+	// bus sleep REQUESTS the end: the cycle stays open for the barrier's grace, so a report a
+	// dispatch from before the edge publishes after this pass's read still lands in it (§7)
 	mut g := [
 		'\t\tif g_nm.awake() != g_fcycle_on { // the operation cycle follows NM (D3)',
 		'\t\t\tg_fcycle_on = g_nm.awake()',
 		'\t\t\tif g_fcycle_on {',
+		'\t\t\t\tif g_fmem.ending { // woken inside the grace: what the ending cycle saw is read into it first',
+	]
+	g << fault_target_consume(m, '\t\t\t\t\t')
+	g << fault_capture_lines(m, 'g_fmem', 'g_diag', '\t\t\t\t\t')
+	g << [
+		'\t\t\t\t}',
 		'\t\t\t\tg_fmem.cycle_start()',
 		'\t\t\t} else {',
-	]
-	g << fault_target_consume(m, '\t\t\t\t')
-	g << [
-		'\t\t\t\tg_fmem.cycle_end()',
+		'\t\t\t\tg_fmem.end_cycle_after(t1, u64(${m.fault_grace_us})) // the cycle-end barrier: the producers publish first',
 		'\t\t\t}',
+		'\t\t}',
+		'\t\tif g_fmem.cycle_end_due(t1) {',
+	]
+	g << fault_target_consume(m, '\t\t\t')
+	g << fault_capture_lines(m, 'g_fmem', 'g_diag', '\t\t\t')
+	g << [
+		'\t\t\tg_fmem.cycle_end()',
 		'\t\t}',
 	]
 	return g
 }
+
+// fault_grace_us: the cycle-end barrier's grace — twice the longest period of a handler that tests
+// a fault, so every dispatch begun before the end has published its report by then.
+fn fault_grace_us(m Model, doc toml.Doc) u64 {
+	mut longest := u64(0)
+	for c in ecumodel.toml_arr(doc, 'fb') {
+		cm := c.as_map()
+		fb := (cm['name'] or { toml.Any('') }).string()
+		for h in (cm['handler'] or { toml.Any([]toml.Any{}) }).array() {
+			hm := h.as_map()
+			hn := (hm['name'] or { toml.Any('') }).string()
+			if !m.faults.any(it.fb == fb && it.handler == hn) {
+				continue
+			}
+			p := u64((hm['period_ms'] or { toml.Any(0) }).i64())
+			if p > longest {
+				longest = p
+			}
+		}
+	}
+	// an interrupt-driven handler has no period: a floor stands in for it
+	if longest < fault_grace_floor_ms {
+		longest = fault_grace_floor_ms
+	}
+	return 2 * longest * 1000
+}
+
+// fault_grace_floor_ms: the barrier's period floor, for interrupt-driven fault-testing handlers
+const fault_grace_floor_ms = u64(50)
 
 // fault_target_cycle_boot: right after NM's init, before the loop's first pass consumes a report —
 // NM may start awake (request = true), and then the operation cycle has already begun: a result the
@@ -5260,6 +5460,12 @@ const shell_glue_syms = ['shell_ps', 'shell_bmc']
 // boot_glue_syms: the programming handoff's board side, boards/common/boot_handoff.c ([boot])
 const boot_glue_syms = ['boot_handoff_request', 'boot_handoff_ok', 'boot_image_version']
 
+// nvm_glue_syms: where the NvM journal lives, boards/common/nvm_map.c (the board's bootmap.h
+// names the two sectors); the flash driver behind it is the board's own (board.mk BOARD_FLASH,
+// the bootloader's driver too)
+const nvm_glue_syms = ['nvm_map_a', 'nvm_map_b', 'nvm_map_size']
+const flash_driver_syms = ['bflash_erase', 'bflash_program', 'bflash_read', 'bflash_blank']
+
 // ioc_pool_n: comm_glue.c's IOC_POOL_N — the target IOC cells an image may use (pinned equal by
 // threadx_makefiles_test.v; a smaller pool silently dropped every index past it, #247).
 const ioc_pool_n = 16
@@ -5286,6 +5492,12 @@ fn glue_build_lines(glue []string, doip bool) string {
 	}
 	if boot_glue_syms.any(declared[it]) {
 		srcs << r'$(REPO)/boards/common/boot_handoff.c'
+	}
+	if nvm_glue_syms.any(declared[it]) {
+		srcs << r'$(REPO)/boards/common/nvm_map.c'
+	}
+	if flash_driver_syms.any(declared[it]) {
+		srcs << r'$(BOARD_FLASH)'
 	}
 	if srcs.len == 0 {
 		return 'LOOM_GLUE_SRCS :=\n'
