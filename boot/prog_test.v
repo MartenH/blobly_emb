@@ -1015,3 +1015,22 @@ fn test_two_transports_against_the_reference_model() {
 	}
 	assert resets > 10, 'the walk never reached a reset'
 }
+
+// the boot's identification DIDs: added in order, read back by 0x22 — the DoIP boot's VIN (F190)
+// among them, as its application answers it; a table that is full adds nothing
+fn test_identification_dids_are_added_and_served() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	p.srv.ndid = 0
+	vin := 'BLOBLYSYSNODEH735'.bytes()
+	assert p.add_did(0xF190, &vin[0], 17)
+	r := ask(mut p, [u8(0x22), 0xF1, 0x90])
+	assert r[..3] == [u8(0x62), 0xF1, 0x90] && r[3..].bytestr() == 'BLOBLYSYSNODEH735'
+	big := []u8{len: 33}
+	assert !p.add_did(0x0100, &big[0], 33), 'longer than a DID holds'
+	for p.srv.ndid < 16 {
+		assert p.add_did(u16(0x0200 + p.srv.ndid), &vin[0], 1)
+	}
+	assert !p.add_did(0x0300, &vin[0], 1), 'a full table'
+	assert p.srv.ndid == 16
+}

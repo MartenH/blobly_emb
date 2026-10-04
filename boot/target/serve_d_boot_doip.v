@@ -43,6 +43,8 @@ fn boot_net_init() {
 	g_doip.entity_addr = C.boot_doip_logical()
 	g_doip.functional_addr = C.boot_doip_functional()
 	C.boot_doip_vin(&g_doip.vin[0])
+	// DID 0xF190 answers the VIN the entity announces, as the application's does
+	g_prog.add_did(0xF190, &g_doip.vin[0], 17)
 	g_doip.n_testers = C.boot_doip_testers(&g_doip.testers[0])
 	g_doip.n_act_types = C.boot_doip_act_types(&g_doip.act_types[0])
 	g_doip.serve.answer = doipnet.answer // g_prog, across the mailbox
