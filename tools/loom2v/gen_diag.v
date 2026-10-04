@@ -610,11 +610,13 @@ fn diag_on(m Model) bool {
 	return m.isotp_conns.len > 0 || diag_doip_only(m)
 }
 
-// diag_doip_only: [doip] with no [isotp] — a node on no CAN bus (system_full's tcu). Its one
-// diagnostic server is hosted by the eth thread, which answers the doip thread's mailbox as the CAN
-// comm thread does; the connection's ISO-TP link carries nothing.
+// diag_doip_only: [doip] on a node whose one bus is its eth bus (system_full's tcu), so it has no
+// [isotp] and no CAN comm thread. Its one diagnostic server is hosted by the eth thread, which
+// answers the doip thread's mailbox as the CAN comm thread does; the connection's ISO-TP link
+// carries nothing. validate_doip refuses [doip] without [isotp] on any other node, so the server
+// has exactly one host. syscheck's rule is the same one: a `doip` node on no CAN bus.
 fn diag_doip_only(m Model) bool {
-	return m.doip.on && m.isotp_conns.len == 0
+	return m.doip.on && m.isotp_conns.len == 0 && eth_only_img(m)
 }
 
 // diag_conn: the connection the server is configured as — the [isotp] one, or none (ids 0) on a
@@ -782,7 +784,7 @@ fn diag_target_init(m Model) []string {
 		return []string{}
 	}
 	mut g := conn_init_lines(m, diag_conn(m), 'g_diag')
-	g << '\tg_diag.owner_resets = true // the comm thread restarts the MCU (diag_target_reset)'
+	g << '\tg_diag.owner_resets = true // the server\'s thread restarts the MCU (diag_target_reset)'
 	if nvm_on(m) {
 		g << '\tmut diag_reset_tries := 0 // passes a failed NvM flush has held a due reset'
 	}

@@ -494,6 +494,10 @@ fn test_a_node_with_no_can_serves_diagnostics_over_doip_alone() {
 		'g_diag.init(u32(0x0), u32(0x0), u32(0x0), 0, 0)',
 		'g_diag.handoff_remote = true',
 		'C.doip_net_seed(doip_seed)',
+		// before the SOME/IP endpoint opens, and served while a dead one parks
+		'C.blob_eth_open(',
+		'doipnet.serve_mailbox(',
+		'mut rx_port := u16(0)',
 		'for {',
 		'g_diag.housekeep(',
 		'doipnet.serve_mailbox(mut g_diag, &g_doip_req[0], &g_doip_resp[0])',
@@ -506,6 +510,9 @@ fn test_a_node_with_no_can_serves_diagnostics_over_doip_alone() {
 	assert !glue.contains('fn comm_thread_entry'), 'no CAN comm thread'
 	assert glue.contains('g_eth_stack [8192]u8')
 	assert glue.contains("C.doip_net_create(c'192.168.0.51',")
+	// on a node with a CAN bus [doip] still needs the [isotp] connection: one host for the server
+	c2, o2, _, _ := generate_ecu('doip_can_no_isotp', eth_only_node.replace('[someip]', '[bus.can0]\ninterface = "can0"\ndbc = "bus.dbc"\n\n[someip]'))
+	assert c2 != 0 && o2.contains('[isotp] connection'), o2
 	h := os.read_file(os.join_path(tmp, 'boot_gen.h')) or { panic(err) }
 	assert h.contains('#define BOOT_CAN_IDX -1') && h.contains('#define BOOT_DOIP 1'), h
 }

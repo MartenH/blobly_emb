@@ -80,10 +80,20 @@ fn validate_doip(m Model) {
 	if !m.target.threadx {
 		panic('loom2v: [doip] is a ThreadX target transport (driver/eth/doip_netx.c); a host node has none yet')
 	}
-	// the server is the [isotp] connection's on the CAN comm thread — or, on a node with no CAN
-	// (diag_doip_only), the eth thread's, reached over DoIP alone
-	if m.isotp_conns.len > 1 || (m.isotp_conns.len == 0 && !eth_thread_on(m)) {
-		panic('loom2v: [doip] carries the node\'s ONE diagnostic server — declare its [uds] server and [isotp] connection, or, on a node with no CAN, an eth bus whose thread hosts it')
+	// the server is the [isotp] connection's on the CAN comm thread — or, on a node whose one bus is
+	// its eth bus (diag_doip_only), the eth thread's, reached over DoIP alone
+	if m.isotp_conns.len > 1 || (m.isotp_conns.len == 0 && !eth_only_img(m)) {
+		panic('loom2v: [doip] carries the node\'s ONE diagnostic server — declare its [uds] server and [isotp] connection (a node on no CAN bus needs none)')
+	}
+	if diag_doip_only(m) {
+		if !eth_thread_on(m) {
+			panic('loom2v: [doip] on a node with no CAN: its diagnostic server runs on the eth thread, which exists for eth [[frame]]s or a [shell] on the eth bus — the node declares neither')
+		}
+		for did in m.dids {
+			if did.signal != '' {
+				panic('loom2v: [doip] on a node with no CAN: [[did]] 0x${did.id.hex()} reads signal "${did.signal}" live, which this node\'s server (the eth thread\'s) has no IOC cell for — declare it constant')
+			}
+		}
 	}
 	// one NetX per image, at one address (driver/eth/netx_up.c): SOME/IP and DoIP share it
 	if eth_thread_on(m) && ip4_octets(m.eth_iface) != ip4_octets(d.address) {
@@ -279,7 +289,7 @@ fn doip_target_create(m Model) []string {
 		}
 		g << '\tg_doip.n_act_types = ${p.types.len}'
 	}
-	g << '\tg_doip.serve.answer = doipnet.answer // the comm thread\'s server, across the mailbox'
+	g << '\tg_doip.serve.answer = doipnet.answer // g_diag, on its thread, across the mailbox'
 	g << '\tC.doip_mb_init(&g_doip_req[0], &g_doip_resp[0])'
 	g << '\tC.doip_net_timers(u32(${p.int_of('initial_inactivity_ms')}), u32(${p.int_of('general_inactivity_ms')})) // T_TCP_Initial / T_TCP_General_Inactivity'
 	// below every application thread (doip_net_prio): the IP thread, then the doip threads

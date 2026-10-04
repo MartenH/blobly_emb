@@ -2020,11 +2020,9 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 		tid++
 	}
 	// the DoIP transport's threads (gen_doip.v): bound after eth, before the kernel timer
-	if comm_thread_on || diag_doip_only(m) {
-		doip_rows := doip_manifest_rows(m, tid)
-		man << doip_rows
-		tid += doip_rows.len
-	}
+	doip_rows := doip_manifest_rows(m, tid) // none without [doip]
+	man << doip_rows
+	tid += doip_rows.len
 	timer_rows := trace_manifest_timer_row(m, tid)
 	man << timer_rows
 	tid += timer_rows.len
@@ -2394,8 +2392,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			}
 			if eth_thread_on(m) {
 				glue << '\tg_eth_tcb   [32]u64  // the SOME/IP eth comm thread (docs/someip.md)'
-				// a DoIP-only node's diagnostic server runs here: the comm thread's 8 KB (its dispatch
-				// copies the UDS server by value into several frames)
+				// a DoIP-only node's diagnostic server runs here: the comm thread's 8 KB — measured on
+				// tcu (gcc -fstack-usage), the entry frame is 2.3 KB with the dispatch inlined and the
+				// deepest call under it ~0.1 KB, so 4 KB would leave too little for an interrupt frame
 				eth_stack := if diag_doip_only(m) { 8192 } else { 4096 }
 				glue << '\tg_eth_stack [${eth_stack}]u8 // someip codec + TxState/E2E frames: comm-thread-class depth'
 				// drop/ok counters as exported globals: SWD-observable (the

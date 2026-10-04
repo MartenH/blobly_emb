@@ -1502,6 +1502,18 @@ fn eth_iocb_idx(m Model) map[string]int {
 	return idx
 }
 
+// eth_diag_pass: a DoIP-only node's diagnostic server, one pass — housekeeping, the doip thread's
+// mailbox, an answered reset performed (nothing on any other node)
+fn eth_diag_pass(m Model, ioc_idx map[string]int) []string {
+	if !diag_doip_only(m) {
+		return []string{}
+	}
+	mut g := diag_target_housekeep(m)
+	g << doip_target_serve(m)
+	g << diag_target_reset(m, ioc_idx)
+	return g
+}
+
 // emit_eth_target_create emits the eth comm thread's tx_thread_create line
 // (both tx_application_define shapes call it; prio is the caller's platform
 // slot — comm-thread class).
@@ -1551,9 +1563,20 @@ fn emit_eth_thread_target(m Model, doc toml.Doc, ioc_idx map[string]int) []strin
 	glue << '// --- eth comm thread (${m.eth}): SOME/IP over the NetX seam (docs/someip.md'
 	glue << '//     target rung). Rx/tx chain identical to the host bridge; IOC + NetX seams. ---'
 	glue << 'fn eth_thread_entry(input u32) {'
+	if diag_doip_only(m) {
+		// the diagnostic server first: DoIP (and with it the field update) must not depend on the
+		// SOME/IP endpoint opening
+		glue << diag_target_init(m)
+		glue << doip_target_init(m)
+	}
 	glue << "\tif C.blob_eth_open(c'${iface}', someip_port) != 0 {"
 	glue << '\t\tfor {'
-	glue << '\t\t\tC._tx_thread_sleep(1000) // dead endpoint — park, never fake a service'
+	if diag_doip_only(m) {
+		glue << '\t\t\tC._tx_thread_sleep(1) // dead endpoint — never fake a service, but keep diagnostics'
+		glue << eth_diag_pass(m, ioc_idx)
+	} else {
+		glue << '\t\t\tC._tx_thread_sleep(1000) // dead endpoint — park, never fake a service'
+	}
 	glue << '\t\t}'
 	glue << '\t}'
 	glue << shell_eth_init(m)
@@ -1590,18 +1613,10 @@ fn emit_eth_thread_target(m Model, doc toml.Doc, ioc_idx map[string]int) []strin
 	glue << '\tmut rx_buf := [80]u8{} // oversize datagrams truncate here and drop (real length reported)'
 	glue << '\tmut rx_ip := [4]u8{}'
 	glue << '\tmut rx_port := u16(0)'
-	if diag_doip_only(m) {
-		glue << diag_target_init(m)
-		glue << doip_target_init(m)
-	}
 	glue << '\tfor {'
 	glue << '\t\tC._tx_thread_sleep(1) // one kernel tick — the [target] tick_ms pace'
 	glue << '\t\tnow := C.board_now_us()'
-	if diag_doip_only(m) {
-		glue << diag_target_housekeep(m)
-		glue << doip_target_serve(m)
-		glue << diag_target_reset(m, ioc_idx)
-	}
+	glue << eth_diag_pass(m, ioc_idx)
 	if rx_frames.len == 0 && !shell_on_eth(m) {
 		glue << '\t\t// tx-only endpoint: drain and count unsolicited datagrams (bounded) —'
 		glue << '\t\t// nothing routes here, but the pool packets must come back'

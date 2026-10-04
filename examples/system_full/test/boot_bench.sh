@@ -16,7 +16,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 sys=$(dirname "$here")
 : "${BLOBLY_NET:?set BLOBLY_NET to the blobly_net checkout}"
 VERSION=${VERSION:-$(( $(date +%s) - 1767225600 ))}
-nodes=("$@"); [ ${#nodes[@]} = 0 ] && nodes=(domain sysnode zone_a sysnode-doip tcu-doip)
+# tcu-doip is named, never a default: the bench H723 is zone_a's board or tcu's, never both at once
+nodes=("$@"); [ ${#nodes[@]} = 0 ] && nodes=(domain sysnode zone_a sysnode-doip)
 for n in "${nodes[@]}"; do
 	case $n in
 		domain | sysnode | zone_a | sysnode-doip | tcu-doip) ;;
