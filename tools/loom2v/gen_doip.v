@@ -164,8 +164,9 @@ fn validate_doip(m Model) {
 	}
 }
 
-// doip_target_fns: the C seam, the hook into the comm thread's server, and the doip thread's loop
-// (the doip thread runs it; driver/eth/doip_netx.c calls it once its sockets are up).
+// doip_target_fns: the C seam and the doip threads' entry points. The loop itself is
+// driver/doipnet's — the same one the node's bootloader runs (boot/target) — over
+// driver/eth/doip_netx.c, which calls these once its sockets are up.
 fn doip_target_fns(m Model) []string {
 	if !m.doip.on {
 		return []string{}
@@ -174,99 +175,34 @@ fn doip_target_fns(m Model) []string {
 		'',
 		'fn C.doip_net_create(&char, u32, u32) int',
 		'fn C.doip_net_timers(u32, u32)',
-		'fn C.doip_stream_open() int',
 		'fn C.doip_net_seed(u32)',
 		'fn C.doip_net_tcb(int) voidptr',
 		'fn C.doip_mb_init(&u8, &u8)',
-		'fn C.doip_mb_call(&u8, int, int, &u8, int) int',
 		'fn C.doip_mb_take(&int) int',
 		'fn C.doip_mb_answer(int)',
 		'fn C.doip_tx_pending() int',
 		'fn C.doip_mb_take_sent() int',
 		'fn C.doip_mb_take_dropped() int',
-		'fn C.doip_stream_recv(&u8, int, u32) int',
-		'fn C.doip_stream_send(&u8, int) int',
-		'fn C.doip_stream_drop()',
-		'fn C.doip_stream_notify_activated(int)',
-		'fn C.doip_udp_broadcast(&u8, int)',
-		'fn C.doip_eid(&u8)',
-		'fn C.doip_sleep_ms(int)',
 	]
 	if sa_levels(m) == 0 {
 		// the TCP sequence-number seed comes from the board TRNG (declared with 0x27 otherwise)
 		g << 'fn C.diag_sa_init() int'
 		g << 'fn C.diag_sa_seed(&u8, int) int'
 	}
+	p := m.doip.policy
 	g << ''
-	g << '// doip_answer: comm/doip\'s hook to the node\'s one diagnostic server, served on the comm thread'
-	g << 'fn doip_answer(ctx voidptr, req &u8, n int, functional bool, resp &u8, cap int) int {'
-	g << '\treturn C.doip_mb_call(req, n, int(functional), resp, cap)'
-	g << '}'
-	g << ''
-	g << '// doip_run: the boot announcements, then one tester at a time. A dropped connection is the'
-	g << '// C side\'s to report to the comm thread; here only the DoIP framing state is reset.'
+	g << '// doip_run: the doip thread — the boot announcements, then one tester at a time ([doip]'
+	g << '// announce_count / announce_interval_ms); the server is the comm thread\'s, across the mailbox'
 	g << "@[export: 'blobly_doip_run']"
 	g << 'fn doip_run() {'
-	ann_count := m.doip.policy.int_of('announce_count')
-	if ann_count > 0 {
-		g << '\tmut eid := [6]u8{}'
-		g << '\tC.doip_eid(&eid[0])'
-		g << '\tmut ann := [64]u8{}'
-		g << '\tan := g_doip.announcement(&eid[0], &ann[0])'
-		g << '\t// A_DoIP_Announce_Num, A_DoIP_Announce_Interval apart ([doip] announce_count / announce_interval_ms)'
-		g << '\tfor i in 0 .. ${ann_count} {'
-		g << '\t\tif i > 0 {'
-		g << '\t\t\tC.doip_sleep_ms(${m.doip.policy.int_of('announce_interval_ms')})'
-		g << '\t\t}'
-		g << '\t\tC.doip_udp_broadcast(&ann[0], an)'
-		g << '\t}'
-	}
-	g << '\tfor {'
-	g << '\t\t// only what the assembly buffer can still take'
-	g << '\t\tn := C.doip_stream_recv(&g_doip_in[0], doip.max_msg - g_doip.buf_len, 100)'
-	g << '\t\tif n < 0 {'
-	g << '\t\t\tdoip_end()'
-	g << '\t\t\tcontinue'
-	g << '\t\t}'
-	g << '\t\tif n == 0 {'
-	g << '\t\t\tcontinue'
-	g << '\t\t}'
-	g << '\t\t// feed stops consuming when the response buffer fills: drain with len-0 feeds'
-	g << '\t\tmut fed := n'
-	g << '\t\tfor {'
-	g << '\t\t\trlen := g_doip.feed(&g_doip_in[0], fed, &g_doip_out[0], g_doip_out.len)'
-	g << '\t\t\tif rlen <= 0 {'
-	g << '\t\t\t\tbreak'
-	g << '\t\t\t}'
-	g << '\t\t\tif C.doip_stream_send(&g_doip_out[0], rlen) < 0 {'
-	g << '\t\t\t\tdoip_end() // the C side recycled the connection'
-	g << '\t\t\t\tbreak'
-	g << '\t\t\t}'
-	g << '\t\t\tfed = 0'
-	g << '\t\t}'
-	g << '\t\tif g_doip.fatal {'
-	g << '\t\t\tC.doip_stream_drop() // the response that closes the socket is sent: a desynced stream\'s NACK, or a refusal'
-	g << '\t\t\tdoip_end()'
-	g << '\t\t}'
-	g << '\t\t// the short initial idle limit holds until routing is activated'
-	g << '\t\tC.doip_stream_notify_activated(if g_doip.activated { 1 } else { 0 })'
-	g << '\t}'
-	g << '}'
-	g << ''
-	g << 'fn doip_end() {'
-	g << '\tg_doip.activated = false'
-	g << '\tg_doip.fatal = false'
-	g << '\tg_doip.buf_len = 0'
-	g << '\tC.doip_stream_notify_activated(0) // the next connection gets the initial inactivity limit'
+	g << '\tdoipnet.run(mut g_doip, ${p.int_of('announce_count')}, ${p.int_of('announce_interval_ms')}, &g_doip_in[0], &g_doip_out[0])'
 	g << '}'
 	g << ''
 	g << '// doip_udp: a request on UDP 13400 (the doip-svc thread) — identification, entity status, power'
 	g << '// mode; identity is set at boot'
 	g << "@[export: 'blobly_doip_udp']"
 	g << 'fn doip_udp(req &u8, n int, resp &u8) int {'
-	g << '\tmut eid := [6]u8{}'
-	g << '\tC.doip_eid(&eid[0])'
-	g << '\treturn g_doip.udp_response(req, n, &eid[0], C.doip_stream_open(), resp)'
+	g << '\treturn doipnet.udp(&g_doip, req, n, resp)'
 	g << '}'
 	return g
 }
@@ -346,7 +282,7 @@ fn doip_target_create(m Model) []string {
 		}
 		g << '\tg_doip.n_act_types = ${p.types.len}'
 	}
-	g << '\tg_doip.serve.answer = doip_answer'
+	g << '\tg_doip.serve.answer = doipnet.answer // the comm thread\'s server, across the mailbox'
 	g << '\tC.doip_mb_init(&g_doip_req[0], &g_doip_resp[0])'
 	g << '\tC.doip_net_timers(u32(${p.int_of('initial_inactivity_ms')}), u32(${p.int_of('general_inactivity_ms')})) // T_TCP_Initial / T_TCP_General_Inactivity'
 	// below every application thread (doip_net_prio): the IP thread, then the doip threads

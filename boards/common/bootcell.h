@@ -13,7 +13,8 @@
 
 /* why the application asked (the request cell's argument) */
 #define BOOTCELL_REQ_SHELL 1u   /* a bench `boot` command: no tester session was promised */
-#define BOOTCELL_REQ_HANDOFF 2u /* 0x10 02 answered 50 02: the tester holds a programming session */
+#define BOOTCELL_REQ_HANDOFF 2u /* 0x10 02 answered 50 02 over the bus: the tester holds a programming session */
+#define BOOTCELL_REQ_HANDOFF_NET 3u /* ... over DoIP: the session is the network tester's, who reconnects */
 
 /* app -> boot: enter (and stay in) programming mode at the next reset */
 static inline void bootcell_request(uint32_t why) {
@@ -30,7 +31,7 @@ static inline uint32_t bootcell_take_request(void) {
 	if (c[0] != BOOTCELL_REQ_MAGIC) return 0;
 	uint32_t why = c[1];
 	c[0] = 0;
-	return why == BOOTCELL_REQ_HANDOFF ? BOOTCELL_REQ_HANDOFF : BOOTCELL_REQ_SHELL;
+	return (why == BOOTCELL_REQ_HANDOFF || why == BOOTCELL_REQ_HANDOFF_NET) ? why : BOOTCELL_REQ_SHELL;
 }
 
 /* boot -> app: why the application is running (BOOT_REASON_*) */

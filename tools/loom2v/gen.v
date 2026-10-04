@@ -3696,6 +3696,7 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 	}
 	if m.doip.on {
 		glue << 'import comm.doip' // the diagnostic server over DoIP too (gen_doip.v)
+		glue << 'import driver.doipnet' // its network loop, shared with the node's bootloader
 	}
 	if m.isotp_conns.len > 0 {
 		glue << 'import comm.diag' // the diagnostic server on its ISO-TP connection
@@ -4530,7 +4531,9 @@ fn main() {
 				panic('write ${bpath}: ${err}')
 			}
 			// the image key too, so `make image` refuses a signing seed this bootloader would reject
-			boot_mk = 'BOOT_IMAGE_KEY := ${m.boot.image_key.hex()}\n' + 'include ' +
+			// a [doip] node's bootloader serves DoIP too (boot/boot.mk links the network for it)
+			boot_doip := if m.doip.on { 'BOOT_DOIP := 1\n' } else { '' }
+			boot_mk = 'BOOT_IMAGE_KEY := ${m.boot.image_key.hex()}\n' + boot_doip + 'include ' +
 				r'$(REPO)/boot/boot.mk' + ' # [boot]: make boot / image / boot-flash\n'
 		}
 		mkpath := os.join_path(os.dir(args[5]), 'loom_build.mk')

@@ -129,7 +129,7 @@ fn test_the_comm_thread_serves_doip_from_the_mailbox() {
 	assert glue.contains('g_doip.entity_addr = u16(0x7b0)')
 	assert glue.contains('g_doip.vin[0] = u8(0x42)') && glue.contains('g_doip.vin[16] = u8(0x58)')
 	assert !glue.contains("'BLOBLYH735THREADX'"), 'a string in the generated runtime'
-	assert glue.contains('g_doip.serve.answer = doip_answer')
+	assert glue.contains('g_doip.serve.answer = doipnet.answer')
 	// below every application thread: h735_threadx's lowest is ctrl_slow at 13
 	assert glue.contains("C.doip_net_create(c'192.168.0.50', u32(14), u32(15))")
 	assert !glue.contains('functional_addr'), 'the default functional address is comm/doip\'s'
@@ -152,10 +152,10 @@ fn test_an_unconfigured_policy_takes_the_iso_defaults() {
 	code, out, glue := generate('doip_defaults', doip_conn)
 	assert code == 0, out
 	assert glue.contains('C.doip_net_timers(u32(2000), u32(300000))'), glue
-	assert glue.contains('\tfor i in 0 .. 3 {') && glue.contains('C.doip_sleep_ms(500)')
+	assert glue.contains('doipnet.run(mut g_doip, 3, 500, &g_doip_in[0], &g_doip_out[0])')
 	assert !glue.contains('g_doip.n_testers') && !glue.contains('g_doip.n_act_types')
 	assert glue.contains("@[export: 'blobly_doip_udp']")
-	assert glue.contains('g_doip.udp_response(req, n, &eid[0], C.doip_stream_open(), resp)')
+	assert glue.contains('return doipnet.udp(&g_doip, req, n, resp)')
 	// the timers are set before the threads that read them exist
 	t := glue.index('C.doip_net_timers(') or { -1 }
 	c := glue.index("C.doip_net_create(c'") or { -1 }
@@ -170,13 +170,13 @@ fn test_a_configured_policy_is_generated_into_the_entity() {
 	for want in ['g_doip.testers[0] = u16(0xe80)', 'g_doip.testers[1] = u16(0xf00)',
 		'g_doip.n_testers = 2', 'g_doip.act_types[0] = u8(0x0)', 'g_doip.act_types[1] = u8(0xe1)',
 		'g_doip.n_act_types = 2', 'C.doip_net_timers(u32(1000), u32(60000))',
-		'\tfor i in 0 .. 5 {', 'C.doip_sleep_ms(200)'] {
+		'doipnet.run(mut g_doip, 5, 200, &g_doip_in[0], &g_doip_out[0])'] {
 		assert glue.contains(want), want
 	}
 	// no announcements: discovery by identification request only
 	c0, o0, g0 := generate('doip_quiet', doip_conn + 'announce_count = 0\n')
 	assert c0 == 0, o0
-	assert !g0.contains('C.doip_udp_broadcast(&ann[0], an)'), g0
+	assert g0.contains('doipnet.run(mut g_doip, 0, 500, &g_doip_in[0], &g_doip_out[0])'), g0
 }
 
 fn test_a_policy_the_entity_cannot_serve_is_refused() {

@@ -1,6 +1,7 @@
 /* driver/eth/doip_netx.c — DoIP's transport on a ThreadX + NetX node whose diagnostic server lives
- * on the CAN comm thread (loom2v `[doip]`, docs/diagnostics.md). Sockets and threads only: DoIP
- * framing is comm/doip and the UDS server is comm/diag, both tested V.
+ * on another thread — the CAN comm thread (loom2v `[doip]`, docs/diagnostics.md), or the
+ * bootloader's serve loop. Sockets and threads only: DoIP framing is comm/doip, its loop
+ * driver/doipnet and the UDS server comm/diag (boot.Prog in the bootloader), all tested V.
  *
  *   doip_net_create  — from tx_application_define: NetX through the shared bring-up (netx_up.c, at
  *                      the node's one address — SOME/IP may be on it too), TCP, and two threads.
@@ -11,8 +12,10 @@
  *   doip_net_timers  — before doip_net_create: the ISO 13400 inactivity limits ([doip]).
  *   doip_net_seed    — from the comm thread, once it has the TRNG: NetX draws TCP initial sequence
  *                      numbers from rand(), and predictable ones make a session spoofable.
- *   doip_stream_*    — the TCP byte pipe the V loop drives (one tester at a time, ISO 13400 idle
- *                      limits), doip_udp_broadcast / doip_eid / doip_sleep_ms beside it.
+ *   doip_stream_*    — the TCP byte pipe the V loop (driver/doipnet) drives (one tester at a time,
+ *                      ISO 13400 idle limits), doip_udp_broadcast / doip_eid / doip_sleep_ms beside it.
+ *                      The node's bootloader links this file too (boot/boot.mk, boards/common/boot_net.c):
+ *                      there the boot's serve loop is the thread that answers the mailbox.
  *   doip_mb_*        — the mailbox that carries one request to the comm thread and its answer back:
  *                      the server has ONE owner thread. The doip thread posts and waits; the comm
  *                      thread serves it at the top of its next pass, woken (comm_wake). One mutex
@@ -173,7 +176,7 @@ int doip_mb_take_dropped(void) {
 static volatile UINT tcp_connected; /* read by the svc and comm threads too */
 static NX_PACKET *rx_pending; /* partially consumed receive (packet > caller's buf) */
 static ULONG rx_pending_off;
-static UINT listening;        /* the TCP listener is opened by the first receive (doip_stream_recv) */
+static volatile UINT listening; /* the TCP listener is opened by the first receive (doip_stream_recv) */
 
 /* ISO 13400 inactivity: T_TCP_Initial_Inactivity (default 2 s: a connection that never activates
  * routing must not hold the one server socket — measured from ACCEPT, so trickled bytes don't
@@ -264,6 +267,12 @@ int doip_stream_recv(unsigned char *buf, int max, unsigned int timeout_ticks) {
 	doip_idle_rx(&idle, (uint32_t)tx_time_get());
 	doip_rx_bytes += got;
 	return (int)got;
+}
+
+/* doip_net_ready: 1 once the TCP listener is open — from then a tester can connect (read by the
+ * bootloader's serve loop: a session handed off over DoIP is timed from here, boot.Prog.net_up) */
+int doip_net_ready(void) {
+	return listening ? 1 : 0;
 }
 
 /* the TCP_DATA sockets open now (0 or 1), for entity status asked over UDP — read from the svc

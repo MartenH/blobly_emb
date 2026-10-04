@@ -408,3 +408,25 @@ fn test_max_resp_is_a_hook_servers_room() {
 	s.serve.answer = serve_big
 	assert s.max_resp_per_msg() == max_resp
 }
+
+// a request as large as one ISO-TP message — a bootloader's TransferData block — reaches the
+// server whole, and one byte more is too large: the DoIP binding takes what the CAN one takes
+fn test_largest_request_is_one_isotp_message() {
+	mut s := activated_with(serve_big)
+	mut inb := [max_msg + 1]u8{}
+	mut resp := [1024]u8{}
+	mut req := [u8(0x0E), 0x00, 0x0E, 0x80, 0x36, 0x01]
+	for req.len < 4 + max_uds {
+		req << u8(req.len)
+	}
+	n := frame(&inb[0], 0x8001, req)
+	assert n == max_msg
+	assert s.feed(&inb[0], n, &resp[0], resp.len) == 13 + 8 + 4 + 300
+	assert g_seen_len == max_uds
+	mut s2 := activated_with(serve_big)
+	req << 0
+	n2 := frame(&inb[0], 0x8001, req)
+	assert s2.feed(&inb[0], n2, &resp[0], resp.len) == 9 // generic NACK: message too large
+	assert resp[2] == 0x00 && resp[3] == 0x00 && resp[8] == 0x02
+	assert s2.fatal
+}

@@ -24,12 +24,15 @@ import comm.uds
 // over both ISO-TP and DoIP (docs/diagnostics.md) hands DoIP a hook to it.
 
 pub const header_len = 8
-pub const max_msg = 256 // DoIP header + the largest UDS payload we serve
 
-// the largest UDS response a request answered through `serve` may produce: one
-// ISO-TP message, so a server shared with a CAN connection answers over DoIP
-// whatever it answers there
+// the largest UDS message either way: one ISO-TP message, so a server shared with a CAN
+// connection takes over DoIP whatever it takes there — a bootloader's TransferData block
+// (boot.max_block_data) included — and answers whatever it answers there
 pub const max_uds = isotp.max_payload
+
+// the largest DoIP message this entity assembles: a diagnostic message carrying max_uds
+// (header, source and target address, the UDS bytes)
+pub const max_msg = header_len + 4 + max_uds
 
 // the most tester addresses and activation types the routing-activation policy holds (policy.v);
 // here, beside the arrays they size: declared in policy.v, the checker read them as 0 when

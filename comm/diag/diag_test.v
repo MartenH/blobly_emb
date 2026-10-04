@@ -418,6 +418,16 @@ fn test_a_handoff_over_the_network_waits_for_its_transport() {
 	assert c.reset_due() == 0, 'handed off before the DoIP answer left'
 	c.remote_sent()
 	assert c.reset_due() == uds.reset_into_boot
+	assert c.reset_asked_remotely(), 'the bootloader\'s session is the network tester\'s'
+	// asked over the bus, it is the bus's
+	mut b := handoff_conn()
+	b.handoff_remote = true
+	b.on_frame(0, sf(b.rx_id, [u8(0x10), 0x03]))
+	b.serve()
+	b.link.abort_tx()
+	b.on_frame(0, sf(b.rx_id, [u8(0x10), 0x02]))
+	b.serve()
+	assert b.server.reset_req == uds.reset_into_boot && !b.reset_asked_remotely()
 	// a connection that drops before its answer is sent takes the handoff with it
 	mut d := handoff_conn()
 	d.handoff_remote = true

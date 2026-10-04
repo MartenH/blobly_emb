@@ -162,7 +162,8 @@ fn check_status(r []u8, open u8) {
 	assert r[8] == 0x01 // a DoIP node, not a gateway
 	assert r[9] == 1 // one TCP_DATA socket
 	assert r[10] == open
-	assert r[11] == 0 && r[12] == 0 && r[13] == 0 && r[14] == u8(max_msg - 8)
+	ds := u32(max_msg - 8)
+	assert r[11] == u8(ds >> 24) && r[12] == u8(ds >> 16) && r[13] == u8(ds >> 8) && r[14] == u8(ds)
 }
 
 fn test_entity_status_and_power_mode_over_tcp() {

@@ -478,12 +478,14 @@ fn test_a_boot_node_hands_off_after_its_answer_has_left() {
 		'if g_diag.reset_due() != 0 {',
 		'diag.wire_drain(mut ch, diag_now_us)',
 		'if g_diag.reset_due() == uds.reset_into_boot {',
-		'C.boot_handoff_request()',
+		'C.boot_handoff_request(if g_diag.reset_asked_remotely() { 1 } else { 0 })',
 		'C.diag_sys_reset()',
 	])
 	// the board side is linked because the code declares it (glue_build_lines, pinned in
 	// threadx_makefiles_test.v)
-	assert glue.contains('fn C.boot_handoff_request()')
+	assert glue.contains('fn C.boot_handoff_request(int)')
+	// no [doip]: a network tester's 0x10 02 stays refused (no bootloader there to reconnect to)
+	assert !glue.contains('handoff_remote')
 }
 
 // a [boot] node with no [[did]] and no service table still names comm.uds (the handoff's reset

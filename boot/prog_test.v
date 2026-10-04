@@ -1,6 +1,7 @@
 module boot
 
 import bcrypto
+import rand
 
 // @verifies REQ-BOOT-005, REQ-BOOT-008, REQ-BOOT-009
 // The full programming session against RAM-backed FlashOps: the same session
@@ -304,7 +305,7 @@ fn test_a_handed_off_boot_opens_the_programming_session() {
 	mut f := &TestFlash{}
 	mut p := new_prog(mut f)
 	t0 := u64(0) // the boot's clock may read 0 at the start: still a real stamp
-	p.open_handed_off(t0)
+	p.open_handed_off(t0, via_bus)
 	assert p.srv.session == 0x02 && !p.unlocked
 	assert ask(mut p, [u8(0x29), 0x01])[..2] == [u8(0x69), 0x01]
 	// the clock may read 0 when the session opens: it survives the S3 window all the same
@@ -314,7 +315,7 @@ fn test_a_handed_off_boot_opens_the_programming_session() {
 		assert !p.idle_return_due(now, t0), 'the stay-window fired at ${now}'
 	}
 	mut q := new_prog(mut f)
-	q.open_handed_off(t0)
+	q.open_handed_off(t0, via_bus)
 	q.tick(t0 + s3_server_us + 2)
 	assert q.srv.session == 0x01, 'a silent tester keeps the handed-off session'
 	assert q.idle_return_due(t0 + s3_server_us + idle_return_us + 2, t0)
@@ -559,4 +560,324 @@ fn test_session_change_clears_auth() {
 	assert ask(mut p, er) == [u8(0x7F), 0x31, 0x33]
 	unlock(mut p) // fresh 0x29
 	assert ask(mut p, er)[0] == 0x71
+}
+
+// ---- two transports: the DoIP binding ----
+
+// @verifies REQ-BOOT-019
+// The programming server reached over two transports — the bus (ISO-TP) and the network (DoIP,
+// through the doip thread's mailbox): the transport that opened a session holds it, a network
+// reset waits for its answer to leave and dies with its connection, and a session handed off over
+// the network waits for the boot's own network before S3 times it. The interleavings are checked
+// against a reference model of those rules.
+
+fn ask_net(mut p Prog, req []u8, now u64) []u8 {
+	mut resp := []u8{len: 600}
+	n := p.serve_remote(&req[0], req.len, false, unsafe { &resp[0] }, now)
+	return resp[..n]
+}
+
+fn ask_via(mut p Prog, via u8, req []u8, now u64) []u8 {
+	if via == via_net {
+		return ask_net(mut p, req, now)
+	}
+	p.heard(now) // serve_step stamps a bus request before it is handled
+	return ask(mut p, req)
+}
+
+// the 0x29 proof for fake_rng's challenge (the same every time)
+fn proof() []u8 {
+	mut ch := []u8{len: 32}
+	fake_rng(unsafe { &ch[0] }, 32)
+	sig := bcrypto.sign(tester_seed, ch)
+	mut out := [u8(0x29), 0x02]
+	for i in 0 .. 64 {
+		out << sig[i]
+	}
+	return out
+}
+
+fn erase_req() []u8 {
+	return [u8(0x31), 0x01, 0xFF, 0x00, u8(t_base >> 24), u8(t_base >> 16), u8(t_base >> 8),
+		u8(t_base), 0x00, 0x00, 0x10, 0x00]
+}
+
+fn unlock_via(mut p Prog, via u8, pf []u8, now u64) {
+	assert ask_via(mut p, via, [u8(0x10), 0x02], now)[0] == 0x50
+	assert ask_via(mut p, via, [u8(0x29), 0x01], now)[..2] == [u8(0x69), 0x01]
+	assert ask_via(mut p, via, pf, now) == [u8(0x69), 0x02]
+}
+
+fn test_the_transport_that_opened_the_session_holds_it() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	pf := proof()
+	unlock_via(mut p, via_net, pf, 0)
+	// the bus cannot use the network's unlock, nor end its session
+	assert ask_via(mut p, via_bus, erase_req(), 1) == [u8(0x7F), 0x31, 0x22]
+	assert ask_via(mut p, via_bus, [u8(0x10), 0x01], 1) == [u8(0x7F), 0x10, 0x22]
+	assert ask_via(mut p, via_net, erase_req(), 2)[0] == 0x71
+	// once the holder ends its session, the other transport starts its own — locked
+	assert ask_via(mut p, via_net, [u8(0x10), 0x01], 3)[0] == 0x50
+	assert ask_via(mut p, via_bus, [u8(0x10), 0x02], 4)[0] == 0x50
+	assert ask_via(mut p, via_bus, erase_req(), 5) == [u8(0x7F), 0x31, 0x33]
+	assert ask_via(mut p, via_net, [u8(0x29), 0x01], 6) == [u8(0x7F), 0x29, 0x22]
+}
+
+fn test_a_network_reset_waits_for_its_answer_and_dies_with_the_connection() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	assert ask_net(mut p, [u8(0x11), 0x01], 0) == [u8(0x51), 0x01]
+	assert !p.reset_due(), 'the answer is still on its way to the tester'
+	p.remote_sent()
+	assert p.reset_due()
+	// the connection dropping after the answer left does not cancel it
+	p.remote_dropped()
+	assert p.reset_due()
+
+	mut q := new_prog(mut f)
+	assert ask_net(mut q, [u8(0x11), 0x01], 0) == [u8(0x51), 0x01]
+	q.remote_dropped() // before the answer was sent: never reset unanswered
+	assert !q.reset_due() && !q.reset_pending
+	// a bus reset is not the network's to cancel, but it waits for a network answer in flight
+	assert ask_net(mut q, [u8(0x3E), 0x00], 1) == [u8(0x7E), 0x00]
+	assert ask_via(mut q, via_bus, [u8(0x11), 0x01], 2) == [u8(0x51), 0x01]
+	assert !q.reset_due()
+	q.remote_dropped()
+	assert q.reset_due()
+	// nothing is served once a reset is pending, over either transport
+	assert ask_via(mut q, via_bus, [u8(0x3E), 0x00], 3) == []u8{}
+	assert ask_net(mut q, [u8(0x3E), 0x00], 3) == []u8{}
+}
+
+fn test_a_dropped_connection_ends_the_session_it_held() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	unlock_via(mut p, via_net, proof(), 0)
+	p.remote_sent()
+	p.remote_dropped()
+	assert p.srv.session == 0x01 && !p.unlocked
+	// one the bus holds is not the network's to end
+	unlock_via(mut p, via_bus, proof(), 1)
+	p.remote_dropped()
+	assert p.srv.session == 0x02 && p.unlocked
+}
+
+fn test_a_functional_network_request_is_acknowledged_unanswered() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	req := [u8(0x10), 0x02]
+	mut resp := []u8{len: 64}
+	assert p.serve_remote(&req[0], 2, true, unsafe { &resp[0] }, 0) == 0
+	assert p.srv.session == 0x01
+	assert p.remote_inflight, 'its acknowledgement still goes out'
+}
+
+// The handoff over DoIP: the application answered 50 02 and reset, and the tester reconnects once
+// the boot's network is up. S3 does not run before then — no tester can reach the boot — and runs
+// in full from then; a network that never comes up gives the ECU back within net_wait_us.
+fn test_a_session_handed_off_over_the_network_waits_for_the_network() {
+	mut f := &TestFlash{}
+	t0 := u64(1_000)
+	up := t0 + 7_000_000 // a slow link: longer than S3 after the reset
+	mut p := new_prog(mut f)
+	p.open_handed_off(t0, via_net)
+	p.tick(up - 1)
+	assert p.srv.session == 0x02, 'S3 ran before the network was up'
+	assert !p.idle_return_due(up - 1, t0)
+	p.net_up(up)
+	p.tick(up + s3_server_us)
+	assert p.srv.session == 0x02, 'S3 counts from the network coming up'
+	// the tester that reconnects goes on with 0x29 at once, as over the bus
+	assert ask_net(mut p, [u8(0x29), 0x01], up + s3_server_us)[..2] == [u8(0x69), 0x01]
+	// and the bus cannot take its session
+	assert ask_via(mut p, via_bus, [u8(0x29), 0x01], up + s3_server_us) == [u8(0x7F), 0x29, 0x22]
+
+	// silent after the network came up: S3, then the stay-window, as for any handoff
+	mut q := new_prog(mut f)
+	q.open_handed_off(t0, via_net)
+	q.net_up(up)
+	q.tick(up + s3_server_us + 1)
+	assert q.srv.session == 0x01
+	assert q.idle_return_due(up + idle_return_us + 1, t0)
+
+	// a network that never comes up: the session ends at net_wait_us, and the ECU goes back
+	mut r := new_prog(mut f)
+	r.open_handed_off(t0, via_net)
+	r.tick(t0 + net_wait_us)
+	assert r.srv.session == 0x02
+	r.tick(t0 + net_wait_us + 1)
+	assert r.srv.session == 0x01
+	assert r.idle_return_due(t0 + net_wait_us + 1, t0), 'parked past the bound'
+	// net_up after the bound changes nothing
+	r.net_up(t0 + net_wait_us + 2)
+	assert r.srv.session == 0x01
+
+	// over the bus there is nothing to wait for: S3 from the handoff
+	mut b := new_prog(mut f)
+	b.open_handed_off(t0, via_bus)
+	b.tick(t0 + s3_server_us + 1)
+	assert b.srv.session == 0x01
+}
+
+// ---- the reference model ----
+
+struct Model {
+mut:
+	session   u8
+	owner     u8
+	unlocked  bool
+	challenge bool
+	pending   bool // a reset answered
+	remote    bool // ... asked over the network
+	inflight  bool
+	heard     u64
+}
+
+fn (mut m Model) end() {
+	m.session = 0x01
+	m.owner = 0
+	m.unlocked = false
+	m.challenge = false
+}
+
+// request: the answer the rules give (its first bytes: the positive SID, or 7F SID NRC)
+fn (mut m Model) request(via u8, req []u8, now u64) []u8 {
+	if via == via_net {
+		m.inflight = true
+	}
+	if m.pending {
+		return []u8{}
+	}
+	m.heard = now
+	sid := req[0]
+	if m.session != 0x01 && m.owner != via {
+		return [u8(0x7F), sid, 0x22]
+	}
+	mut out := []u8{}
+	match sid {
+		0x10 {
+			m.session = req[1]
+			m.unlocked = false
+			m.challenge = false
+			out = [u8(0x50), req[1]]
+		}
+		0x29 {
+			if m.session != 0x02 {
+				out = [u8(0x7F), 0x29, 0x22]
+			} else if req[1] == 0x01 {
+				m.challenge = true
+				out = [u8(0x69), 0x01]
+			} else if !m.challenge {
+				out = [u8(0x7F), 0x29, 0x24]
+			} else {
+				m.challenge = false
+				m.unlocked = true
+				out = [u8(0x69), 0x02]
+			}
+		}
+		0x31 {
+			out = if m.session == 0x02 && m.unlocked { [u8(0x71)] } else { [u8(0x7F), 0x31, 0x33] }
+		}
+		0x11 {
+			m.pending = true
+			m.remote = via == via_net
+			out = [u8(0x51), 0x01]
+		}
+		else {
+			out = [u8(0x7E)]
+		}
+	}
+	m.owner = if m.session == 0x01 { u8(0) } else { via }
+	return out
+}
+
+fn (mut m Model) dropped() {
+	if m.inflight && m.remote {
+		m.pending = false
+	}
+	m.inflight = false
+	m.remote = false
+	if m.owner == via_net {
+		m.end()
+	}
+}
+
+fn (mut m Model) tick(now u64) {
+	if m.session != 0x01 && now - m.heard > s3_server_us {
+		m.end()
+	}
+}
+
+fn (m &Model) reset_due() bool {
+	return m.pending && !m.inflight
+}
+
+fn fresh_model() Model {
+	return Model{
+		session: 0x01
+	}
+}
+
+// what the model compares: the positive SID, or the negative answer whole
+fn shape(a []u8) []u8 {
+	if a.len == 0 {
+		return a
+	}
+	if a[0] == 0x7F {
+		return a[..3]
+	}
+	if a[0] == 0x50 || a[0] == 0x51 || a[0] == 0x69 {
+		return a[..2]
+	}
+	return a[..1]
+}
+
+fn test_two_transports_against_the_reference_model() {
+	rand.seed([u32(0x0B007), 0x13400])
+	pf := proof()
+	reqs := [[u8(0x10), 0x01], [u8(0x10), 0x02], [u8(0x10), 0x03], [u8(0x29), 0x01], pf,
+		erase_req(), [u8(0x11), 0x01], [u8(0x3E), 0x00]]
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	mut m := fresh_model()
+	mut now := u64(0)
+	mut resets := 0
+	for step in 0 .. 1000 {
+		op := rand.intn(12) or { 0 }
+		now += u64(rand.intn(400_000) or { 0 })
+		match op {
+			0...7 {
+				via := if rand.intn(2) or { 0 } == 0 { via_bus } else { via_net }
+				req := reqs[rand.intn(reqs.len) or { 0 }]
+				got := shape(ask_via(mut p, via, req, now))
+				want := m.request(via, req, now)
+				assert got == want, 'step ${step}: ${req[0]:02X} via ${via}: got ${got} want ${want}'
+			}
+			8 {
+				p.remote_sent()
+				m.inflight = false
+			}
+			9 {
+				p.remote_dropped()
+				m.dropped()
+			}
+			10 {
+				now += s3_server_us
+			}
+			else {}
+		}
+		p.tick(now)
+		m.tick(now)
+		assert p.srv.session == m.session, 'step ${step}: session'
+		assert p.unlocked == m.unlocked, 'step ${step}: unlock'
+		assert p.reset_due() == m.reset_due(), 'step ${step}: reset due'
+		if p.reset_due() {
+			// the owner resets the MCU: both start over
+			p = new_prog(mut f)
+			m = fresh_model()
+			resets++
+		}
+	}
+	assert resets > 10, 'the walk never reached a reset'
 }

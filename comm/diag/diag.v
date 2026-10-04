@@ -22,9 +22,10 @@ pub mut:
 	rx_id         u32 // physical requests (standard id)
 	tx_id         u32 // responses
 	functional_id u32 // functional requests, shared by every server on the bus; 0 = none
-	// handoff_remote: the bootloader also serves the other transport (DoIP), so a programming
-	// handoff may be asked for over it. False today — the boot answers on CAN only — and the
-	// server then refuses a remote 0x10 02 with conditionsNotCorrect
+	// handoff_remote: the bootloader also serves the other transport (DoIP — a [boot] node with
+	// [doip], boot/target), so a programming handoff may be asked for over it. False: the server
+	// refuses a remote 0x10 02 with conditionsNotCorrect, since a bootloader answering on CAN only
+	// would leave the network tester nothing to reconnect to
 	handoff_remote bool
 	// refresh writes the live-signal DIDs into the server it is handed. It runs right before every
 	// dispatch, physical or functional, so a read answers with the value current then. nil = the
@@ -309,6 +310,12 @@ pub fn (c &Connection) reset_due() u8 {
 		return c.server.reset_req
 	}
 	return 0
+}
+
+// reset_asked_remotely: the pending reset was asked over the other transport — for a handoff, the
+// transport the bootloader's session belongs to (boards/common/bootcell.h BOOTCELL_REQ_HANDOFF_NET).
+pub fn (c &Connection) reset_asked_remotely() bool {
+	return c.reset_remote
 }
 
 // apply_answered_reset: ECUReset is two-phase — once its answer has left, the diagnostic state

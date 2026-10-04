@@ -101,13 +101,90 @@ pub mut:
 	stage_len u32
 	// set by 0x11 after the positive response is sent — the owner loop resets
 	reset_pending bool
+	// Two transports, one server (a node that serves DoIP too, docs/bootloader.md "The DoIP
+	// binding"): the transport whose request opened the session in force holds it (0 = none, the
+	// default session), and a request over the other is refused conditionsNotCorrect until that
+	// session ends — so an unlock earned over one transport is never used over the other.
+	owner u8
+	// a network request whose answer is not sent yet (DoIP acknowledges every request, answered
+	// or not): no reset overtakes it — and whether the pending reset was asked over the network
+	remote_inflight bool
+	reset_remote    bool
+	// a session handed off over the network: S3 does not time it until the boot's own network is
+	// up (net_up) — no tester can reach the boot before — and at most net_wait_us
+	await_net bool
 }
 
-// handle: boot services first, everything else delegated to comm/uds.
+// the transports a request reaches the programming server over: the bus (ISO-TP on CAN) and the
+// network (DoIP) — the request cell names the one a handoff was asked over (boards/common/bootcell.h)
+pub const via_bus = u8(1)
+pub const via_net = u8(2)
+
+// handle serves one request from the bus (ISO-TP) — on a node without DoIP, the only transport.
 pub fn (mut p Prog) handle(req &u8, req_len int, resp &u8) int {
-	if req_len < 1 {
+	return p.handle_via(via_bus, req, req_len, resp)
+}
+
+// serve_remote serves one request that arrived over the network (DoIP, through the doip thread's
+// mailbox), stamped as tester activity at `now`. Every network request is in flight until
+// remote_sent — its acknowledgement goes out whether or not there is an answer — and none is
+// served once a reset is pending. A functional request is not served: the bus side serves none.
+pub fn (mut p Prog) serve_remote(req &u8, req_len int, functional bool, resp &u8, now u64) int {
+	p.remote_inflight = true
+	if req_len < 1 || functional || p.reset_pending {
 		return 0
 	}
+	p.heard(now)
+	return p.handle_via(via_net, req, req_len, resp)
+}
+
+// remote_sent: the network transport has sent the answer serve_remote gave.
+pub fn (mut p Prog) remote_sent() {
+	p.remote_inflight = false
+}
+
+// remote_dropped: the network connection is gone. A reset it asked for whose answer never left is
+// abandoned (never reset unanswered); a session it held ends — relocked, a download abandoned —
+// since no tester outlives its connection's session.
+pub fn (mut p Prog) remote_dropped() {
+	if p.remote_inflight && p.reset_remote {
+		p.reset_pending = false
+	}
+	p.remote_inflight = false
+	p.reset_remote = false
+	if p.owner == via_net {
+		p.end_session()
+	}
+}
+
+// net_up: the boot's network is reachable now (its DoIP listener is open). A session handed off
+// over it starts its S3 here, the first moment its tester can speak.
+pub fn (mut p Prog) net_up(now u64) {
+	if p.await_net {
+		p.await_net = false
+		p.heard(now)
+	}
+}
+
+// handle_via: one request over transport `via`, refused while the other holds the session. A
+// request while a reset is pending is dropped unanswered, as the bus side drops it.
+fn (mut p Prog) handle_via(via u8, req &u8, req_len int, resp &u8) int {
+	if req_len < 1 || p.reset_pending {
+		return 0
+	}
+	if p.srv.session != 0x01 && p.owner != 0 && p.owner != via {
+		return negative(resp, unsafe { req[0] }, nrc_conditions_not_correct)
+	}
+	n := p.dispatch(req, req_len, resp)
+	p.owner = if p.srv.session == 0x01 { u8(0) } else { via }
+	if p.reset_pending {
+		p.reset_remote = via == via_net
+	}
+	return n
+}
+
+// dispatch: boot services first, everything else delegated to comm/uds.
+fn (mut p Prog) dispatch(req &u8, req_len int, resp &u8) int {
 	sid := unsafe { req[0] }
 	match sid {
 		0x10 {
@@ -144,8 +221,12 @@ pub fn (mut p Prog) init() {
 // 0x29 without asking twice (docs/diagnostics.md §7). Locked, like any session entry, and timed
 // from `now`: a tester that never speaks loses it to S3 like any other, and then the stay-window
 // (REQ-BOOT-014) gives the ECU back to the application.
-pub fn (mut p Prog) open_handed_off(now u64) {
+// `via` is the transport the handoff was asked over, which holds the session; over the network the
+// session waits for the boot's own network (net_up) before S3 times it.
+pub fn (mut p Prog) open_handed_off(now u64, via u8) {
 	p.srv.session = 0x02
+	p.owner = via
+	p.await_net = via == via_net
 	p.unlocked = false
 	p.challenge_valid = false
 	p.heard(now)
@@ -165,9 +246,10 @@ fn elapsed(now u64, since u64) u64 {
 }
 
 // reset_due / cancel_reset: the answered 0x11 the owner performs once its answer is on the wire,
-// and its cancellation when that answer is lost (comm/diag serve_step: never reset unanswered)
+// and its cancellation when that answer is lost (comm/diag serve_step: never reset unanswered).
+// Not while a network answer is still on its way: no reset overtakes an answer, whoever asked.
 pub fn (p &Prog) reset_due() bool {
-	return p.reset_pending
+	return p.reset_pending && !p.remote_inflight
 }
 
 pub fn (mut p Prog) cancel_reset() {
@@ -181,18 +263,34 @@ pub const s3_server_us = u64(5_000_000)
 // session + this much silence -> give the ECU back to the application.
 pub const idle_return_us = u64(10_000_000)
 
+// The longest a session handed off over the network waits for the boot's own network (PHY
+// auto-negotiation, NetX, the vehicle announcements) before S3 times it from the handoff as usual
+// — a network that never comes up must not park the ECU in its bootloader (REQ-BOOT-014).
+pub const net_wait_us = u64(10_000_000)
+
 // tick expires the diagnostic session on tester silence (REQ-BOOT-013): back to
 // the default session, security re-locked, a half-done download abandoned (the
 // torn image is refused by the valid-mark-last rule anyway — conservative wins).
 // Call it from the serve loop; handle() stamps the activity clock.
 pub fn (mut p Prog) tick(now u64) {
-	if p.srv.session != 0x01 && p.heard && elapsed(now, p.last_rx_us) > s3_server_us {
-		p.srv.session = 0x01
-		p.unlocked = false
-		p.challenge_valid = false
-		p.downloading = false
-		p.erased = false
+	if p.await_net && elapsed(now, p.last_rx_us) > net_wait_us {
+		p.await_net = false // the network never came: time the session from the handoff
 	}
+	if p.srv.session != 0x01 && !p.await_net && p.heard && elapsed(now, p.last_rx_us) > s3_server_us {
+		p.end_session()
+	}
+}
+
+// end_session: back to the default session — relocked, a challenge and a download abandoned, no
+// transport holding it.
+fn (mut p Prog) end_session() {
+	p.srv.session = 0x01
+	p.unlocked = false
+	p.challenge_valid = false
+	p.downloading = false
+	p.erased = false
+	p.owner = 0
+	p.await_net = false
 }
 
 // idle_return_due: the serve loop's exit question (REQ-BOOT-014). Only in the

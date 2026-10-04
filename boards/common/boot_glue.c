@@ -13,9 +13,11 @@ int diag_sa_init(void);
 int diag_sa_seed(uint8_t *out, int n);
 void diag_sys_reset(void);
 
+/* the pending request (0 = none) and, for a handoff, the transport that holds its session: 1 the bus,
+ * 2 the network (boot.via_bus / via_net); 0 for a request no session was promised to */
 uint32_t boot_take_request(uint32_t *handoff) {
 	uint32_t why = bootcell_take_request();
-	*handoff = why == BOOTCELL_REQ_HANDOFF;
+	*handoff = why == BOOTCELL_REQ_HANDOFF ? 1u : why == BOOTCELL_REQ_HANDOFF_NET ? 2u : 0u;
 	return why != 0;
 }
 
