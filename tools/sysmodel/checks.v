@@ -489,10 +489,10 @@ fn check_signals_dissolved(s System) []Issue {
 			}
 			if fname == 'status' || fname == 'lost' {
 				// receive metadata is not AUTHORED in system.toml: the producer's generated tx
-				// signal, a ThreadX CAN endpoint (R5) and a generated frame without E2E would each
-				// reject or mis-carry it. Where the lowering knows it applies — a someip E2E frame —
-				// sysgen adds `status` to the receiving node itself; elsewhere it is declared in the
-				// consuming node's ecu.toml.
+				// signal and a generated frame without E2E would each reject or mis-carry it. Where
+				// the lowering knows it applies — a received E2E frame, someip or CAN (its DBC's E2E
+				// attributes) — sysgen adds `status` and `lost` to the receiving node itself;
+				// elsewhere it is declared in the consuming node's ecu.toml.
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-001'

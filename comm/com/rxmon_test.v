@@ -206,7 +206,7 @@ fn (mut s Sender) next(skip int) [64]u8 {
 	return f
 }
 
-fn run(cfg Cfg, seed u64, passes int) []Pub {
+fn run(cfg Cfg, seed u64, passes int) ([]Pub, u32) {
 	mut rng := Rng{seed}
 	mut ref := Ref{
 		cfg: cfg
@@ -285,7 +285,7 @@ fn run(cfg Cfg, seed u64, passes int) []Pub {
 		assert im.pubs == ref.pubs, 'cfg ${cfg} seed ${seed}: pass ${p} differs\nref  ${ref.pubs}\nimpl ${im.pubs}'
 	}
 	assert im.mon.hidden <= im.mon.e2e.lost_frames
-	return im.pubs
+	return im.pubs, im.mon.hidden
 }
 
 const cfgs = [
@@ -333,9 +333,12 @@ fn test_the_monitor_matches_the_reference_pass() {
 	// silence hiding some of it — a model that never reaches a case proves nothing about it
 	mut seen := map[RxPublish]int{}
 	mut lost_shown := 0
+	mut hidden := u32(0)
 	for cfg in cfgs {
 		for seed in 1 .. 41 {
-			for p in run(cfg, u64(seed), 400) {
+			pubs, h := run(cfg, u64(seed), 400)
+			hidden += h
+			for p in pubs {
 				seen[p.st]++
 				if p.lost > 0 {
 					lost_shown++
@@ -347,6 +350,7 @@ fn test_the_monitor_matches_the_reference_pass() {
 		assert seen[st] > 50, '${st} published only ${seen[st]} times'
 	}
 	assert lost_shown > 50
+	assert hidden > 50, 'a silence hid only ${hidden} lost frames'
 }
 
 // --- the rules one at a time, each with its own reason to exist --------------------------------
