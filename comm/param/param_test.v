@@ -349,6 +349,10 @@ fn test_a_refused_write_answers_0x72_and_changes_nothing() {
 	assert r.write(0x0111, [u8(0x01)]) == [u8(0x7F), 0x2E, 0x72]
 	assert r.read(status_did) == [u8(status_coded), status_default, status_default]
 	r.f.refuse = false
+	// the refused put may have landed unconfirmed: re-writing the old value is stored, not skipped
+	puts := r.puts
+	assert r.write(0x0110, [u8(0x00), 0x64])[0] == 0x6E
+	assert r.puts == puts + 1
 	r.reboot()
 	assert r.cell_a[steer] == 100 && r.cell_a[trailer] == 0 // durable unchanged
 }
@@ -499,7 +503,7 @@ fn test_power_cuts_anywhere_leave_an_acknowledged_coding() {
 		} else if !r.f.dead {
 			assert !in_range || resp[2] == 0x72, 'step ${step}: ${resp}'
 		}
-		if r.f.dead || g.next(50) == 0 {
+		if r.f.dead || g.next(10) == 0 {
 			inflight := if r.f.dead { v.clone() } else { []i64{} }
 			if r.f.dead {
 				cuts++

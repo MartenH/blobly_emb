@@ -3791,6 +3791,7 @@ fn main() {
 	m.fault_status_id, m.fault_snap_ids, m.fault_snap_ids_b = derive_fault_nvm(m)
 	validate_params(mut m, doc)
 	derive_param_nvm(mut m)
+	check_journal_capacity(m)
 	m.fault_grace_us = fault_grace_us(m, doc)
 	validate_doip(m)
 
@@ -5382,7 +5383,13 @@ fn fault_target_persist(m Model, ioc_idx map[string]int) []string {
 	// never an erase here: on a node without NM the journal erases only at boot, before the kernel
 	// (nvm_boot_lines), and one with NM only in its sleep edges' choreography
 	mut g := ['\t\tg_fmem.persist(t1, false) // what changed: unwritten snapshots, the status image, tombstones']
-	if m.nm.on {
+	if m.nm.on && m.params.len > 0 {
+		// a parameter coded this pass too: ONE choreography for both writers
+		g << '\t\tparam_wrote := g_param.take_wrote()'
+		g << '\t\tif (g_fmem.wrote > 0 || param_wrote) && g_nm.state() == .bus_sleep {'
+		g << nvm_flush_choreo(m, ioc_idx, '\t\t\t')
+		g << '\t\t}'
+	} else if m.nm.on {
 		g << '\t\tif g_fmem.wrote > 0 && g_nm.state() == .bus_sleep {'
 		g << nvm_flush_choreo(m, ioc_idx, '\t\t\t')
 		g << '\t\t}'

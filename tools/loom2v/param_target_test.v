@@ -170,9 +170,9 @@ fn test_parameters_are_restored_before_the_kernel_and_bound_on_the_comm_thread()
 	assert o.manifest.contains(',reset,x:i8:-128..127=-3'), o.manifest
 }
 
-// a block id and a fingerprint follow the LAYOUT: declaration order and a range move neither, a
-// field type moves both
-fn test_a_parameters_identity_is_its_layout() {
+// a block id follows the NAME and the fingerprint the LAYOUT: declaration order and a range move
+// neither, a field type moves only the fingerprint — so the old record is found and refused
+fn test_a_parameters_identity_is_its_name_and_its_layout() {
 	o1 := pt_generate('id1', reads_params, pt_conn + pt_param)
 	assert o1.code == 0, o1.out
 	id0, fp0 := id_fp(o1.glue, 0)
@@ -190,7 +190,14 @@ fn test_a_parameters_identity_is_its_layout() {
 	o3 := pt_generate('id3', reads_params, pt_conn + pt_param.replace('iters = "u16"', 'iters = "u32"'))
 	assert o3.code == 0, o3.out
 	id3, fp3 := id_fp(o3.glue, 0)
-	assert id3.all_after('= ') != id0.all_after('= ') && fp3.all_after('= ') != fp0.all_after('= ')
+	assert id3.all_after('= ') == id0.all_after('= '), 'a layout change moved the block: the old record would be pruned, not refused'
+	assert fp3.all_after('= ') != fp0.all_after('= '), 'a layout change kept the fingerprint: the old bytes would be read as the new layout'
+	// the field ORDER is layout too: it is the order of the bytes in the record and the DID
+	o4 := pt_generate('id4', reads_params, pt_conn + pt_param.replace('fields  = { iters = "u16", strict = "bool" }',
+		'fields  = { strict = "bool", iters = "u16" }'))
+	assert o4.code == 0, o4.out
+	_, fp4 := id_fp(o4.glue, 0)
+	assert fp4.all_after('= ') != fp0.all_after('= ')
 }
 
 fn test_what_generation_refuses() {
@@ -224,6 +231,18 @@ fn test_what_generation_refuses() {
 			'apply = "later"']
 		'pin collision':    [pt_conn + pt_param.replace('apply   = "reset"', 'apply   = "reset"\nnvm_id  = 0x1234').replace('range   = {',
 			'nvm_id  = 0x1234\nrange   = {'), 'collides with [[param]] "LoadCap"']
+		'open in default':  [pt_conn + pt_param.replace('param = "Trim"\nwrite = { session = ["extended"], security = 1 }', 'param = "Trim"'),
+			'codes parameter "Trim" from the default session with no 0x27 level']
+		'default session':  [pt_conn + pt_param.replace('param = "Trim"\nwrite = { session = ["extended"], security = 1 }',
+			'param = "Trim"\nwrite = { session = ["default", "extended"] }'), 'from the default session with no 0x27 level']
+		'snake name':       [pt_conn + pt_param.replace('name    = "Trim"', 'name    = "trim_x"').replace('param = "Trim"',
+			'param = "trim_x"'), 'name "trim_x" is not PascalCase']
+		'camel field':      [pt_conn + pt_param.replace('x = "i8" }\ndefault = { x = -3 }', 'maxX = "i8" }\ndefault = { maxX = -3 }'),
+			'field "maxX" is not a lower-case identifier']
+		'signal clash':     [pt_conn + pt_param.replace('name    = "Trim"', 'name    = "Workload"').replace('param = "Trim"',
+			'param = "Workload"'), 'and [[signal]] "Workload" are one identifier']
+		'pin wraps':        [pt_conn + pt_param.replace('apply   = "reset"', 'apply   = "reset"\nnvm_id  = 0x100000001'),
+			'nvm_id = 4294967297 is out of range']
 		'no isotp':         [pt_conn.all_after('functional_id = 0x7DF') + pt_param.all_before('[[did]]'),
 			'declare the diagnostic server\'s [isotp] connection']
 	}
@@ -248,6 +267,25 @@ fn test_what_generation_refuses() {
 			'name      = "LoadFast"\nthread    = "other"\n  [[fb.handler]]\n  name      = "on_10ms"\n  period_ms = 10\n  reads     = ["Trim"]')
 	}, pt_conn + pt_param)
 	assert two.code != 0 && two.out.contains('parameter "Trim" is read on threads'), two.out
+}
+
+// a 0x2E service row gating the write is the gate a parameter DID without its own needs
+fn test_the_service_row_can_be_the_gate() {
+	row := '\n[uds.services]\n"0x10" = {}\n"0x22" = {}\n"0x27" = {}\n"0x2E" = { sessions = ["extended"], security = 1 }\n"0x3E" = {}\n'
+	o := pt_generate('row_gate', reads_params, pt_conn + pt_param.replace('param = "Trim"\nwrite = { session = ["extended"], security = 1 }',
+		'param = "Trim"') + row)
+	assert o.code == 0, o.out
+}
+
+// with a persisted fault memory on an NM node, ONE in-sleep choreography covers both writers
+fn test_one_sleep_choreography_for_the_fault_memory_and_the_parameters() {
+	fault := '\n[[fault]]\nname     = "LoadImplausible"\ndtc      = 0xC40100\nfrom     = "LoadSlow.on_100ms"\ndebounce = { kind = "counter", fail = 3, pass = 3 }\n'
+	o := pt_generate('with_faults', reads_params, pt_conn + pt_param + fault)
+	assert o.code == 0, o.out
+	in_order(o.glue, ['g_fmem.persist(t1, false)', 'param_wrote := g_param.take_wrote()',
+		'if (g_fmem.wrote > 0 || param_wrote) && g_nm.state() == .bus_sleep {', 'g_nvm.mark_clean()'])
+	assert o.glue.count('g_param.take_wrote()') == 1
+	assert !o.glue.contains('if g_param.take_wrote() && g_nm.state()')
 }
 
 // on a [doip] node a parameter's DID is a state-changing write: it needs a 0x27 level (REQ-NET-012)

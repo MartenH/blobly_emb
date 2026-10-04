@@ -176,7 +176,7 @@ the FB never calls a service API.
   path with 0x78 (§7)
 - 🧭 **R7 parameters / variant coding** (#288) — *built:* `[[param]]` on a ThreadX target: read-only
   In fields an FB names in its `reads`, published by the comm thread; one journal record each (block
-  id and fingerprint from the layout, revalidated against the range at restore — out of range → the
+  id from the name, a layout fingerprint in the record, revalidated against the range at restore — out of range → the
   default, the status DID says `reverted`); coded with 0x2E on the `[[did]]` that names it (0x13 /
   0x31 before storage, durable before the answer, 0x72 on a refusal, a repeat writes nothing), read
   back with 0x22; `apply` = next dispatch or next start (comm/param, tools/loom2v/gen_param.v). zone_a

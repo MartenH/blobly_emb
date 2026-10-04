@@ -15,13 +15,15 @@
 //   write = { session = ["extended"], security = 1 }
 //
 // An FB reads it by naming it in a handler's `reads`, like any input — there is no `to`: the
-// reads are the one statement of who consumes it. On a ThreadX target the comm thread is the one
+// reads are the one statement of who consumes it. Its journal block is a hash of its name; its
+// record carries a fingerprint of its layout (comm/param). On a ThreadX target the comm thread is the one
 // writer of each parameter's IOC cell (the rx-signal path's shape): it publishes the restored value
 // before the kernel starts, and a coded one after the journal has accepted it.
 module main
 
 import toml
 import comm.param
+import comm.uds
 import tools.ecumodel
 
 // ParamField is one field of a [[param]]: its V type, wire width, signedness, range and default.
@@ -68,8 +70,8 @@ fn parse_params(doc toml.Doc) []ParamCfg {
 	for pv in ecumodel.toml_arr(doc, 'param') {
 		pm := pv.as_map()
 		name := (pm['name'] or { toml.Any('') }).string()
-		if name == '' {
-			panic('loom2v: [[param]] needs a `name`')
+		if !ecumodel.pascal_ok(name) {
+			panic('loom2v: [[param]] name "${name}" is not PascalCase ([A-Z][A-Za-z0-9]*) — it names the value type FBs read, as a signal\'s does')
 		}
 		for k, _ in pm {
 			if k !in param_keys {
@@ -96,6 +98,9 @@ fn parse_params(doc toml.Doc) []ParamCfg {
 		}
 		mut fields := []ParamField{}
 		for fname, ftv in fm {
+			if !field_ident_ok(fname) {
+				panic('loom2v: [[param]] "${name}" field "${fname}" is not a lower-case identifier ([a-z][a-z0-9_]*) — it is the FB\'s field name as written')
+			}
 			typ := ftv.string()
 			width, signed, tlo, thi := param_type(typ) or {
 				panic('loom2v: [[param]] "${name}" field "${fname}" is "${typ}" — a parameter field is bool, u8, u16, u32, i8, i16 or i32')
@@ -149,7 +154,7 @@ fn parse_params(doc toml.Doc) []ParamCfg {
 		if apply !in ['next_dispatch', 'reset'] {
 			panic('loom2v: [[param]] "${name}" apply = "${apply}" — "next_dispatch" (the FB\'s next dispatch after the write) or "reset" (the next start)')
 		}
-		pin := (pm['nvm_id'] or { toml.Any(0) }).int()
+		pin := (pm['nvm_id'] or { toml.Any(0) }).i64()
 		if pin < 0 || pin > 65534 {
 			panic('loom2v: [[param]] "${name}" nvm_id = ${pin} is out of range (0 = derived, 1..65534 = pin)')
 		}
@@ -169,10 +174,19 @@ fn parse_params(doc toml.Doc) []ParamCfg {
 	return out
 }
 
-// param_ident: a parameter's LAYOUT — name, then each field's name and type in declaration order,
-// the order the record and the cell carry them. Its block id and fingerprint both hash it; the
-// range is not in it (comm/param: a stored value is revalidated against the range instead).
-fn param_ident(p ParamCfg) string {
+// field_ident_ok: a field name the generated struct and the FB's code spell alike ([a-z][a-z0-9_]*)
+fn field_ident_ok(s string) bool {
+	if s == '' || !(s[0] >= `a` && s[0] <= `z`) {
+		return false
+	}
+	return s.bytes().all((it >= `a` && it <= `z`) || (it >= `0` && it <= `9`) || it == `_`)
+}
+
+// param_layout: a parameter's LAYOUT — each field's name and type in declaration order, the order
+// the record, the DID and the cell carry them. Its fingerprint hashes it; its block id hashes only
+// the name, so a layout change finds the old record and refuses it (status `reverted`) rather than
+// finding nothing. The range is in neither (comm/param: a stored value is revalidated against it).
+fn param_layout(p ParamCfg) string {
 	return '${p.name}:${p.fields.map('${it.name}=${it.typ}').join(',')}'
 }
 
@@ -220,14 +234,30 @@ fn validate_params(mut m Model, doc toml.Doc) {
 		panic('loom2v: [[param]] is coded with 0x2E — declare the diagnostic server\'s [isotp] connection')
 	}
 	for i, p in m.params {
-		if p.name in m.sig_of {
-			panic('loom2v: [[param]] "${p.name}" is also a [[signal]] — one name, one input')
+		for sname in m.sig_names {
+			if snake(sname) == snake(p.name) {
+				panic('loom2v: [[param]] "${p.name}" and [[signal]] "${sname}" are one identifier (${snake(p.name)}) — one name, one input')
+			}
+		}
+		for q in m.params[..i] {
+			if snake(q.name) == snake(p.name) {
+				panic('loom2v: [[param]] "${q.name}" and "${p.name}" are one identifier (${snake(p.name)})')
+			}
 		}
 		dids := m.dids.filter(it.param == p.name)
 		if dids.len != 1 {
 			panic('loom2v: [[param]] "${p.name}" is coded through ${dids.len} [[did]]s — exactly one names it (`param = "${p.name}"`): a parameter nobody can write is a constant, and two DIDs are two answers')
 		}
 		m.params[i].did = dids[0].id
+		// coding a vehicle is never open to a tester in the default session with no unlock: the
+		// DID's write gate or the 0x2E row must keep it out of default, or name a 0x27 level
+		d := dids[0]
+		row, _ := svc_row(m, 0x2E)
+		in_default := (d.write_sessions == 0 || d.write_sessions & uds.in_default != 0)
+			&& (row.sessions == 0 || row.sessions & uds.in_default != 0)
+		if in_default && d.write_security == 0 && row.security == 0 {
+			panic('loom2v: [[did]] 0x${d.id.hex()} codes parameter "${p.name}" from the default session with no 0x27 level — give it a write gate (write = { session = ["extended"], security = N }) or gate [uds] services "0x2E"')
+		}
 	}
 	for d in m.dids {
 		if d.param != '' && !is_param(m, d.param) {
@@ -272,8 +302,9 @@ fn validate_params(mut m Model, doc toml.Doc) {
 	}
 }
 
-// derive_param_nvm: each parameter's journal block and fingerprint, refused on a collision with
-// any other block (naming the pin that resolves it), and the journal capacity with them in it.
+// derive_param_nvm: each parameter's journal block and its layout's fingerprint, refused on a
+// collision with any other block, naming the pin that resolves it (the capacity with them in it is
+// check_journal_capacity's).
 fn derive_param_nvm(mut m Model) {
 	if m.params.len == 0 {
 		return
@@ -292,24 +323,13 @@ fn derive_param_nvm(mut m Model) {
 		}
 	}
 	for i, p in m.params {
-		ident := param_ident(p)
-		id := if p.nvm_id != 0 { p.nvm_id } else { nvm_hash16('param:${ident}') }
+		id := if p.nvm_id != 0 { p.nvm_id } else { nvm_hash16('param:${p.name}') }
 		if prev := used[id] {
 			panic('loom2v: [[param]] "${p.name}": its journal block 0x${id.hex()} collides with ${prev} — pin one side (`nvm_id = <1..65534>` on the parameter or the signal) and keep the pin')
 		}
 		used[id] = '[[param]] "${p.name}"'
 		m.params[i].id = id
-		m.params[i].fp = nvm_hash16('param-schema:${ident}')
-	}
-	snaps := m.fault_snap_ids.filter(it != 0).len
-	if m.nvm_names.len + 1 + 2 * snaps + m.params.len > 48 {
-		panic('loom2v: ${m.nvm_names.len} persistent signals, the fault memory and ${m.params.len} parameters exceed the safe journal pool budget (48 of nvm.max_blocks)')
-	}
-	// capacity, the docs/nvm.md headroom rule: one record per parameter in the live set, and its
-	// full rewrite beside it, within one sector
-	live := m.nvm_names.len + fault_live_records(m) + m.params.len + 1
-	if live + live > int(m.nvm.sector_records) {
-		panic('loom2v: the journal needs ${live + live} records of sector headroom (live set ${live}, ${m.params.len} parameters included) but [nvm] sector_records = ${m.nvm.sector_records}')
+		m.params[i].fp = nvm_hash16('param-layout:${param_layout(p)}')
 	}
 }
 
@@ -440,8 +460,8 @@ fn param_bind_lines(m Model) []string {
 // param_sleep_lines: a parameter coded while the bus sleeps re-runs the flush choreography, so the
 // clean marker never sits below a record it does not cover (REQ-NVM-014) — an NM node's.
 fn param_sleep_lines(m Model, ioc_idx map[string]int) []string {
-	if m.params.len == 0 || !m.nm.on {
-		return []string{}
+	if m.params.len == 0 || !m.nm.on || fault_persist_on(m) {
+		return []string{} // a persisted fault memory's in-sleep choreography covers it (fault_target_persist)
 	}
 	mut g := ['\t\tif g_param.take_wrote() && g_nm.state() == .bus_sleep {']
 	g << nvm_flush_choreo(m, ioc_idx, '\t\t\t')

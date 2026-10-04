@@ -574,11 +574,13 @@ param_status = true                         # one byte per parameter: 0 default,
   Its value rides one IOC cell `{a, b}` (so at most two fields), the comm thread its one writer; the
   readers sit on one thread (the cell's one reader context) on the image that owns the journal.
 - **Identity.** One journal record per parameter: `[version | fingerprint (2) | each field
-  big-endian at its width]`, ≤ 11 B — one record. The block id is a hash of the parameter's LAYOUT
-  (name, field names and types — the persisted signals' rule), pinnable with `nvm_id` to resolve a
-  reported collision, and kept in the prune keep-set; a second hash of the layout is stored in the
-  record, so a pinned id kept across a layout change refuses the old bytes. Declaration order moves
-  neither.
+  big-endian at its width]`, ≤ 11 B — one record. The block id is a hash of the parameter's NAME,
+  pinnable with `nvm_id` to resolve a collision generation reports, and kept in the prune keep-set;
+  the record carries a hash of its LAYOUT (field names, types and their order, which is the byte
+  order of the record and the DID). So declaration order moves nothing, and an update that changes
+  the layout finds the old record and REFUSES it — status `reverted`, never the old bytes read as
+  the new layout, and never a coding silently gone (a layout-derived id, the persisted signals'
+  rule, would have pruned it and read `default`).
 - **The range is not identity — it is revalidated.** A range is not a layout: the stored bytes mean
   the same thing under a new one, and a vehicle's coding must not be lost to an update that only
   widens it. So a restored value is checked against THIS firmware's range before any FB sees it:
@@ -587,8 +589,12 @@ param_status = true                         # one byte per parameter: 0 default,
 - **0x2E**, after the DID's own gates (0x31 for a DID not writable in this session, 0x33 without its
   level) and the service row's: 0x13 for a record of the wrong length, 0x31 for a field out of range,
   then the journal — and only once it has accepted the record do the 0x22 record, the status and
-  (for `next_dispatch`) the FB's cell change. A refused put answers **0x72** and changes nothing
-  (§7, R6 / R7). A value equal to the one the journal holds writes nothing: a tester polling 0x2E
+  (for `next_dispatch`) the FB's cell change. A refused put answers **0x72** and changes nothing in
+  this run (§7, R6 / R7) — nor in the journal, unless the flash took the record and only its
+  read-back failed (`nvm.Journal.put` false is UNCONFIRMED, the journal's limit, as for 0x14): so
+  after a 0x72 the next write is stored whatever it holds, and re-writing the old value makes it
+  certain again. Generation refuses a parameter DID a tester could code from the default session
+  with no 0x27 level (its write gate and the 0x2E row both open). A value equal to the one the journal holds writes nothing: a tester polling 0x2E
   costs no wear; the first write of a never-coded parameter is stored even when it equals the
   default, so an update that changes the default does not move a vehicle coded to the old one. The
   write is one synchronous journal record (an inline compaction at a sector's end copies the live
@@ -598,8 +604,10 @@ param_status = true                         # one byte per parameter: 0 default,
   cell in the pass that wrote it; `reset` leaves the FB on the value it started with until the next
   power-up or ECUReset (coding that shapes start-up). 0x22 reads the CODED value either way.
 - **At start**, after the journal's mount and prune and before the kernel: every parameter read back,
-  revalidated and published, so the first dispatch reads it. Status per parameter: `0` default
-  (nothing stored), `1` coded, `2` reverted (another layout, out of range, or the journal unreadable).
+  revalidated and published, so the first dispatch reads it. Status per parameter — it describes the
+  CODING, as 0x22 does: `0` default (nothing stored), `1` coded (a value of this layout, in range;
+  for `reset`, possibly coded since this start and in use from the next), `2` reverted (another
+  layout, out of range, or the journal unreadable).
 - **Over DoIP** a parameter DID is a state-changing write: REQ-NET-012's rule for writable DIDs
   applies (a level on its write gate or on the 0x2E row), and the unlock is the network's own.
 - **One DID per parameter**, and a parameter is at most two fields: a coding RECORD — several
@@ -704,7 +712,7 @@ done until its obligations hold under their tests. §3 fixes the shape; this tab
 | R6 | The clear epoch has a stable block identity like the entries (fixed / schema-derived, collision-handled, in the prune keep-set), so a firmware update can never prune it and resurrect cleared entries. *Met in R6b by removing the epoch:* the status image, one value with a fixed id keyed by DTC number, IS the clear. | power-cycle test across a firmware update that reorders faults |
 | R6 / R7 | Persistent writes never block the comm thread: `nvm.Journal.put` is synchronous (a full chain, or a compaction), so persisted 0x2E / 0x14 / fault-memory writes go through a bounded incremental flash path, with 0x78 covering the wait. *Not met (R6b):* fault-memory writes are synchronous but bounded — an image ≤ 17 records, a 0x14 one image; an inline compaction copies the live set — and no 0x78 is sent. *R7 the same:* a parameter's 0x2E is one synchronous record (an inline compaction at a sector's end copies the live set), no 0x78. | bench: CAN rx/tx, NM and 0x78 timing continue during a worst-case chain write and a compaction |
 | R6 | Automatic fault-memory writes (qualification, cycle end) that the journal refuses are kept dirty and retried with bounded pacing — including in the sleep flush — rather than waiting for the next event, since no request is there to receive a 0x72. *Met in R6b* (paced by `[nvm] min_write_ms`; a flush always tries). | `persist_test.v` `test_a_refused_write_is_retried_after_the_pause`; fault-injection: a refused qualification write survives a later power cycle |
-| R7 | Parameters get the entries' identity rules: a stable, schema-derived, collision-handled block id in the prune keep-set, so a firmware update that reorders or adds parameters never restores one parameter's bytes into another. *Met in R7:* the id hashes the layout (pinnable on a collision, which generation refuses), and the record carries a layout fingerprint a pinned id is checked against. | `tools/loom2v/param_target_test.v` `test_a_parameters_identity_is_its_layout`; `comm/param/param_test.v` `test_another_layout_is_never_applied` |
+| R7 | Parameters get the entries' identity rules: a stable, schema-derived, collision-handled block id in the prune keep-set, so a firmware update that reorders or adds parameters never restores one parameter's bytes into another. *Met in R7:* the id hashes the parameter's name (pinnable on a collision, which generation refuses), and the record carries its layout's fingerprint, so an update that changes the layout refuses the old bytes and says `reverted`. | `tools/loom2v/param_target_test.v` `test_a_parameters_identity_is_its_name_and_its_layout`; `comm/param/param_test.v` `test_another_layout_is_never_applied` |
 | R7 | A restored parameter is revalidated against the CURRENT range before the FB first sees it; out of range → the compiled default (and a flag the tester can read), so a range narrowed by an update is never bypassed. *Met in R7:* the status DID reads `reverted` (2). | `comm/param/param_test.v` `test_a_restored_value_is_revalidated_against_this_firmwares_range` |
 | R6 | Signal-status faults (timeout / integrity / lost) raise their DTCs on silicon — moved here from R5, which proves only the FB-visible status. | bench: pull a sender → its DTC reads back over 0x19 |
 | R2 | NM stays awake for a diagnostic exchange in ANY session: a request-scoped keep-awake vote from the first frame of a request until its final response has drained (diagnostic frames do not refresh NM), in addition to the session-scoped vote. | bench: a multi-frame 0x22 in the default session started near the NM timeout completes |

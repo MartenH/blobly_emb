@@ -12,11 +12,13 @@ module param
 //
 //   [ version | schema fingerprint (2) | each field, big-endian, at its width ]
 //
-// The block id and the fingerprint are both derived from the parameter's LAYOUT — its name and
-// its fields' names and types — so a firmware update that changes the layout finds no value it
-// could misread (a pinned id keeps its block, and the fingerprint then refuses the record). The
-// RANGE is not part of either: a range is not a layout, the stored bytes still mean the same thing
-// under a new range, and a workshop's coding must not be lost to an update that only widens one.
+// The block id is derived from the parameter's NAME (pinnable on a collision), so declaration order
+// and layout never move it; the record carries a FINGERPRINT of the LAYOUT — its fields' names,
+// types and order, which is the byte order of the record and the DID — so a firmware update that
+// changes the layout finds a record it refuses, and says so (status `reverted`), rather than finding
+// nothing or misreading it. The RANGE is in neither: a range is not a layout, the stored bytes still
+// mean the same thing under a new range, and a workshop's coding must not be lost to an update that
+// only widens one.
 // Instead every restored value is REVALIDATED against this firmware's range before an FB sees it
 // (§7, R7): out of range — a range narrowed by an update — and the compiled default stands, with
 // the parameter's status saying so (`reverted`), so a narrowed range is never bypassed.
@@ -24,9 +26,12 @@ module param
 // A write is durable before anything changes (§7, R6 / R7): the value is validated (0x13 for a
 // record of the wrong length, 0x31 for a field out of range), put into the journal, and only once
 // the journal has accepted it does the 0x22 record, the status, and — for `apply = next_dispatch`
-// — the FB's input change. A refused put answers 0x72 generalProgrammingFailure and leaves both the
-// live and the durable value exactly as they were. A write of the value the journal already holds
-// writes nothing (a tester polling 0x2E with an unchanged value costs no wear).
+// — the FB's input change. A refused put answers 0x72 generalProgrammingFailure and leaves this
+// run's live value, record and status as they were; the durable value too, unless the flash took
+// the record and only its read-back failed (the journal's own limit: `put` false is UNCONFIRMED) —
+// so after a 0x72 the next write is stored whatever it holds, and re-writing the old value is how a
+// tester makes the old value certain again. A write of the value the journal already holds writes
+// nothing (a tester polling 0x2E with an unchanged value costs no wear).
 //
 // When a written value takes effect is the parameter's `apply`: `next_dispatch` — the FB's next
 // dispatch after the positive answer — or `reset` — the next power-up or ECUReset, as coding that
@@ -48,7 +53,8 @@ pub const nrc_general_programming_failure = u8(0x72)
 
 // Status, per parameter, as the status DID reports it (one byte each, declaration order).
 pub const status_default = u8(0) // nothing coded: the compiled default
-pub const status_coded = u8(1) // a coded value of this schema, in range, is in use
+pub const status_coded = u8(1) // a value of this layout, in range, is coded — in use, or for an
+// `apply = reset` parameter coded since this start, in use from the next one
 pub const status_reverted = u8(2) // a stored value was refused at restore (another schema, out of
 // range, or the journal unreadable): the compiled default is in use
 
@@ -294,7 +300,12 @@ pub fn (mut ps Params) write(did u16, data &u8, n int) u8 {
 		rec[2] = u8(p.fp)
 		len := record_hdr + p.encode(v, &rec[record_hdr])
 		if !ps.store.put(ps.store.ctx, p.id, &rec[0], u16(len)) {
-			return nrc_general_programming_failure // nothing changed: live and durable as they were
+			// nothing changed here: the live value, the 0x22 record and the status are as they
+			// were. But a put the journal could not CONFIRM may still have landed (nvm.Journal.put:
+			// a read-back that failed), and the next start would read it — so the next write is
+			// stored whatever it holds, the old value included, and supersedes it
+			p.has_stored = false
+			return nrc_general_programming_failure
 		}
 		ps.wrote++
 		for f in 0 .. p.nfields {
