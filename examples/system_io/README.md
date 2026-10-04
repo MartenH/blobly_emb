@@ -41,7 +41,7 @@ make flash-h735 H735_SERIAL=<st-link>   # STM32H735G-DK   (lamp)
 ```
 
 Each node builds from its **generated** `gen-<node>.toml` through the same io+comm
-ThreadX pipeline as `h755_io` / `h735_io_lamp`, parameterized by `BOARD`. Wire both
+ThreadX pipeline as `h755_io`, parameterized by `BOARD`. Wire both
 boards on one CAN bus, then **press B1 on the H755 → the H735 LED follows**; the
 H755's green LED mirrors locally and its yellow blinks as a heartbeat.
 

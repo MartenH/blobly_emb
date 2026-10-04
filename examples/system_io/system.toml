@@ -1,8 +1,8 @@
 # system_io — the two-node IO demo composed from ONE system.toml (docs/multi-node.md
 # P1b, the dissolution). The H755 reads its B1 button and the H735 mirrors it on an
-# LED — the SAME button->lamp behaviour as the hand-written examples/h755_io +
-# examples/h735_io_lamp pair, but the cross-node signal is declared ONCE here and
-# both nodes' ecu.tomls are generated. Each node keeps its LOCAL io (button, LEDs).
+# LED — the button->lamp demo with the cross-node signal declared ONCE here and
+# both nodes' ecu.tomls generated (examples/h755_io is the tx node written as a
+# complete ecu.toml instead). Each node keeps its LOCAL io (button, LEDs).
 #
 #   make gen-system   # sysgen -> gen-h755.toml / gen-h735.toml
 #   make syscheck     # cross-node checks

@@ -4,12 +4,14 @@ import os
 
 // [doip] (gen_doip.v): the node's one diagnostic server reachable over DoIP too — what the
 // generator wires into the comm thread and boot, and what it refuses. Runs the real generator on
-// examples/h735_threadx with a connection and [doip] appended (a refusal is a panic, which cannot
-// be caught in-process).
+// testdata/threadx_node (a ThreadX node config, test input) with a connection and [doip] appended
+// (a refusal is a panic, which cannot be caught in-process).
 // @verifies REQ-NET-012 (the build half: no service that changes ECU state is reachable over IP
 // without a security level — comm/diag's tests show the unlock that level asks for is the network's own)
 
-// a service table gating the one state-changing service h735_threadx performs (0x11; no fault
+const fixture_dir = os.join_path(@DIR, 'testdata', 'threadx_node')
+
+// a service table gating the one state-changing service that config performs (0x11; no fault
 // memory, so no 0x14/0x85), as every [doip] node must (REQ-NET-012)
 const doip_uds = '
 [uds.services]
@@ -51,7 +53,7 @@ fn doip_loom2v() string {
 	return bin
 }
 
-// generate runs loom2v on h735_threadx's config with `extra` appended: exit code, output, glue
+// generate runs loom2v on the fixture's config with `extra` appended: exit code, output, glue
 fn generate(name string, extra string) (int, string, string) {
 	code, out, glue, _ := generate_mk(name, extra)
 	return code, out, glue
@@ -63,7 +65,7 @@ fn generate_mk(name string, extra string) (int, string, string, string) {
 	defer {
 		os.rmdir_all(tmp) or {}
 	}
-	ex := os.join_path(@VMODROOT, 'examples', 'h735_threadx')
+	ex := fixture_dir
 	os.mkdir_all(tmp) or { panic(err) }
 	ecu := os.join_path(tmp, 'ecu.toml')
 	src := os.read_file(os.join_path(ex, 'ecu.toml')) or { panic(err) }
@@ -77,7 +79,7 @@ fn generate_mk(name string, extra string) (int, string, string, string) {
 		'loom_build.mk')) or { '' }
 }
 
-// generate_ecu runs loom2v on `ecu` alone (h735_threadx's DBC beside it)
+// generate_ecu runs loom2v on `ecu` alone (the fixture's DBC beside it)
 fn generate_ecu(name string, ecu_text string) (int, string, string, string) {
 	tmp := os.join_path(os.temp_dir(), 'doip_target_${name}_${os.getpid()}')
 	defer {
@@ -87,7 +89,7 @@ fn generate_ecu(name string, ecu_text string) (int, string, string, string) {
 	ecu := os.join_path(tmp, 'ecu.toml')
 	os.write_file(ecu, ecu_text) or { panic(err) }
 	dbc := os.join_path(tmp, 'bus.dbc')
-	os.cp(os.join_path(@VMODROOT, 'examples', 'h735_threadx', 'bus.dbc'), dbc) or { panic(err) }
+	os.cp(os.join_path(fixture_dir, 'bus.dbc'), dbc) or { panic(err) }
 	glue := os.join_path(tmp, 'gen.v')
 	r := os.execute('${doip_loom2v()} ${ecu} ${dbc} ${os.join_path(tmp, 'sig.v')} ' +
 		'${os.join_path(tmp, 'ports.v')} ${glue} ${os.join_path(tmp, 'manifest.csv')}')
@@ -130,7 +132,7 @@ fn test_the_comm_thread_serves_doip_from_the_mailbox() {
 	assert glue.contains('g_doip.vin[0] = u8(0x42)') && glue.contains('g_doip.vin[16] = u8(0x58)')
 	assert !glue.contains("'BLOBLYH735THREADX'"), 'a string in the generated runtime'
 	assert glue.contains('g_doip.serve.answer = doipnet.answer')
-	// below every application thread: h735_threadx's lowest is ctrl_slow at 13
+	// below every application thread: the fixture's lowest is ctrl_slow at 13
 	assert glue.contains("C.doip_net_create(c'192.168.0.50', u32(14), u32(15))")
 	assert !glue.contains('functional_addr'), 'the default functional address is comm/doip\'s'
 	// a reset waits for the CAN controller, then for DoIP answers still in TCP's transmit queue
@@ -281,11 +283,11 @@ fn test_ip4_ok_is_the_drivers_rule() {
 	}
 }
 
-// the trace recorder binds 8 thread ids: h735_threadx with DoIP fills them exactly (comm, three
+// the trace recorder binds 8 thread ids: the fixture with DoIP fills them exactly (comm, three
 // app threads, NetX IP, doip, doip-svc, the timer); one thread more is refused, not mislabelled
 fn test_a_trace_past_the_recorders_thread_table_is_refused() {
-	src := os.read_file(os.join_path(@VMODROOT, 'examples', 'h735_threadx', 'ecu.toml')) or { panic(err) }
-	at := src.index('  [[partition.thread]]') or { panic('no thread in h735_threadx') }
+	src := os.read_file(os.join_path(fixture_dir, 'ecu.toml')) or { panic(err) }
+	at := src.index('  [[partition.thread]]') or { panic('no thread in the fixture') }
 	more := src[..at] + '  [[partition.thread]]\n  name     = "extra"\n  priority = 14\n\n' + src[at..]
 	code, out, _, _ := generate_ecu('doip_trace_full', more + doip_conn)
 	assert code != 0, 'loom2v accepted 9 traced threads'
@@ -296,7 +298,7 @@ fn test_a_trace_past_the_recorders_thread_table_is_refused() {
 	}
 	os.mkdir_all(tmp) or { panic(err) }
 	os.write_file(os.join_path(tmp, 'ecu.toml'), more + doip_conn) or { panic(err) }
-	os.cp(os.join_path(@VMODROOT, 'examples', 'h735_threadx', 'bus.dbc'), os.join_path(tmp, 'bus.dbc')) or {
+	os.cp(os.join_path(fixture_dir, 'bus.dbc'), os.join_path(tmp, 'bus.dbc')) or {
 		panic(err)
 	}
 	r := os.execute('${doip_loom2v()} ${os.join_path(tmp, 'ecu.toml')} ${os.join_path(tmp, 'bus.dbc')} ' +

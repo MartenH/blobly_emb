@@ -1,6 +1,6 @@
 module main
 
-// h735_threadx entry (P3c-1 phase 6a). The generated gen/loom_gen.v provides run() (the FB
+// h755_threadx entry (CM7). The generated gen/loom_gen.v provides run() (the FB
 // superloop), the ThreadX app thread, and @[export] tx_application_define. This hand-written,
 // platform-aware main does only the board bring-up then hands control to the ThreadX kernel:
 // tx_kernel_enter() calls tx_application_define, which creates the app_main thread. crt0.S

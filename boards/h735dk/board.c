@@ -1,4 +1,5 @@
-/* STM32H735G-DK board bring-up for the h735_app showcase — register-level, no HAL.
+/* STM32H735G-DK board bring-up for every image on the board, bare-metal and ThreadX —
+ * register-level, no HAL.
  *
  * The FDCAN1 bring-up (PH13/PH14, AF9), plus a bare-metal timebase: the Loom and the
  * telemetry loop need a monotonic microsecond clock (host/sim gets it from POSIX

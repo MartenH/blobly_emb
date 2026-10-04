@@ -5,7 +5,7 @@ name: ci
 #
 # Scope: the HOST/SIM side — unit tests, config validation, the requirement→verification trace —
 # plus the STM32H7 cross builds: gcc-arm-none-eabi from apt and `make deps` (~10s of clones),
-# then every image — 18 of them, a few minutes from clean. That gate
+# then every image — 16 of them, a few minutes from clean. That gate
 # is worth having, because a broken target build otherwise merges behind a green board — exactly
 # what happened to examples/trace_comm and trace_multicore (#191), and to h735_app during the fix
 # for them. It also runs scripts/lint_vinit.sh, which only exists on the freestanding path.
@@ -49,7 +49,7 @@ jobs:
       #
       # Bump .v-version deliberately, and re-run the full local gate on the new compiler:
       #   host  — make deps-cmsis && v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot examples
-      #   cross — the 17 STM32H7 images (the loop in the cross job below visits 19 directories; system_full/ and system_io/ build their nodes)
+      #   cross — the 16 STM32H7 images, 13 applications and 3 bootloaders (the loop in the cross job below visits 15 directories; system_full/ and system_io/ build their nodes)
       - name: Install V (pinned prebuilt release, see .v-version)
         run: |
           set -euo pipefail
@@ -209,7 +209,7 @@ jobs:
       #
       # Bump .v-version deliberately, and re-run the full local gate on the new compiler:
       #   host  — make deps-cmsis && v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot examples
-      #   cross — the 17 STM32H7 images (the loop in the cross job below visits 19 directories; system_full/ and system_io/ build their nodes)
+      #   cross — the 16 STM32H7 images, 13 applications and 3 bootloaders (the loop in the cross job below visits 15 directories; system_full/ and system_io/ build their nodes)
       - name: Install V (pinned prebuilt release, see .v-version)
         run: |
           set -euo pipefail
