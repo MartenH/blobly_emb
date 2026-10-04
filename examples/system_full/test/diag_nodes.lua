@@ -50,7 +50,9 @@ for _, n in ipairs(nodes) do
     check.nrc(0x7E, function() d:session(0x02) end)
     check.nrc(0x31, function() d:read_did(0xABCD) end)
     d:session(0x01)
-    check.nrc(0x11, function() d:raw("\x28\x01\xF1") end) -- 0x28: nothing gates the target's frames
+    -- 0x28 gates the target's application frames since R5, in a non-default session; sysnode's
+    -- service table leaves it out
+    check.nrc(n.name == "sysnode" and 0x11 or 0x7F, function() d:raw("\x28\x01\x01") end)
     if n.name == "sysnode" then
       -- sysnode's [uds] service table: ECUReset only in the extended session (0x7F here, where
       -- zone_a, on the default table, would reset)
