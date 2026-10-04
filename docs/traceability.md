@@ -69,7 +69,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-014 | QM | test | covered | faults.lua (pending), faults_zone_a_persist.lua (pending), records_test.v (pass) |
 | REQ-DIAG-015 | QM | test | covered | faults.lua (pending), records_test.v (pass) |
 | REQ-DIAG-016 | QM | test | covered | faults_zone_a_persist.lua (pending), persist_test.v (pass) |
-| REQ-DIAG-017 | QM | test | covered | param_target_test.v (pass), param_test.v (pass), param_zone_a.lua (pending) |
+| REQ-DIAG-017 | QM | test | covered | ecucheck_test.v (pass), param_target_test.v (pass), param_test.v (pass), param_zone_a.lua (pending) |
 | REQ-E2E-001 | B | test | verified | e2e_test.v (pass) |
 | REQ-E2E-002 | B | test | verified | e2e_test.v (pass) |
 | REQ-E2E-003 | B | test | verified | e2e_test.v (pass) |
