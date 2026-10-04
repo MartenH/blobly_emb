@@ -404,7 +404,10 @@ ride the same bus-sleep flush choreography as persisted signals.
 
 **The invariant** (`persist.v`): no block the last COMMITTED image claims is ever written or
 tombstoned; a block is released only by a committed image that no longer claims it. It holds by
-construction: the image records WHICH block it claims, a capture always writes the other one, and a
+construction: the image records WHICH block it claims — and the schema fingerprint of the snapshot it claims, so
+restore accepts a block only with that fingerprint, and only when it is this firmware's (a claim
+under another schema, after an update or a rollback, is read as nothing and dropped by the next
+committed image) — a capture always writes the other one, and a
 tombstone is written only for a block the committed image does not claim and no captured snapshot
 is waiting in. So a power cut anywhere restores a committed image whose every claimed block is
 intact — through a displacement, a DTC displaced and reacquired before the image released it, a
@@ -436,8 +439,8 @@ cycle, so a passing power cycle clears pending.
 stores changes, and the status rules bound that PER OPERATION CYCLE: per DTC, at its first completed
 test, at its first failure (pending, testFailedSinceLastClear, confirmed, the failed-cycle counter)
 and at the cycle's end (pending cleared, aging), plus once at each cycle start and end and at each
-tester clear and 0x85 change (the image records the setting); changes in one owner pass coalesce into one write. The image is 2 + 8 B per fault
-(≤ 14 journal records for 32 faults). A LATER occurrence in the same cycle changes only the
+tester clear and 0x85 change (the image records the setting); changes in one owner pass coalesce into one write. The image is 2 + 10 B per fault (the last 2: the claimed snapshot's schema fingerprint)
+(≤ 17 journal records for 32 faults). A LATER occurrence in the same cycle changes only the
 occurrence counter, which is DEFERRED — written with the next image write or at the next flush (a
 sleep edge, an ECUReset), never on its own — so an intermittent fault costs no write per occurrence,
 and a power cut can lose the occurrences counted since that cycle's first failure, never more and
@@ -472,7 +475,7 @@ per sector fill — on the single-bank H723 an erase stalls every fetch for abou
 when the journal is REFUSING with a sector awaiting its erase, the comm pass erases it there and
 then — the one runtime erase, once per sector fill — or nothing, a 0x14 included, could be stored
 until the next boot (a 0x14 refused meanwhile answers 0x72 and the tester retries).
-`nvm.Journal.put` is synchronous: an image write is ≤ 14 records (microseconds each), an inline
+`nvm.Journal.put` is synchronous: an image write is ≤ 17 records (microseconds each), an inline
 compaction copies the live set — bounded, but not the incremental flash path §7 asks for.
 
 A producer publishes its fault report AFTER the handler's outputs, so a snapshot of a DID the same
@@ -623,7 +626,7 @@ done until its obligations hold under their tests. §3 fixes the shape; this tab
 | R6 | Snapshot and extended-data records carry stable on-wire record numbers — snapshot record 0x01 per DTC (one snapshot per fault), extended data 0x01 occurrence counter, 0x02 aging counter — with 0xFF (all) supported, and the numbering carried in the manifest for the tester. *Met in R6b* but for the manifest: the numbers and widths are fixed (0x03 = failed cycles added) and blobly_net knows them (`blobly_ext_records`). | unit: 0x19 03 / 04 / 06 with explicit and 0xFF record numbers; N3 decodes them |
 | R0 | A functional id may be shared with OTHER functional ids on its bus, never with a physical request or response id there — checked in syscheck across the whole bus (loom2v checks the node's own ids). | syscheck test: a functional id equal to another node's physical id on the same bus fails |
 | R6 | The clear epoch has a stable block identity like the entries (fixed / schema-derived, collision-handled, in the prune keep-set), so a firmware update can never prune it and resurrect cleared entries. *Met in R6b by removing the epoch:* the status image, one value with a fixed id keyed by DTC number, IS the clear. | power-cycle test across a firmware update that reorders faults |
-| R6 / R7 | Persistent writes never block the comm thread: `nvm.Journal.put` is synchronous (a full chain, or a compaction), so persisted 0x2E / 0x14 / fault-memory writes go through a bounded incremental flash path, with 0x78 covering the wait. *Not met (R6b):* fault-memory writes are synchronous but bounded — an image ≤ 14 records, a 0x14 one image; an inline compaction copies the live set — and no 0x78 is sent. | bench: CAN rx/tx, NM and 0x78 timing continue during a worst-case chain write and a compaction |
+| R6 / R7 | Persistent writes never block the comm thread: `nvm.Journal.put` is synchronous (a full chain, or a compaction), so persisted 0x2E / 0x14 / fault-memory writes go through a bounded incremental flash path, with 0x78 covering the wait. *Not met (R6b):* fault-memory writes are synchronous but bounded — an image ≤ 17 records, a 0x14 one image; an inline compaction copies the live set — and no 0x78 is sent. | bench: CAN rx/tx, NM and 0x78 timing continue during a worst-case chain write and a compaction |
 | R6 | Automatic fault-memory writes (qualification, cycle end) that the journal refuses are kept dirty and retried with bounded pacing — including in the sleep flush — rather than waiting for the next event, since no request is there to receive a 0x72. *Met in R6b* (paced by `[nvm] min_write_ms`; a flush always tries). | `persist_test.v` `test_a_refused_write_is_retried_after_the_pause`; fault-injection: a refused qualification write survives a later power cycle |
 | R7 | Parameters get the entries' identity rules: a stable, schema-derived, collision-handled block id in the prune keep-set, so a firmware update that reorders or adds parameters never restores one parameter's bytes into another. | power-cycle across a reordering update |
 | R7 | A restored parameter is revalidated against the CURRENT range before the FB first sees it; out of range → the compiled default (and a flag the tester can read), so a range narrowed by an update is never bypassed. | update test narrowing a range below a stored value |

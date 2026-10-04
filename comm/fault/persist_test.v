@@ -89,6 +89,24 @@ fn pf_put(ctx voidptr, id u16, data &u8, len u16) bool {
 	if r.refuse_id != 0 && id == r.refuse_id {
 		return false
 	}
+	if id == r.m.store.id {
+		if !r.j.put(id, data, len) {
+			return false
+		}
+		r.puts++
+		r.image_puts++
+		r.committed = map[u32][]u8{}
+		for o := 2; o + image_rec <= int(len); o += image_rec {
+			rec := unsafe { data.vbytes(int(len))[o..o + image_rec] }
+			claimed := r.claimed_block(rec)
+			if claimed != 0 {
+				mut b := [max_block]u8{}
+				n := int(r.j.get(claimed, &b[0], u16(max_block)))
+				r.committed[u32(rec[0]) << 16 | u32(rec[1]) << 8 | u32(rec[2])] = b[..n].clone()
+			}
+		}
+		return true
+	}
 	r.puts++
 	if id == r.m.store.id {
 		r.image_puts++
@@ -124,6 +142,7 @@ mut:
 	puts       int
 	image_puts int
 	cap        int
+	committed  map[u32][]u8 // per DTC, the snapshot block the last COMMITTED image claims, as it was then
 	swapped    bool // an update swapped the snapshot's DID sizes (F1A0 18 B, F190 4 B): same length
 	order      [4]int // which configured slot carries DTC k (an update may reorder)
 	n          int
@@ -454,8 +473,26 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 						assert schema_of[rec] == r.swapped, '${ctx}: a snapshot of the old schema was restored under the new one (${rec})'
 					}
 				}
+				r.check_restored(ctx)
 				flips++
-				r.m.persist(now, true) // the first pass after the update: claims of the old schema dropped
+				// the first pass after the update — completed, cut half-way (both schemas' blocks
+				// left whole), or never reached before the next update (a rollback)
+				match (rng >> 26) % 3 {
+					0 {
+						r.m.persist(now, true)
+					}
+					1 {
+						r.f.cut_at = r.f.calls + 1 + (rng >> 8) % 3
+						r.f.cut_part = (rng >> 16) % 33
+						r.m.persist(now, true)
+						r.f.cut_at = 0
+						if r.f.dead {
+							r.reboot()
+							r.check_restored(ctx)
+						}
+					}
+					else {}
+				}
 				continue
 			}
 			old := stored_image(r)
@@ -524,7 +561,10 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 				gained := claimed(after).filter(it !in claimed(old))
 				for dtc in lost {
 					i := r.m.slot_of(dtc)
-					freed := r.m.slots[i].status & (pending | confirmed) == 0
+					// freed: no failure held any more, or a claim of another schema (an update)
+					o := 2 + i * image_rec
+					other_schema := u16(old[o + 8]) << 8 | u16(old[o + 9]) != r.m.schema_fp(i)
+					freed := r.m.slots[i].status & (pending | confirmed) == 0 || other_schema
 					assert freed || gained.len > 0, '${ctx}: DTC ${dtc:06X} lost its stored snapshot to a refused write, and nothing replaced it'
 				}
 				continue
@@ -534,6 +574,7 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 				mid_image++
 			}
 			r.reboot()
+			r.check_restored(ctx)
 			got := stored_image(r)
 			assert got == old || got == new, '${ctx}: the store holds ${got}\n  before ${old}\n  writing ${new}'
 			for i in 0 .. r.m.n {
@@ -596,6 +637,7 @@ fn shadow(r &Rig) &Rig {
 	}
 	sh.j.ops.ctx = &sh.f
 	sh.m.store.ctx = sh
+	sh.committed = r.committed.clone() // a map is a reference: the shadow keeps its own
 	sh.srv.faults = sh.m.uds_ops()
 	return sh
 }
@@ -772,4 +814,38 @@ fn test_lowered_entries_leave_the_dropped_snapshot_claimed() {
 	r.pass(-1, .not_tested, 0, 2000) // now an image without it commits, and then it goes
 	r.pass(-1, .not_tested, 0, 3000)
 	assert r.j.get(0x1001, &blk[0], u16(max_block)) == 1
+}
+
+// check_restored: every snapshot the memory restored is exactly the one the last COMMITTED image
+// claimed — never a stale block of another write or another schema standing in for it.
+fn (r &Rig) check_restored(ctx string) {
+	for k in 0 .. r.m.cap {
+		e := r.m.entries[k]
+		if !e.used {
+			continue
+		}
+		dtc := r.m.slots[e.slot].dtc
+		want := r.committed[dtc] or { []u8{} }
+		assert want.len == snap_hdr + e.len && want[snap_hdr..] == e.data[..e.len], '${ctx}: DTC ${dtc:06X} restored a snapshot its committed image did not claim'
+	}
+}
+
+// A claim is accepted only with the fingerprint the IMAGE recorded for it: an image that claims a
+// block under another schema (written by firmware of another schema) is read as no snapshot, even
+// when the block itself holds a valid snapshot of this firmware's schema — the block is not the
+// one that image claimed. The claim is dropped by the next committed image.
+fn test_a_claim_is_accepted_only_with_its_recorded_fingerprint() {
+	mut r := new_rig(2)
+	r.pass(0, .failed, 5, 1)
+	mut img := [max_image]u8{}
+	n := r.j.get(r.m.store.id, &img[0], u16(max_image))
+	o := 2 + r.order[0] * image_rec
+	assert img[o + 3] & img_snapshot != 0
+	img[o + 8] ^= 0x5A // the image claims the block under another schema
+	assert r.j.put(r.m.store.id, &img[0], n)
+	r.reboot()
+	assert r.slot(0).entry == 0 && r.slot(0).claim == 1 && !r.slot(0).claim_ok
+	assert r.slot(0).status & confirmed != 0, 'the status went with the snapshot'
+	r.pass(-1, .not_tested, 0, 2)
+	assert r.slot(0).claim == 0, 'the next committed image kept the claim'
 }

@@ -48,8 +48,8 @@ module fault
 // DTC per cycle: an entry that failed this cycle cannot be displaced) and tombstoned once when
 // freed. A refused write is retried no sooner than `retry_us` later.
 
-pub const image_version = u8(3) // 3: which of a DTC's two snapshot blocks is claimed (2: the setting bit and fingerprints)
-pub const image_rec = 8 // bytes per DTC in the image
+pub const image_version = u8(4) // 4: the claimed snapshot's fingerprint (3: which of two blocks; 2: the setting bit, block fingerprints)
+pub const image_rec = 10 // bytes per DTC in the image: DTC 3, flags 1, failed cycles 1, aging 1, occurrence 2, the claimed snapshot's schema fingerprint 2
 pub const max_image = 2 + max_faults * image_rec
 pub const snap_hdr = 9 // a snapshot block: DTC (3), stamp (4), schema fingerprint (2), then the record body
 pub const max_block = max_image // the larger of an image and a snapshot block (test_the_scratch_holds_either)
@@ -120,6 +120,11 @@ fn (mut m Memory) image(clearing bool, group u32) int {
 		m.scratch[o + 5] = s.aging_count
 		m.scratch[o + 6] = u8(s.occurrence >> 8)
 		m.scratch[o + 7] = u8(s.occurrence)
+		// the schema the claimed snapshot was written under: restore accepts a block only with
+		// this fingerprint, so no stale block of another schema stands in for the one claimed
+		fp := if f & img_snapshot != 0 { m.schema_fp(i) } else { u16(0) }
+		m.scratch[o + 8] = u8(fp >> 8)
+		m.scratch[o + 9] = u8(fp)
 	}
 	return 2 + m.n * image_rec
 }
@@ -135,7 +140,7 @@ fn (m &Memory) image_change(n int) (bool, bool) {
 	for b in 0 .. n {
 		if m.scratch[b] != m.img[b] {
 			any = true
-			if b < 2 || (b - 2) % image_rec < 6 {
+			if b < 2 || ((b - 2) % image_rec != 6 && (b - 2) % image_rec != 7) {
 				other = true
 			}
 		}
@@ -330,9 +335,13 @@ pub fn (mut m Memory) restore() {
 			s.aging_count = m.img[o + 5]
 			s.occurrence = u16(m.img[o + 6]) << 8 | u16(m.img[o + 7])
 			// the committed claim stands whether or not its block is readable: what it claims is
-			// released only by a committed image that no longer claims it
+			// released only by a committed image that no longer claims it. A claim of a snapshot
+			// written under ANOTHER schema than this firmware's (an update, or a rollback) is read
+			// as nothing and dropped from the next committed image: a block is accepted only with
+			// the fingerprint the image claimed, which must be this firmware's.
 			s.claim = if s.nfreeze > 0 { claim_of(f) } else { u8(0) }
-			s.claim_ok = s.claim != 0 && m.load_snapshot(i, s.claim)
+			claimed_fp := u16(m.img[o + 8]) << 8 | u16(m.img[o + 9])
+			s.claim_ok = s.claim != 0 && claimed_fp == m.schema_fp(i) && m.load_snapshot(i, s.claim)
 		}
 		m.fit_entries()
 	}
