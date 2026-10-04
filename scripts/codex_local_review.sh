@@ -72,13 +72,16 @@ fi
 head=$(git rev-parse HEAD)
 merge_base=$(git merge-base "$base" "$head")
 
-# The V this build uses: $V, else `v` on PATH. It need not match the CI pin (.v-version) —
-# `make v-pin` says how it differs — so the review is told which one it is running.
-v_bin=$(command -v "${V:-v}" || true)
+# The V this build uses: $V (a command and its flags, as scripts/build_tool.sh takes it), else `v`
+# on PATH. It need not match the CI pin (.v-version) — `make v-pin` says how it differs — so the
+# review is told which one it is running.
+read -r -a v_cmd <<< "${V:-v}"
+v_bin=$(command -v "${v_cmd[0]:-v}" || true)
+v_run=${V:-$v_bin}
 probe_note="Put any probe or scratch files under /tmp, never in the repository."
-gates="the host unit tests \`$v_bin -enable-globals test <module>/\` for the touched modules (CI runs comm driver tools ecu loom nvm wdg bcrypto boot, and examples), \`make lint\` (no-alloc + isolation, must pass), \`make check\` and \`make trace-check\`. tools/vectab needs the CMSIS headers under third_party/; if they are absent, skip it rather than fetching them. Do not flash or touch hardware (never \`make hwtest\` or \`make flash\`)"
+gates="the host unit tests \`$v_run -enable-globals test <module>/\` for the touched modules (CI runs comm driver tools ecu loom nvm wdg bcrypto boot, and examples), \`make lint\` (no-alloc + isolation, must pass), \`make check\`, \`make syscheck\` (the cross-node checks over every examples/*/system.toml; a change to one needs it) and \`make trace-check\`. tools/vectab needs the CMSIS headers under third_party/; if they are absent, skip it rather than fetching them. Do not flash or touch hardware (never \`make hwtest\` or \`make flash\`)"
 if [ -n "$v_bin" ] && [ -x "$v_bin" ]; then
-	v_note="The V compiler is \`$v_bin\` ($("$v_bin" version 2>/dev/null || echo 'version unknown'); CI pins $(tr -d '[:space:]' < .v-version)). Do not look for other V installations. Where they bear on the change, run $gates. A change to generated code must leave \`gen/\` outputs that regeneration reproduces. Network sockets are allowed, so the UDP/TCP tests can run. $probe_note"
+	v_note="The V compiler is \`$v_run\` ($("$v_bin" version 2>/dev/null || echo 'version unknown'); CI pins $(tr -d '[:space:]' < .v-version)). Do not look for other V installations. Where they bear on the change, run $gates. A change to generated code must leave \`gen/\` outputs that regeneration reproduces. Network sockets are allowed, so the UDP/TCP tests can run. $probe_note"
 else
 	v_note="No V compiler was found on this machine; review statically and say that tests were not run. $probe_note"
 	echo "codex-local-review: warning: no V in \$V or on PATH; the review will not run tests" >&2
