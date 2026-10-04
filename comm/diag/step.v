@@ -78,10 +78,12 @@ pub fn in_flight(l &isotp.Link) bool {
 
 // wire_drain waits until the controller has put every handed-off frame on the wire, at most
 // drain_us by `clock` — the link going idle only means the last frame reached the Tx FIFO, and an
-// immediate reset loses it (REQ-BOOT-012, found on the H755 bench).
-pub fn wire_drain[H](mut ch H, clock fn () u64) {
+// immediate reset loses it (REQ-BOOT-012, found on the H755 bench). True when the wire took them
+// all; false when drain_us ran out first (a bus-off, sustained errors): nothing confirmed.
+pub fn wire_drain[H](mut ch H, clock fn () u64) bool {
 	t0 := clock()
 	for !ch.tx_idle() && clock() - t0 < drain_us {}
+	return ch.tx_idle()
 }
 
 // serve_step is one whole pass of a server that owns its connection and nothing else on its bus —
@@ -89,7 +91,7 @@ pub fn wire_drain[H](mut ch H, clock fn () u64) {
 // and, for routine work it answered responsePending for (a flash erase, a unit at a time):
 // work_awaiting (a response of the routine is on its way through the link), work_left / work_lost
 // (it left the link AND the wire — a flash erase stalls a single-bank chip whole; the drain is
-// bounded by `clock` — or a refused or aborted transfer lost it), work_pending / work (the next
+// bounded by `clock` — or a refused or aborted transfer, or a drain that ran out, lost it), work_pending / work (the next
 // step, once its own preceding response has left: a unit and what follows it, or the lost 0x78
 // again — never the work unannounced).
 // Returns true when the reset the server answered is due: its answer has left the link — the owner
@@ -125,8 +127,11 @@ pub fn serve_step[T, H](mut s T, mut l isotp.Link, rx_id u32, tx_id u32, now u64
 		if lost {
 			s.work_lost()
 		} else if !l.busy() {
-			wire_drain(mut ch, clock)
-			s.work_left()
+			if wire_drain(mut ch, clock) {
+				s.work_left()
+			} else {
+				s.work_lost() // still in the controller when the drain ran out: not confirmed
+			}
 		}
 	}
 	if s.work_pending() && !l.busy() {

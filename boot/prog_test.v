@@ -96,13 +96,23 @@ fn new_prog(mut f TestFlash) Prog {
 // ask: one request/response exchange; returns the final response bytes — a routine answered
 // responsePending is stepped to its answer, as the serve loop does once each response has left.
 fn ask(mut p Prog, req []u8) []u8 {
+	return ask_at(mut p, req, 0)
+}
+
+// ask_at: ask, its routine steps taken at `now` (each step is tester activity)
+fn ask_at(mut p Prog, req []u8, now u64) []u8 {
 	mut resp := []u8{len: 600}
 	mut n := p.handle(&req[0], req.len, unsafe { &resp[0] })
+	mut stepped := false
 	for n == 3 && resp[0] == 0x7F && resp[2] == 0x78 {
 		assert !p.work_due(via_bus), 'a step before its 0x78 left'
 		p.work_left() // the transport: the 0x78 is on the wire
 		assert p.work_due(via_bus)
-		n = p.step(0, unsafe { &resp[0] })
+		n = p.step(now, unsafe { &resp[0] })
+		stepped = true
+	}
+	if stepped {
+		p.work_left() // ... and so is the routine's answer
 	}
 	return resp[..n]
 }
@@ -595,6 +605,15 @@ fn test_session_change_clears_auth() {
 // against a reference model of those rules.
 
 fn ask_net(mut p Prog, req []u8, now u64) []u8 {
+	out, pushed := ask_net_held(mut p, req, now)
+	if pushed {
+		p.push_sent() // the routine's answer, pushed, acknowledged
+	}
+	return out
+}
+
+// ask_net_held: ask_net, a routine's pushed answer left unacknowledged (true when there is one)
+fn ask_net_held(mut p Prog, req []u8, now u64) ([]u8, bool) {
 	mut resp := []u8{len: 600}
 	p.tick(now) // the serve loop ticks every pass; a network request is stamped by it
 	mut n := p.serve_remote(&req[0], req.len, false, unsafe { &resp[0] })
@@ -612,7 +631,7 @@ fn ask_net(mut p Prog, req []u8, now u64) []u8 {
 		n = p.step(now, unsafe { &resp[0] })
 		pushed = true
 	}
-	return resp[..n]
+	return resp[..n], pushed
 }
 
 fn ask_via(mut p Prog, via u8, req []u8, now u64) []u8 {
@@ -620,7 +639,7 @@ fn ask_via(mut p Prog, via u8, req []u8, now u64) []u8 {
 		return ask_net(mut p, req, now)
 	}
 	p.heard(now) // serve_step stamps a bus request before it is handled
-	return ask(mut p, req)
+	return ask_at(mut p, req, now)
 }
 
 // the 0x29 proof for fake_rng's challenge (the same every time)
@@ -847,6 +866,7 @@ mut:
 	remote    bool // ... asked over the network
 	inflight  bool
 	spoke     bool // the network has been heard in the session it holds
+	push      bool // a routine's answer pushed over the network, not yet acknowledged
 	heard     u64
 }
 
@@ -856,6 +876,7 @@ fn (mut m Model) end() {
 	m.unlocked = false
 	m.challenge = false
 	m.spoke = false
+	m.push = false
 }
 
 // request: the answer the rules give (its first bytes: the positive SID, or 7F SID NRC)
@@ -916,6 +937,7 @@ fn (mut m Model) dropped() {
 	}
 	m.inflight = false
 	m.remote = false
+	m.push = false // nobody acknowledges it now: the routine goes with the connection
 	if m.owner == via_net && m.spoke {
 		m.end()
 	}
@@ -924,6 +946,9 @@ fn (mut m Model) dropped() {
 fn (mut m Model) tick(now u64) {
 	if m.inflight && (m.session == 0x01 || m.owner == via_net) {
 		m.heard = now // an exchange in flight holds the silence clocks
+	}
+	if m.push {
+		m.heard = now // ... and so does a routine's answer on its way
 	}
 	if m.session != 0x01 && now - m.heard > s3_server_us {
 		m.end()
@@ -964,27 +989,56 @@ fn test_two_transports_against_the_reference_model() {
 	mut m := fresh_model()
 	mut now := u64(0)
 	mut resets := 0
+	mut held_s3 := 0 // S3 passed with a routine's pushed answer unacknowledged
 	// the DoIP mailbox and connection under the serve loop, through the target's own rules
 	// (driver/eth/doip_mb.h; its protocol has its own model, driver/eth/doip_mb_test.v): the
 	// connection and its unacknowledged bytes
 	mut mb := C.doip_mb_t{}
 	mut connected := 1
 	mut unacked := u32(0)
-	for step in 0 .. 1000 {
-		op := rand.intn(12) or { 0 }
+	for step in 0 .. 2000 {
+		op := rand.intn(13) or { 0 }
 		now += u64(rand.intn(400_000) or { 0 })
 		p.tick(now) // the serve loop ticks every pass, before it serves
 		m.tick(now)
 		match op {
 			0...7 {
 				via := if rand.intn(2) or { 0 } == 0 { via_bus } else { via_net }
-				req := reqs[rand.intn(reqs.len) or { 0 }]
+				// half the time the next request on the way to an erase, so routines run often
+				req := if rand.intn(2) or { 0 } == 0 {
+					reqs[rand.intn(reqs.len) or { 0 }]
+				} else if m.session != 0x02 {
+					[u8(0x10), 0x02]
+				} else if m.unlocked {
+					erase_req()
+				} else if m.challenge {
+					pf
+				} else {
+					[u8(0x29), 0x01]
+				}
 				if via == via_net {
 					connected = 1 // a tester connects (again)
 					C.doip_mb_post(&mb)
 				}
-				got := shape(ask_via(mut p, via, req, now))
+				// over the network a routine's pushed answer may stay unacknowledged (op 11 acks it)
+				mut raw := []u8{}
+				mut routine := false
+				if via == via_net {
+					raw, routine = ask_net_held(mut p, req, now)
+				} else {
+					raw = ask_via(mut p, via, req, now)
+				}
+				got := shape(raw)
 				want := m.request(via, req, now)
+				if routine {
+					// its 0x78 — the answer to the request — was acknowledged on the way
+					m.inflight = false
+					if rand.intn(2) or { 0 } == 0 {
+						m.push = true
+					} else {
+						p.push_sent()
+					}
+				}
 				assert got == want, 'step ${step}: ${req[0]:02X} via ${via}: got ${got} want ${want}'
 				if via == via_net {
 					// served, and its answer handed to TCP over the connection it came on
@@ -1006,6 +1060,10 @@ fn test_two_transports_against_the_reference_model() {
 			10 {
 				now += s3_server_us
 			}
+			11 {
+				p.push_sent() // the pushed answer's own acknowledgement
+				m.push = false
+			}
 			else {}
 		}
 		// the serve loop's mailbox pass (doipnet.serve_mailbox): an answer is sent once acknowledged
@@ -1025,6 +1083,9 @@ fn test_two_transports_against_the_reference_model() {
 		assert p.srv.session == m.session, 'step ${step}: session'
 		assert p.unlocked == m.unlocked, 'step ${step}: unlock'
 		assert p.reset_due() == m.reset_due(), 'step ${step}: reset due'
+		if op == 10 && m.push && m.session != 0x01 {
+			held_s3++
+		}
 		if p.reset_due() {
 			// never with a network answer queued unacknowledged (the reset would kill it)
 			assert !(m.remote && unacked != 0), 'step ${step}: reset with its answer unacknowledged'
@@ -1035,6 +1096,7 @@ fn test_two_transports_against_the_reference_model() {
 		}
 	}
 	assert resets > 10, 'the walk never reached a reset'
+	assert held_s3 > 0, 'the walk never held a session on an unacknowledged answer'
 }
 
 // the boot's identification DIDs: added in order, read back by 0x22 — the DoIP boot's VIN (F190)
@@ -1173,5 +1235,94 @@ fn test_a_lost_pending_answer_is_sent_again_before_any_unit() {
 	}
 	p.work_lost()
 	assert p.step(3, unsafe { &resp[0] }) == 3 && resp[1] == 0x31 && resp[2] == 0x72, 'given up, refused'
-	assert f.erases == 1 && p.work == 0
+	assert f.erases == 1 && p.work != 0, 'the refusal on its way'
+	p.work_left()
+	assert p.work == 0
+}
+
+// the routine's answer is in flight until confirmed, like its 0x78s: over the network a pushed
+// answer whose acknowledgement is late holds S3 — the tester's next download finds the session
+// it was answered in — and its acknowledgement ends the routine; a connection that drops takes it
+fn test_a_pushed_answer_holds_the_session_until_acknowledged() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	unlock_via(mut p, via_net, proof(), 0)
+	p.remote_sent()
+	er := erase_req()
+	mut resp := []u8{len: 64}
+	assert p.serve_remote(&er[0], er.len, false, unsafe { &resp[0] }) == 3 && resp[2] == 0x78
+	p.remote_sent()
+	assert p.step(1, unsafe { &resp[0] }) == 5 && resp[0] == 0x71, 'erased, answered'
+	assert !p.work_due(via_net), 'nothing to do until it is acknowledged'
+	p.remote_sent() // another answer's acknowledgement is not the push's
+	// a request meanwhile is served (the routine is done) and releases nothing
+	tp := [u8(0x3E), 0x00]
+	assert p.serve_remote(&tp[0], 2, false, unsafe { &resp[0] }) == 2 && resp[0] == 0x7E
+	p.remote_sent()
+	assert p.work != 0 && p.work_push, 'a served request released the pushed answer'
+	p.tick(1 + 2 * s3_server_us)
+	assert p.srv.session == 0x02, 'S3 ran out under an answer still on its way'
+	p.push_sent()
+	assert p.work == 0, 'acknowledged: the routine is over'
+	p.tick(2 + 2 * s3_server_us)
+	assert p.srv.session == 0x02, 'S3 starts from the acknowledgement'
+	p.tick(3 + 3 * s3_server_us)
+	assert p.srv.session == 0x01, 'and then runs'
+	// never acknowledged: the connection drops and takes the routine with it
+	mut q := new_prog(mut f)
+	unlock_via(mut q, via_net, proof(), 0)
+	q.remote_sent()
+	q.serve_remote(&er[0], er.len, false, unsafe { &resp[0] })
+	q.remote_sent()
+	q.step(1, unsafe { &resp[0] })
+	q.remote_dropped()
+	assert q.work == 0 && q.srv.session == 0x01
+	// ... also once the session has moved on to the bus: nothing is left holding it
+	mut r := new_prog(mut f)
+	unlock_via(mut r, via_net, proof(), 0)
+	r.remote_sent()
+	r.serve_remote(&er[0], er.len, false, unsafe { &resp[0] })
+	r.remote_sent()
+	r.step(1, unsafe { &resp[0] })
+	assert ask_net(mut r, [u8(0x10), 0x01], 2)[0] == 0x50
+	assert ask_via(mut r, via_bus, [u8(0x10), 0x02], 3)[0] == 0x50
+	r.remote_dropped()
+	assert r.work == 0, 'a routine answer nobody will acknowledge'
+	r.tick(4 + s3_server_us)
+	assert r.srv.session == 0x01, 'S3 held for ever'
+}
+
+// a routine's answer the bus lost goes again — the work is not done twice — and lost every time it
+// is given up after work_resend_max tries: the routine ends, nothing holds the session for ever
+fn test_a_lost_answer_is_sent_again_then_given_up() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	unlock(mut p)
+	er := erase_req()
+	mut resp := []u8{len: 64}
+	p.handle(&er[0], er.len, unsafe { &resp[0] })
+	p.work_left()
+	assert p.step(0, unsafe { &resp[0] }) == 5 && resp[0] == 0x71
+	erases := f.erases
+	for i in 0 .. work_resend_max {
+		p.work_lost()
+		assert p.work_due(via_bus)
+		mut again := []u8{len: 64}
+		assert p.step(u64(i), unsafe { &again[0] }) == 5 && again[..5] == resp[..5], 'the same answer'
+		assert f.erases == erases, 'not erased again'
+	}
+	p.work_lost()
+	assert p.step(9, unsafe { &resp[0] }) == 0 && p.work == 0, 'given up'
+	p.tick(10 + s3_server_us)
+	assert p.srv.session == 0x01, 'S3 runs again'
+	// lost once, then confirmed: over
+	mut q := new_prog(mut f)
+	unlock(mut q)
+	q.handle(&er[0], er.len, unsafe { &resp[0] })
+	q.work_left()
+	q.step(0, unsafe { &resp[0] })
+	q.work_lost()
+	q.step(1, unsafe { &resp[0] })
+	q.work_left()
+	assert q.work == 0 && !q.work_due(via_bus)
 }

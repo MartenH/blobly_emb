@@ -32,6 +32,9 @@ const nrc_response_pending = u8(0x78)
 // the routine work answered responsePending and done a unit at a time (Prog.step)
 const work_erase = u8(1)
 const work_check = u8(2)
+// the routine is done; only its answer (0x71, or 7F 31 72) is still on its way: held, like every
+// response it gives, until the transport confirms it, and sent again if lost
+const work_answer = u8(3)
 
 // how often a routine's lost 0x78 is sent again before the routine ends refused
 pub const work_resend_max = u8(3)
@@ -140,16 +143,21 @@ pub mut:
 	work_end  u32
 	erase_unit u32
 	// The ONE gate of a step, whichever transport: the routine's own preceding response has LEFT.
-	// work_out: a response of the routine is on its way (handed to the transport, not yet known to
-	// have left); work_push: it was pushed (over the network: only the push's own acknowledgement
-	// counts, never another request's). work_left / work_lost settle it: left, the next unit may
-	// run (work_ready); lost (a refused or aborted bus transfer), the 0x78 is sent again before
-	// any unit runs (work_resend) — at most work_resend_max times, then the routine ends refused.
+	// work_out: THE in-flight state — a response of the routine (a 0x78 or its answer) is on its
+	// way: handed to the transport, not yet CONFIRMED (a bus drain that completed, or the push's
+	// own acknowledgement). work_push: it was pushed (over the network: only the push's own
+	// acknowledgement counts, never another request's). work_left / work_lost settle it: left,
+	// the next unit may run (work_ready) or, after the answer, the routine is over; lost (a
+	// refused, aborted or undrained bus transfer), that response is sent again before anything
+	// else (work_resend) — at most work_resend_max times. A lost 0x78 then ends the routine
+	// refused; a lost answer is given up. While work != 0, S3 and the stay-window are held.
 	work_out    bool
 	work_push   bool
 	work_ready  bool
 	work_resend bool
 	work_tries  u8
+	work_rsp    [8]u8 // the routine's answer, kept until confirmed (sent again if lost)
+	work_rsp_n  int
 	// the longest that wait may last: the node's link start-up allowance plus its whole
 	// announcement sequence (gen/boot_gen.h BOOT_DOIP_NET_WAIT_MS — every announcement goes out
 	// before the DoIP listener opens); 0 = net_wait_default_us
@@ -203,13 +211,17 @@ pub fn (mut p Prog) push_sent() {
 pub fn (mut p Prog) work_left() {
 	if p.work_out {
 		p.work_out = false
-		p.work_ready = true
 		p.work_tries = 0
+		if p.work == work_answer {
+			p.work = 0 // the answer is confirmed: the routine is over
+		} else {
+			p.work_ready = true
+		}
 	}
 }
 
-// work_lost: the routine's response on its way was lost (a refused or aborted bus transfer): the
-// 0x78 goes again before any unit runs
+// work_lost: the routine's response on its way was lost (a refused, aborted or undrained bus
+// transfer): it goes again before any unit runs
 pub fn (mut p Prog) work_lost() {
 	if p.work_out {
 		p.work_out = false
@@ -226,6 +238,9 @@ pub fn (mut p Prog) remote_dropped() {
 	}
 	if p.owner == via_net && p.remote_spoke {
 		p.end_session()
+	}
+	if p.work_via == via_net {
+		p.work = 0 // nobody will acknowledge its responses: the routine goes with its connection
 	}
 }
 
@@ -247,11 +262,11 @@ fn (mut p Prog) handle_via(via u8, req &u8, req_len int, resp &u8) int {
 	if p.srv.session != 0x01 && p.owner != 0 && p.owner != via {
 		return negative(resp, unsafe { req[0] }, nrc_conditions_not_correct)
 	}
-	if p.work != 0 {
+	if p.work != 0 && p.work != work_answer {
 		return negative(resp, unsafe { req[0] }, nrc_busy_repeat) // a routine still running
 	}
 	n := p.dispatch(req, req_len, resp)
-	if p.work != 0 {
+	if p.work == work_erase || p.work == work_check {
 		// the routine just started: its responses go where its request came from, the first being
 		// this answer (0x78)
 		p.work_via = via
@@ -440,20 +455,32 @@ pub fn (mut p Prog) step(now u64, resp &u8) int {
 	}
 	p.stamp(now)
 	if p.work_resend {
-		// the preceding 0x78 was lost: say it again before any unit runs — or give up
+		// the preceding response was lost: say it again before anything else — or give up
 		p.work_resend = false
 		p.work_tries++
+		if p.work == work_answer {
+			if p.work_tries > work_resend_max {
+				p.work = 0 // the answer lost every time: the routine is over unanswered
+				return 0
+			}
+			p.work_out = true
+			p.work_push = p.work_via == via_net
+			for i in 0 .. p.work_rsp_n {
+				unsafe {
+					resp[i] = p.work_rsp[i]
+				}
+			}
+			return p.work_rsp_n
+		}
 		if p.work_tries > work_resend_max {
-			p.work = 0
-			return negative(resp, 0x31, nrc_general_programming_failure)
+			return p.answer_out(resp, negative(resp, 0x31, nrc_general_programming_failure))
 		}
 		return p.pending_out(resp)
 	}
 	p.work_ready = false
 	if p.work == work_check {
-		p.work = 0
 		ok := p.check_and_mark()
-		return routine_rsp(resp, routine_check, if ok { u8(0x00) } else { u8(0x01) })
+		return p.answer_out(resp, routine_rsp(resp, routine_check, if ok { u8(0x00) } else { u8(0x01) }))
 	}
 	// erase the unit holding work_addr, up to the next unit boundary (units count from app_base)
 	mut next := p.work_end
@@ -464,16 +491,28 @@ pub fn (mut p Prog) step(now u64, resp &u8) int {
 		}
 	}
 	if !p.flash.erase(p.flash.ctx, p.work_addr, next - p.work_addr) {
-		p.work = 0
-		return negative(resp, 0x31, nrc_general_programming_failure)
+		return p.answer_out(resp, negative(resp, 0x31, nrc_general_programming_failure))
 	}
 	p.work_addr = next
 	if next < p.work_end {
 		return p.pending_out(resp)
 	}
-	p.work = 0
 	p.erased = true
-	return routine_rsp(resp, routine_erase, 0x00)
+	return p.answer_out(resp, routine_rsp(resp, routine_erase, 0x00))
+}
+
+// answer_out: the routine's answer (n bytes in resp), on its way and kept until confirmed — the
+// routine holds the session until then, and the answer goes again if it is lost
+fn (mut p Prog) answer_out(resp &u8, n int) int {
+	p.work = work_answer
+	p.work_tries = 0
+	p.work_rsp_n = n
+	for i in 0 .. n {
+		p.work_rsp[i] = unsafe { resp[i] }
+	}
+	p.work_out = true
+	p.work_push = p.work_via == via_net
+	return n
 }
 
 // pending_out: the routine's 0x78, on its way (pushed over the network, through the link on the bus)

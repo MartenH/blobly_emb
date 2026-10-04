@@ -271,10 +271,17 @@ the previous response has LEFT — on the bus the link idle and the controller d
 and sends the next response (`7F 31 78` while sectors remain, `71 01 FF 00 00` after the last),
 pushed over DoIP through the mailbox (`doip_mb_push`, with its own sequence: only THAT push's
 acknowledgement lets the next step run, never another request's answer). The gate is one
-predicate for both transports (`Prog.work_due`: the routine's OWN preceding response has left); a
-0x78 the bus loses (refused, aborted) is said again before any unit runs, and after
-`work_resend_max` lost tries the routine ends refused (`7F 31 72`) — never the work unannounced. A
-push still waiting when its connection drops is never sent to the next tester. So no gap
+predicate for both transports (`Prog.work_due`: the routine's OWN preceding response has left).
+EVERY response the routine gives — each 0x78 and its final answer (`71 ..` or `7F 31 72`) — is in
+flight (`Prog.work_out`) until its transport CONFIRMS it: on the bus a drain that completes
+(`wire_drain` returns whether the controller emptied; one that runs out, as in a bus-off, is a
+loss like a refused frame), over DoIP the push's own acknowledgement. While it is, the routine
+holds S3 and the stay-window, so a late acknowledgement of the final answer cannot leave the
+tester answered in a session that has since expired. A lost response is said again before
+anything else: a lost 0x78 before any unit runs — after `work_resend_max` lost tries the routine
+ends refused (`7F 31 72`), never the work unannounced — and a lost final answer as it was (the
+work not done twice), given up after `work_resend_max` tries. A push still waiting when its
+connection drops is never sent to the next tester, and the routine goes with it. So no gap
 between responses is longer than one sector's erase, well inside P2* (5 s). The image check (0x31
 FF01: CRC + SHA-512 + Ed25519 over the image) is answered `7F 31 78` and done in one step the same
 way. A 0x36 block is not: its 512 bytes are 16 flash-word programs (H7: 256 bits each, on the order of 100 µs at most)
