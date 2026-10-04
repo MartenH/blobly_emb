@@ -104,12 +104,16 @@ v-unrecorded: ;
 #     	$(call c_build,$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(TX_A))
 #     -include $(BUILD)/$(NAME).elf.d
 #
-# The record names this file too, as a V record names the rule that wrote it: a changed rule
-# re-records. A literal comma in <command> splits the call's argument: name -Wl,... groups by a
+# The record is the pass's stdout: -MF names ONE file, which each source's rule overwrites in
+# turn (measured — it kept the last source's alone). Each source compiled gets
+# an empty rule, as -MP gives each header one, so a source dropped from the list (a renamed board
+# file, a network a config no longer asks for) remakes the target instead of stopping make with
+# "No rule to make target". The record names this file too, as a V record names the rule that
+# wrote it: a changed rule re-records. A literal comma in <command> splits the call's argument: name -Wl,... groups by a
 # variable. As with v_deps, a failed compile or record removes the target, and a target with no
 # record is remade. What it does NOT carry is the command's flags (no c_sign beside v_sign yet). scripts/app_deps_check.sh pins the shape and asks make that a header's edit remakes each
 # image, the bootloaders included.
-c_build = $(1) -o $@ && { { $(filter-out %.o %.a,$(1)) -MM -MP -MT $@ && echo "$@: $(TOOL_REPO)/tools/tools.mk"; } >$@.d.tmp && mv -f $@.d.tmp $@.d; } || { rm -f $@ $@.d.tmp; exit 1; }
+c_build = $(1) -o $@ && $(filter-out %.o %.a,$(1)) -MM -MP -MT $@ >$@.d.tmp && printf '%s\n' $(foreach s,$(filter %.c %.S,$(1)),'$(s):') '$@: $(TOOL_REPO)/tools/tools.mk' >>$@.d.tmp && mv -f $@.d.tmp $@.d || { rm -f $@ $@.d.tmp; exit 1; }
 c_unrecorded = $(if $(wildcard $(1).d),,c-unrecorded)
 .PHONY: c-unrecorded
 c-unrecorded: ;

@@ -24,7 +24,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 fail=0
-tmpf=$(mktemp)
+tmpf=$(mktemp) || exit 1
 trap 'rm -f "$tmpf"' EXIT
 # a transpile rule — the C file V writes — not in the documented shape
 if grep -nE '^\$\((BUILD|BOOT_DIR)\)/[a-z_]+\.c:' examples/*/Makefile examples/*/nodes/*/Makefile boot/boot.mk \
@@ -105,7 +105,7 @@ for mk in $cmks boot/boot.mk; do
 		function done_rule() {
 			if (tgt == "" || !cc) return
 			if (tgt ~ /^\$\(BUILD\)\/(tx|nx)\//) return
-			if (!via) { print mk ":" start ": " tgt " runs the C compiler without tools/tools.mk c_build — its headers go untracked"; return }
+			if (bare) { print mk ":" start ": " tgt " runs the C compiler without tools/tools.mk c_build — its headers go untracked"; return }
 			if (index(rule, "$(call c_unrecorded," tgt ")") == 0) print mk ":" start ": " tgt " has no $(call c_unrecorded," tgt ")"
 			need[mk SUBSEP tgt] = 1
 			p = substr(rule, index(rule, ":") + 1)
@@ -113,19 +113,25 @@ for mk in $cmks boot/boot.mk; do
 		}
 		{ if (cont) { line = line " " $0 } else { line = $0; start_l = NR } }
 		{ cont = sub(/\\$/, "", line); if (cont) next }
+		# every compiler call in a recipe goes through c_build, after the recipe prefixes (@ + -)
 		substr(line, 1, 1) == "\t" {
-			if (line ~ /\$\(CC\)/) cc = 1
-			if (line ~ /^\t\$\(call c_build,/) via = 1
+			if (line ~ /\$\(CC\)/) { cc = 1; if (line !~ /^\t[@+-]*\$\(call c_build,/) bare = 1 }
 			next
 		}
-		{ done_rule(); tgt = ""; cc = 0; via = 0 }
+		# blank and comment lines may sit among the recipe lines of a rule
+		line ~ /^[[:space:]]*(#.*)?$/ { next }
+		{ done_rule(); tgt = ""; cc = 0; bare = 0 }
 		line ~ /^-include / { f = substr(line, 10); sub(/\.d$/, "", f); inc[mk SUBSEP f] = 1 }
-		line ~ /^[^#=:[:space:]][^=:]*:([^=]|$)/ { tgt = line; sub(/:.*/, "", tgt); rule = line; start = start_l }
+		line ~ /^[^#=:[:space:]][^=:]*:([^=]|$)/ {
+			tgt = line; sub(/:.*/, "", tgt); rule = line; start = start_l
+			# a recipe on the rule line itself, after a semicolon
+			if (index(rule, ";") && substr(rule, index(rule, ";")) ~ /\$\(CC\)/) { cc = 1; bare = 1 }
+		}
 		END {
 			done_rule()
 			for (k in need) { split(k, a, SUBSEP); if (!(k in inc)) print mk ": " a[2] "'"'"'s record (" a[2] ".d) is never included" }
 		}' "$mk"
-	r=$(grep -nF 'c_unrecorded' "$mk" | head -1 | cut -d: -f1)
+	r=$(grep -nE '^[^#]*c_unrecorded' "$mk" | head -1 | cut -d: -f1)
 	[ -n "$r" ] || continue
 	i=$(grep -nE '^include \$\(REPO\)/tools/tools.mk' "$mk" | head -1 | cut -d: -f1)
 	if [ "$mk" != boot/boot.mk ] && { [ -z "$i" ] || [ "$i" -gt "$r" ]; }; then
@@ -139,7 +145,7 @@ fi
 for mk in $cmks; do
 	d=$(dirname "$mk")
 	boot=0
-	grep -qE '^\[boot\][[:space:]]*(#.*)?$' "$d/ecu.toml" 2>/dev/null && boot=1
+	grep -qE '^[[:space:]]*\[boot\][[:space:]]*(#.*)?$' "$d/ecu.toml" 2>/dev/null && boot=1
 	for t in "$d"/build/*.elf "$d"/build/app.o "$d"/build/boot/boot.elf; do
 		[ -f "$t" ] || continue
 		rel=${t#"$d"/}
@@ -172,10 +178,12 @@ for mk in $cmks; do
 			[ "$o" != "$rel" ] && [ -f "$d/$o" ] && old+=(-o "$o")
 		done
 		for h in $bm $bh $rule; do
-			if make -C "$d" -q "${old[@]}" -W "$h" "$rel" >/dev/null 2>&1; then
-				echo "app_deps_check: an edit to $h leaves $t up to date — a dependency is missing"
-				fail=1
-			fi
+			make -C "$d" -q "${old[@]}" -W "$h" "$rel" >/dev/null 2>&1
+			case $? in
+				1) ;;
+				0) echo "app_deps_check: an edit to $h leaves $t up to date — a dependency is missing"; fail=1 ;;
+				*) echo "app_deps_check: make could not answer for $t with $h edited"; fail=1 ;;
+			esac
 		done
 		echo "app_deps_check: $t ok (${bm:+$(basename "$bm"), }$(basename "$bh"), the rule)"
 	done

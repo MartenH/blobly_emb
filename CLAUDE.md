@@ -95,7 +95,8 @@ the same command's `-MM -MP` (`<target>.d`, `-include`d after the rule), with
 forced `board.h`, `boot_gen.h` and a textually included backend (`can_fdcan.c`, `io_stm32.c`) are
 derived from the compile, never listed (boot/boot.mk still names `bootmap.h` beside the app ELF —
 for the LINK flags `boot_layout.sh` reads from it, not for a compile); a `-Wl,` group goes in a
-variable (a literal comma splits the call). The same script pins that no recipe runs `$(CC)` any
+variable (a literal comma splits the call). Each compiled source gets an empty rule in the record,
+as `-MP` gives each header one, so dropping a source from the list remakes rather than stops make. The same script pins that no recipe runs `$(CC)` any
 other way (the pinned ThreadX/NetX archive objects aside), that no such rule names a header, and
 asks make's what-if (`-W`), with the target's generated C and objects held old (`-o`), that an edit
 to `bootmap.h` (where the image reads it — every `[boot]` node's app and bootloader must),
