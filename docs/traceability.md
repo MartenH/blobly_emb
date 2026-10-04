@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 204 | 112 | 32 | 60 | 0 |
+| 205 | 113 | 32 | 60 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -49,10 +49,11 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-002 | QM | test | uncovered | — |
 | REQ-COM-003 | QM | test | verified | com_test.v (pass) |
 | REQ-COM-004 | QM | test | uncovered | — |
-| REQ-COM-005 | QM | test | verified | com_test.v (pass) |
+| REQ-COM-005 | QM | test | verified | com_test.v (pass), rxmon_test.v (pass) |
 | REQ-COM-006 | QM | test | verified | com_test.v (pass) |
 | REQ-COM-007 | QM | test | uncovered | — |
-| REQ-COM-008 | QM | test | covered | rxstatus.lua (pending) |
+| REQ-COM-008 | QM | test | covered | rx_faults_zone_a.lua (pending), rx_target_test.v (pass), rxmon_test.v (pass), rxstatus.lua (pending) |
+| REQ-COM-009 | QM | test | verified | rxmon_test.v (pass) |
 | REQ-DIAG-001 | QM | test | verified | diag_test.v (pass), uds-on-target-domain (approved), uds-on-target-sysnode (approved), uds-on-target-zone-a (approved), uds_test.v (pass) |
 | REQ-DIAG-002 | QM | test | covered | diag.lua (pending), diag_test.v (pass), uds-on-target-live-did (approved), uds-on-target-zone-a (approved) |
 | REQ-DIAG-003 | QM | test | covered | diag.lua (pending), diag_test.v (pass), uds_test.v (pass) |
@@ -63,14 +64,14 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-008 | QM | test | covered | diag.lua (pending), uds-on-target-reset (approved), uds_test.v (pass) |
 | REQ-DIAG-009 | QM | test | verified | fault_test.v (pass) |
 | REQ-DIAG-010 | QM | test | verified | fault_test.v (pass) |
-| REQ-DIAG-011 | QM | test | covered | faults.lua (pending), net_faults.lua (pending) |
+| REQ-DIAG-011 | QM | test | covered | faults.lua (pending), net_faults.lua (pending), rx_faults_zone_a.lua (pending), rx_target_test.v (pass) |
 | REQ-DIAG-012 | QM | test | verified | fault_group_test.v (pass), fault_target_test.v (pass) |
 | REQ-DIAG-013 | QM | test | covered | faults.lua (pending), faults_zone_a_persist.lua (pending), records_test.v (pass) |
 | REQ-DIAG-014 | QM | test | covered | faults.lua (pending), faults_zone_a_persist.lua (pending), records_test.v (pass) |
 | REQ-DIAG-015 | QM | test | covered | faults.lua (pending), records_test.v (pass) |
 | REQ-DIAG-016 | QM | test | covered | faults_zone_a_persist.lua (pending), persist_test.v (pass) |
 | REQ-E2E-001 | B | test | verified | e2e_test.v (pass) |
-| REQ-E2E-002 | B | test | verified | e2e_test.v (pass) |
+| REQ-E2E-002 | B | test | verified | e2e_test.v (pass), rx_target_test.v (pass), rxmon_test.v (pass) |
 | REQ-E2E-003 | B | test | verified | e2e_test.v (pass) |
 | REQ-E2E-004 | B | test | verified | compose_test.v (pass) |
 | REQ-ECU-001 | QM | test | verified | ecu_test.v (pass) |
@@ -261,7 +262,8 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-005 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-COM-006 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-COM-007 | | | | | | | | | | | | | | | | | | | | | |
-| REQ-COM-008 | | | | | | | | | | | | | | | | | · | | | | |
+| REQ-COM-008 | | | | | | | | | | | | | | | | | · | ✓ | | | |
+| REQ-COM-009 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-001 | ✓ | | | | | | | ✓ | | | | | | | | ✓ | | ✓ | | | |
 | REQ-DIAG-002 | ✓ | | | | | | | | | | | | | | | ✓ | · | ✓ | | | |
 | REQ-DIAG-003 | | | | | | | | | | | | | | | | | · | ✓ | | | |
@@ -272,7 +274,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-008 | | | | | | | | | | | | | | | | ✓ | · | ✓ | | | |
 | REQ-DIAG-009 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-010 | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-DIAG-011 | | | | | | | | | | | | | | | | | · | | | | |
+| REQ-DIAG-011 | | | | | | | | | | | | | | | | | · | ✓ | | | |
 | REQ-DIAG-012 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-013 | | | | | | | | | | | | | | | | | · | ✓ | | | |
 | REQ-DIAG-014 | | | | | | | | | | | | | | | | | · | ✓ | | | |

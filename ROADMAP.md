@@ -159,8 +159,12 @@ the FB never calls a service API.
   every `system_full` CAN node (domain, sysnode, zone_a) runs behind its own. Left: the bench run
   (`test/boot_bench.sh`: handoff → 0x29 → flash → new version), and tcu (Ethernet only) waits for
   the bootloader's DoIP binding
-- 🧭 **R5 target COM checks** — rx deadlines + E2E/SecOC on the comm thread, so receive
-  status reaches FBs on silicon
+- ✅ **R5 target COM checks** (built; bench run pending) — rx deadlines, E2E and SecOC checked on the
+  ThreadX comm thread by the host bridge's own templates and `com.RxMonitor` (one rule, against a
+  reference model), the status and lost count reaching FBs whole through the byte IOC, 0x28 gating the
+  comm thread's application frames, NM's sleep a silence (deadlines restart on wake), and
+  signal-status faults on the target — `system_full`'s chassis → zone_a SafetyCmd, bench suite
+  `test/rx_faults_zone_a.lua`
 - 🧭 **R6 fault memory on the target** — *R6a landed (#350, 2026-10-02):* `[[fault]]` on a
   ThreadX node, FB-tested faults debounced on the FB thread, the fault memory on the comm thread,
   0x19 01/02/0A, 0x14, 0x85, operation cycle from NM or `cycle = "power"` — run on zone_a's bench
@@ -171,8 +175,8 @@ the FB never calls a service API.
   cycle ended at restore; 0x14 durable before it is answered), snapshots from the server's DIDs
   (`freeze`), extended data (occurrence / aging / failed cycles), displacement by `priority` over
   `[fault_memory] entries`, 0x19 03/04/06 on both owners; zone_a persisted (bench suite
-  `test/faults_zone_a_persist.lua`, run pending). Left: signal-status faults on the target (R5),
-  faults in multi-thread / satellite partitions, a cycle signal on the target, the incremental flash
+  `test/faults_zone_a_persist.lua`, run pending); signal-status faults on the target came with R5.
+  Left: faults in multi-thread / satellite partitions, a cycle signal on the target, the incremental flash
   path with 0x78 (§7)
 - 🧭 **R7 parameters / variant coding** (#288) — `[[param]]` over the nvm P4 DID write path
 

@@ -187,7 +187,8 @@ the answer, flushing the NvM journal first and keeping the 0x27 state across the
 non-default sessions only (extended or programming), normal messages only (network
 management is refused until NM is gated by it) — stops sending and/or decoding this bus's
 application frames, and suspends their rx deadlines while reception is off so a
-diagnostic command never looks like a comms timeout. Diagnostic traffic is never gated,
+diagnostic command never looks like a comms timeout — on the host bridge and, since R5, a ThreadX
+comm thread. Diagnostic traffic is never gated,
 and neither is traffic a gateway routes between buses — that is not this ECU's own
 communication. Only an owner that acts on `0x11` / `0x28` offers them (the generated
 bridge does; DoIP and the bootloader's delegate answer serviceNotSupported). A connection with a `functional_id` also serves
@@ -267,12 +268,12 @@ owns the fault memory (`comm/fault`), keeps each DTC's ISO 14229-1 status throug
 (confirmation, pending, aging), and answers `0x19` 01/02/0A, `0x14` and `0x85`. A clear reaches the
 FB's thread as a new generation in a control cell, so its debounce restarts. On a ThreadX target
 (R6's first step) the ThreadX comm thread owns the memory and the two cells ride the byte IOC; there
-the operation cycle is NM's wake -> bus sleep, or `[fault_memory] cycle = "power"`. Still to come:
-signal-status faults on the target, persistence and freeze frames (`freeze` / `priority` fail
-generation until then) — docs/diagnostics.md R6.
+the operation cycle is NM's wake -> bus sleep, or `[fault_memory] cycle = "power"`; the memory is
+persisted in the node's NvM journal with snapshots and extended data (R6b), and signal-status faults
+(below) run there too (R5) — docs/diagnostics.md.
 
 A fault can also be raised by a received signal's **status** — no FB code, the diagnostic bridge
-is the detector:
+(on a ThreadX target, the comm thread) is the detector:
 
 ```toml
 [[fault]]
@@ -292,7 +293,8 @@ or SecOC, `lost` the E2E `lost` counter — each refused at generation when miss
   integrity failure.
 - **The level** (a timeout still holding, a sender gone quiet) is stepped once per pass, and only
   in a pass that published nothing.
-- `never_received` is not tested, and nothing is tested while 0x28 has reception off.
+- `never_received` is not tested, and nothing is tested while 0x28 has reception off — nor, on a
+  ThreadX node with NM, while the network is asleep (REQ-COM-009).
 - A `lost` gap is one failed result, and the next good frame passes. So a `lost` fault takes
   `fail = 1`, and its DTC confirms without staying testFailed.
 

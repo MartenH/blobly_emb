@@ -30,7 +30,9 @@ examples/<name>/   a FREESTANDING app (own Makefile, `make all`):
    gen/ (module gen)   codec/tables/glue +   │  (incl. the COM bus bridge:
                        COM bus bridge + run() ┘   bus endpoints -> rx/tx codec)
 loom/   the Loom: scheduler (the de-AUTOSAR'd "RTE")
-comm/   comms stack: com, e2e (AUTOSAR E2E Profile 1), secoc (AES-CMAC), isotp (15765-2), uds (14229), nm,
+comm/   comms stack: com (tx modes; the receive rule — RxMonitor / RxGate in rxmon.v, ONE rule the host
+        bridge and the ThreadX comm thread both run, emitted by tools/loom2v/gen_rx.v), e2e (AUTOSAR E2E
+        Profile 1), secoc (AES-CMAC), isotp (15765-2), uds (14229), nm,
         fault (debounce + fault memory behind 0x19/0x14/0x85; snapshots, extended data, displacement
         and its persistence in the NvM journal — entry.v, persist.v), diag (the UDS server on its ISO-TP
         connection and the order a pass runs it — the host bridge calls it; the ThreadX comm

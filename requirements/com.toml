@@ -80,10 +80,23 @@ method = "test"
 asil = "QM"
 derives = "SYS-REQ-COMMS-001"
 
+# REQ-COM-008 on a ThreadX target since R5: the comm thread runs the host bridge's receive templates
+# and com.RxMonitor, and the status reaches the FB thread through the byte IOC.
 [[req]]
 id = "REQ-COM-008"
 title = "Receive status"
 text = "COM shall publish, with each received signal that declares one, a status stating what it last learned of that signal: not yet received, received from a good frame, reception deadline passed, or newest frame failed its E2E or SecOC check. The deadline shall run from COM start, so a sender absent since start is reported as a deadline loss; for an E2E-protected frame, COM shall also publish the count of frames the sequence counter showed missing."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-COMMS-003"
+
+# R5 (docs/diagnostics.md §3.2): com.RxGate. A pause the system COMMANDS — UDS CommunicationControl,
+# or the network put to sleep by NM — is not a fault of the sender.
+[[req]]
+id = "REQ-COM-009"
+title = "Reception paused"
+text = "While reception is switched off by UDS CommunicationControl, or network management has the bus asleep, COM shall report no reception deadline loss and shall not count the frames the sender's sequence advanced meanwhile as lost; when reception resumes, every reception deadline shall restart from that moment. While switched off by CommunicationControl, COM shall publish no received value."
 status = "draft"
 method = "test"
 asil = "QM"

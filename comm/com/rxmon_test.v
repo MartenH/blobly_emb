@@ -2,7 +2,7 @@ module com
 
 import comm.e2e
 
-// @verifies REQ-COM-005 REQ-COM-008 REQ-E2E-002
+// @verifies REQ-COM-005 REQ-COM-008 REQ-COM-009 REQ-E2E-002
 // RxMonitor + RxGate against a reference model of the bridge pass they replace: the host bridge's
 // generated receive rules as they stood before the monitor existed (one state variable per rule,
 // written out in pass order), extended by one statement — the network asleep is a silence like

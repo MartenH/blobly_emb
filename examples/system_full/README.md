@@ -1,6 +1,6 @@
 # `examples/system_full` — the reference system (4 ECUs + a CM4 satellite; CAN + Ethernet)
 
-`system_full` is **the one reference system** for the blobly stack: a multi-node automotive system meant to exercise *every* shipped feature on real silicon, so the ~45 single-feature one-off examples can be retired. Every built node is a real **ThreadX** image — the CAN nodes are composed from a single [`system.toml`](system.toml), the Ethernet node is a self-contained SOME/IP endpoint, and the one exception is deliberate: the `tester` is a **declaration-only** node (nothing is built; blobly_net stands in for it).
+`system_full` is **the one reference system** for the blobly stack: a multi-node automotive system meant to exercise *every* shipped feature on real silicon, so the ~45 single-feature one-off examples can be retired. Every built node is a real **ThreadX** image — the CAN nodes are composed from a single [`system.toml`](system.toml), the Ethernet node is a self-contained SOME/IP endpoint, and the exceptions are deliberate: the `tester` and the `chassis` are **declaration-only** nodes (nothing is built; blobly_net stands in for them).
 
 It runs on **four boards** across **two CAN buses + Ethernet**:
 
@@ -26,6 +26,7 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 | Physical **IO** (GPIO: button → signal, signal → LED) | `zone_a` | ⚙️ config-proven on silicon (re-flash after the #247 pool fix to see the LED) |
 | Physical **PWM** (cross-node `LedLevel` → LD3 intensity, 0.5 Hz breathing) | `domain` → `zone_a` | ✅ on-silicon (TIM12 at 1 kHz, CCR1 sweeping 0..49999 over SWD, LD3 fades) |
 | **Tester as a node**: `tester` (declaration only) produces `HostLedLevel` → `domain`'s LD3 as PWM; blobly_net restbus-simulates it | `tester` → `domain` | ✅ on-silicon via the CANsub (`simulation: tester`, H755 TIM12 CCR1 follows the sine) |
+| **Receive checks on a target** (R5): `chassis` (declaration only) sends a protected `SafetyCmd` — E2E Profile 1 + a 300 ms sender-loss timeout from `edge.dbc` — and `zone_a`'s comm thread checks it; its FB sees the value with its `RxStatus` and lost count (echoed on `SafetyView`), three signal-status faults raise DTCs with no FB code, and 0x28 rx off records nothing | `chassis` → `zone_a` | ⏳ builds; **bench-pending** (`test/rx_faults_zone_a.lua`, `test/rx_faults.blobnet`) |
 | **SOME/IP-over-Ethernet** (cyclic events + E2E + RPC rx) | `tcu` | ✅ silicon-validated (ping, tx/rx, E2E tx); the E2E receive path awaits a tcu bench run |
 | **DoIP** (the UDS server over TCP/UDP 13400, one session with CAN) | `sysnode` | ✅ on-silicon (#338, hand-authored `[doip]`); declared in `system.toml` since rung 6 — ⏳ bench re-run pending |
 | **DoIP entity transport** (routing-activation policy — the bench tester alone, `testers = [0x0E00]` — alive check, entity status, power mode, inactivity timers; docs/net.md) | `sysnode` | ⏳ builds; bench: `test/doip_entity.py` |
@@ -40,8 +41,9 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 | `sysnode` | STM32H735G-DK | Gateway: routes 4 signals `compute` ↔ `edge`; publishes `GwStatus` on `tel`; DoIP entity `0x07A0` at `192.168.0.50` | `compute` (can0/FDCAN1), `edge` (can1/FDCAN2), `tel` (Ethernet) | ✅ |
 | `domain` | NUCLEO-H755ZI-Q (CM7) | Powertrain + persistence + AMP owner; NvM, bulk, trace, shell | `compute` (can0) | ✅ |
 | `domain_m4` | …the H755's **CM4** | `domain`'s co-processor **satellite** (bulk producer + CpuLoad); a `[[partition]] image=`, flashed to flash **bank 2** (`0x08100000`) | — (built by `domain`'s gen) | — (a satellite, not a node) |
-| `zone_a` | NUCLEO-H723ZG | Front zone: sensor→limiter FB pipeline + **physical GPIO + PWM** | `edge` (can1) | ✅ |
+| `zone_a` | NUCLEO-H723ZG | Front zone: sensor→limiter FB pipeline + **physical GPIO + PWM**; checks `chassis`'s protected `SafetyCmd` (R5) | `edge` (can1) | ✅ |
 | `tcu` | NUCLEO-H723ZG | **Telematics/connectivity — SOME/IP-over-Ethernet** at `192.168.0.51` | `tel` (Ethernet) | ✅ |
+| `chassis` | — (nothing built) | **Declaration-only**: an absent edge-bus ECU — produces the E2E-protected `SafetyCmd` for `zone_a` and reads back `SafetyView`; blobly_net restbus-simulates it and breaks it on purpose (`test/rx_faults.blobnet`) | `edge` (can1) | ✅ |
 | `tester` | — (nothing built) | **Declaration-only**: the bench tool as ONE node on BOTH buses — produces `HostLedLevel` on CAN, and is tcu's SOME/IP peer (`LampCmd`, `LampCmdSafe`) at `192.168.0.190` — and the receiver of sysnode's `GwStatus`; blobly_net restbus-simulates it | `compute` (can0), `tel` (Ethernet) | ✅ |
 
 ---
@@ -84,6 +86,8 @@ All four routes are **layout-identical** (same signal position/scale/DLC on both
 | `LedLevel` | `domain` (compute) | `compute` → `edge` | `zone_a` | `0x126` → `0x133` | 100 ms |
 | `HostLedLevel` | `tester` (compute; blobly_net on the bench) | — (consumed on `compute`) | `domain` | `0x127` | 100 ms |
 | `SteeringAngle` | `zone_a` (edge) | `edge` → `compute` | `domain` | `0x132` → `0x125` | 50 ms |
+| `SafetyCmd` | `chassis` (edge; blobly_net on the bench) | — (consumed on `edge`) | `zone_a` | `0x128`, E2E Profile 1 | 50 ms |
+| `SafetyView` | `zone_a` (edge) | — (consumed on `edge`) | `chassis` | `0x134` | 100 ms |
 
 This closes a **bidirectional** loop through the H735: `domain` switches its headlights on `zone_a`'s routed steering (`headlight_cmd = steering > 90`), and `zone_a` clamps its steering by the `VehicleSpeed` it receives from `domain`. Every cross-bus hop goes through the gateway's forwarder.
 
