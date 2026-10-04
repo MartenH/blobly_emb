@@ -89,6 +89,8 @@ struct DidCfg {
 	write_sessions u8
 	read_security  u8 // the 0x27 level required; 0 = none
 	write_security u8
+	param          string // the [[param]] this DID codes (0x2E) and reads back (0x22); '' = none
+	param_status   bool   // the parameters' status: one byte per [[param]] (comm/param status_*)
 }
 
 // Route is one [[route]] on a gateway. A RAW (frame) route forwards a PDU unchanged
@@ -181,6 +183,22 @@ fn (f FrameCfg) secoc_here(frame string, bus string) bool {
 // bus.dbc (message id/dlc/ext/trivial). Value field = the single non-"valid" field.
 // parse_nvm_id: range-check BEFORE narrowing — nvm_id = 65536 must fail, not
 // silently become 0 (= auto-hash) through the u16 cast.
+// toml_int: an integer key read WHOLE (i64) and held to [lo, hi] before anything narrows it —
+// the one reader for ids and other bounded integers. toml.Any.int() truncates to 32 bits, and a
+// u16 / u32 cast afterwards truncates again, so 0x10110 read through them was the DID 0x0110 (codex
+// on #376). Absent = `def`; a non-integer is refused, never read as 0.
+fn toml_int(m map[string]toml.Any, key string, def i64, lo i64, hi i64, what string) int {
+	v := m[key] or { return int(def) }
+	if v !is i64 {
+		panic('loom2v: ${what} ${key} must be an integer')
+	}
+	n := v.i64()
+	if n < lo || n > hi {
+		panic('loom2v: ${what} ${key} = 0x${n.hex()} is out of range (0x${lo.hex()}..0x${hi.hex()})')
+	}
+	return int(n)
+}
+
 fn parse_nvm_id(name string, v int) u16 {
 	if v < 0 || v > 65534 {
 		panic('ecu.toml: signal "${name}" nvm_id = ${v} is out of range (0 = auto, 1..65534 = pin)')
@@ -265,7 +283,7 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool, eth string) (m
 			name:      name
 			transport: transport
 			persist:   (m['persist'] or { toml.Any('') }).string()
-			nvm_id:    parse_nvm_id(name, int((m['nvm_id'] or { toml.Any(0) }).int()))
+			nvm_id:    parse_nvm_id(name, toml_int(m, 'nvm_id', 0, 0, 65534, 'signal "${name}"'))
 			from:      from
 			to:        to
 			local:     from == to
@@ -554,7 +572,7 @@ fn parse_routes(doc toml.Doc, dbc string, frames FrameCfg) []Route {
 			from_bus:   fb
 			from_frame: (fm['frame'] or { toml.Any('') }).string()
 			to_bus:     (tm['bus'] or { toml.Any('') }).string()
-			to_id:      int((tm['id'] or { toml.Any(0) }).int())
+			to_id:      toml_int(tm, 'id', 0, 0, 0x1FFFFFFF, 'route to')
 			signal:     sig
 			to_frame:   (tm['frame'] or { toml.Any('') }).string()
 		}
@@ -905,11 +923,11 @@ fn parse_isotp(doc toml.Doc) []IsotpConn {
 	c := IsotpConn{
 		name:          'diag'
 		bus:           (m['bus'] or { toml.Any('') }).string()
-		rx_id:         int((m['rx_id'] or { toml.Any(0) }).int())
-		tx_id:         int((m['tx_id'] or { toml.Any(0) }).int())
+		rx_id:         toml_int(m, 'rx_id', 0, 0, 0x1FFFFFFF, '[isotp]')
+		tx_id:         toml_int(m, 'tx_id', 0, 0, 0x1FFFFFFF, '[isotp]')
 		bs:            int((m['bs'] or { toml.Any(0) }).int())
 		stmin:         int((m['stmin_ms'] or { toml.Any(0) }).int())
-		functional_id: int((m['functional_id'] or { toml.Any(0) }).int())
+		functional_id: toml_int(m, 'functional_id', 0, 0, 0x1FFFFFFF, '[isotp]')
 	}
 	// the connection matches and sends its ids as standard frames: a wider value never matches
 	// on receive and goes out masked on transmit
@@ -938,7 +956,9 @@ fn parse_dids(doc toml.Doc) []DidCfg {
 	mut dids := []DidCfg{}
 	for d in ecumodel.toml_arr(doc, 'did') {
 		m := d.as_map()
-		id := int((m['id'] or { toml.Any(0) }).int())
+		// 1..0xFFFF, refused here — the one place every DID consumer reads it from — before the
+		// server's u16 narrows it
+		id := toml_int(m, 'id', 0, 0, 0xFFFF, '[[did]] (a 16-bit data identifier)')
 		if id == 0 {
 			continue
 		}
@@ -954,6 +974,22 @@ fn parse_dids(doc toml.Doc) []DidCfg {
 		if bytes.len > uds.max_did_data {
 			panic('loom2v: [[did]] 0x${id.hex()} holds ${bytes.len} bytes — a DID stores at most ${uds.max_did_data} (comm/uds max_did_data)')
 		}
+		pname := (m['param'] or { toml.Any('') }).string()
+		pstatus := (m['param_status'] or { toml.Any(false) }).bool()
+		if pname != '' || pstatus {
+			what := if pname != '' { 'codes parameter "${pname}"' } else { 'is the parameter status' }
+			for k in ['ascii', 'bytes', 'signal', 'writable'] {
+				if k in m {
+					panic('loom2v: [[did]] 0x${id.hex()} ${what} — its record is the parameter\'s, so `${k}` has no place there')
+				}
+			}
+			if pname != '' && pstatus {
+				panic('loom2v: [[did]] 0x${id.hex()} is both a parameter and the parameter status')
+			}
+			if pstatus && 'write' in m {
+				panic('loom2v: [[did]] 0x${id.hex()} is the parameter status, which a tester reads and never writes — drop `write`')
+			}
+		}
 		rd_s, rd_sec := parse_did_access(m, 'read', id)
 		wr_s, wr_sec := parse_did_access(m, 'write', id)
 		if 'write' in m && 'writable' in m && !(m['writable'] or { toml.Any(false) }).bool() {
@@ -964,11 +1000,23 @@ fn parse_dids(doc toml.Doc) []DidCfg {
 			bytes:          bytes
 			// a `write = {...}` gate implies the DID is writable
 			writable:       (m['writable'] or { toml.Any(false) }).bool() || 'write' in m
+				|| pname != ''
 			signal:         (m['signal'] or { toml.Any('') }).string()
+			param:          pname
+			param_status:   pstatus
 			read_sessions:  rd_s
 			write_sessions: wr_s
 			read_security:  rd_sec
 			write_security: wr_sec
+		}
+	}
+	// one id, one row: the server serves the FIRST row of an id, so a repeat would carry gates and
+	// bindings nobody is served by — a weaker-gated twin of a parameter DID would code it
+	for i, d in dids {
+		for e in dids[..i] {
+			if e.id == d.id {
+				panic('loom2v: [[did]] 0x${d.id.hex()} is declared twice — one DID, one row (the server answers the first)')
+			}
 		}
 	}
 	if dids.len > uds.max_dids {
@@ -1194,7 +1242,7 @@ fn parse_frames(doc toml.Doc, eth string, buses map[string]bool, bus_kind map[st
 		if 'secoc' in fm {
 			sm := (fm['secoc'] or { toml.Any('') }).as_map()
 			f.secoc_on[fk] = true
-			f.secoc_id[fk] = int((sm['data_id'] or { toml.Any(0) }).int())
+			f.secoc_id[fk] = toml_int(sm, 'data_id', 0, 0, 0xFFFF, 'frame "${fk}" secoc')
 			if f.secoc_id[fk] < 0 || f.secoc_id[fk] > 0xffff {
 				panic('frame "${fk}": secoc data_id 0x${f.secoc_id[fk].hex()} is out of range (0..0xFFFF)')
 			}
@@ -1238,8 +1286,8 @@ fn parse_telemetry(doc toml.Doc) TelemetryCfg {
 		tm := tcfg.as_map()
 		t.on = (tm['enabled'] or { toml.Any(false) }).bool()
 		t.bus = (tm['bus'] or { toml.Any('') }).string()
-		t.id = u32((tm['id'] or { toml.Any(0) }).int())
-		t.detail_id = u32((tm['detail_id'] or { toml.Any(0) }).int())
+		t.id = u32(toml_int(tm, 'id', 0, 0, 0x1FFFFFFF, '[telemetry]'))
+		t.detail_id = u32(toml_int(tm, 'detail_id', 0, 0, 0x1FFFFFFF, '[telemetry]'))
 		if pms := tm['period_ms'] {
 			t.period_us = u64(pms.int()) * 1000
 		}
@@ -1283,6 +1331,7 @@ mut:
 	boot         BootCfg     // [boot]: the node runs behind the bootloader; 0x10 02 hands over to it (gen_diag.v)
 	doip         DoipCfg // [doip]: the diagnostic server over DoIP too (gen_doip.v)
 	dids         []DidCfg
+	params       []ParamCfg // [[param]] in declaration order (gen_param.v)
 	faults       []FaultCfg // [[fault]] in declaration order = the fault memory's slot order
 	fault_cycle  string     // [fault_memory] cycle = "Signal.field" (bool) or "power" — the operation cycle ('' = NM's, D3)
 	fault_entries int       // [fault_memory] entries: the snapshot entries (default: one per fault with `freeze`, at most fault.max_entries)
@@ -1511,6 +1560,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		boot:         parse_boot(doc)
 		doip:         parse_doip(doc)
 		dids:         parse_dids(doc)
+		params:       parse_params(doc)
 		faults:       parse_faults(doc)
 		fault_cycle:  parse_fault_cycle(doc)
 		fault_entries: parse_fault_entries(doc)
@@ -2078,6 +2128,7 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 	man << nm_manifest_frames(m)
 	man << xcore_manifest(m)
 	man << nvm_manifest(m)
+	man << param_manifest(m)
 	man << someip_manifest(m)
 	return man
 }
@@ -2378,6 +2429,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << doip_target_globals(m)
 			glue << xcore_trace_globals(m)
 			glue << nvm_globals(m)
+			glue << param_globals(m)
 			glue << nm_module_globals(m)
 			if comm_thread_on {
 				glue << '\tg_comm_tcb   [32]u64  // the bus-owning comm thread'
@@ -2798,6 +2850,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << diag_target_init(m)
 				glue << fault_target_init(m)
 				glue << doip_target_init(m)
+				glue << param_bind_lines(m)
 				glue << nm_shell_register(m)
 				glue << stat_shell_register(m)
 				glue << nm_module_init(m)
@@ -2869,6 +2922,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << nm_produce_drain(m)
 				glue << fault_target_cycle(m)
 				glue << fault_target_persist(m, ioc_idx)
+				glue << param_sleep_lines(m, ioc_idx)
 				if m.nm.on {
 					// REQ-COM-007: every producer below gates on this — the bus is
 					// SILENT in sleep; NM's own drain is exempt (its state machine
@@ -3050,6 +3104,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << '// referencing it also forces this module (incl. tx_application_define) to link.'
 			glue << nvm_flash_wrappers(m)
 			glue << fault_store_fns(m)
+			glue << param_fns(m, ioc_idx)
 			glue << 'pub fn boot() {'
 			if has_satellite(m) {
 				// release the parked satellite core BEFORE the kernel: it waits on XCORE_CLK_MAGIC
@@ -3062,6 +3117,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << '\tC.ioc_pool_init() // init the cross-thread signal IOC cells before any thread runs'
 			}
 			glue << nvm_boot_lines(m, ioc_idx)
+			glue << param_boot_lines(m)
 			if m.eth_frames.len > 0 {
 				// byte IOC channels for the eth signals, each arena sized to its
 				// SIGNAL's in-memory struct (the ioc.h size-proportional rule) —
@@ -3332,6 +3388,11 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 				ports << 'pub struct ${cname}In {'
 				ports << 'pub mut:'
 				for r in reads {
+					if p := param_of(m, r.string()) {
+						ports << '\t// parameter "${p.name}" — coded with 0x2E on DID 0x${p.did.hex()}, read-only'
+						ports << '\t${snake(p.name)} sig.${p.name}'
+						continue
+					}
 					ports << provenance(r.string(), m.sig_of)
 					// an input point's declared default becomes the port field's
 					// initial value — the FB sees it until the first real sample
@@ -3378,6 +3439,12 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 				for r in reads {
 					rn := r.string()
 					si := m.sig_of[rn] or { SigInfo{} }
+					if p := param_of(m, rn) {
+						glue << param_read_lines(p, ioc_idx[rn] or {
+							panic('loom2v: parameter "${rn}" has no IOC cell on this image')
+						})
+						continue
+					}
 					if si.local {
 						glue << '\tinp.${snake(rn)} = st.cell_${snake(rn)} // local'
 					} else if idx := ioc_idx[rn] {
@@ -3601,7 +3668,7 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 	ports << ''
 	// Port structs carry sig.* fields only when there are signals; a pure-compute app (e.g. a
 	// trace demo) has none, so skip the import rather than emit an unused-import warning.
-	if m.sig_names.len > 0 {
+	if m.sig_names.len > 0 || m.params.len > 0 {
 		ports << 'import sig'
 	}
 	if m.faults.any(it.signal == '') {
@@ -3707,6 +3774,9 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 	if m.faults.len > 0 {
 		glue << 'import comm.fault' // debounce + the fault memory (docs/diagnostics.md §3.3)
 	}
+	if m.params.len > 0 {
+		glue << 'import comm.param' // the parameters (docs/diagnostics.md §3.4)
+	}
 	if m.doip.on {
 		glue << 'import comm.doip' // the diagnostic server over DoIP too (gen_doip.v)
 		glue << 'import driver.doipnet' // its network loop, shared with the node's bootloader
@@ -3747,6 +3817,9 @@ fn main() {
 	mut m := build_model(doc, dbc)
 	m.nvm_names, m.nvm_ids = derive_nvm(mut m, doc)
 	m.fault_status_id, m.fault_snap_ids, m.fault_snap_ids_b = derive_fault_nvm(m)
+	validate_params(mut m, doc)
+	derive_param_nvm(mut m)
+	check_journal_capacity(m)
 	m.fault_grace_us = fault_grace_us(m, doc)
 	validate_doip(m)
 
@@ -3838,7 +3911,8 @@ fn main() {
 	}
 
 	// [[signal]] -> the model, then emit the `sig` module.
-	signals := emit_signals(m.sig_of, m.sig_names, ecu)
+	mut signals := emit_signals(m.sig_of, m.sig_names, ecu)
+	signals << param_sig_structs(m)
 
 	// Per-PDU COM behaviour ([[frame]]), rebound to the existing locals.
 	// m.frames is CAN-only — parse_frames skips eth frames, whose E2E trailer
@@ -4299,6 +4373,10 @@ fn main() {
 		// cell (single-writer wait-free — the proven transport, reused).
 		for sname in m.nvm_names {
 			ioc_idx[sname] = ioc_idx.len
+		}
+		// [[param]]: each parameter reaches its FBs through one cell the comm thread writes
+		for p in m.params {
+			ioc_idx[p.name] = ioc_idx.len
 		}
 	}
 	// io points on the ThreadX target: the io thread and the FB thread(s) are different
@@ -5155,6 +5233,8 @@ fn fault_freeze_lens(m Model, f FaultCfg) []int {
 			if d.id == id {
 				n = if d.signal != '' {
 					did_value_width((m.sig_of[d.signal] or { SigInfo{} }).val_type) or { 0 }
+				} else if d.param != '' || d.param_status {
+					param_did_len(m, d)
 				} else {
 					d.bytes.len
 				}
@@ -5333,7 +5413,13 @@ fn fault_target_persist(m Model, ioc_idx map[string]int) []string {
 	// never an erase here: on a node without NM the journal erases only at boot, before the kernel
 	// (nvm_boot_lines), and one with NM only in its sleep edges' choreography
 	mut g := ['\t\tg_fmem.persist(t1, false) // what changed: unwritten snapshots, the status image, tombstones']
-	if m.nm.on {
+	if m.nm.on && m.params.len > 0 {
+		// a parameter coded this pass too: ONE choreography for both writers
+		g << '\t\tparam_wrote := g_param.take_wrote()'
+		g << '\t\tif (g_fmem.wrote > 0 || param_wrote) && g_nm.state() == .bus_sleep {'
+		g << nvm_flush_choreo(m, ioc_idx, '\t\t\t')
+		g << '\t\t}'
+	} else if m.nm.on {
 		g << '\t\tif g_fmem.wrote > 0 && g_nm.state() == .bus_sleep {'
 		g << nvm_flush_choreo(m, ioc_idx, '\t\t\t')
 		g << '\t\t}'

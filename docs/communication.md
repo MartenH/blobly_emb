@@ -151,7 +151,8 @@ transports (`[isotp]` on CAN, `[doip]` on a ThreadX target's Ethernet). The owne
 hands it a reassembled request and ships the response it builds. Services:
 `0x10` DiagnosticSessionControl, `0x11` ECUReset, `0x22` ReadDataByIdentifier
 (several DIDs per request), `0x27` SecurityAccess, `0x28` CommunicationControl, `0x2E`
-WriteDataByIdentifier, `0x3E` TesterPresent, and — where a fault memory is injected (`comm/fault`,
+WriteDataByIdentifier (on a parameter's DID through `comm/param`: validated, durable before the
+answer — [diagnostics.md](diagnostics.md) §3.4), `0x3E` TesterPresent, and — where a fault memory is injected (`comm/fault`,
 generated from `[[fault]]` in R4b) — `0x19` 01/02/0A, `0x14` and `0x85`; anything else →
 `0x7F sid 0x11`.
 Negative responses follow ISO 14229-1's evaluation order.

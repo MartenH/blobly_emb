@@ -377,6 +377,7 @@ pub mut:
 	// node's application and stay authored (docs/multi-node.md: a gpio/adc/pwm node).
 	authored_signals bool     // a [[signal]] with a BUS endpoint (forbidden)
 	local_signals    []string // node-local signal names (io / cross-partition) — allowed
+	params           []string // [[param]] names: node-local INPUTS an FB reads (docs/diagnostics.md §3.4)
 	authored_frames  bool
 	authored_routes  bool
 }
@@ -891,6 +892,11 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 			v.local_signals << nm
 		} else {
 			v.authored_signals = true // a bus endpoint = authored bus wiring
+		}
+	}
+	for pv in (doc.value_opt('param') or { toml.Any([]toml.Any{}) }).array() {
+		if nm := pv.as_map()['name'] {
+			v.params << nm.string()
 		}
 	}
 	if fv := doc.value_opt('frame') {

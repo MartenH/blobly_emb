@@ -32,7 +32,9 @@ examples/<name>/   a FREESTANDING app (own Makefile, `make all`):
 loom/   the Loom: scheduler (the de-AUTOSAR'd "RTE")
 comm/   comms stack: com, e2e (AUTOSAR E2E Profile 1), secoc (AES-CMAC), isotp (15765-2), uds (14229), nm,
         fault (debounce + fault memory behind 0x19/0x14/0x85; snapshots, extended data, displacement
-        and its persistence in the NvM journal — entry.v, persist.v), diag (the UDS server on its ISO-TP
+        and its persistence in the NvM journal — entry.v, persist.v), param (variant coding: read-only
+        FB inputs coded with 0x2E on a bound DID, one NvM journal record each, docs/diagnostics.md §3.4),
+        diag (the UDS server on its ISO-TP
         connection and the order a pass runs it — the host bridge calls it; the ThreadX comm
         thread from R2; its transport step — intake, busy guard, pump/abort, S3 hold, wire
         drain — is step.v, which the bootloader runs whole as serve_step)
@@ -166,8 +168,10 @@ application, which also shares `doipnet.serve_mailbox` / `drain_tx`), linked fro
 `TX_A`/`NX_A` (`boards/common/boot_net.c`). sysnode's boot is
 ~90 KB of its 128 KB sector that way (37 KB bus-only); `boot/target/serve_{d,notd}_boot_doip.v` are
 the two variants of the serve loop. zone_a's NvM journal (its persisted fault memory) is
-flash sectors 6 + 7 (`boards/h723/bootmap.h` NVM_*, outside the app region, which is sectors 1..5):
-`make flash` never erases it, so DTCs survive a reflash — clear them with 0x14.
+flash sectors 6 + 7 (`boards/h723/bootmap.h` NVM_*, outside the app region, which is sectors 1..5) and
+holds its persisted fault memory and its `SteerLimit` parameter: `make flash` never erases it, so DTCs
+and coded parameters survive a reflash — clear DTCs with 0x14, recode a parameter with 0x2E
+(`test/param_zone_a.lua` leaves it at 360).
 
 **CI pins the V compiler** to the release tag in `.v-version` (currently `0.5.2`), installed as the
 **prebuilt** `v_linux.zip` release asset in both jobs. It used to install master HEAD, so an upstream
