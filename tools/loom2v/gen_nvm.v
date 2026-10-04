@@ -314,8 +314,9 @@ fn chain_records(len int) int {
 // derive_fault_nvm: the persisted fault memory's block ids, and the journal capacity it needs.
 // The STATUS IMAGE has one fixed id — it is keyed inside by DTC number, so no update to the fault
 // table moves it, and a firmware update can never prune it and resurrect cleared DTCs. Each
-// SNAPSHOT's id is a hash of its DTC and its schema (the DIDs and their sizes), so an update that
-// changes a snapshot restores none rather than the wrong bytes; a collision with a persisted
+// snapshot has TWO blocks, A and B (comm/fault persist.v), their ids hashes of its DTC and its schema
+// (the DIDs and their sizes), so an update that changes a snapshot restores none rather than the
+// wrong bytes; a collision with a persisted
 // signal, the status image or another snapshot is refused, naming the pin (`snapshot_id`) that
 // resolves it — never resolved by declaration order, which an update may change.
 fn derive_fault_nvm(m Model) (u16, []u16, []u16) {
@@ -361,7 +362,7 @@ fn derive_fault_nvm(m Model) (u16, []u16, []u16) {
 			if prev := used[id] {
 				// never resolved by the order the faults are declared in: an update that reorders
 				// them, or adds a colliding signal, would move a stored snapshot to another id
-				panic('loom2v: [[fault]] "${f.name}": its snapshot block 0x${id.hex()} collides with ${prev} — pin the fault with `snapshot_id = <1..65533>` (its blocks are that id and the next), or a signal with `nvm_id`, and keep it')
+				panic('loom2v: [[fault]] "${f.name}": its snapshot block 0x${id.hex()} collides with ${prev} — pin the other side (a signal with `nvm_id`), or this fault with `snapshot_id = 0x${a.hex()}` if 0x${(a + 1).hex()} is free (its blocks are that id and the next: pinning its current block A keeps a stored snapshot), and keep the pin')
 			}
 			used[id] = 'a snapshot block of [[fault]] "${f.name}"'
 		}

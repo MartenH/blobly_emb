@@ -222,7 +222,8 @@ pub mut:
 	entry      int  // the snapshot entry this DTC holds, index + 1; 0 = none
 	snap_due   bool // an occurrence wants a snapshot captured (capture)
 	// persistence (persist.v): what the store holds for this DTC
-	claim u8      // which snapshot block the COMMITTED image claims: 0 none, 1 A, 2 B
+	claim    u8   // which snapshot block the COMMITTED image claims: 0 none, 1 A, 2 B
+	claim_ok bool // ... and it holds that snapshot (committed from one, or read back at restore)
 	live  [2]bool // blocks A / B hold a snapshot (not a tombstone or nothing)
 }
 
@@ -270,6 +271,7 @@ pub fn (mut m Memory) init() {
 		m.slots[i].entry = 0
 		m.slots[i].snap_due = false
 		m.slots[i].claim = 0
+		m.slots[i].claim_ok = false
 		m.slots[i].live[0] = false
 		m.slots[i].live[1] = false
 	}

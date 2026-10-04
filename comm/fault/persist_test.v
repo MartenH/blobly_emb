@@ -67,36 +67,27 @@ fn pf_read(ctx voidptr, addr u32, out &u8, len u32) bool {
 
 fn pf_put(ctx voidptr, id u16, data &u8, len u16) bool {
 	mut r := unsafe { &Rig(ctx) }
-	if r.refuse_id != 0 && id == r.refuse_id {
-		return false
-	}
-	// THE INVARIANT (persist.v), checked at the write itself: no block the last COMMITTED image
-	// claims is ever written or tombstoned
+	// THE INVARIANT (persist.v), checked at every ATTEMPTED write, refused or not: no block the
+	// last COMMITTED image claims is ever written or tombstoned ...
 	if id != r.m.store.id {
 		mut img := [max_image]u8{}
 		n := int(r.j.get(r.m.store.id, &img[0], u16(max_image)))
 		for o := 2; o + image_rec <= n; o += image_rec {
-			f := img[o + 3]
-			if f & img_snapshot == 0 {
-				continue
+			assert id != r.claimed_block(img[o..o + image_rec]), 'block 0x${id.hex()} written (${len} B) while the committed image claims it'
+		}
+	} else {
+		// ... and its other half: an image never claims a block that does not hold a snapshot
+		for o := 2; o + image_rec <= int(len); o += image_rec {
+			rec := unsafe { data.vbytes(int(len))[o..o + image_rec] }
+			claimed := r.claimed_block(rec)
+			if claimed != 0 {
+				mut b := [4]u8{}
+				assert r.j.get(claimed, &b[0], 4) > 1, 'an image claims block 0x${claimed.hex()}, which holds no snapshot'
 			}
-			k := int(img[o + 2]) // the rig's DTCs are 0xC1000k
-			claimed := if f & img_block_b != 0 { u16(0x1100 + k) } else { u16(0x1000 + k) }
-			assert id != claimed, 'block 0x${id.hex()} written (${len} B) while the committed image claims it'
 		}
 	}
-	// ... and its other half: an image never claims a block that does not hold a snapshot
-	if id == r.m.store.id {
-		for o := 2; o + image_rec <= int(len); o += image_rec {
-			f := unsafe { data[o + 3] }
-			if f & img_snapshot == 0 {
-				continue
-			}
-			k := int(unsafe { data[o + 2] })
-			claimed := if f & img_block_b != 0 { u16(0x1100 + k) } else { u16(0x1000 + k) }
-			mut b := [4]u8{}
-			assert r.j.get(claimed, &b[0], 4) > 1, 'an image claims block 0x${claimed.hex()}, which holds no snapshot'
-		}
+	if r.refuse_id != 0 && id == r.refuse_id {
+		return false
 	}
 	r.puts++
 	if id == r.m.store.id {
@@ -108,6 +99,16 @@ fn pf_put(ctx voidptr, id u16, data &u8, len u16) bool {
 fn pf_get(ctx voidptr, id u16, out &u8, cap u16) u16 {
 	r := unsafe { &Rig(ctx) }
 	return r.j.get(id, out, cap)
+}
+
+// claimed_block: the snapshot block an image record claims (0 = none), by the module's own rules.
+fn (r &Rig) claimed_block(rec []u8) u16 {
+	b := claim_of(rec[3])
+	i := r.m.slot_of(u32(rec[0]) << 16 | u32(rec[1]) << 8 | u32(rec[2]))
+	if b == 0 || i < 0 {
+		return 0
+	}
+	return r.m.block_id(i, b)
 }
 
 // Rig is one ECU: the flash outlives a reboot, the journal and the memory do not.
@@ -477,9 +478,9 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 							newest = k
 						}
 					}
-					r.refuse_id = sh.m.slots[sh.m.entries[newest].slot].snap_id
+					r.refuse_id = sh.m.block_id(sh.m.entries[newest].slot, sh.m.entries[newest].blk)
 				} else if (rng >> 9) % 3 == 0 {
-					r.refuse_id = u16(0x1000 + (rng >> 11) % 3) + if (rng >> 13) & 1 == 0 { u16(0) } else { u16(0x100) }
+					r.refuse_id = u16(0x1000 + (rng >> 24) % 3) + if (rng >> 27) & 1 == 0 { u16(0) } else { u16(0x100) }
 				} else if (rng >> 9) % 3 == 1 {
 					r.refuse_id = r.m.store.id // the image alone: its snapshots and tombstones go through
 				} else {
@@ -541,7 +542,7 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 				}
 				// claimed: the block is there, whole, this DTC's, and exactly what was captured
 				mut blk := [max_block]u8{}
-				bid := if got[2 + i * image_rec + 3] & img_block_b != 0 { r.m.slots[i].snap_id_b } else { r.m.slots[i].snap_id }
+				bid := r.claimed_block(got[2 + i * image_rec..2 + (i + 1) * image_rec])
 				n := int(r.j.get(bid, &blk[0], u16(max_block)))
 				assert n == snap_hdr + r.m.snap_len(i), '${ctx}: slot ${i} claims a snapshot the store does not hold (${n} B)'
 				dtc := u32(blk[0]) << 16 | u32(blk[1]) << 8 | u32(blk[2])
@@ -730,8 +731,8 @@ fn test_a_refused_clear_reaches_the_owner_inside_the_retry_pause() {
 	r.f.refuse = false
 }
 
-// Round 3's two scenarios, each with the store refusing the image at the worst moment. A DTC
-// displaced and then reacquired writes its OTHER block — the committed image still claims the old
+// Two ways to reach a block the committed image claims, each with the store refusing the image at
+// the worst moment. A DTC displaced and then reacquired writes its OTHER block — the committed image still claims the old
 // one — and an update that lowers `entries` leaves the dropped snapshot claimed (and untouched)
 // until an image that drops it commits. The invariant oracle in pf_put fails at the offending write.
 fn test_reacquire_after_displacement_writes_the_other_block() {

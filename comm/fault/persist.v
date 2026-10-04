@@ -8,10 +8,10 @@ module fault
 //   counters, the current operation cycle's per-DTC flags, and which DTC holds a stored snapshot.
 //   ONE value, so a group clear, a displacement and a cycle boundary are each one atomic write;
 //
-//   one SNAPSHOT block per DTC that declares `freeze` (its id derived from the DTC and the
-//   snapshot's schema): the DTC, its allocation stamp, the schema's fingerprint and the record
-//   body — or a 1-byte TOMBSTONE
-//   once the snapshot is gone, so a freed snapshot stops occupying journal space.
+//   TWO SNAPSHOT blocks, A and B, per DTC that declares `freeze` (their ids derived from the DTC
+//   and the snapshot's schema): the DTC, its allocation stamp, the schema's fingerprint and the
+//   record body — or a 1-byte TOMBSTONE once released, so a released block stops occupying
+//   journal space.
 //
 // THE INVARIANT: no block the last COMMITTED image claims is ever written or tombstoned; a block is
 // released only by a committed image that no longer claims it. It holds by construction: each
@@ -48,7 +48,7 @@ module fault
 // DTC per cycle: an entry that failed this cycle cannot be displaced) and tombstoned once when
 // freed. A refused write is retried no sooner than `retry_us` later.
 
-pub const image_version = u8(2) // 2: the setting bit, and snapshot blocks with a fingerprint
+pub const image_version = u8(3) // 3: which of a DTC's two snapshot blocks is claimed (2: the setting bit and fingerprints)
 pub const image_rec = 8 // bytes per DTC in the image
 pub const max_image = 2 + max_faults * image_rec
 pub const snap_hdr = 9 // a snapshot block: DTC (3), stamp (4), schema fingerprint (2), then the record body
@@ -152,6 +152,7 @@ fn (mut m Memory) commit_image(n int) {
 	m.img_len = n
 	for i in 0 .. m.n {
 		m.slots[i].claim = claim_of(m.img[2 + i * image_rec + 3])
+		m.slots[i].claim_ok = m.slots[i].claim != 0 // an image claims only snapshots written whole
 	}
 }
 
@@ -297,6 +298,14 @@ pub fn (mut m Memory) restore() {
 	if !m.stored() {
 		return
 	}
+	// two distinct, real snapshot blocks per DTC, or no snapshot: block id 0 is the journal's
+	// clean marker, and a single block for A and B would be overwritten under its own claim
+	for i in 0 .. m.n {
+		s := &m.slots[i]
+		if s.nfreeze > 0 && (s.snap_id == 0 || s.snap_id_b == 0 || s.snap_id == s.snap_id_b) {
+			m.slots[i].nfreeze = 0
+		}
+	}
 	n := int(m.store.get(m.store.ctx, m.store.id, &m.img[0], u16(max_image)))
 	m.img_len = 0
 	mut open := false
@@ -323,9 +332,7 @@ pub fn (mut m Memory) restore() {
 			// the committed claim stands whether or not its block is readable: what it claims is
 			// released only by a committed image that no longer claims it
 			s.claim = if s.nfreeze > 0 { claim_of(f) } else { u8(0) }
-			if s.claim != 0 {
-				m.load_snapshot(i, s.claim)
-			}
+			s.claim_ok = s.claim != 0 && m.load_snapshot(i, s.claim)
 		}
 		m.fit_entries()
 	}
@@ -334,9 +341,10 @@ pub fn (mut m Memory) restore() {
 		if s.nfreeze == 0 {
 			continue
 		}
-		// a block nothing claims is tombstoned at the next persist
+		// a block nothing claims is tombstoned at the next persist (the one just loaded is live)
 		for b in u8(1) .. 3 {
-			s.live[b - 1] = int(m.store.get(m.store.ctx, m.block_id(i, b), &m.scratch[0], 2)) > 1
+			s.live[b - 1] = (s.entry != 0 && m.entries[s.entry - 1].blk == b)
+				|| int(m.store.get(m.store.ctx, m.block_id(i, b), &m.scratch[0], 2)) > 1
 		}
 	}
 	if open {
