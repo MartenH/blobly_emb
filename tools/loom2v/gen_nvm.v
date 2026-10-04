@@ -318,9 +318,9 @@ fn chain_records(len int) int {
 // changes a snapshot restores none rather than the wrong bytes; a collision with a persisted
 // signal, the status image or another snapshot is refused, naming the pin (`snapshot_id`) that
 // resolves it — never resolved by declaration order, which an update may change.
-fn derive_fault_nvm(m Model) (u16, []u16) {
+fn derive_fault_nvm(m Model) (u16, []u16, []u16) {
 	if !fault_persist_on(m) {
-		return 0, []u16{}
+		return 0, []u16{}, []u16{}
 	}
 	mut used := map[u16]string{}
 	for sname, id in m.nvm_ids {
@@ -332,11 +332,13 @@ fn derive_fault_nvm(m Model) (u16, []u16) {
 	}
 	used[status] = 'the fault memory status'
 	mut snaps := []u16{}
+	mut snaps_b := []u16{}
 	mut nsnap := 0
 	mut snap_recs := 1
 	for f in m.faults {
 		if f.freeze.len == 0 {
 			snaps << 0
+			snaps_b << 0
 			continue
 		}
 		nsnap++
@@ -351,34 +353,36 @@ fn derive_fault_nvm(m Model) (u16, []u16) {
 		if r > snap_recs {
 			snap_recs = r
 		}
-		id := if f.snapshot_id != 0 {
-			u16(f.snapshot_id)
-		} else {
-			nvm_hash16('fault_snapshot:${f.dtc}:${schema.join(',')}')
+		// two blocks, A and B (persist.v: a capture writes the one the committed image does not claim)
+		ident := 'fault_snapshot:${f.dtc}:${schema.join(',')}'
+		a := if f.snapshot_id != 0 { u16(f.snapshot_id) } else { nvm_hash16(ident) }
+		b := if f.snapshot_id != 0 { u16(f.snapshot_id + 1) } else { nvm_hash16(ident + ':B') }
+		for id in [a, b] {
+			if prev := used[id] {
+				// never resolved by the order the faults are declared in: an update that reorders
+				// them, or adds a colliding signal, would move a stored snapshot to another id
+				panic('loom2v: [[fault]] "${f.name}": its snapshot block 0x${id.hex()} collides with ${prev} — pin the fault with `snapshot_id = <1..65533>` (its blocks are that id and the next), or a signal with `nvm_id`, and keep it')
+			}
+			used[id] = 'a snapshot block of [[fault]] "${f.name}"'
 		}
-		if prev := used[id] {
-			// never resolved by the order the faults are declared in: an update that reorders them,
-			// or adds a colliding signal, would move a stored snapshot to another id and lose it
-			panic('loom2v: [[fault]] "${f.name}": its snapshot block 0x${id.hex()} collides with ${prev} — pin one with `snapshot_id = <1..65534>` on the fault (or `nvm_id` on a signal), and keep it')
-		}
-		used[id] = 'the snapshot of [[fault]] "${f.name}"'
-		snaps << id
+		snaps << a
+		snaps_b << b
 	}
-	// the pool: a row per persisted signal, the status image and every snapshot block (a freed one
-	// stays as a tombstone), within the migration headroom derive_nvm leaves
-	if m.nvm_names.len + 1 + nsnap > 48 {
-		panic('loom2v: ${m.nvm_names.len} persistent signals + the fault memory (${1 + nsnap} blocks) exceed the safe journal pool budget (48 of nvm.max_blocks)')
+	// the pool: a row per persisted signal, the status image and both snapshot blocks of every
+	// fault with one (a freed one stays as a tombstone), within derive_nvm's migration headroom
+	if m.nvm_names.len + 1 + 2 * nsnap > 48 {
+		panic('loom2v: ${m.nvm_names.len} persistent signals + the fault memory (${1 + 2 * nsnap} blocks) exceed the safe journal pool budget (48 of nvm.max_blocks)')
 	}
-	// capacity, the docs/nvm.md headroom rule: the live set — EVERY snapshot block whole (a
-	// tombstone is written only after the image that frees it is durable, and a refusal or a power
-	// cut can leave any number of freed blocks waiting for theirs) — plus a full rewrite of it
-	// must fit one sector, so a flush never needs an erase
-	live := m.nvm_names.len + chain_records(2 + m.faults.len * fault.image_rec) + nsnap * snap_recs + 1
+	// capacity, the docs/nvm.md headroom rule: the live set — BOTH blocks of every snapshot whole
+	// (the committed one and the one a capture writes beside it; a tombstone waits for the image
+	// that releases its block, and refusals or power cuts can leave any of them waiting) — plus a
+	// full rewrite of it must fit one sector, so a flush never needs an erase
+	live := m.nvm_names.len + chain_records(2 + m.faults.len * fault.image_rec) + 2 * nsnap * snap_recs + 1
 	if live + live > int(m.nvm.sector_records) {
 		panic('loom2v: the journal needs ${live + live} records of sector headroom (live set ${live}: ' +
 			'${m.nvm_names.len} persistent signals + the fault memory, docs/nvm.md) but [nvm] sector_records = ${m.nvm.sector_records}')
 	}
-	return status, snaps
+	return status, snaps, snaps_b
 }
 
 // fault_store_fns: the fault memory's store seam over the journal (one thread: the comm thread
@@ -506,9 +510,10 @@ fn nvm_boot_lines(m Model, ioc_idx map[string]int) []string {
 	}
 	if fault_persist_on(m) {
 		keep << 'u16(0x${m.fault_status_id.hex()}) /* the fault memory status */'
-		for id in m.fault_snap_ids {
+		for k, id in m.fault_snap_ids {
 			if id != 0 {
 				keep << 'u16(0x${id.hex()})'
+				keep << 'u16(0x${m.fault_snap_ids_b[k].hex()})'
 			}
 		}
 	}

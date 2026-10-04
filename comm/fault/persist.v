@@ -13,6 +13,14 @@ module fault
 //   body — or a 1-byte TOMBSTONE
 //   once the snapshot is gone, so a freed snapshot stops occupying journal space.
 //
+// THE INVARIANT: no block the last COMMITTED image claims is ever written or tombstoned; a block is
+// released only by a committed image that no longer claims it. It holds by construction: each
+// fault has TWO snapshot blocks, A and B; the image records which one it claims; a capture always
+// writes the one the committed image does not claim (entry.v allocate), and a tombstone is written
+// only for a block the committed image does not claim and no captured snapshot is waiting in. So
+// a power cut anywhere restores a committed image with every block it claims intact — whether the
+// DTC was displaced and reacquired, cleared, aged, or dropped by an update that lowered `entries`.
+//
 // A snapshot is written BEFORE the image that claims it, and a freed one is tombstoned only AFTER
 // the image that no longer claims it is durable — so the image is the one authority: a power cut
 // between the two writes restores either the old pair or the new one, never a claim of a snapshot
@@ -53,6 +61,7 @@ pub const persisted_bits = pending | confirmed | not_completed_since_clear | fai
 const img_tested = u8(0x01) // tested in the cycle in progress
 const img_failed = u8(0x02) // failed in the cycle in progress
 const img_snapshot = u8(0x40) // holds a stored snapshot
+const img_block_b = u8(0x80) // ... in its block B (else A)
 const img_cycle_open = u8(0x01) // image byte 1: an operation cycle was in progress
 const img_setting_off = u8(0x02) // image byte 1: DTC setting was off (0x85) — so was its end
 
@@ -102,6 +111,9 @@ fn (mut m Memory) image(clearing bool, group u32) int {
 		}
 		if s.entry != 0 && m.entries[s.entry - 1].durable {
 			f |= img_snapshot
+			if m.entries[s.entry - 1].blk == 2 {
+				f |= img_block_b
+			}
 		}
 		m.scratch[o + 3] = f
 		m.scratch[o + 4] = s.failed_cycles
@@ -139,7 +151,7 @@ fn (mut m Memory) commit_image(n int) {
 	}
 	m.img_len = n
 	for i in 0 .. m.n {
-		m.slots[i].claim_durable = m.img[2 + i * image_rec + 3] & img_snapshot != 0
+		m.slots[i].claim = claim_of(m.img[2 + i * image_rec + 3])
 	}
 }
 
@@ -180,18 +192,20 @@ pub fn (mut m Memory) persist(now u64, flush bool) bool {
 	} else if changed {
 		deferred = true // only occurrence counters: durable with the next image write or flush
 	}
-	// 3. tombstones, only for blocks the durable image no longer claims (safe whatever was refused:
-	// the claims are the durable image's)
+	// 3. tombstones: a block the committed image does not claim and no captured snapshot waits in
 	for i in 0 .. m.n {
-		if !m.slots[i].blk_live || m.slots[i].entry != 0 || m.slots[i].claim_durable {
-			continue
-		}
-		m.scratch[0] = 0
-		if m.store.put(m.store.ctx, m.slots[i].snap_id, &m.scratch[0], 1) {
-			m.slots[i].blk_live = false
-			m.wrote++
-		} else {
-			refused = true
+		for b in u8(1) .. 3 {
+			if !m.slots[i].live[b - 1] || m.slots[i].claim == b
+				|| (m.slots[i].entry != 0 && m.entries[m.slots[i].entry - 1].blk == b) {
+				continue
+			}
+			m.scratch[0] = 0
+			if m.store.put(m.store.ctx, m.block_id(i, b), &m.scratch[0], 1) {
+				m.slots[i].live[b - 1] = false
+				m.wrote++
+			} else {
+				refused = true
+			}
 		}
 	}
 	m.retry_at = if refused { now + m.store.retry_us } else { u64(0) }
@@ -218,9 +232,10 @@ fn (mut m Memory) write_snapshots(group u32, clearing bool) (bool, bool) {
 			continue
 		}
 		n := m.snapshot_block(k)
-		if m.store.put(m.store.ctx, m.slots[i].snap_id, &m.scratch[0], u16(n)) {
+		b := m.entries[k].blk
+		if m.store.put(m.store.ctx, m.block_id(i, b), &m.scratch[0], u16(n)) {
 			m.entries[k].durable = true
-			m.slots[i].blk_live = true
+			m.slots[i].live[b - 1] = true
 			m.wrote++
 		} else {
 			refused = true
@@ -305,7 +320,12 @@ pub fn (mut m Memory) restore() {
 			s.failed_cycles = m.img[o + 4]
 			s.aging_count = m.img[o + 5]
 			s.occurrence = u16(m.img[o + 6]) << 8 | u16(m.img[o + 7])
-			s.claim_durable = f & img_snapshot != 0 && s.nfreeze > 0 && m.load_snapshot(i)
+			// the committed claim stands whether or not its block is readable: what it claims is
+			// released only by a committed image that no longer claims it
+			s.claim = if s.nfreeze > 0 { claim_of(f) } else { u8(0) }
+			if s.claim != 0 {
+				m.load_snapshot(i, s.claim)
+			}
 		}
 		m.fit_entries()
 	}
@@ -315,8 +335,9 @@ pub fn (mut m Memory) restore() {
 			continue
 		}
 		// a block nothing claims is tombstoned at the next persist
-		s.blk_live = s.entry != 0
-			|| int(m.store.get(m.store.ctx, s.snap_id, &m.scratch[0], 2)) > 1
+		for b in u8(1) .. 3 {
+			s.live[b - 1] = int(m.store.get(m.store.ctx, m.block_id(i, b), &m.scratch[0], 2)) > 1
+		}
 	}
 	if open {
 		// the cycle power interrupted ends with what it saw — under the DTC setting it ended
@@ -347,9 +368,9 @@ fn fnv(h u32, b u8) u32 {
 
 // load_snapshot reads slot i's snapshot block into a free entry; false = absent, malformed, or
 // another DTC's.
-fn (mut m Memory) load_snapshot(i int) bool {
+fn (mut m Memory) load_snapshot(i int, b u8) bool {
 	want := snap_hdr + m.snap_len(i)
-	n := int(m.store.get(m.store.ctx, m.slots[i].snap_id, &m.scratch[0], u16(max_block)))
+	n := int(m.store.get(m.store.ctx, m.block_id(i, b), &m.scratch[0], u16(max_block)))
 	if n != want {
 		return false
 	}
@@ -381,10 +402,12 @@ fn (mut m Memory) load_snapshot(i int) bool {
 	e.used = true
 	e.slot = i
 	e.durable = true
+	e.blk = b
+	e.took_claim = false
 	e.stamp = u32(m.scratch[3]) << 24 | u32(m.scratch[4]) << 16 | u32(m.scratch[5]) << 8 | u32(m.scratch[6])
 	e.len = n - snap_hdr
-	for b in 0 .. e.len {
-		e.data[b] = m.scratch[snap_hdr + b]
+	for x in 0 .. e.len {
+		e.data[x] = m.scratch[snap_hdr + x]
 	}
 	m.slots[i].entry = k + 1
 	if e.stamp >= m.next_stamp {
@@ -415,9 +438,7 @@ fn (mut m Memory) fit_entries() {
 				worst = k
 			}
 		}
-		i := m.entries[worst].slot
-		m.free_entry(i)
-		m.slots[i].claim_durable = false
+		m.free_entry(m.entries[worst].slot) // its block stays claimed until an image that drops it commits
 	}
 	mut to := 0
 	for k in 0 .. max_entries {
@@ -451,4 +472,17 @@ fn (m &Memory) slot_of(dtc u32) int {
 		}
 	}
 	return -1
+}
+
+// block_id: slot i's snapshot block b (1 A, 2 B).
+fn (m &Memory) block_id(i int, b u8) u16 {
+	return if b == 2 { m.slots[i].snap_id_b } else { m.slots[i].snap_id }
+}
+
+// claim_of: the block an image's per-DTC flag byte claims — 0 none, 1 A, 2 B.
+fn claim_of(f u8) u8 {
+	if f & img_snapshot == 0 {
+		return 0
+	}
+	return if f & img_block_b != 0 { u8(2) } else { u8(1) }
 }

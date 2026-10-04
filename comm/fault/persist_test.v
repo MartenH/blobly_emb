@@ -70,6 +70,34 @@ fn pf_put(ctx voidptr, id u16, data &u8, len u16) bool {
 	if r.refuse_id != 0 && id == r.refuse_id {
 		return false
 	}
+	// THE INVARIANT (persist.v), checked at the write itself: no block the last COMMITTED image
+	// claims is ever written or tombstoned
+	if id != r.m.store.id {
+		mut img := [max_image]u8{}
+		n := int(r.j.get(r.m.store.id, &img[0], u16(max_image)))
+		for o := 2; o + image_rec <= n; o += image_rec {
+			f := img[o + 3]
+			if f & img_snapshot == 0 {
+				continue
+			}
+			k := int(img[o + 2]) // the rig's DTCs are 0xC1000k
+			claimed := if f & img_block_b != 0 { u16(0x1100 + k) } else { u16(0x1000 + k) }
+			assert id != claimed, 'block 0x${id.hex()} written (${len} B) while the committed image claims it'
+		}
+	}
+	// ... and its other half: an image never claims a block that does not hold a snapshot
+	if id == r.m.store.id {
+		for o := 2; o + image_rec <= int(len); o += image_rec {
+			f := unsafe { data[o + 3] }
+			if f & img_snapshot == 0 {
+				continue
+			}
+			k := int(unsafe { data[o + 2] })
+			claimed := if f & img_block_b != 0 { u16(0x1100 + k) } else { u16(0x1000 + k) }
+			mut b := [4]u8{}
+			assert r.j.get(claimed, &b[0], 4) > 1, 'an image claims block 0x${claimed.hex()}, which holds no snapshot'
+		}
+	}
 	r.puts++
 	if id == r.m.store.id {
 		r.image_puts++
@@ -158,6 +186,7 @@ fn (mut r Rig) restart(power_cycle bool) {
 			s.freeze_len[1] = if r.swapped { u8(4) } else { 18 }
 			s.nfreeze = 2
 			s.snap_id = u16(0x1000 + k)
+			s.snap_id_b = u16(0x1100 + k)
 		}
 	}
 	r.m.n = r.n
@@ -449,8 +478,10 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 						}
 					}
 					r.refuse_id = sh.m.slots[sh.m.entries[newest].slot].snap_id
-				} else if (rng >> 9) & 1 == 0 {
-					r.refuse_id = u16(0x1000 + (rng >> 10) % 3)
+				} else if (rng >> 9) % 3 == 0 {
+					r.refuse_id = u16(0x1000 + (rng >> 11) % 3) + if (rng >> 13) & 1 == 0 { u16(0) } else { u16(0x100) }
+				} else if (rng >> 9) % 3 == 1 {
+					r.refuse_id = r.m.store.id // the image alone: its snapshots and tombstones go through
 				} else {
 					r.f.refuse = true
 				}
@@ -467,7 +498,7 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 			r.f.refuse = false
 			// the journal never holds more than the generator budgets: the image, EVERY snapshot
 			// block whole, the marker (gen_nvm.v derive_fault_nvm)
-			budget := nvm.records_for(u16(2 + r.m.n * image_rec)) + 3 * nvm.records_for(u16(snap_hdr +
+			budget := nvm.records_for(u16(2 + r.m.n * image_rec)) + 6 * nvm.records_for(u16(snap_hdr +
 				r.m.snap_len(0))) + 1
 			assert r.j.live_records() <= budget, '${ctx}: ${r.j.live_records()} live records, the budget is ${budget}'
 			for k in 0 .. r.m.cap {
@@ -510,7 +541,8 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 				}
 				// claimed: the block is there, whole, this DTC's, and exactly what was captured
 				mut blk := [max_block]u8{}
-				n := int(r.j.get(r.m.slots[i].snap_id, &blk[0], u16(max_block)))
+				bid := if got[2 + i * image_rec + 3] & img_block_b != 0 { r.m.slots[i].snap_id_b } else { r.m.slots[i].snap_id }
+				n := int(r.j.get(bid, &blk[0], u16(max_block)))
 				assert n == snap_hdr + r.m.snap_len(i), '${ctx}: slot ${i} claims a snapshot the store does not hold (${n} B)'
 				dtc := u32(blk[0]) << 16 | u32(blk[1]) << 8 | u32(blk[2])
 				stamp := u32(blk[3]) << 24 | u32(blk[4]) << 16 | u32(blk[5]) << 8 | u32(blk[6])
@@ -696,4 +728,47 @@ fn test_a_refused_clear_reaches_the_owner_inside_the_retry_pause() {
 	r.m.persist(1500, false)
 	assert r.m.refused, 'a refused clear stayed invisible through the retry pause'
 	r.f.refuse = false
+}
+
+// Round 3's two scenarios, each with the store refusing the image at the worst moment. A DTC
+// displaced and then reacquired writes its OTHER block — the committed image still claims the old
+// one — and an update that lowers `entries` leaves the dropped snapshot claimed (and untouched)
+// until an image that drops it commits. The invariant oracle in pf_put fails at the offending write.
+fn test_reacquire_after_displacement_writes_the_other_block() {
+	mut r := new_rig(1)
+	r.m.slots[r.order[0]].priority = 50 // equals: either may displace the other
+	r.m.slots[r.order[1]].priority = 50
+	r.pass(0, .failed, 1, 1) // DTC 0 takes the one entry: block A, committed
+	r.m.cycle_end()
+	r.m.cycle_start()
+	r.pass(0, .passed, 1, 2)
+	r.refuse_id = r.m.store.id // every image refused from here: block A stays committed to DTC 0
+	r.pass(1, .failed, 2, 3) // DTC 1 displaces DTC 0 (passive, from an earlier cycle)
+	assert r.slot(0).entry == 0 && r.slot(1).entry != 0 && r.slot(0).claim == 1
+	r.m.cycle_end()
+	r.m.cycle_start()
+	r.pass(1, .passed, 2, 40000)
+	r.pass(0, .failed, 9, 50000) // DTC 0 reacquires the entry, displacing DTC 1
+	assert r.slot(0).entry != 0, 'DTC 0 did not reacquire'
+	assert r.m.entries[r.slot(0).entry - 1].blk == 2, 'the reacquired snapshot went to the block the committed image claims'
+	assert r.m.entries[r.slot(0).entry - 1].durable
+	r.refuse_id = 0
+	r.reboot() // nothing new committed: the committed image and its block A come back intact
+	assert r.slot(0).entry != 0 && r.m.entries[r.slot(0).entry - 1].blk == 1
+}
+
+fn test_lowered_entries_leave_the_dropped_snapshot_claimed() {
+	mut r := new_rig(2)
+	r.pass(1, .failed, 1, 1)
+	r.pass(0, .failed, 2, 2) // two snapshots committed
+	r.cap = 1
+	r.refuse_id = r.m.store.id
+	r.reboot() // the update drops one; the image that would release it is refused
+	r.pass(-1, .not_tested, 0, 3)
+	mut blk := [max_block]u8{}
+	assert int(r.j.get(0x1001, &blk[0], u16(max_block))) > 1, 'the dropped snapshot was tombstoned under a committed claim'
+	r.refuse_id = 0
+	r.pass(-1, .not_tested, 0, 2000) // now an image without it commits, and then it goes
+	r.pass(-1, .not_tested, 0, 3000)
+	assert r.j.get(0x1001, &blk[0], u16(max_block)) == 1
 }

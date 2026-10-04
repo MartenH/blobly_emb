@@ -2005,6 +2005,7 @@ fn fault_slot_lines(m Model, fmem string, ind string) []string {
 			out << '${ind}${fmem}.slots[${i}].nfreeze = ${f.freeze.len}'
 			if i < m.fault_snap_ids.len && m.fault_snap_ids[i] != 0 {
 				out << '${ind}${fmem}.slots[${i}].snap_id = u16(0x${m.fault_snap_ids[i].hex()})'
+				out << '${ind}${fmem}.slots[${i}].snap_id_b = u16(0x${m.fault_snap_ids_b[i].hex()})'
 			}
 		}
 	}

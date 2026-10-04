@@ -231,7 +231,7 @@ fn test_the_fault_memory_is_persisted_in_the_journal() {
 		'if g_diag.reset_due() != 0 {', 'g_fmem.consume(0, g_frep_load_slow.r[0])',
 		'if !g_fmem.persist(t1, true) {', 'C.diag_sys_reset()', 'fn fmem_put(ctx voidptr, id u16, data &u8, len u16) bool {',
 		'return g_nvm.put(id, data, len)', 'pub fn boot() {', 'if g_nvm.mounted {',
-		'keep := [', '/* the fault memory status */', 'g_nvm.prune(&keep[0], 2)',
+		'keep := [', '/* the fault memory status */', 'g_nvm.prune(&keep[0], 3)',
 		'g_nvm.erase_pending() // the boot quiet point (no NM)'])
 	assert mk.contains(r'$(REPO)/boards/common/nvm_map.c $(BOARD_FLASH)'), mk
 	// with NM: no erase at boot (the sleep edges are the quiet points), and a write made in bus
@@ -437,11 +437,12 @@ fn test_snapshot_ids_do_not_depend_on_declaration_order() {
 		name: 'C'
 		dtc:  0x030303
 	}
-	st1, ids1 := derive_fault_nvm(snap_model([a, b, c]))
-	st2, ids2 := derive_fault_nvm(snap_model([c, b, a]))
+	st1, ids1, b1 := derive_fault_nvm(snap_model([a, b, c]))
+	st2, ids2, b2 := derive_fault_nvm(snap_model([c, b, a]))
 	assert st1 == st2
 	assert ids1[0] == ids2[2] && ids1[1] == ids2[1] && ids1[2] == 0 && ids2[0] == 0
-	assert ids1[0] != ids1[1]
+	assert b1[0] == b2[2] && b1[1] == b2[1]
+	assert ids1[0] != ids1[1] && ids1[0] != b1[0]
 }
 
 // A collision is refused at generation, naming the pin, rather than resolved by declaration
@@ -452,19 +453,21 @@ fn test_a_snapshot_id_collision_is_refused_and_a_pin_resolves_it() {
 	second := '\n[[fault]]\nname     = "LoadLow"\ndtc      = 0xC40101\nfrom     = "LoadSlow.on_100ms"\nfreeze   = [0xF190]\nsnapshot_id = ${first}\n'
 	base := ft_conn + did + ft_fault.replace('fail = 3, pass = 3 }', 'fail = 3, pass = 3 }\nfreeze = [0xF190]')
 	code, out, _, _ := ft_generate('snapcollide', same, base.replace('[nvm]', second + '\n[nvm]'))
-	assert code != 0 && out.contains('collides with the snapshot of [[fault]] "LoadImplausible"')
+	assert code != 0 && out.contains('collides with a snapshot block of [[fault]] "LoadImplausible"')
 		&& out.contains('snapshot_id'), out
 	c2, o2, g2, _ := ft_generate('snappin', same, base.replace('[nvm]', second.replace('${first}',
 		'4242') + '\n[nvm]'))
 	assert c2 == 0, o2
 	assert g2.contains('g_fmem.slots[1].snap_id = u16(0x${u16(4242).hex()})')
+	assert g2.contains('g_fmem.slots[1].snap_id_b = u16(0x${u16(4243).hex()})')
 	assert g2.contains('g_fmem.slots[0].snap_id = u16(0x${first.hex()})')
 }
 
 // The journal budget holds EVERY snapshot block whole, not only the entries' worth: a tombstone
 // waits for the image that frees its block, so refusals and power cuts can leave all of them live.
-// Three 42-byte snapshot blocks (3 records each) with one entry: 2 (image) + 9 + 1 (marker) = 12,
-// twice that 24 — over 22, which a budget of "2 x entries whole" (20) would have passed.
+// Three faults with 44-byte snapshot blocks (3 records each), two blocks each (A / B) and one entry:
+// 2 (image) + 18 + 1 (marker) = 21, twice that 42 — over 40, which a budget of one block per
+// snapshot (24) would have passed.
 fn test_the_journal_budget_holds_every_snapshot_whole() {
 	wide := '[[did]]\nid    = 0xF192\nascii = "${'W'.repeat(32)}"\n'
 	mut extra := ''
@@ -472,9 +475,9 @@ fn test_the_journal_budget_holds_every_snapshot_whole() {
 		extra += '\n[[fault]]\nname     = "Load${k}"\ndtc      = 0xC4010${k}\nfrom     = "LoadSlow.on_100ms"\nfreeze   = [0xF192]\n'
 	}
 	cfg := ft_conn + wide + ft_fault.replace('fail = 3, pass = 3 }', 'fail = 3, pass = 3 }\nfreeze = [0xF192]').replace('[nvm]',
-		extra + '\n[fault_memory]\nentries = 1\n\n[nvm]') + 'sector_records = 22\n'
+		extra + '\n[fault_memory]\nentries = 1\n\n[nvm]') + 'sector_records = 40\n'
 	code, out, _, _ := ft_generate('budget', same, cfg)
-	assert code != 0 && out.contains('the journal needs 24 records'), out
-	c2, o2, _, _ := ft_generate('budget_ok', same, cfg.replace('sector_records = 22', 'sector_records = 24'))
+	assert code != 0 && out.contains('the journal needs 42 records'), out
+	c2, o2, _, _ := ft_generate('budget_ok', same, cfg.replace('sector_records = 40', 'sector_records = 42'))
 	assert c2 == 0, o2
 }

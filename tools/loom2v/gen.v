@@ -1314,6 +1314,7 @@ mut:
 	// fault's snapshot (0 = the fault has no `freeze`)
 	fault_status_id u16
 	fault_snap_ids  []u16
+	fault_snap_ids_b []u16 // each fault's second snapshot block (persist.v A / B)
 	fault_grace_us  u64 // the cycle-end barrier: twice the longest period of a fault-testing handler
 	bulk      []BulkPoolCfg
 }
@@ -3744,7 +3745,7 @@ fn main() {
 	// (rebound to the existing locals so it stays unchanged). (Step (a): parse -> model.)
 	mut m := build_model(doc, dbc)
 	m.nvm_names, m.nvm_ids = derive_nvm(mut m, doc)
-	m.fault_status_id, m.fault_snap_ids = derive_fault_nvm(m)
+	m.fault_status_id, m.fault_snap_ids, m.fault_snap_ids_b = derive_fault_nvm(m)
 	m.fault_grace_us = fault_grace_us(m, doc)
 	validate_doip(m)
 
@@ -4918,8 +4919,8 @@ fn parse_faults(doc toml.Doc) []FaultCfg {
 			freeze << int(d.i64())
 		}
 		snapshot_id := (m['snapshot_id'] or { toml.Any(0) }).i64()
-		if 'snapshot_id' in m && (snapshot_id < 1 || snapshot_id > 0xFFFE) {
-			panic('loom2v: [[fault]] "${name}": snapshot_id ${snapshot_id} must be 1..65534')
+		if 'snapshot_id' in m && (snapshot_id < 1 || snapshot_id > 0xFFFD) {
+			panic('loom2v: [[fault]] "${name}": snapshot_id ${snapshot_id} must be 1..65533 (its two blocks are that id and the next)')
 		}
 		if 'snapshot_id' in m && freeze.len == 0 {
 			panic('loom2v: [[fault]] "${name}": snapshot_id pins a snapshot block, but the fault declares no `freeze`')

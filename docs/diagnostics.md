@@ -394,22 +394,32 @@ ride the same bus-sleep flush choreography as persisted signals.
   each by its number and the block id never moves (it cannot be pruned, so a cleared DTC cannot
   come back). A group clear, a displacement and a cycle boundary are each one atomic write of it,
   so no clear epoch is needed;
-- one **snapshot block** per fault with `freeze` — its id hashed from the DTC and the snapshot's
-  schema (the DIDs and their sizes), so an update that changes a snapshot restores none rather than
-  the wrong bytes — and the block carries that schema's fingerprint too, checked on restore, so a
-  pinned id kept across such an update restores none either; a collision is refused at generation, naming the pin (`snapshot_id`) — never
-  resolved by declaration order, which an update may change — holding the DTC, an allocation stamp, the schema's fingerprint and the record
-  body; a freed one is rewritten as a 1-byte TOMBSTONE, so freed snapshots stop occupying the
-  journal.
+- TWO **snapshot blocks**, A and B, per fault with `freeze` — their ids hashed from the DTC and
+  the snapshot's schema (the DIDs and their sizes), so an update that changes a snapshot restores
+  none rather than the wrong bytes; each block also carries the schema's fingerprint, checked on
+  restore, so a pinned id (`snapshot_id`: A is that id, B the next) kept across such an update
+  restores none either. A collision is refused at generation, naming the pin — never resolved by
+  declaration order, which an update may change. A block holds the DTC, an allocation stamp, the
+  fingerprint and the record body; a released one is rewritten as a 1-byte TOMBSTONE.
 
-A snapshot is written BEFORE the image that claims it, and tombstoned only AFTER an image that no
-longer claims it is durable: the image is the one authority, so a power cut between the two writes
-restores the old pair or the new one, never a claim of a snapshot that is not there — and an
-interrupted displacement loses neither entry (the old image still claims the victim, whose block is
-untouched until the swap is durable). Proved by `persist_test.v`'s power-cut fuzz: a shadow of the
-ECU says what each step writes, the power is cut at a random flash program inside it, and the store
-must then hold exactly the image from before the step or the one it was writing, with every claimed
-snapshot whole and the one captured.
+**The invariant** (`persist.v`): no block the last COMMITTED image claims is ever written or
+tombstoned; a block is released only by a committed image that no longer claims it. It holds by
+construction: the image records WHICH block it claims, a capture always writes the other one, and a
+tombstone is written only for a block the committed image does not claim and no captured snapshot
+is waiting in. So a power cut anywhere restores a committed image whose every claimed block is
+intact — through a displacement, a DTC displaced and reacquired before the image released it, a
+clear, aging, or an update that lowered `entries`. Beside it, the image is not written while a
+snapshot that displaced a stored one is unwritten (it would drop the victim's claim with nothing in
+its place). The cost: two blocks per snapshot in the journal's live set and pool (zone_a: one fault,
+a 16-byte block, 2 records).
+
+Proved by `persist_test.v`'s power-cut fuzz: a shadow of the ECU says what each step writes, the
+power is cut at a random flash program inside it or the store refuses a block, the image, or
+everything; the store must then hold exactly the image from before the step or the one it was
+writing, every claimed block whole and the one captured — and an ORACLE in the store checks the
+invariant at every write: a write or tombstone of a block the committed image claims, or an image
+claiming a block that holds no snapshot, fails at that write. Firmware-update steps change the
+snapshot schema without changing its length.
 
 **What survives a power-up** (ISO 14229-1 D.2): pendingDTC, confirmedDTC,
 testNotCompletedSinceLastClear, testFailedSinceLastClear and the counters. testFailed is not
@@ -436,8 +446,8 @@ entry whose DTC failed this cycle cannot be displaced) and tombstoned once when 
 write stays outstanding and is retried no sooner than `[nvm] min_write_ms` later. On a 4096-record
 sector a `cycle = "power"` node like zone_a writes a few image records per boot — on the order of a
 hundred boots per sector fill. loom2v checks the capacity at generation: the live set (persisted
-signals, the image and EVERY snapshot block whole — a tombstone waits for the image that frees its
-block, so a refusal or a power cut can leave any of them waiting) and its full rewrite must fit one sector, and the journal pool must hold a
+signals, the image and BOTH blocks of every snapshot whole — a tombstone waits for the image that
+releases its block, so a refusal or a power cut can leave any of them waiting) and its full rewrite must fit one sector, and the journal pool must hold a
 row for each block.
 
 **The cycle-end barrier.** On the target an NM sleep does not end the cycle at once: a producer's

@@ -202,7 +202,8 @@ pub mut:
 	freeze_len [max_freeze]u8
 	nfreeze    int
 	priority   u8  // displacement: 1 = the most important .. 255 (0 reads as 255)
-	snap_id    u16 // the snapshot's block in the store (persist.v)
+	snap_id    u16 // the snapshot's two blocks in the store, A and B (persist.v)
+	snap_id_b  u16
 	// runtime
 	status        u8
 	occurrence    u16 // saturating
@@ -221,8 +222,8 @@ pub mut:
 	entry      int  // the snapshot entry this DTC holds, index + 1; 0 = none
 	snap_due   bool // an occurrence wants a snapshot captured (capture)
 	// persistence (persist.v): what the store holds for this DTC
-	claim_durable bool // the durable status image claims its snapshot
-	blk_live      bool // its snapshot block holds a snapshot (not a tombstone)
+	claim u8      // which snapshot block the COMMITTED image claims: 0 none, 1 A, 2 B
+	live  [2]bool // blocks A / B hold a snapshot (not a tombstone or nothing)
 }
 
 // Memory is the node's fault memory — one writer, the comm thread (D2). Its receivers are all
@@ -268,8 +269,9 @@ pub fn (mut m Memory) init() {
 		m.slots[i].wait_gen = false
 		m.slots[i].entry = 0
 		m.slots[i].snap_due = false
-		m.slots[i].claim_durable = false
-		m.slots[i].blk_live = false
+		m.slots[i].claim = 0
+		m.slots[i].live[0] = false
+		m.slots[i].live[1] = false
 	}
 	for k in 0 .. max_entries {
 		m.entries[k].used = false

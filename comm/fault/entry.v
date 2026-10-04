@@ -39,6 +39,7 @@ pub mut:
 	slot    int
 	stamp   u32
 	durable bool // written to the store since it was captured
+	blk     u8   // the slot's block it is written to: 1 A, 2 B — never the one the committed image claims
 	// it displaced a snapshot the durable image claims: no image may be written until this one is
 	// durable, or a power cut would leave neither (persist.v)
 	took_claim bool
@@ -129,7 +130,7 @@ fn (mut m Memory) allocate(i int) int {
 		v := m.entries[k].slot
 		m.slots[v].entry = 0 // displaced: its snapshot goes, its status and counters stay
 		m.displaced++
-		took = m.slots[v].claim_durable || m.entries[k].took_claim
+		took = m.slots[v].claim != 0 || m.entries[k].took_claim
 	}
 	m.entries[k].took_claim = took
 	m.entries[k].used = true
@@ -137,6 +138,8 @@ fn (mut m Memory) allocate(i int) int {
 	m.entries[k].stamp = m.next_stamp
 	m.entries[k].durable = false
 	m.entries[k].len = 0
+	// the block the committed image does NOT claim: a snapshot it still claims is never overwritten
+	m.entries[k].blk = if m.slots[i].claim == 1 { u8(2) } else { u8(1) }
 	m.next_stamp++
 	m.slots[i].entry = k + 1
 	return k
