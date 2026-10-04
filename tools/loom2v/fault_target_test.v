@@ -6,9 +6,11 @@ import time
 
 // Faults on a ThreadX target (docs/diagnostics.md R6): the fault memory on the comm thread, each
 // fault-owning FB's report and control cells on the byte IOC, the operation cycle from NM (D3) or
-// the power cycle — and what stays refused. Runs the real generator on examples/h735_threadx with
+// the power cycle — and what stays refused. Runs the real generator on testdata/threadx_node with
 // its FBs on one thread and a connection and faults appended (a refusal is a panic, which cannot be
 // caught in-process).
+
+const fixture_dir = os.join_path(@DIR, 'testdata', 'threadx_node')
 
 const ft_conn = '
 [isotp]
@@ -46,7 +48,7 @@ fn ft_loom2v() string {
 	return ft_bin
 }
 
-// one_thread: h735_threadx with every FB on its first thread — faults in a multi-thread partition
+// one_thread: the fixture with every FB on its first thread — faults in a multi-thread partition
 // are not generated yet (the refusal is the host's too).
 fn one_thread(src string) string {
 	mut s := src
@@ -59,14 +61,14 @@ fn one_thread(src string) string {
 	return s
 }
 
-// ft_generate runs loom2v on the one-thread h735_threadx with `edit` applied and `extra` appended;
+// ft_generate runs loom2v on the one-thread fixture with `edit` applied and `extra` appended;
 // returns the exit code, the output, the glue and gen/loom_build.mk.
 fn ft_generate(name string, edit fn (string) string, extra string) (int, string, string, string) {
 	tmp := os.join_path(os.temp_dir(), 'fault_target_${name}_${os.getpid()}')
 	defer {
 		os.rmdir_all(tmp) or {}
 	}
-	ex := os.join_path(@VMODROOT, 'examples', 'h735_threadx')
+	ex := fixture_dir
 	os.mkdir_all(tmp) or { panic(err) }
 	ecu := os.join_path(tmp, 'ecu.toml')
 	src := os.read_file(os.join_path(ex, 'ecu.toml')) or { panic(err) }
@@ -295,7 +297,7 @@ on     = "timeout"
 	assert o2.contains('a signal-status fault on the target needs'), o2
 	// faults in a multi-thread partition (the original layout), as on the host
 	c3, o3, _, _ := ft_generate('multi', fn (src string) string {
-		return os.read_file(os.join_path(@VMODROOT, 'examples', 'h735_threadx', 'ecu.toml')) or {
+		return os.read_file(os.join_path(fixture_dir, 'ecu.toml')) or {
 			panic(err)
 		}
 	}, ft_conn + ft_fault)

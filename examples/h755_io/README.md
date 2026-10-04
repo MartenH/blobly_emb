@@ -10,7 +10,7 @@ with nothing pressed.
 **This is one of a connected pair:**
 
 - **tx (here):** button → `ButtonState` 0x310 → bus
-- **rx: [`../h735_io_lamp`](../h735_io_lamp) —** 0x310 → a remote LED on an
+- **rx: [`../system_io`](../system_io) node `h735` —** 0x310 → a remote LED on an
   STM32H735G-DK
 
 Press B1 and the green LED here *and* the remote lamp both light. Full recipe,

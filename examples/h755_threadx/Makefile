@@ -1,13 +1,13 @@
 # h755_threadx — the full generated ThreadX target on the NUCLEO-H755ZI-Q (CM7 side):
-# the same ecu.toml stack as examples/h735_threadx (shell, trace, NM, the 3-thread load
-# demo), re-based onto boards/h755zi (400 MHz VOS1, FDCAN1 on PD0/PD1 via an external
+# the ThreadX node stack (shell, trace, NM, the 3-thread load demo in app/) on
+# boards/h755zi (400 MHz VOS1, FDCAN1 on PD0/PD1 via an external
 # TLE9251V — see boards/h755zi/board.mk). The point of this example: the whole toolchain
 # on the second board BEFORE waking the CM4, so multicore bring-up is debuggable with
 # our own tools (shell ps/bmc, trace chart) rather than gdb alone. loom2v's
 # [target] kind="threadx" emitter wraps the FB superloop in a ThreadX thread; this build
 # transpiles the V stack to freestanding C and links it with the vendored ThreadX kernel
-# + the H735 board bring-up (the shared recorder, boards/common/trace_hooks.c) + the register-level FDCAN
-# backend. Generated; it replaced the hand-written threadx_h735 (retired, #344).
+# + the H755 board bring-up (the shared recorder, boards/common/trace_hooks.c) + the register-level FDCAN
+# backend.
 #
 #   make -C ../.. deps      # once: ThreadX + CMSIS
 #   make flash              # st-flash the .bin
@@ -72,7 +72,7 @@ all: $(BUILD)/$(NAME).bin
 # 0) generate the ThreadX target (gen/ports/sig) from ecu.toml via loom2v.
 GEN = gen/loom_gen.v ports/ports_gen.v sig/signals_gen.v
 gen: gen/.stamp
-gen/.stamp: ecu.toml bus.dbc $(wildcard $(REPO)/examples/shared/loadmix/app/*.v) $(TOOL_ecucheck) $(TOOL_loom2v)
+gen/.stamp: ecu.toml bus.dbc $(wildcard app/*.v) $(TOOL_ecucheck) $(TOOL_loom2v)
 	@mkdir -p gen ports sig
 	cd $(REPO) && $(TOOL_ecucheck) examples/$(NAME)/ecu.toml
 	cd $(REPO) && $(TOOL_loom2v) examples/$(NAME)/ecu.toml examples/$(NAME)/bus.dbc \
@@ -90,9 +90,9 @@ endif
 gen/loom_build.mk: gen/.stamp ;
 
 # 1) transpile the V stack to freestanding C (-enable-globals for the ThreadX TCB/stack statics).
-$(BUILD)/app.c: main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) $(wildcard $(REPO)/nvm/*.v) $(wildcard $(REPO)/boot/*.v) $(wildcard $(REPO)/examples/shared/loadmix/app/*.v) | $(BUILD)
+$(BUILD)/app.c: main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) $(wildcard $(REPO)/nvm/*.v) $(wildcard $(REPO)/boot/*.v) $(wildcard app/*.v) | $(BUILD)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
-	  -path "@vlib|@vmodules|.|examples/$(NAME)|examples/shared/loadmix" \
+	  -path "@vlib|@vmodules|.|examples/$(NAME)" \
 	  -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
 	$(REPO)/scripts/lint_vinit.sh $@
 

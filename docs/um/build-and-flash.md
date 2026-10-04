@@ -103,9 +103,9 @@ BLOBLY_NET=../blobly_net VERSION=8 examples/system_full/test/boot_bench.sh zone_
 refuses (valid mark last) — the board sits in programming mode and a plain re-run of
 `cmd/flash` recovers it ([../bootloader.md](../bootloader.md) bench log).
 
-The standalone examples `h755_threadx` / `h735_threadx` keep `make APP_LINK=boot` (an image for
-the app slot) and their `boot` shell command (the request cell, then a reset); the boot that
-serves them is a `[boot]` node's on the same board.
+The standalone example `h755_threadx` keeps `make APP_LINK=boot` (an image for the app slot)
+and its `boot` shell command (the request cell, then a reset); the boot that
+serves it is a `[boot]` node's on the same board.
 
 ## 3. blobly_net — CLI and GUI
 

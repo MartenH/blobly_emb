@@ -49,7 +49,7 @@ fn bsp_definition(src string) string {
 
 fn test_every_threadx_makefile_links_the_generated_sources() {
 	mks := threadx_makefiles()
-	assert mks.len >= 10, 'found only ${mks.len} ThreadX Makefiles: ${mks}'
+	assert mks.len >= 9, 'found only ${mks.len} ThreadX Makefiles: ${mks}'
 	for mk in mks {
 		src := os.read_file(mk) or { panic(err) }
 		inc := src.index('\n-include gen/loom_build.mk') or {

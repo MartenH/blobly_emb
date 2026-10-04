@@ -2,22 +2,15 @@ module app
 
 import ports
 
-// The SHARED demo app (examples/shared/loadmix): h735_threadx and h755_threadx run this
-// same mixed-rate load — one source instead of two byte-identical copies drifting apart.
-// Each example's Makefile adds this directory to the V module path; the per-board ports/
-// sig modules still come from the example's own generated files. NOTE: each example's
-// ports module must declare the same FB In/Out shapes (they do — same ecu.toml FB set);
-// the iteration calibration below was measured on the H735 at 550 MHz (the H755 runs the
-// same budgets slower — still far from overrun).
-//
 // A "realistic" mixed-rate load for the multi-thread ThreadX target: three FB threads at
 // rate-monotonic priorities (fast 10 ms > mid 20 ms > slow 100 ms, comm above all of them),
 // so the trace's swimlane shows real preemption — the fast thread cutting into the mid/slow
 // burns, comm cutting into everything when a frame arrives.
 //
-// Calibrated against THIS image's MEASURED throughput: ~183k LCG iters per ms (bench, FB trace
-// lane: burn(45k) -> 246 us — the standalone burn() compiles ~10x tighter than the old inline
-// loop, so calibrate against what the trace MEASURES, not what a previous image did). Budgets:
+// Calibrated on an H735 at 550 MHz: the budgets below are its timings, and this H755 at 400 MHz
+// runs the same counts roughly 1.4x longer. Measured throughput there: ~183k LCG iters per ms
+// (bench, FB trace lane: burn(45k) -> 246 us — the standalone burn() compiles ~10x tighter than
+// the old inline loop, so calibrate against what the trace MEASURES). Budgets:
 //   fast : ~2.5 ms per 10 ms  (~25 %)  + a ~5.5 ms spike every ~0.6 s (the visible outlier)
 //   mid  : ~3.0 ms per 20 ms  (~15 %)
 //   slow : 1..4 ms per 100 ms (~1-4 %) — the Governor-swept, CAN-commandable burn
