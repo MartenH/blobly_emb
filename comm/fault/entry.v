@@ -54,7 +54,11 @@ pub mut:
 
 // snap_len: the body length slot i's snapshot has — fixed by its configuration.
 pub fn (m &Memory) snap_len(i int) int {
-	s := &m.slots[i]
+	return m.slots[i].body_len()
+}
+
+// body_len: the record body length this slot's snapshot has: the DID count, each DID's id and data.
+pub fn (s &Slot) body_len() int {
 	mut n := 1
 	for k in 0 .. s.nfreeze {
 		n += 2 + int(s.freeze_len[k])

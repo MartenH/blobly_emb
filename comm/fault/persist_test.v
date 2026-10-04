@@ -73,13 +73,13 @@ fn pf_put(ctx voidptr, id u16, data &u8, len u16) bool {
 		mut img := [max_image]u8{}
 		n := int(r.j.get(r.m.store.id, &img[0], u16(max_image)))
 		for o := 2; o + image_rec <= n; o += image_rec {
-			assert id != r.claimed_block(img[o..o + image_rec]), 'block 0x${id.hex()} written (${len} B) while the committed image claims it'
+			assert id != r.claimed_block(img[0], img[o..o + image_rec]), 'block 0x${id.hex()} written (${len} B) while the committed image claims it'
 		}
 	} else {
 		// ... and its other half: an image never claims a block that does not hold a snapshot
 		for o := 2; o + image_rec <= int(len); o += image_rec {
 			rec := unsafe { data.vbytes(int(len))[o..o + image_rec] }
-			claimed := r.claimed_block(rec)
+			claimed := r.claimed_block(unsafe { data[0] }, rec)
 			if claimed != 0 {
 				mut b := [4]u8{}
 				assert r.j.get(claimed, &b[0], 4) > 1, 'an image claims block 0x${claimed.hex()}, which holds no snapshot'
@@ -98,7 +98,7 @@ fn pf_put(ctx voidptr, id u16, data &u8, len u16) bool {
 		r.committed = map[u32][]u8{}
 		for o := 2; o + image_rec <= int(len); o += image_rec {
 			rec := unsafe { data.vbytes(int(len))[o..o + image_rec] }
-			claimed := r.claimed_block(rec)
+			claimed := r.claimed_block(unsafe { data[0] }, rec)
 			if claimed != 0 {
 				mut b := [max_block]u8{}
 				n := int(r.j.get(claimed, &b[0], u16(max_block)))
@@ -119,14 +119,38 @@ fn pf_get(ctx voidptr, id u16, out &u8, cap u16) u16 {
 	return r.j.get(id, out, cap)
 }
 
-// claimed_block: the snapshot block an image record claims (0 = none), by the module's own rules.
-fn (r &Rig) claimed_block(rec []u8) u16 {
-	b := claim_of(rec[3])
-	i := r.m.slot_of(u32(rec[0]) << 16 | u32(rec[1]) << 8 | u32(rec[2]))
-	if b == 0 || i < 0 {
+// claimed_block: the snapshot block an image record of format `v` claims (0 = none): the id it
+// names, or in a v4 image its DTC's block A or B.
+fn (r &Rig) claimed_block(v u8, rec []u8) u16 {
+	if rec[3] & img_snapshot == 0 {
 		return 0
 	}
-	return r.m.block_id(i, b)
+	if v == image_v4 {
+		i := r.m.slot_of(u32(rec[0]) << 16 | u32(rec[1]) << 8 | u32(rec[2]))
+		if i < 0 {
+			return 0
+		}
+		return r.m.block_id(i, if rec[3] & img_v4_block_b != 0 { u8(2) } else { u8(1) })
+	}
+	return u16(rec[8]) << 8 | u16(rec[9])
+}
+
+// block_body: the 0x19 04 record body a snapshot block holds, read by the structure the BLOCK
+// states (whichever schema wrote it): the DID count, then each DID's id and data.
+fn block_body(blk []u8) []u8 {
+	count := int(blk[8])
+	mut out := [u8(count)]
+	mut data := snap_fixed + count * snap_per_did
+	for f in 0 .. count {
+		o := snap_fixed + f * snap_per_did
+		out << blk[o]
+		out << blk[o + 1]
+		size := int(blk[o + 2])
+		out << blk[data..data + size]
+		data += size
+	}
+	assert data == blk.len, 'a snapshot block of ${blk.len} B states ${data} B'
+	return out
 }
 
 // Rig is one ECU: the flash outlives a reboot, the journal and the memory do not.
@@ -145,6 +169,10 @@ mut:
 	aging      u8 // every fault's aging threshold
 	committed  map[u32][]u8 // per DTC, the snapshot block the last COMMITTED image claims, as it was then
 	swapped    bool // an update swapped the snapshot's DID sizes (F1A0 18 B, F190 4 B): same length
+	// an update to another snapshot schema for the faults with one (empty = F1A0 4 B, F190 18 B)
+	dids       []u16
+	lens       []u8
+	ids_base   u16 // the snapshot blocks' ids: A = base + k, B = base + 0x100 + k (0 = 0x1000)
 	order      [4]int // which configured slot carries DTC k (an update may reorder)
 	n          int
 }
@@ -207,8 +235,16 @@ fn (mut r Rig) restart(power_cycle bool) {
 			s.freeze[1] = 0xF190
 			s.freeze_len[1] = if r.swapped { u8(4) } else { 18 }
 			s.nfreeze = 2
-			s.snap_id = u16(0x1000 + k)
-			s.snap_id_b = u16(0x1100 + k)
+			if r.dids.len > 0 {
+				for f, d in r.dids {
+					s.freeze[f] = d
+					s.freeze_len[f] = r.lens[f]
+				}
+				s.nfreeze = r.dids.len
+			}
+			base := if r.ids_base == 0 { u16(0x1000) } else { r.ids_base }
+			s.snap_id = base + u16(k)
+			s.snap_id_b = base + 0x100 + u16(k)
 		}
 	}
 	r.m.n = r.n
@@ -529,6 +565,10 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 				r.f.cut_at = r.f.calls + 1 + (rng >> 8) % programs
 				r.f.cut_part = (rng >> 16) % 33
 			}
+			mut loaded := [4]bool{} // which committed claims hold a snapshot of this firmware's schema
+			for i in 0 .. r.m.n {
+				loaded[i] = r.m.slots[i].claim_ok
+			}
 			pre := r.m.displaced
 			do_step(mut r, op, rng, step, now)
 			if r.m.displaced != pre {
@@ -538,8 +578,7 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 			r.f.refuse = false
 			// the journal never holds more than the generator budgets: the image, EVERY snapshot
 			// block whole, the marker (gen_nvm.v derive_fault_nvm)
-			budget := nvm.records_for(u16(2 + r.m.n * image_rec)) + 6 * nvm.records_for(u16(snap_hdr +
-				r.m.snap_len(0))) + 1
+			budget := nvm.records_for(u16(2 + r.m.n * image_rec)) + 6 * nvm.records_for(u16(r.m.block_len(0))) + 1
 			assert r.j.live_records() <= budget, '${ctx}: ${r.j.live_records()} live records, the budget is ${budget}'
 			for k in 0 .. r.m.cap {
 				e := r.m.entries[k]
@@ -564,9 +603,7 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 				for dtc in lost {
 					i := r.m.slot_of(dtc)
 					// freed: no failure held any more, or a claim of another schema (an update)
-					o := 2 + i * image_rec
-					other_schema := u16(old[o + 8]) << 8 | u16(old[o + 9]) != r.m.schema_fp(i)
-					freed := r.m.slots[i].status & (pending | confirmed) == 0 || other_schema
+					freed := r.m.slots[i].status & (pending | confirmed) == 0 || !loaded[i]
 					assert freed || gained.len > 0, '${ctx}: DTC ${dtc:06X} lost its stored snapshot to a refused write, and nothing replaced it'
 				}
 				continue
@@ -585,14 +622,14 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 				}
 				// claimed: the block is there, whole, this DTC's, and exactly what was captured
 				mut blk := [max_block]u8{}
-				bid := r.claimed_block(got[2 + i * image_rec..2 + (i + 1) * image_rec])
+				bid := r.claimed_block(got[0], got[2 + i * image_rec..2 + (i + 1) * image_rec])
 				n := int(r.j.get(bid, &blk[0], u16(max_block)))
-				assert n == snap_hdr + r.m.snap_len(i), '${ctx}: slot ${i} claims a snapshot the store does not hold (${n} B)'
+				assert n == r.m.block_len(i), '${ctx}: slot ${i} claims a snapshot the store does not hold (${n} B)'
 				dtc := u32(blk[0]) << 16 | u32(blk[1]) << 8 | u32(blk[2])
 				stamp := u32(blk[3]) << 24 | u32(blk[4]) << 16 | u32(blk[5]) << 8 | u32(blk[6])
 				key := '${dtc}:${stamp}'
 				assert dtc == r.m.slots[i].dtc && key in captured
-					&& captured[key] == blk[snap_hdr..n], '${ctx}: slot ${i} claims a snapshot that is not the one captured'
+					&& captured[key] == block_body(blk[..n]), '${ctx}: slot ${i} claims a snapshot that is not the one captured'
 			}
 		}
 	}
@@ -658,8 +695,10 @@ fn stored_image(r &Rig) []u8 {
 }
 
 fn test_the_scratch_holds_either() {
-	assert max_block >= max_image && max_block >= snap_hdr + max_snapshot
-	assert max_image <= int(nvm.chain_data_max) && snap_hdr + max_snapshot <= int(nvm.chain_data_max)
+	assert max_block >= max_image && max_block >= max_snap_block
+	assert max_image <= int(nvm.chain_data_max) && max_snap_block <= int(nvm.chain_data_max)
+	// a full snapshot's block: its body's DID ids and data, plus the DTC, stamp, format and sizes
+	assert max_snap_block == 7 + 1 + max_freeze + max_snapshot
 }
 
 // A tombstone waits for the image that stops claiming its snapshot: while the store refuses that
@@ -828,28 +867,204 @@ fn (r &Rig) check_restored(ctx string) {
 		}
 		dtc := r.m.slots[e.slot].dtc
 		want := r.committed[dtc] or { []u8{} }
-		assert want.len == snap_hdr + e.len && want[snap_hdr..] == e.data[..e.len], '${ctx}: DTC ${dtc:06X} restored a snapshot its committed image did not claim'
+		assert want.len == r.m.block_len(e.slot) && block_body(want) == e.data[..e.len], '${ctx}: DTC ${dtc:06X} restored a snapshot its committed image did not claim'
 	}
 }
 
-// A claim is accepted only with the fingerprint the IMAGE recorded for it: an image that claims a
-// block under another schema (written by firmware of another schema) is read as no snapshot, even
-// when the block itself holds a valid snapshot of this firmware's schema — the block is not the
-// one that image claimed. The claim is dropped by the next committed image.
-fn test_a_claim_is_accepted_only_with_its_recorded_fingerprint() {
+// A claim names its block by ID: an image claiming a block that is not one of this firmware's for
+// that DTC is read as no snapshot — even while this firmware's own block A holds a valid snapshot of
+// its own schema, which is not the one that image claimed. The claim is dropped by the next
+// committed image, and the unclaimed block released.
+fn test_a_claim_of_another_block_id_is_no_snapshot() {
 	mut r := new_rig(2)
 	r.pass(0, .failed, 5, 1)
 	mut img := [max_image]u8{}
 	n := r.j.get(r.m.store.id, &img[0], u16(max_image))
 	o := 2 + r.order[0] * image_rec
-	assert img[o + 3] & img_snapshot != 0
-	img[o + 8] ^= 0x5A // the image claims the block under another schema
+	assert img[o + 3] & img_snapshot != 0 && u16(img[o + 8]) << 8 | u16(img[o + 9]) == 0x1000
+	img[o + 8] ^= 0x5A // the image claims a block of another firmware's ids
 	assert r.j.put(r.m.store.id, &img[0], n)
 	r.reboot()
-	assert r.slot(0).entry == 0 && r.slot(0).claim == 1 && !r.slot(0).claim_ok
+	assert r.slot(0).entry == 0 && r.slot(0).claim == 0 && !r.slot(0).claim_ok && r.m.pruned == 1
 	assert r.slot(0).status & confirmed != 0, 'the status went with the snapshot'
 	r.pass(-1, .not_tested, 0, 2)
-	assert r.slot(0).claim == 0, 'the next committed image kept the claim'
+	assert claimed(stored_image(r)).len == 0, 'the next committed image kept the claim'
+	mut b := [4]u8{}
+	assert r.j.get(0x1000, &b[0], 4) == 1, 'the unclaimed block was not released'
+}
+
+// A rollback across a schema change that moved the snapshot ids: firmware X stored S1 in its block
+// A; firmware Y (other ids) stored S2 and its image claims Y's block. Back on X, X's block A still
+// holds S1 — a valid snapshot of X's own schema — and must not stand in for the S2 the image claims.
+fn test_a_rollback_does_not_resurrect_a_stale_block() {
+	mut r := new_rig(2)
+	r.pass(0, .failed, 1, 1) // X: S1 in 0x1000, claimed
+	r.ids_base = 0x2000
+	r.lens = [u8(6), 18]
+	r.dids = [u16(0xF1A0), 0xF190]
+	r.reboot() // Y: X's claim names no block of Y's
+	assert r.slot(0).entry == 0 && r.slot(0).status & confirmed != 0
+	r.m.cycle_end()
+	r.m.cycle_start()
+	r.pass(0, .passed, 1, 2)
+	r.m.cycle_end()
+	r.m.cycle_start()
+	r.pass(0, .failed, 2, 3)
+	assert r.slot(0).entry != 0 && r.m.persist(4, true) // Y: S2 in 0x2000 or 0x2100, claimed
+	mut b := [max_block]u8{}
+	assert int(r.j.get(0x1000, &b[0], u16(max_block))) == snap_fixed + 2 * snap_per_did + 4 + 18, 'X\'s block was disturbed by Y'
+	r.ids_base = 0
+	r.lens = []
+	r.dids = []
+	r.reboot() // X again
+	assert r.slot(0).entry == 0, 'a stale block of this firmware stood in for the one the image claims'
+}
+
+// Every byte of the structure a block states is compared: the format, the DID count, and each
+// DID's id (both bytes) and size. Each one changed alone — the block's length, DTC and data left
+// as they are — and the snapshot is not restored.
+fn test_every_byte_of_the_stated_structure_is_compared() {
+	mut r := new_rig(2)
+	r.pass(0, .failed, 3, 1)
+	mut b := [max_block]u8{}
+	n := r.j.get(0x1000, &b[0], u16(max_block))
+	nid := 2 + 2 * snap_per_did
+	for x in 0 .. nid {
+		mut bad := b
+		bad[7 + x] ^= 0x01
+		assert r.j.put(0x1000, &bad[0], n)
+		r.reboot()
+		assert r.slot(0).entry == 0, 'structure byte ${x} changed, and the snapshot was still restored'
+		assert r.j.put(0x1000, &b[0], n)
+		r.reboot()
+		assert r.slot(0).entry != 0, 'the original block, put back, was not restored'
+	}
+	// and the data must be exactly as long as that structure says: a byte short or a byte over
+	for d in [-1, 1] {
+		assert r.j.put(0x1000, &b[0], u16(int(n) + d))
+		r.reboot()
+		assert r.slot(0).entry == 0, 'a block ${d:+} B off the length its structure states was restored'
+	}
+}
+
+// An update from the image format before (v4: a claim as A or B under a 16-bit fingerprint) keeps
+// every DTC's status and counters; its snapshot claims are never loaded — no block of that format
+// states its structure — and are counted, and the block a v4 claim names is held until a v5 image
+// without it commits (the oracle in pf_put reads the v4 claim too).
+fn test_a_v4_image_keeps_status_and_counters_and_drops_its_snapshots() {
+	mut r := new_rig(2)
+	r.pass(1, .failed, 4, 1)
+	r.m.slots[r.order[1]].occurrence = 7
+	assert r.m.persist(2, true)
+	mut img := [max_image]u8{}
+	n := r.j.get(r.m.store.id, &img[0], u16(max_image))
+	o := 2 + r.order[1] * image_rec
+	assert img[o + 3] & img_snapshot != 0
+	// the same content as a v4 image: block B claimed, a fingerprint where v5 names the block
+	img[0] = image_v4
+	img[o + 3] |= img_v4_block_b
+	img[o + 8] = 0x12
+	img[o + 9] = 0x34
+	mut blk := [max_block]u8{}
+	bn := r.j.get(0x1001, &blk[0], u16(max_block)) // the v5 block A moves to B, where v4 claims it
+	assert r.j.put(0x1101, &blk[0], bn)
+	assert r.j.put(0x1001, &blk[0], 1)
+	assert r.j.put(r.m.store.id, &img[0], n)
+	r.reboot()
+	s := r.slot(1)
+	assert s.status & (pending | confirmed) == pending | confirmed && s.occurrence == 7 && s.failed_cycles == 1
+	assert s.entry == 0 && s.claim == 2 && !s.claim_ok && r.m.pruned == 1
+	r.m.cycle_end()
+	r.m.cycle_start()
+	r.pass(1, .passed, 4, 3)
+	r.m.cycle_end()
+	r.m.cycle_start()
+	r.pass(1, .failed, 5, 4) // a new snapshot: into A, the block the v4 claim does not name
+	assert r.slot(1).entry != 0 && r.m.entries[r.slot(1).entry - 1].blk == 1
+	assert r.m.persist(5, true)
+	img2 := stored_image(r)
+	assert img2[0] == image_version && claimed(img2) == [rig_dtcs[1]]
+	r.reboot()
+	assert r.slot(1).entry != 0 && r.slot(1).claim_ok, 'the snapshot taken after the update did not survive'
+}
+
+// old_schema_fp: the 16-bit fingerprint snapshot blocks carried before the exact structure (FNV-1a
+// over each DID's id and size, folded) — kept here only to construct its collision.
+fn old_schema_fp(dids []u16, lens []u8) u16 {
+	mut h := u32(0x811C9DC5)
+	for f, d in dids {
+		for x in [u8(d >> 8), u8(d), lens[f]] {
+			h = (h ^ u32(x)) * 16777619
+		}
+	}
+	return u16(h ^ (h >> 16))
+}
+
+// Two schemas the old 16-bit fingerprint confused: the rig's (F1A0 4 B, F190 18 B) and one found
+// here with the same fingerprint, the same DID count and the same block length — so the stored
+// length, count and fingerprint all agreed, and with the second DID's id planted in the data where
+// the new schema looks for it, the old content guard did too. The stored structure tells them apart.
+fn test_two_schemas_the_16_bit_fingerprint_confused_are_told_apart() {
+	mut found := -1
+	for d in 0 .. 0x10000 {
+		if d != 0xF190 && old_schema_fp([u16(0xF1A0), u16(d)], [u8(18), 4]) == old_schema_fp([
+			u16(0xF1A0),
+			0xF190,
+		], [u8(4), 18]) {
+			found = d
+			break
+		}
+	}
+	assert found >= 0, 'no 16-bit collision among 65535 candidates'
+	mut r := new_rig(2)
+	// where the colliding schema looks for its second DID (body offset 1 + 2 + 18), the old record holds its id
+	r.srv.dids[1].data[12] = u8(found >> 8)
+	r.srv.dids[1].data[13] = u8(found)
+	r.pass(0, .failed, 7, 1)
+	r.dids = [u16(0xF1A0), u16(found)]
+	r.lens = [u8(18), 4]
+	r.reboot()
+	assert r.slot(0).entry == 0 && !r.slot(0).claim_ok, 'a snapshot of a colliding schema (DID 0x${found:04X}) was restored'
+	assert r.slot(0).status & confirmed != 0
+}
+
+// Each change of the snapshot's structure prunes the stored snapshot — a DID resized, the list
+// reordered, a DID added or one removed: restore reads it as none, the next committed image drops
+// the claim, and the block is released. An unchanged schema keeps it across the same restart.
+fn test_a_changed_structure_prunes_and_an_unchanged_one_keeps() {
+	cases := [
+		[]u16{}, // unchanged
+		[u16(0xF1A0), 0xF190], // F1A0 resized
+		[u16(0xF190), 0xF1A0], // reordered
+		[u16(0xF1A0), 0xF190, 0xF1A2], // one added
+		[u16(0xF1A0)], // one removed
+	]
+	lens := [
+		[]u8{},
+		[u8(5), 18],
+		[u8(18), 4],
+		[u8(4), 18, 2],
+		[u8(4)],
+	]
+	for c, dids in cases {
+		mut r := new_rig(2)
+		r.pass(0, .failed, 9, 1)
+		before := r.req([u8(0x19), 0x04, 0xC1, 0x00, 0x00, 0x01])
+		r.dids = dids
+		r.lens = lens[c]
+		r.reboot()
+		if c == 0 {
+			assert r.slot(0).entry != 0 && r.slot(0).claim_ok && r.m.pruned == 0, 'an unchanged schema lost its snapshot'
+			assert r.req([u8(0x19), 0x04, 0xC1, 0x00, 0x00, 0x01])[6..] == before[6..]
+			continue
+		}
+		assert r.slot(0).entry == 0 && !r.slot(0).claim_ok && r.m.pruned == 1, 'case ${c}: a snapshot of another structure was restored'
+		assert r.slot(0).status & confirmed != 0, 'case ${c}: the status went with the snapshot'
+		r.pass(-1, .not_tested, 0, 2)
+		assert claimed(stored_image(r)).len == 0, 'case ${c}: the claim survived'
+		mut b := [4]u8{}
+		assert r.j.get(0x1000, &b[0], 4) == 1, 'case ${c}: the pruned block was not released'
+	}
 }
 
 // A clear of what is already cleared writes nothing: the store holds that image already — the same

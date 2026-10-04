@@ -1,5 +1,7 @@
 module fault
 
+import comm.uds
+
 // Persistence of the fault memory (docs/diagnostics.md §3.3, R6b): what survives a reset and a
 // power loss, kept in an injected Store — the NvM journal on a ThreadX target (nvm.Journal through
 // the generated seam), nothing on the host. Two kinds of value:
@@ -9,16 +11,25 @@ module fault
 //   ONE value, so a group clear, a displacement and a cycle boundary are each one atomic write;
 //
 //   TWO SNAPSHOT blocks, A and B, per DTC that declares `freeze` (their ids derived from the DTC
-//   and the snapshot's schema): the DTC, its allocation stamp, the schema's fingerprint and the
-//   record body — or a 1-byte TOMBSTONE once released, so a released block stops occupying
-//   journal space.
+//   and the snapshot's schema): the DTC, its allocation stamp, the snapshot's STRUCTURE and each
+//   DID's data — or a 1-byte TOMBSTONE once released, so a released block stops occupying
+//   journal space:
+//
+//     [ DTC 3 | stamp 4 | format | DID count | each DID's id (2) and size (1) | each DID's data ]
+//
+// What a snapshot IS is stated EXACTLY in its block, never hashed — the rule the parameter record
+// follows (comm/param): a hash of any width can collide or be constructed, so the structure itself
+// is the identity, and a block is restored only when its format, DID count and every DID's id and
+// size, in order, match this firmware's byte for byte. Anything else — a DID resized, the list
+// reordered, a DID added or removed — is read as no snapshot and released by the next committed
+// image. The whole structure fits: at most max_freeze DIDs, 3 bytes each.
 //
 // THE INVARIANT: no block the last COMMITTED image claims is ever written or tombstoned; a block is
 // released only by a committed image that no longer claims it. It holds by construction: each
-// fault has TWO snapshot blocks, A and B; the image records which one it claims; a capture always
-// writes the one the committed image does not claim (entry.v allocate), and a tombstone is written
-// only for a block the committed image does not claim and no captured snapshot is waiting in. So
-// a power cut anywhere restores a committed image with every block it claims intact — whether the
+// fault has TWO snapshot blocks, A and B; the image names the one it claims by its block id; a
+// capture always writes the one the committed image does not claim (entry.v allocate), and a
+// tombstone is written only for a block the committed image does not claim and no captured
+// snapshot is waiting in. So a power cut anywhere restores a committed image with every block it claims intact — whether the
 // DTC was displaced and reacquired, cleared, aged, or dropped by an update that lowered `entries`.
 //
 // A snapshot is written BEFORE the image that claims it, and a freed one is tombstoned only AFTER
@@ -48,10 +59,15 @@ module fault
 // DTC per cycle: an entry that failed this cycle cannot be displaced) and tombstoned once when
 // freed. A refused write is retried no sooner than `retry_us` later.
 
-pub const image_version = u8(4) // 4: the claimed snapshot's fingerprint (3: which of two blocks; 2: the setting bit, block fingerprints)
-pub const image_rec = 10 // bytes per DTC in the image: DTC 3, flags 1, failed cycles 1, aging 1, occurrence 2, the claimed snapshot's schema fingerprint 2
+pub const image_version = u8(5) // the image's format; each record names its claimed block by id
+const image_v4 = u8(4) // the format before: read for status and counters, its snapshot claims never loaded
+pub const image_rec = 10 // bytes per DTC in the image: DTC 3, flags 1, failed cycles 1, aging 1, occurrence 2, the claimed snapshot block's id 2
 pub const max_image = 2 + max_faults * image_rec
-pub const snap_hdr = 9 // a snapshot block: DTC (3), stamp (4), schema fingerprint (2), then the record body
+pub const snapshot_format = u8(1) // a snapshot block's format byte, the first byte of its stated structure
+pub const snap_fixed = 9 // a snapshot block's fixed part: DTC (3), stamp (4), format (1), DID count (1)
+pub const snap_per_did = 3 // ... then per DID its id (2) and size (1); then each DID's data
+pub const max_identity = 2 + max_freeze * snap_per_did // format, DID count, each DID's id and size
+pub const max_snap_block = 7 + max_identity + max_freeze * uds.max_did_data
 pub const max_block = max_image // the larger of an image and a snapshot block (test_the_scratch_holds_either)
 
 // the status bits the image keeps
@@ -60,8 +76,8 @@ pub const persisted_bits = pending | confirmed | not_completed_since_clear | fai
 // the image's per-DTC flag byte: the persisted bits in their own positions, and beside them
 const img_tested = u8(0x01) // tested in the cycle in progress
 const img_failed = u8(0x02) // failed in the cycle in progress
-const img_snapshot = u8(0x40) // holds a stored snapshot
-const img_block_b = u8(0x80) // ... in its block B (else A)
+const img_snapshot = u8(0x40) // holds a stored snapshot, in the block whose id the record's last 2 bytes name
+const img_v4_block_b = u8(0x80) // a v4 image: the claimed snapshot is in block B (else A)
 const img_cycle_open = u8(0x01) // image byte 1: an operation cycle was in progress
 const img_setting_off = u8(0x02) // image byte 1: DTC setting was off (0x85) — so was its end
 
@@ -109,22 +125,21 @@ fn (mut m Memory) image(clearing bool, group u32) int {
 		if s.failed_cycle {
 			f |= img_failed
 		}
+		mut claimed := u16(0)
 		if s.entry != 0 && m.entries[s.entry - 1].durable {
 			f |= img_snapshot
-			if m.entries[s.entry - 1].blk == 2 {
-				f |= img_block_b
-			}
+			claimed = m.block_id(i, m.entries[s.entry - 1].blk)
 		}
 		m.scratch[o + 3] = f
 		m.scratch[o + 4] = s.failed_cycles
 		m.scratch[o + 5] = s.aging_count
 		m.scratch[o + 6] = u8(s.occurrence >> 8)
 		m.scratch[o + 7] = u8(s.occurrence)
-		// the schema the claimed snapshot was written under: restore accepts a block only with
-		// this fingerprint, so no stale block of another schema stands in for the one claimed
-		fp := if f & img_snapshot != 0 { m.schema_fp(i) } else { u16(0) }
-		m.scratch[o + 8] = u8(fp >> 8)
-		m.scratch[o + 9] = u8(fp)
+		// the claimed block by its ID, not as A or B: firmware with other snapshot ids (another
+		// schema hashes other ids) finds none of its own blocks claimed, so a stale block it wrote
+		// before an update never stands in for the snapshot this image claims (a rollback)
+		m.scratch[o + 8] = u8(claimed >> 8)
+		m.scratch[o + 9] = u8(claimed)
 	}
 	return 2 + m.n * image_rec
 }
@@ -156,7 +171,8 @@ fn (mut m Memory) commit_image(n int) {
 	}
 	m.img_len = n
 	for i in 0 .. m.n {
-		m.slots[i].claim = claim_of(m.img[2 + i * image_rec + 3])
+		o := 2 + i * image_rec
+		m.slots[i].claim = m.claim_of(i, m.img[o + 3], u16(m.img[o + 8]) << 8 | u16(m.img[o + 9]))
 		m.slots[i].claim_ok = m.slots[i].claim != 0 // an image claims only snapshots written whole
 	}
 }
@@ -253,10 +269,12 @@ fn (mut m Memory) write_snapshots(group u32, clearing bool) (bool, bool) {
 	return ok, refused
 }
 
-// snapshot_block builds entry k's block into m.scratch and returns its length.
+// snapshot_block builds entry k's block into m.scratch and returns its length: the DTC, the stamp,
+// this firmware's snapshot structure (identity), then each DID's data from the record body.
 fn (mut m Memory) snapshot_block(k int) int {
 	e := &m.entries[k]
-	dtc := m.slots[e.slot].dtc
+	i := e.slot
+	dtc := m.slots[i].dtc
 	m.scratch[0] = u8(dtc >> 16)
 	m.scratch[1] = u8(dtc >> 8)
 	m.scratch[2] = u8(dtc)
@@ -264,13 +282,58 @@ fn (mut m Memory) snapshot_block(k int) int {
 	m.scratch[4] = u8(e.stamp >> 16)
 	m.scratch[5] = u8(e.stamp >> 8)
 	m.scratch[6] = u8(e.stamp)
-	fp := m.schema_fp(e.slot)
-	m.scratch[7] = u8(fp >> 8)
-	m.scratch[8] = u8(fp)
-	for b in 0 .. e.len {
-		m.scratch[snap_hdr + b] = e.data[b]
+	id := m.identity(i)
+	for x in 0 .. id.n {
+		m.scratch[7 + x] = id.b[x]
 	}
-	return snap_hdr + e.len
+	mut o := 7 + id.n
+	// the body is [count, (id 2, data)...]: its data, in DID order
+	mut src := 1
+	for f in 0 .. m.slots[i].nfreeze {
+		src += 2
+		for b in 0 .. int(m.slots[i].freeze_len[f]) {
+			m.scratch[o] = e.data[src + b]
+			o++
+		}
+		src += int(m.slots[i].freeze_len[f])
+	}
+	return o
+}
+
+// identity: slot i's snapshot structure — format, DID count, each DID's id and size in order —
+// and its length. It is the whole identity of a stored snapshot: a block is restored only when
+// these bytes match this firmware's exactly.
+fn (m &Memory) identity(i int) Identity {
+	s := &m.slots[i]
+	mut id := Identity{}
+	id.b[0] = snapshot_format
+	id.b[1] = u8(s.nfreeze)
+	id.n = 2
+	for f in 0 .. s.nfreeze {
+		id.b[id.n] = u8(s.freeze[f] >> 8)
+		id.b[id.n + 1] = u8(s.freeze[f])
+		id.b[id.n + 2] = s.freeze_len[f]
+		id.n += snap_per_did
+	}
+	return id
+}
+
+// Identity is a snapshot block's structure bytes (identity) and how many of them there are.
+struct Identity {
+mut:
+	b [max_identity]u8
+	n int
+}
+
+// block_len: the length of slot i's snapshot block — fixed by its configuration.
+pub fn (m &Memory) block_len(i int) int {
+	return m.slots[i].block_len()
+}
+
+// block_len: the length of this slot's snapshot block: the DTC, the stamp and the format byte, the
+// record body (DID count, each DID's id and data), and one size byte per DID.
+pub fn (s &Slot) block_len() int {
+	return 7 + 1 + s.body_len() + s.nfreeze
 }
 
 // persist_clear: 0x14's image made durable before the clear touches RAM (true without a store).
@@ -319,7 +382,7 @@ pub fn (mut m Memory) restore() {
 	m.img_len = 0
 	mut open := false
 	mut off := false
-	if n >= 2 && m.img[0] == image_version && (n - 2) % image_rec == 0 {
+	if n >= 2 && (m.img[0] == image_version || m.img[0] == image_v4) && (n - 2) % image_rec == 0 {
 		m.img_len = n
 		open = m.img[1] & img_cycle_open != 0
 		off = m.img[1] & img_setting_off != 0
@@ -339,13 +402,29 @@ pub fn (mut m Memory) restore() {
 			s.aging_count = m.img[o + 5]
 			s.occurrence = u16(m.img[o + 6]) << 8 | u16(m.img[o + 7])
 			// the committed claim stands whether or not its block is readable: what it claims is
-			// released only by a committed image that no longer claims it. A claim of a snapshot
-			// written under ANOTHER schema than this firmware's (an update, or a rollback) is read
-			// as nothing and dropped from the next committed image: a block is accepted only with
-			// the fingerprint the image claimed, which must be this firmware's.
-			s.claim = if s.nfreeze > 0 { claim_of(f) } else { u8(0) }
-			claimed_fp := u16(m.img[o + 8]) << 8 | u16(m.img[o + 9])
-			s.claim_ok = s.claim != 0 && claimed_fp == m.schema_fp(i) && m.load_snapshot(i, s.claim)
+			// released only by a committed image that no longer claims it. A claim of a block that
+			// is not one of this firmware's (another schema hashed other ids), or of a snapshot
+			// whose stated structure is not this firmware's (an update, or a rollback, under kept
+			// ids), is read as nothing and dropped from the next committed image.
+			if m.img[0] == image_v4 {
+				// an image of the format before this one: its status and counters are read as they
+				// are, and its claim — A or B, under a 16-bit fingerprint — is held (so neither block
+				// it names is written or tombstoned until a v5 image without it commits) and never
+				// loaded: no snapshot of that format states its structure
+				s.claim = if s.nfreeze > 0 && f & img_snapshot != 0 {
+					if f & img_v4_block_b != 0 { u8(2) } else { u8(1) }
+				} else {
+					u8(0)
+				}
+				s.claim_ok = false
+			} else {
+				claimed := u16(m.img[o + 8]) << 8 | u16(m.img[o + 9])
+				s.claim = if s.nfreeze > 0 { m.claim_of(i, f, claimed) } else { u8(0) }
+				s.claim_ok = s.claim != 0 && m.load_snapshot(i, s.claim)
+			}
+			if f & img_snapshot != 0 && !s.claim_ok {
+				m.pruned++
+			}
 		}
 		m.fit_entries()
 	}
@@ -371,43 +450,24 @@ pub fn (mut m Memory) restore() {
 	}
 }
 
-// schema_fp: slot i's snapshot schema — its DIDs and their sizes — folded to 16 bits (FNV-1a),
-// stored in every snapshot block so a snapshot of another schema is never restored as this one.
-fn (m &Memory) schema_fp(i int) u16 {
-	mut h := u32(0x811C9DC5)
-	for f in 0 .. m.slots[i].nfreeze {
-		h = fnv(h, u8(m.slots[i].freeze[f] >> 8))
-		h = fnv(h, u8(m.slots[i].freeze[f]))
-		h = fnv(h, m.slots[i].freeze_len[f])
-	}
-	return u16(h ^ (h >> 16))
-}
-
-fn fnv(h u32, b u8) u32 {
-	return (h ^ u32(b)) * 16777619
-}
-
-// load_snapshot reads slot i's snapshot block into a free entry; false = absent, malformed, or
-// another DTC's.
+// load_snapshot reads slot i's snapshot block into a free entry; false = absent, malformed,
+// another DTC's, or a snapshot whose stated structure is not exactly this firmware's.
 fn (mut m Memory) load_snapshot(i int, b u8) bool {
-	want := snap_hdr + m.snap_len(i)
 	n := int(m.store.get(m.store.ctx, m.block_id(i, b), &m.scratch[0], u16(max_block)))
-	if n != want {
+	if n != m.block_len(i) {
 		return false
 	}
 	dtc := u32(m.scratch[0]) << 16 | u32(m.scratch[1]) << 8 | u32(m.scratch[2])
-	if dtc != m.slots[i].dtc || int(m.scratch[snap_hdr]) != m.slots[i].nfreeze
-		|| u16(m.scratch[7]) << 8 | u16(m.scratch[8]) != m.schema_fp(i) {
-		return false // another DTC's, or its snapshot under another schema (a kept snapshot_id)
+	if dtc != m.slots[i].dtc {
+		return false // another DTC's
 	}
-	// and the record's DIDs at the offsets this build's sizes put them — a second guard behind the
-	// 16-bit fingerprint, against the one schema in 65536 that shares it
-	mut o := snap_hdr + 1
-	for f in 0 .. m.slots[i].nfreeze {
-		if u16(m.scratch[o]) << 8 | u16(m.scratch[o + 1]) != m.slots[i].freeze[f] {
+	// the stored structure, compared whole against this firmware's: a snapshot under another
+	// schema (a kept snapshot_id, a resized, reordered, added or removed DID) is no snapshot
+	want := m.identity(i)
+	for x in 0 .. want.n {
+		if m.scratch[7 + x] != want.b[x] {
 			return false
 		}
-		o += 2 + int(m.slots[i].freeze_len[f])
 	}
 	mut k := -1
 	for j in 0 .. max_entries {
@@ -426,10 +486,21 @@ fn (mut m Memory) load_snapshot(i int, b u8) bool {
 	e.blk = b
 	e.took_claim = false
 	e.stamp = u32(m.scratch[3]) << 24 | u32(m.scratch[4]) << 16 | u32(m.scratch[5]) << 8 | u32(m.scratch[6])
-	e.len = n - snap_hdr
-	for x in 0 .. e.len {
-		e.data[x] = m.scratch[snap_hdr + x]
+	// the record body served by 0x19 04: the DID count, then each DID's id and data
+	e.data[0] = u8(m.slots[i].nfreeze)
+	mut src := 7 + want.n
+	mut o := 1
+	for f in 0 .. m.slots[i].nfreeze {
+		e.data[o] = u8(m.slots[i].freeze[f] >> 8)
+		e.data[o + 1] = u8(m.slots[i].freeze[f])
+		o += 2
+		for x in 0 .. int(m.slots[i].freeze_len[f]) {
+			e.data[o + x] = m.scratch[src + x]
+		}
+		o += int(m.slots[i].freeze_len[f])
+		src += int(m.slots[i].freeze_len[f])
 	}
+	e.len = o
 	m.slots[i].entry = k + 1
 	if e.stamp >= m.next_stamp {
 		m.next_stamp = e.stamp + 1
@@ -500,10 +571,17 @@ fn (m &Memory) block_id(i int, b u8) u16 {
 	return if b == 2 { m.slots[i].snap_id_b } else { m.slots[i].snap_id }
 }
 
-// claim_of: the block an image's per-DTC flag byte claims — 0 none, 1 A, 2 B.
-fn claim_of(f u8) u8 {
+// claim_of: which of slot i's blocks an image record (flag byte f, claimed block id) claims —
+// 0 none, or a block id that is not one of this firmware's for this DTC; 1 A; 2 B.
+fn (m &Memory) claim_of(i int, f u8, id u16) u8 {
 	if f & img_snapshot == 0 {
 		return 0
 	}
-	return if f & img_block_b != 0 { u8(2) } else { u8(1) }
+	if id == m.slots[i].snap_id {
+		return 1
+	}
+	if id == m.slots[i].snap_id_b {
+		return 2
+	}
+	return 0
 }

@@ -424,19 +424,26 @@ ride the same bus-sleep flush choreography as persisted signals.
   come back). A group clear, a displacement and a cycle boundary are each one atomic write of it,
   so no clear epoch is needed;
 - TWO **snapshot blocks**, A and B, per fault with `freeze` — their ids hashed from the DTC and
-  the snapshot's schema (the DIDs and their sizes), so an update that changes a snapshot restores
-  none rather than the wrong bytes; each block also carries the schema's fingerprint, checked on
-  restore, so pinned ids (`snapshot_ids = [A, B]`) kept across such an update
-  restores none either. A collision is refused at generation, naming the pin — never resolved by
-  declaration order, which an update may change. A block holds the DTC, an allocation stamp, the
-  fingerprint and the record body; a released one is rewritten as a 1-byte TOMBSTONE.
+  the snapshot's schema (the DIDs and their sizes), so an update that changes a snapshot usually
+  finds other ids; a collision is refused at generation, naming the pin — never resolved by
+  declaration order, which an update may change. A block holds
+  `[ DTC 3 | stamp 4 | format | DID count | each DID's id (2) and size (1) | each DID's data ]`;
+  a released one is rewritten as a 1-byte TOMBSTONE. **What a snapshot is, the block states
+  EXACTLY** — the rule the parameter record follows (§3.4): no hash of any width is trusted for
+  identity (#378; until then a 16-bit fingerprint, which a constructed collision passed). A block
+  is restored only when its format, DID count and every DID's id and size, in order, match this
+  firmware's byte for byte, and its length is the one that structure states. So a DID resized, the
+  list reordered, a DID added or removed — under pinned ids (`snapshot_ids = [A, B]`) or ids that
+  happen to coincide — restores none rather than the wrong bytes, and the block is released by the
+  next committed image (counted in `Memory.pruned`). The whole structure is stored: at most 4 DIDs, 3 bytes each.
 
 **The invariant** (`persist.v`): no block the last COMMITTED image claims is ever written or
 tombstoned; a block is released only by a committed image that no longer claims it. It holds by
-construction: the image records WHICH block it claims — and the schema fingerprint of the snapshot it claims, so
-restore accepts a block only with that fingerprint, and only when it is this firmware's (a claim
-under another schema, after an update or a rollback, is read as nothing and dropped by the next
-committed image) — a capture always writes the other one, and a
+construction: the image names the block it claims by its BLOCK ID (not as A or B — so firmware with
+other snapshot ids finds none of its own blocks claimed, and a stale block it wrote before an update
+never stands in for the one a later image claims, after a rollback; a claim under kept ids is held to
+the block's stated structure — either way it is read as nothing and dropped by the next committed
+image) — a capture always writes the other one, and a
 tombstone is written only for a block the committed image does not claim and no captured snapshot
 is waiting in. So a power cut anywhere restores a committed image whose every claimed block is
 intact — through a displacement, a DTC displaced and reacquired before the image released it, a
@@ -468,7 +475,9 @@ cycle, so a passing power cycle clears pending.
 stores changes, and the status rules bound that PER OPERATION CYCLE: per DTC, at its first completed
 test, at its first failure (pending, testFailedSinceLastClear, confirmed, the failed-cycle counter)
 and at the cycle's end (pending cleared, aging), plus once at each cycle start and end and at each
-tester clear and 0x85 change (the image records the setting); changes in one owner pass coalesce into one write. The image is 2 + 10 B per fault (the last 2: the claimed snapshot's schema fingerprint)
+tester clear and 0x85 change (the image records the setting); changes in one owner pass coalesce into one write. The image is 2 + 10 B per fault (the last 2: the claimed snapshot block's id; image format 5 —
+an image of format 4, the one before, is read for its status and counters, and its snapshot claims
+are held until the next image commits but never loaded)
 (≤ 17 journal records for 32 faults). A LATER occurrence in the same cycle changes only the
 occurrence counter, which is DEFERRED — written with the next image write or at the next flush (a
 sleep edge, an ECUReset), never on its own — so an intermittent fault costs no write per occurrence,
