@@ -59,11 +59,14 @@ ifneq ($(MAKECMDGOALS),clean)
 endif
 
 # 2) transpile the V stack (shared main.v + this node's app/) to freestanding C.
-$(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) $(wildcard $(REPO)/driver/io/*.v) $(wildcard app/*.v) | $(BUILD)
+$(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp | $(BUILD)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
 	  -path "@vlib|@vmodules|.|examples/system_io/nodes/h735" \
-	  -o examples/system_io/nodes/h735/$(BUILD)/app.c examples/system_io/main.v
+	  $(call v_dump,$@) -o examples/system_io/nodes/h735/$(BUILD)/app.c examples/system_io/main.v
+	$(call v_deps,$@)
 	$(REPO)/scripts/lint_vinit.sh $@
+# what V compiled into it (tools/tools.mk v_deps)
+-include $(BUILD)/app.c.d
 
 # 3) ThreadX kernel objects.
 $(BUILD)/tx/%.o: $(PORT)/src/%.S Makefile

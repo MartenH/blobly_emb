@@ -47,8 +47,11 @@ all: $(BUILD)/canfd.bin
 #    driver.can` resolves via -path; output back into build/).
 $(BUILD)/canfd.c: main.v | $(BUILD)
 	cd $(REPO) && $(V) $(VDBG) -freestanding -gc none -no-bounds-checking -path "@vlib|@vmodules|." \
-	  -o examples/h755_canfd/$(BUILD)/canfd.c examples/h755_canfd/main.v
+	  $(call v_dump,$@) -o examples/h755_canfd/$(BUILD)/canfd.c examples/h755_canfd/main.v
+	$(call v_deps,$@)
 	$(REPO)/scripts/lint_vinit.sh $@
+# what V compiled into it (tools/tools.mk v_deps)
+-include $(BUILD)/canfd.c.d
 
 # 2) cross-compile + link: V output + the shared bare-metal startup (boards/common) + board shim + CAN backend
 $(BUILD)/canfd.elf: $(CSRC) linker.ld | $(BUILD)
