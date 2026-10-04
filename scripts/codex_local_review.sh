@@ -79,7 +79,7 @@ read -r -a v_cmd <<< "${V:-v}"
 v_bin=$(command -v "${v_cmd[0]:-v}" || true)
 v_run=${V:-$v_bin}
 probe_note="Put any probe or scratch files under /tmp, never in the repository."
-gates="the host unit tests \`$v_run -enable-globals test <module>/\` for the touched modules (CI runs comm driver tools ecu loom nvm wdg bcrypto boot, and examples), \`make lint\` (no-alloc + isolation, must pass), \`make check\`, \`make syscheck\` (the cross-node checks over every examples/*/system.toml; a change to one needs it) and \`make trace-check\`. tools/vectab needs the CMSIS headers under third_party/; if they are absent, skip it rather than fetching them. Do not flash or touch hardware (never \`make hwtest\` or \`make flash\`)"
+gates="the host unit tests \`$v_run -enable-globals test <module>/\` for the touched modules (CI runs comm driver tools ecu loom nvm wdg bcrypto boot, and examples), \`make lint\` (no-alloc + isolation, must pass), \`make check\`, \`make syscheck SYSTEM=<file>\` for each examples/*/system.toml the change can affect (the cross-node checks; a bare \`make syscheck\` checks only examples/system_bench, CI loops over every one) and \`make trace-check\`. tools/vectab needs the CMSIS headers under third_party/; if they are absent, skip it rather than fetching them. Do not flash or touch hardware (never \`make hwtest\` or \`make flash\`)"
 if [ -n "$v_bin" ] && [ -x "$v_bin" ]; then
 	v_note="The V compiler is \`$v_run\` ($("$v_bin" version 2>/dev/null || echo 'version unknown'); CI pins $(tr -d '[:space:]' < .v-version)). Do not look for other V installations. Where they bear on the change, run $gates. A change to generated code must leave \`gen/\` outputs that regeneration reproduces. Network sockets are allowed, so the UDP/TCP tests can run. $probe_note"
 else
@@ -113,17 +113,18 @@ if [ "$dry_run" = 1 ]; then
 fi
 
 mkdir -p "$reviews"
-# Whatever the review's outcome, a working tree it changed must not pass unnoticed.
+# Whatever the review's outcome, a working tree it changed must not pass unnoticed: a moved HEAD or
+# a dirty tree is exit 4 even when the review itself also failed.
 dirty_check() {
 	rc=$?
 	if [ "$(git rev-parse HEAD)" != "$head" ]; then
 		echo "codex-local-review: HEAD moved during the review; these findings are for ${head:0:9}, not the branch as it is now" >&2
-		[ "$rc" = 0 ] && rc=4
+		rc=4
 	fi
 	if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
 		echo "codex-local-review: the review left the working tree dirty; inspect before committing:" >&2
 		git status --porcelain --untracked-files=normal >&2
-		[ "$rc" = 0 ] && rc=4
+		rc=4
 	fi
 	exit "$rc"
 }
