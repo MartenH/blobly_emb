@@ -430,3 +430,14 @@ fn test_largest_request_is_one_isotp_message() {
 	assert resp[2] == 0x00 && resp[3] == 0x00 && resp[8] == 0x02
 	assert s2.fatal
 }
+
+// a further response (a routine's next responsePending, its answer) goes to the activated tester
+// as a diagnostic message from this entity
+fn test_a_further_response_is_a_diagnostic_message_to_the_tester() {
+	s := activated_with(serve_big)
+	mut out := [64]u8{}
+	uds := [u8(0x7F), 0x31, 0x78]
+	n := s.response_message(&uds[0], 3, &out[0])
+	assert out[..n] == [u8(0x02), 0xFD, 0x80, 0x01, 0, 0, 0, 7, 0x0E, 0x80, 0x0E, 0x00, 0x7F, 0x31,
+		0x78]
+}

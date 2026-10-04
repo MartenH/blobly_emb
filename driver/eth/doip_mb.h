@@ -17,6 +17,10 @@
  * A withdrawn request is never served, so it never stands in for the served one: an answer still
  * in flight is acknowledged, or dropped, whatever was withdrawn after it.
  *
+ * The server's thread may PUSH a further response to the request it served last (a routine
+ * answered responsePending, then its next step's response): it is in flight like an answer —
+ * queued when the doip thread sends it, reported sent once acknowledged.
+ *
  * Fields written by one thread and read by another are single aligned words; doip_netx.c holds
  * its mailbox mutex around post / take / answer / withdraw / collect. */
 #ifndef BLOBLY_DRIVER_ETH_DOIP_MB_H
@@ -37,6 +41,8 @@ typedef struct {
 	volatile uint32_t drops;      /* connections dropped */
 	volatile uint32_t drop_after; /* the request posted last when the latest one dropped */
 	volatile uint32_t drops_seen; /* the server thread's last reading of drops */
+	volatile uint32_t pushed;     /* further responses pushed by the server thread */
+	volatile uint32_t push_taken; /* ... and taken by the doip thread */
 } doip_mb_t;
 
 /* doip thread: a new request; its sequence */
@@ -78,6 +84,23 @@ static inline void doip_mb_drop(doip_mb_t *m) {
 	m->queued = 0u;
 	m->drop_after = m->posted;
 	m->drops = m->drops + 1u;
+}
+
+/* server thread: push a further response to the request served last — in flight until queued
+ * and acknowledged, as its answer was */
+static inline void doip_mb_push(doip_mb_t *m) {
+	m->queued = 0u;
+	m->reported = 0u;
+	m->pushed = m->pushed + 1u;
+}
+
+/* doip thread: 1 when a pushed response waits to be sent (taking it) */
+static inline int doip_mb_push_take(doip_mb_t *m) {
+	if (m->push_taken == m->pushed) {
+		return 0;
+	}
+	m->push_taken = m->pushed;
+	return 1;
 }
 
 /* server thread: 1 once the answer it served last has been acknowledged (above), reported once;

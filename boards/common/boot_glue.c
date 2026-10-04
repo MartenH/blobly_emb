@@ -28,6 +28,7 @@ void boot_info_no_app(void) { bootcell_set_info(BOOT_REASON_NO_APP); }
 
 uint32_t boot_app_base(void) { return APP_BASE; }
 uint32_t boot_app_size(void) { return APP_SIZE; }
+uint32_t boot_erase_unit(void) { return FLASH_SECTOR; }
 uint32_t boot_rx_id(void) { return BOOT_RX_ID; }
 uint32_t boot_tx_id(void) { return BOOT_TX_ID; }
 int boot_can_idx(void) { return BOOT_CAN_IDX; }

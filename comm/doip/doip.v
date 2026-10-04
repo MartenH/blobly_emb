@@ -163,6 +163,24 @@ fn nack_if_room(resp &u8, at int, code u8, resp_max int) int {
 	return gen_nack(resp, at, code)
 }
 
+// response_message frames a further response to the activated tester — one its server sends after
+// the answer to a request (a routine answered responsePending, then its next response): a
+// diagnostic message from this entity, `n` UDS bytes. Returns its length; out holds header_len + 4
+// + n bytes.
+pub fn (s &Server) response_message(uds_resp &u8, n int, out &u8) int {
+	o := put_header(out, 0, pt_diag, u32(4 + n))
+	unsafe {
+		out[o] = u8(s.entity_addr >> 8)
+		out[o + 1] = u8(s.entity_addr)
+		out[o + 2] = u8(s.tester_addr >> 8)
+		out[o + 3] = u8(s.tester_addr)
+		for i in 0 .. n {
+			out[o + 4 + i] = uds_resp[i]
+		}
+	}
+	return o + 4 + n
+}
+
 // announcement builds the vehicle-announcement payload (UDP broadcast at boot,
 // also the answer to a vehicle-identification request): VIN, logical address,
 // EID/GID (we use the MAC-derived EID for both), further-action 0x00.

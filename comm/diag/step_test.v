@@ -18,6 +18,7 @@ mut:
 	rx      []can.Frame
 	tx      []can.Frame
 	refuse  bool
+	stalled bool // the controller takes no frame (tx_ready false)
 	pending int // frames handed to the "controller" and not yet on the wire (tx_idle)
 }
 
@@ -39,7 +40,7 @@ fn (mut c FakeChan) send(f can.Frame) bool {
 }
 
 fn (c &FakeChan) tx_ready() bool {
-	return true
+	return !c.stalled
 }
 
 fn (mut c FakeChan) tx_idle() bool {
@@ -97,6 +98,18 @@ fn (mut s FakeServer) cancel_reset() {
 	s.reset = false
 }
 
+fn (s &FakeServer) work_pending() bool {
+	return false
+}
+
+fn (mut s FakeServer) work(now u64, resp &u8) int {
+	return 0
+}
+
+fn zero_clock() u64 {
+	return 0
+}
+
 fn new_link() isotp.Link {
 	mut l := isotp.Link{}
 	l.init_defaults()
@@ -130,7 +143,7 @@ mut:
 }
 
 fn step(mut s FakeServer, mut l isotp.Link, now u64, mut ch FakeChan, mut b Bufs) bool {
-	return serve_step(mut s, mut l, srx, stx, now, mut ch, &b.req[0], &b.resp[0])
+	return serve_step(mut s, mut l, srx, stx, now, mut ch, &b.req[0], &b.resp[0], zero_clock)
 }
 
 // a frame shorter than its PCI says is dropped, never read as a request
@@ -239,7 +252,7 @@ fn test_the_bootloader_runs_the_same_step() {
 	mut b := Bufs{}
 	mut t := new_link()
 	ch.rx << tester_frames(mut t, 0, [u8(0x11), 0x01])
-	due := serve_step(mut p, mut l, srx, stx, 0, mut ch, &b.req[0], &b.resp[0])
+	due := serve_step(mut p, mut l, srx, stx, 0, mut ch, &b.req[0], &b.resp[0], zero_clock)
 	assert due && p.reset_due()
 	assert ch.tx.len == 1 && ch.tx[0].id == stx && ch.tx[0].data[..3] == [u8(0x02), 0x51, 0x01]
 	// refused: the bootloader does not reset unanswered either
@@ -251,7 +264,7 @@ fn test_the_bootloader_runs_the_same_step() {
 	}
 	mut t2 := new_link()
 	ch2.rx << tester_frames(mut t2, 0, [u8(0x11), 0x01])
-	assert !serve_step(mut q, mut l2, srx, stx, 0, mut ch2, &b.req[0], &b.resp[0])
+	assert !serve_step(mut q, mut l2, srx, stx, 0, mut ch2, &b.req[0], &b.resp[0], zero_clock)
 	assert !q.reset_due()
 }
 
@@ -273,4 +286,91 @@ fn test_queued_requests_are_taken_one_at_a_time() {
 	// its answer is still in flight (no flow control), so the 0x11 is dropped, not served
 	step(mut s, mut l, 1000, mut ch, mut b)
 	assert s.handled == 1 && !s.reset
+}
+
+// routine work the bootloader answered pending (an erase): each pass with the link idle drains the
+// wire FIRST — the previous response must be on the bus before an erase stalls the chip — then
+// erases one unit and sends what follows: 0x78 while units remain, the routine's answer after
+__global g_step_ch &FakeChan
+__global g_step_pending_at_erase []int
+
+fn ram_erase(ctx voidptr, addr u32, size u32) bool {
+	g_step_pending_at_erase << g_step_ch.pending
+	return true
+}
+
+fn ram_read(ctx voidptr, addr u32, out &u8, len u32) bool {
+	for i in 0 .. len {
+		unsafe {
+			out[i] = 0xFF
+		}
+	}
+	return true
+}
+
+fn test_routine_work_steps_once_the_wire_is_drained() {
+	mut p := boot.Prog{}
+	p.init()
+	p.app_base = 0x0802_0000
+	p.app_size = 0x0004_0000
+	p.erase_unit = 0x0001_0000 // four units
+	p.flash = boot.FlashOps{
+		erase: ram_erase
+		read:  ram_read
+	}
+	mut ch := &FakeChan{}
+	g_step_ch = ch
+	g_step_pending_at_erase = []int{}
+	mut l := new_link()
+	mut b := Bufs{}
+	mut resp := []u8{len: 16}
+	prog := [u8(0x10), 0x02]
+	assert p.handle(&prog[0], 2, unsafe { &resp[0] }) > 0
+	er := [u8(0x31), 0x01, 0xFF, 0x00, 0x08, 0x02, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00]
+	assert p.handle(&er[0], er.len, unsafe { &resp[0] }) == 3 && resp[2] == 0x78
+	mut answers := [][]u8{}
+	for i in 0 .. 8 {
+		ch.pending = 3 // what the previous response left in the controller
+		serve_step(mut p, mut l, srx, stx, u64(i), mut ch, &b.req[0], &b.resp[0], zero_clock)
+		for f in ch.tx {
+			answers << f.data[..f.data[0] + 1].clone()
+		}
+		ch.tx.clear()
+		if !p.work_pending() {
+			break
+		}
+	}
+	assert g_step_pending_at_erase == [0, 0, 0, 0], 'an erase ran with a response still in the controller'
+	assert answers == [[u8(0x03), 0x7F, 0x31, 0x78], [u8(0x03), 0x7F, 0x31, 0x78],
+		[u8(0x03), 0x7F, 0x31, 0x78], [u8(0x05), 0x71, 0x01, 0xFF, 0x00, 0x00]], answers.str()
+}
+
+// a response still on its way out of the link holds the next step back
+fn test_routine_work_waits_for_the_link() {
+	mut p := boot.Prog{}
+	p.init()
+	p.app_base = 0x0802_0000
+	p.app_size = 0x0004_0000
+	p.flash = boot.FlashOps{
+		erase: ram_erase
+		read:  ram_read
+	}
+	mut ch := &FakeChan{
+		stalled: true
+	}
+	g_step_ch = ch
+	g_step_pending_at_erase = []int{}
+	mut l := new_link()
+	mut b := Bufs{}
+	mut resp := []u8{len: 16}
+	prog := [u8(0x10), 0x02]
+	p.handle(&prog[0], 2, unsafe { &resp[0] })
+	er := [u8(0x31), 0x01, 0xFF, 0x00, 0x08, 0x02, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00]
+	n := p.handle(&er[0], er.len, unsafe { &resp[0] })
+	assert l.send(unsafe { &resp[0] }, n) // the 0x78, not yet taken by the controller
+	serve_step(mut p, mut l, srx, stx, 0, mut ch, &b.req[0], &b.resp[0], zero_clock)
+	assert g_step_pending_at_erase.len == 0, 'a step with the previous response still in the link'
+	ch.stalled = false
+	serve_step(mut p, mut l, srx, stx, 1, mut ch, &b.req[0], &b.resp[0], zero_clock)
+	assert g_step_pending_at_erase.len == 1
 }

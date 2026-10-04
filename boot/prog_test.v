@@ -93,10 +93,15 @@ fn new_prog(mut f TestFlash) Prog {
 	return p
 }
 
-// ask: one request/response exchange; returns the response bytes.
+// ask: one request/response exchange; returns the final response bytes — a routine answered
+// responsePending is stepped to its answer, as the serve loop does once each response has left.
 fn ask(mut p Prog, req []u8) []u8 {
 	mut resp := []u8{len: 600}
-	n := p.handle(&req[0], req.len, unsafe { &resp[0] })
+	mut n := p.handle(&req[0], req.len, unsafe { &resp[0] })
+	for n == 3 && resp[0] == 0x7F && resp[2] == 0x78 {
+		assert p.work_due(via_bus)
+		n = p.step(0, unsafe { &resp[0] })
+	}
 	return resp[..n]
 }
 
@@ -590,7 +595,13 @@ fn test_session_change_clears_auth() {
 fn ask_net(mut p Prog, req []u8, now u64) []u8 {
 	mut resp := []u8{len: 600}
 	p.tick(now) // the serve loop ticks every pass; a network request is stamped by it
-	n := p.serve_remote(&req[0], req.len, false, unsafe { &resp[0] })
+	mut n := p.serve_remote(&req[0], req.len, false, unsafe { &resp[0] })
+	for n == 3 && resp[0] == 0x7F && resp[2] == 0x78 {
+		assert !p.work_due(via_net), 'a step before the pending answer was acknowledged'
+		p.remote_sent()
+		assert p.work_due(via_net)
+		n = p.step(now, unsafe { &resp[0] })
+	}
 	return resp[..n]
 }
 
@@ -1033,4 +1044,91 @@ fn test_identification_dids_are_added_and_served() {
 	}
 	assert !p.add_did(0x0300, &vin[0], 1), 'a full table'
 	assert p.srv.ndid == 16
+}
+
+// ---- routine work answered pending ----
+
+// a multi-sector erase answers responsePending, then erases ONE unit per step — the owner sends
+// each response before the next step (a sector erase stalls a single-bank chip whole) — with a
+// 0x78 between units and the routine's answer after the last: every response is one unit's erase
+// time after the one before it (a 128 KB H7 sector: about 1-2 s), never past P2* (5 s)
+fn test_an_erase_answers_pending_and_steps_one_unit_at_a_time() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	p.erase_unit = 0x4000 // four units in the 64 KB test window
+	unlock(mut p)
+	er := [u8(0x31), 0x01, 0xFF, 0x00, u8(t_base >> 24), u8(t_base >> 16), u8(t_base >> 8),
+		u8(t_base), u8(t_size >> 24), u8(t_size >> 16), u8(t_size >> 8), u8(t_size)]
+	mut resp := []u8{len: 64}
+	mut n := p.handle(&er[0], er.len, unsafe { &resp[0] })
+	assert resp[..n] == [u8(0x7F), 0x31, 0x78], 'answered pending, nothing erased yet'
+	assert f.erases == 0
+	// a request while it runs is told to come back
+	tp := [u8(0x3E), 0x00]
+	mut r2 := []u8{len: 8}
+	assert p.handle(&tp[0], 2, unsafe { &r2[0] }) == 3 && r2[2] == 0x21
+	mut pendings := 0
+	for step in 1 .. 10 {
+		assert p.work_due(via_bus)
+		n = p.step(u64(step) * 2_000_000, unsafe { &resp[0] })
+		assert f.erases == step, 'one unit per step'
+		if resp[..n] == [u8(0x7F), 0x31, 0x78] {
+			pendings++
+			continue
+		}
+		break
+	}
+	assert pendings == 3
+	assert resp[..n] == [u8(0x71), 0x01, 0xFF, 0x00, 0x00]
+	assert !p.work_due(via_bus) && p.erased
+	// the steps are tester activity: S3 does not expire under a long erase
+	p.tick(4 * 2_000_000 + s3_server_us)
+	assert p.srv.session == 0x02
+}
+
+// over the network each step waits for the previous response to be acknowledged, and its own
+// response is in flight until it is; a connection that drops takes the routine with it
+fn test_a_network_erase_steps_only_on_acknowledgement() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	p.erase_unit = 0x8000
+	unlock_via(mut p, via_net, proof(), 0)
+	p.remote_sent()
+	er := [u8(0x31), 0x01, 0xFF, 0x00, u8(t_base >> 24), u8(t_base >> 16), u8(t_base >> 8),
+		u8(t_base), u8(t_size >> 24), u8(t_size >> 16), u8(t_size >> 8), u8(t_size)]
+	mut resp := []u8{len: 64}
+	assert p.serve_remote(&er[0], er.len, false, unsafe { &resp[0] }) == 3 && resp[2] == 0x78
+	assert !p.work_due(via_net) && !p.work_due(via_bus)
+	p.remote_sent()
+	assert p.work_due(via_net)
+	assert p.step(1, unsafe { &resp[0] }) == 3 && resp[2] == 0x78
+	assert !p.work_due(via_net), 'the next step waits for this response to be acknowledged'
+	p.remote_dropped()
+	assert !p.work_due(via_net) && f.erases == 1, 'nobody waits for the rest'
+}
+
+// the check routine is answered pending too, and done in one step
+fn test_the_check_routine_answers_pending() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	unlock(mut p)
+	transfer(mut p, signed_image(300))
+	ck := [u8(0x31), 0x01, 0xFF, 0x01]
+	mut resp := []u8{len: 64}
+	assert p.handle(&ck[0], 4, unsafe { &resp[0] }) == 3 && resp[2] == 0x78
+	assert p.step(0, unsafe { &resp[0] }) == 5
+	assert resp[..5] == [u8(0x71), 0x01, 0xFF, 0x01, 0x00]
+}
+
+// an acknowledged reset answer is not cancelled by a request pipelined behind it whose connection
+// drops: TCP acknowledged the reset's answer, which is all a reset waits for
+fn test_an_acknowledged_reset_survives_a_pipelined_request_that_drops() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	assert ask_net(mut p, [u8(0x11), 0x01], 0) == [u8(0x51), 0x01]
+	p.remote_sent() // A acknowledged
+	assert ask_net(mut p, [u8(0x3E), 0x00], 1) == []u8{}, 'B: acknowledged by DoIP, unanswered'
+	assert !p.reset_due(), 'B is in flight'
+	p.remote_dropped() // B's connection drops
+	assert p.reset_due(), 'the acknowledged reset is cancelled'
 }

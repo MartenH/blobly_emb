@@ -170,6 +170,40 @@ int doip_mb_take_dropped(void) {
 	return doip_mb_dropped_take(&mb);
 }
 
+/* the further response the server thread pushes (a routine's responsePending, then its next one) */
+#define MB_PUSH_MAX 16
+static unsigned char mb_push[MB_PUSH_MAX];
+static int mb_push_len;
+
+/* server thread: push a further response to the request it served last; 0 = too long */
+int doip_mb_push_resp(const unsigned char *resp, int n) {
+	if (n < 1 || n > MB_PUSH_MAX) {
+		return 0;
+	}
+	tx_mutex_get(&mb_mutex, TX_WAIT_FOREVER);
+	for (int i = 0; i < n; i++) {
+		mb_push[i] = resp[i];
+	}
+	mb_push_len = n;
+	doip_mb_push(&mb);
+	tx_mutex_put(&mb_mutex);
+	return 1;
+}
+
+/* doip thread: a pushed response waiting to be sent, copied to resp; its length, or -1 */
+int doip_mb_push_get(unsigned char *resp, int cap) {
+	int n = -1;
+	tx_mutex_get(&mb_mutex, TX_WAIT_FOREVER);
+	if (mb_push_len <= cap && doip_mb_push_take(&mb)) {
+		n = mb_push_len;
+		for (int i = 0; i < n; i++) {
+			resp[i] = mb_push[i];
+		}
+	}
+	tx_mutex_put(&mb_mutex);
+	return n;
+}
+
 /* ---- the TCP byte pipe -------------------------------------------------------------------- */
 
 static NX_PACKET *rx_pending; /* partially consumed receive (packet > caller's buf) */

@@ -15,6 +15,7 @@
 #define APP_BASE 0x08020000u
 #define APP_SIZE 0x000E0000u /* sectors 1..7 */
 #define APP_VECTORS (APP_BASE + 0x400u)
+#define FLASH_SECTOR 0x00020000u /* the erase unit: the boot erases the app a sector per step */
 
 /* The NvM journal's sector pair (docs/nvm.md; boards/common/nvm_map.c) = the BANK-2 TAIL,
  * sectors 6 + 7, carved OUT of the CM4 link regions in cm4_*.ld. Bank-2 programs and erases never

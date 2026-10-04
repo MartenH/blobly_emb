@@ -28,6 +28,7 @@ fn C.boot_jump_app()
 fn C.boot_sys_reset()
 fn C.boot_app_base() u32
 fn C.boot_app_size() u32
+fn C.boot_erase_unit() u32
 fn C.boot_rx_id() u32
 fn C.boot_tx_id() u32
 fn C.boot_can_idx() int
@@ -111,6 +112,7 @@ fn main() {
 	g_link.stmin = C.boot_stmin()
 	g_prog.app_base = app_base
 	g_prog.app_size = app_size
+	g_prog.erase_unit = C.boot_erase_unit() // a sector per step, a 0x78 between (Prog.step)
 	// identification (REQ-BOOT-009): F180 = bootloader version, F181 = app state, F195 = the
 	// valid installed image's sw_version at boot (0 when there is none) — the DID the application
 	// answers too
@@ -154,7 +156,7 @@ fn serve_loop() {
 		mut due := false
 		if can_ok {
 			due = diag.serve_step(mut g_prog, mut g_link, rx_id, tx_id, now, mut ch, &g_req[0],
-				&g_rsp[0])
+				&g_rsp[0], now_us)
 		} else {
 			g_prog.tick(now)
 			due = g_prog.reset_due()

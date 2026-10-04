@@ -26,6 +26,12 @@ const nrc_security_access_denied = u8(0x33)
 const nrc_invalid_key = u8(0x35)
 const nrc_general_programming_failure = u8(0x72)
 const nrc_wrong_block_sequence = u8(0x73)
+const nrc_busy_repeat = u8(0x21)
+const nrc_response_pending = u8(0x78)
+
+// the routine work answered responsePending and done a unit at a time (Prog.step)
+const work_erase = u8(1)
+const work_check = u8(2)
 
 // routine ids (0x31 sub 0x01 = start)
 pub const routine_erase = u16(0xFF00)
@@ -120,6 +126,20 @@ pub mut:
 	// a session handed off over the network: S3 does not time it until the boot's own network is
 	// up (net_up) — no tester can reach the boot before — and at most net_wait_us
 	await_net bool
+	// routine work answered responsePending (0x78) and done a step at a time once that answer has
+	// LEFT — on the wire, or acknowledged over the network — because a flash erase stalls the whole
+	// chip on a single-bank part, the network stack with it: the erase of one unit
+	// (`erase_unit`, the flash sector; 0 = the whole region at once) or the image check per step,
+	// a 0x78 between steps, the routine's answer after the last. work_via: the transport that
+	// asked, which carries every response. A request meanwhile is answered busyRepeatRequest.
+	work      u8
+	work_via  u8
+	work_addr u32
+	work_end  u32
+	erase_unit u32
+	// the reset's own answer has been acknowledged over the network: a later request's connection
+	// dropping cannot cancel it any more
+	reset_sent bool
 	// the longest that wait may last: the node's link start-up allowance plus its whole
 	// announcement sequence (gen/boot_gen.h BOOT_DOIP_NET_WAIT_MS — every announcement goes out
 	// before the DoIP listener opens); 0 = net_wait_default_us
@@ -154,13 +174,16 @@ pub fn (mut p Prog) serve_remote(req &u8, req_len int, functional bool, resp &u8
 // drop (remote_dropped) then cancels the reset it announced.
 pub fn (mut p Prog) remote_sent() {
 	p.remote_inflight = false
+	if p.reset_pending && p.reset_remote {
+		p.reset_sent = true // TCP acknowledges in order: the reset's answer has been, too
+	}
 }
 
 // remote_dropped: the network connection is gone. A reset it asked for whose answer never left is
 // abandoned (never reset unanswered); a session it held ends — relocked, a download abandoned —
 // since no tester outlives its connection's session.
 pub fn (mut p Prog) remote_dropped() {
-	if p.remote_inflight && p.reset_remote {
+	if p.remote_inflight && p.reset_remote && !p.reset_sent {
 		p.reset_pending = false
 	}
 	p.remote_inflight = false
@@ -188,7 +211,13 @@ fn (mut p Prog) handle_via(via u8, req &u8, req_len int, resp &u8) int {
 	if p.srv.session != 0x01 && p.owner != 0 && p.owner != via {
 		return negative(resp, unsafe { req[0] }, nrc_conditions_not_correct)
 	}
+	if p.work != 0 {
+		return negative(resp, unsafe { req[0] }, nrc_busy_repeat) // a routine still running
+	}
 	n := p.dispatch(req, req_len, resp)
+	if p.work != 0 {
+		p.work_via = via // the routine just started: its responses go where its request came from
+	}
 	p.owner = if p.srv.session == 0x01 { u8(0) } else { via }
 	p.remote_spoke = p.owner == via_net
 	if p.reset_pending {
@@ -321,6 +350,9 @@ pub const net_wait_default_us = u64(10_000_000)
 // Call it from the serve loop; handle() stamps the activity clock.
 pub fn (mut p Prog) tick(now u64) {
 	p.clock = now
+	if p.work != 0 {
+		p.stamp(now) // a routine running is an exchange in flight
+	}
 	if p.remote_inflight {
 		// a network exchange in flight — its answer not yet acknowledged — holds S3 and the
 		// stay-window, as a bus exchange in flight does (comm/diag serve_step)
@@ -335,6 +367,60 @@ pub fn (mut p Prog) tick(now u64) {
 	}
 }
 
+// work_due: routine work for `via` waits on its next step — over the network only once the
+// previous response has been acknowledged (the bus side asks once its link and wire are idle)
+pub fn (p &Prog) work_due(via u8) bool {
+	return p.work != 0 && p.work_via == via && (via != via_net || !p.remote_inflight)
+}
+
+// work_pending / work: the bus side's routine work, for comm/diag serve_step
+pub fn (p &Prog) work_pending() bool {
+	return p.work_due(via_bus)
+}
+
+pub fn (mut p Prog) work(now u64, resp &u8) int {
+	return p.step(now, resp)
+}
+
+// step does the next unit of the routine work in progress and returns the response that follows
+// it: responsePending while more is left, the routine's answer once it is done. Call it only once
+// the previous response has LEFT (work_due; on the bus, after the wire drain): an erase stalls a
+// single-bank chip whole. Each step is tester activity; a network step's response is in flight
+// until acknowledged.
+pub fn (mut p Prog) step(now u64, resp &u8) int {
+	if p.work == 0 {
+		return 0
+	}
+	p.stamp(now)
+	if p.work_via == via_net {
+		p.remote_inflight = true
+	}
+	if p.work == work_check {
+		p.work = 0
+		ok := p.check_and_mark()
+		return routine_rsp(resp, routine_check, if ok { u8(0x00) } else { u8(0x01) })
+	}
+	// erase the unit holding work_addr, up to the next unit boundary (units count from app_base)
+	mut next := p.work_end
+	if p.erase_unit != 0 {
+		b := p.app_base + ((p.work_addr - p.app_base) / p.erase_unit + 1) * p.erase_unit
+		if b < next {
+			next = b
+		}
+	}
+	if !p.flash.erase(p.flash.ctx, p.work_addr, next - p.work_addr) {
+		p.work = 0
+		return negative(resp, 0x31, nrc_general_programming_failure)
+	}
+	p.work_addr = next
+	if next < p.work_end {
+		return negative(resp, 0x31, nrc_response_pending)
+	}
+	p.work = 0
+	p.erased = true
+	return routine_rsp(resp, routine_erase, 0x00)
+}
+
 // end_session: back to the default session — relocked, a challenge and a download abandoned, no
 // transport holding it.
 fn (mut p Prog) end_session() {
@@ -346,6 +432,7 @@ fn (mut p Prog) end_session() {
 	p.owner = 0
 	p.await_net = false
 	p.remote_spoke = false
+	p.work = 0
 }
 
 // idle_return_due: the serve loop's exit question (REQ-BOOT-014). Only in the
@@ -475,12 +562,13 @@ fn (mut p Prog) routine_control(req &u8, req_len int, resp &u8) int {
 			if !p.region_ok(addr, size) {
 				return negative(resp, 0x31, nrc_request_out_of_range)
 			}
-			if !p.flash.erase(p.flash.ctx, addr, size) {
-				return negative(resp, 0x31, nrc_general_programming_failure)
-			}
-			p.erased = true
+			// answered pending: the erase runs a unit at a time (step)
+			p.erased = false
 			p.downloading = false
-			return routine_rsp(resp, rid, 0x00)
+			p.work = work_erase
+			p.work_addr = addr
+			p.work_end = addr + size
+			return negative(resp, 0x31, nrc_response_pending)
 		}
 		routine_check {
 			// full-image verification, then — only on success — the valid mark
@@ -488,10 +576,9 @@ fn (mut p Prog) routine_control(req &u8, req_len int, resp &u8) int {
 			if p.downloading {
 				return negative(resp, 0x31, nrc_request_sequence_error)
 			}
-			if !p.check_and_mark() {
-				return routine_rsp(resp, rid, 0x01) // routine ran; verdict: failed
-			}
-			return routine_rsp(resp, rid, 0x00)
+			// answered pending: the image is hashed and verified in one step (well inside P2*)
+			p.work = work_check
+			return negative(resp, 0x31, nrc_response_pending)
 		}
 		else {
 			return negative(resp, 0x31, nrc_request_out_of_range)

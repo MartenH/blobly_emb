@@ -255,10 +255,24 @@ Plain UDS, because it is already transport-neutral by construction:
 | enter | 0x10 programming session | boot manager answers; app forwards + resets (above) |
 | identify | 0x22 read DID | bootloader + app version/validity (REQ-BOOT-009) |
 | authenticate | 0x29 Authentication | challenge/response; the tester signs, the boot verifies with its public key (REQ-BOOT-016) |
-| erase | 0x31 routine: erase region | region = app area only (REQ-BOOT-008 enforced here) |
+| erase | 0x31 routine: erase region | region = app area only (REQ-BOOT-008 enforced here); answered responsePending (0x78), then a sector per step (below) |
 | transfer | 0x34 / 0x36 × N / 0x37 | block-wise, per-block ack (ISO-TP flow control does the pacing on CAN; DoIP brings its own) |
 | verify | 0x31 routine: check image | full-image CRC (+ signature when REQ-BOOT-011 lands) — only THEN is the header's valid mark written (REQ-BOOT-005) |
 | go | 0x11 ECU reset | boot decision runs again, now finds a valid image |
+
+**Long routines answer responsePending, a sector at a time.** The server announces P2 50 ms, and a
+128 KB H7 sector erase takes ~1–2 s with the CPU stalled — on a single-bank part the whole chip,
+the network stack included. So the erase routine answers `7F 31 78` and the erase runs a SECTOR
+per step (`boot.Prog.step`, `FLASH_SECTOR` from the board's `bootmap.h`): each step starts only once
+the previous response has LEFT — on the bus the link idle and the controller drained
+(`comm/diag serve_step`), over DoIP acknowledged by the tester (`Prog.work_due`) — erases one sector
+and sends the next response (`7F 31 78` while sectors remain, `71 01 FF 00 00` after the last),
+pushed over DoIP through the mailbox (`doip_mb_push`, in flight until acknowledged). So no gap
+between responses is longer than one sector's erase, well inside P2* (5 s). The image check (0x31
+FF01: CRC + SHA-512 + Ed25519 over the image) is answered `7F 31 78` and done in one step the same
+way. A 0x36 block is not: its 512 bytes are 16 flash-word programs (H7: 256 bits each, on the order of 100 µs at most)
+— a couple of milliseconds of stall at most, inside P2. A request while a routine runs is answered
+busyRepeatRequest (0x21).
 
 `comm/uds` today serves DIDs; the bootloader adds 0x10/0x29/0x31/0x34/0x36/0x37/0x11 —
 services the host side (blobly_net) already knows how to

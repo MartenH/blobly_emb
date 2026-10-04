@@ -208,3 +208,22 @@ fn test_a_partial_message_dies_with_its_connection() {
 	assert f.sent[1].len == 8 + 9 && f.sent[1][12] == 0x10 // the new connection activates
 	assert f.act == [true, true, false, true]
 }
+
+// a response the server pushes (a routine's next responsePending) goes to the activated tester; with
+// none activated its connection is gone and nothing is sent; a failed send ends the connection
+fn test_a_pushed_response_goes_to_the_activated_tester() {
+	mut s := entity()
+	mut b := Bufs{}
+	pending := [u8(0x7F), 0x31, 0x78]
+	mut f := Fake{}
+	push(mut f, mut s, &pending[0], 3, &b.out[0])
+	assert f.sent.len == 0, 'no tester activated'
+	f.chunks = [activation()]
+	pass(mut f, mut s, &b.inb[0], &b.out[0])
+	push(mut f, mut s, &pending[0], 3, &b.out[0])
+	assert f.sent.len == 2 && f.sent[1] == [u8(0x02), 0xFD, 0x80, 0x01, 0, 0, 0, 7, 0x07, 0xA0, 0x0E,
+		0x00, 0x7F, 0x31, 0x78]
+	f.fail_send = 3
+	push(mut f, mut s, &pending[0], 3, &b.out[0])
+	assert !s.activated && f.act.last() == false
+}

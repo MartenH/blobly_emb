@@ -85,10 +85,13 @@ pub fn wire_drain[H](mut ch H, clock fn () u64) {
 }
 
 // serve_step is one whole pass of a server that owns its connection and nothing else on its bus —
-// the bootloader (boot.Prog). The server answers handle / heard / tick / reset_due / cancel_reset.
+// the bootloader (boot.Prog). The server answers handle / heard / tick / reset_due / cancel_reset,
+// and work_pending / work: routine work it answered responsePending for (a flash erase, a unit at a
+// time), whose next step runs once the previous response has left the link AND the wire (a flash
+// erase stalls a single-bank chip whole; the drain is bounded by `clock`), its response sent after.
 // Returns true when the reset the server answered is due: its answer has left the link — the owner
 // then wire_drains and resets.
-pub fn serve_step[T, H](mut s T, mut l isotp.Link, rx_id u32, tx_id u32, now u64, mut ch H, req &u8, resp &u8) bool {
+pub fn serve_step[T, H](mut s T, mut l isotp.Link, rx_id u32, tx_id u32, now u64, mut ch H, req &u8, resp &u8, clock fn () u64) bool {
 	l.tick(now)
 	mut f := can.Frame{}
 	for ch.recv(mut f) {
@@ -109,6 +112,14 @@ pub fn serve_step[T, H](mut s T, mut l isotp.Link, rx_id u32, tx_id u32, now u64
 	}
 	if !pump(mut l, tx_id, now, mut ch) {
 		s.cancel_reset()
+	}
+	// the next step of routine work answered pending, once its previous response is on the wire
+	if s.work_pending() && !l.busy() {
+		wire_drain(mut ch, clock)
+		wn := s.work(now, resp)
+		if wn > 0 && (!l.send(resp, wn) || !pump(mut l, tx_id, now, mut ch)) {
+			s.cancel_reset()
+		}
 	}
 	if in_flight(&l) {
 		s.heard(now) // S3 held while an exchange is in flight

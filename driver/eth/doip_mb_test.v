@@ -22,6 +22,8 @@ mut:
 	drops      u32
 	drop_after u32
 	drops_seen u32
+	pushed     u32
+	push_taken u32
 }
 
 fn C.doip_mb_post(&C.doip_mb_t) u32
@@ -33,6 +35,8 @@ fn C.doip_mb_queue(&C.doip_mb_t)
 fn C.doip_mb_drop(&C.doip_mb_t)
 fn C.doip_mb_sent_take(&C.doip_mb_t, u32, u32) int
 fn C.doip_mb_dropped_take(&C.doip_mb_t) int
+fn C.doip_mb_push(&C.doip_mb_t)
+fn C.doip_mb_push_take(&C.doip_mb_t) int
 
 const established = u32(5)
 const close_wait = u32(6)
@@ -110,8 +114,11 @@ mut:
 	// its answer announced
 	served   u32
 	inflight bool
-	reset    bool
-	resets   int
+	reset     bool
+	reset_seq u32  // the request whose answer announced it
+	reset_ack bool // its answer acknowledged (TCP in order: any later one's ack covers it)
+	gone      bool // a drop was reported since the request served last: its routine ended with it
+	resets    int
 	// what really happened: answers the tester acknowledged, and the latest request posted when
 	// a connection was recorded as dropped
 	acked     map[u32]bool
@@ -124,19 +131,24 @@ fn (mut w World) server_pass() {
 	if C.doip_mb_sent_take(&w.m, w.state, w.unacked) == 1 {
 		assert w.served != 0 && w.acked[w.served], 'reported sent before the tester acknowledged ${w.served}'
 		w.inflight = false
+		if w.reset {
+			w.reset_ack = true // boot.Prog.remote_sent: the reset's answer is acknowledged
+		}
 	}
 	if C.doip_mb_dropped_take(&w.m) == 1 {
 		w.reports++
 		assert w.reports <= w.m.drops, 'a drop reported twice'
-		if w.inflight && w.reset {
+		if w.inflight && w.reset && !w.reset_ack {
 			w.reset = false // never reset unanswered
 		}
 		w.inflight = false
+		w.gone = true // boot.Prog.remote_dropped ends the routine: nothing more is pushed
 	}
 	if w.reset && !w.inflight {
-		assert w.acked[w.served], 'a reset with its answer unacknowledged'
+		assert w.acked[w.reset_seq], 'a reset with its answer unacknowledged'
 		w.resets++
 		w.reset = false
+		w.reset_ack = false
 	}
 }
 
@@ -149,12 +161,19 @@ fn (mut w World) step(op int) {
 			}
 		}
 		1 { // the server's thread takes and answers it — perhaps announcing a reset
-			if C.doip_mb_waiting(&w.m) == 1 && !w.reset {
+			if C.doip_mb_waiting(&w.m) == 1 {
+				// a request pipelined behind a reset's answer is served too (acknowledged by
+				// DoIP, unanswered: boot.Prog.serve_remote) — and is in flight like any other
 				assert w.doip == .waiting && !w.withdrawn[w.seq], 'a settled request taken'
 				C.doip_mb_serve(&w.m)
 				w.served = w.seq
 				w.inflight = true
-				w.reset = rand.intn(4) or { 1 } == 0
+				w.gone = false
+				if !w.reset && rand.intn(4) or { 1 } == 0 {
+					w.reset = true
+					w.reset_seq = w.seq
+					w.reset_ack = false
+				}
 			}
 		}
 		2 { // the doip thread collects the answer, or gives up and withdraws
@@ -207,6 +226,20 @@ fn (mut w World) step(op int) {
 				w.state = listening
 			}
 		}
+		9 { // the server's thread pushes a further response to the request it served last (a
+			// routine's next one), once the previous response has been acknowledged
+			if w.served != 0 && !w.inflight && !w.reset && !w.gone {
+				C.doip_mb_push(&w.m)
+				w.inflight = true
+			}
+		}
+		10 { // the doip thread sends a pushed response, on the connection it has, if any
+			if w.doip != .waiting && C.doip_mb_push_take(&w.m) == 1 && w.state == established {
+				C.doip_mb_queue(&w.m)
+				w.unacked = 1
+				w.sent_on = w.served
+			}
+		}
 		7 { // a tester connects again
 			if w.recycled && w.state != established {
 				w.state = established
@@ -239,6 +272,8 @@ fn pick(r int) int {
 		25 { 5 } // RST
 		26, 27 { 6 } // recycle
 		28, 29 { 7 } // reconnect
+		30, 31 { 9 } // push
+		32, 33 { 10 } // send a push
 		else { 8 } // a server pass
 	}
 }
@@ -268,12 +303,14 @@ fn test_the_mailbox_against_the_reference_model() {
 		if w.doip == .ready {
 			w.step(3)
 		}
+		w.step(10) // a pushed response waiting
 		w.step(4)
 		if w.state != established && !w.recycled && w.doip == .idle {
 			w.step(6)
 		}
 		w.server_pass()
 		assert !w.inflight, 'run ${run}: ${w.served} stays in flight (doip ${w.doip}, state ${w.state})'
+		assert !(w.reset_ack && w.reset), 'run ${run}: an acknowledged reset never happened'
 		total += w.resets
 	}
 	assert total > 50, 'the walk never reached a reset'
