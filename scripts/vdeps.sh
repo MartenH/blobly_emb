@@ -6,6 +6,10 @@
 # so an edit or a deletion remakes TARGET, and a wildcard per directory, so a NEW file does too.
 # A source that disappears must remake TARGET, not stop make (gcc -MP): each gets an empty rule.
 #
+# The rule that writes the list is an input too: this script and tools/tools.mk (whose v_dump /
+# v_deps macros run it) are named in every list, so changing how dependencies are recorded remakes
+# what was recorded the old way.
+#
 # A relative path in either list is taken against $VDEPS_BASE when it is set (V reports paths
 # relative to where it ran — a Makefile that runs V after `cd $(REPO)` passes the repo root).
 #
@@ -30,8 +34,10 @@ dirs=$({
 	printf '%s\n' "$srcs" | sed 's|/[^/]*$||'
 	if [ -n "$extra" ]; then while read -r d; do [ -n "$d" ] && abs "$d"; done <"$extra"; fi
 } | awk 'NF && !seen[$0]++')
+here=$(cd "$(dirname "$0")" && pwd)
 all=$({
 	printf '%s\n' "$srcs"
+	printf '%s\n' "$here/vdeps.sh" "$(cd "$here/../tools" && pwd)/tools.mk"
 	printf '%s\n' "$dirs" | while read -r d; do
 		for f in "$d"/*.v "$d"/*.c "$d"/*.h; do [ -f "$f" ] && printf '%s\n' "$f"; done
 	done
