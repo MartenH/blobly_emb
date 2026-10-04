@@ -35,6 +35,11 @@ module fault
 // producer qualified meanwhile is lost with them. If an operation cycle began while off, "on" resets that
 // cycle's status bits, which the frozen byte still carried from the previous one.
 //
+// Beyond the status byte (R6b): a SNAPSHOT (freeze frame) per DTC that declares one, captured from
+// the server's own DIDs at the failure that allocates it (entry.v), the EXTENDED DATA records
+// (occurrence, aging and failed-cycle counters), DISPLACEMENT when the snapshot entries are full,
+// and PERSISTENCE through an injected store (persist.v) — the journal on a ThreadX target.
+//
 // No field defaults anywhere (the _vinit rule): the owner calls init / configures explicitly.
 
 import comm.uds
@@ -191,6 +196,14 @@ pub mut:
 	dtc     u32 // 3-byte DTC (ISO 14229-1 D.1)
 	confirm u8  // failed operation cycles to confirm (0 = 1)
 	aging   u8  // passing cycles before a confirmed DTC ages out (0 = never)
+	// the snapshot (entry.v): the DIDs captured at the failure that allocates an entry, each with
+	// its fixed size; nfreeze == 0 = this DTC keeps no snapshot
+	freeze     [max_freeze]u16
+	freeze_len [max_freeze]u8
+	nfreeze    int
+	priority   u8  // displacement: 1 = the most important .. 255 (0 reads as 255)
+	snap_id    u16 // the snapshot's two blocks in the store, A and B (persist.v)
+	snap_id_b  u16
 	// runtime
 	status        u8
 	occurrence    u16 // saturating
@@ -206,10 +219,16 @@ pub mut:
 	base_tests u16
 	held       bool // `gen` starts failed: renewed by 0x85 on while the status showed testFailed
 	wait_gen   bool // no fresh generation was free at 0x85 on: results suppressed until one is
+	entry      int  // the snapshot entry this DTC holds, index + 1; 0 = none
+	snap_due   bool // an occurrence wants a snapshot captured (capture)
+	// persistence (persist.v): what the store holds for this DTC
+	claim    u8   // which snapshot block the COMMITTED image claims: 0 none, 1 A, 2 B
+	claim_ok bool // ... and it holds that snapshot (committed from one, or read back at restore)
+	live  [2]bool // blocks A / B hold a snapshot (not a tombstone or nothing)
 }
 
-// Memory is the node's fault memory — one writer, the comm thread (D2). RAM only in R4;
-// persistence is R6.
+// Memory is the node's fault memory — one writer, the comm thread (D2). Its receivers are all
+// `&Memory` / `mut Memory`: it is several KB, and a value receiver would copy it onto a 4 KB stack.
 pub struct Memory {
 pub mut:
 	slots        [max_faults]Slot
@@ -217,6 +236,22 @@ pub mut:
 	setting_off  bool // 0x85 off
 	cycle_active bool
 	boundary_off bool // an operation cycle began while 0x85 was off
+	ending       bool // the cycle's end is requested and waits for the producers (end_cycle_after)
+	end_at       u64
+	// snapshot entries (entry.v): `cap` of them, held by the DTCs that failed most importantly
+	entries    [max_entries]Entry
+	cap        int
+	next_stamp u32 // the allocation order: older entries are displaced first among equals
+	displaced  u32 // snapshots displaced since power-on (observability)
+	// persistence (persist.v): nil store = RAM only
+	store    Store
+	img      [max_image]u8 // the status image the store holds (img_len 0 = none known)
+	img_len  int
+	scratch  [max_block]u8 // an image or a snapshot block being built
+	retry_at u64 // a refused write is retried no sooner than this
+	wrote    int  // writes the last persist / clear made (the owner re-lays its clean marker)
+	refused  bool // the store refused a write since the last persist, a 0x14's included (observability)
+	clear_refused bool // a 0x14 the store refused, carried into the next persist's `refused`
 }
 
 // init sets every configured slot to the power-on status. Call after filling dtc / confirm / aging.
@@ -233,10 +268,29 @@ pub fn (mut m Memory) init() {
 		m.slots[i].base_seen = false
 		m.slots[i].held = false
 		m.slots[i].wait_gen = false
+		m.slots[i].entry = 0
+		m.slots[i].snap_due = false
+		m.slots[i].claim = 0
+		m.slots[i].claim_ok = false
+		m.slots[i].live[0] = false
+		m.slots[i].live[1] = false
+	}
+	for k in 0 .. max_entries {
+		m.entries[k].used = false
+		m.entries[k].durable = false
 	}
 	m.setting_off = false
 	m.cycle_active = false
 	m.boundary_off = false
+	m.ending = false
+	m.end_at = 0
+	m.next_stamp = 1
+	m.displaced = 0
+	m.img_len = 0
+	m.retry_at = 0
+	m.wrote = 0
+	m.refused = false
+	m.clear_refused = false
 }
 
 // consume applies slot i's latest Report. Call every owner pass for every fault.
@@ -279,6 +333,9 @@ pub fn (mut m Memory) consume(i int, r Report) {
 		s.status |= test_failed_this_cycle | pending | failed_since_clear
 		if df > 0 {
 			s.occurrence = sat16(s.occurrence, df)
+			if s.nfreeze > 0 && s.entry == 0 {
+				s.snap_due = true // captured by the owner from the server's DIDs (capture)
+			}
 		}
 		if !s.failed_cycle {
 			s.failed_cycle = true
@@ -297,6 +354,7 @@ pub fn (mut m Memory) consume(i int, r Report) {
 // still open is ended first, so its pending / aging bookkeeping is never skipped. While 0x85 has
 // DTC setting off no status bit changes — the cycle's own bits included.
 pub fn (mut m Memory) cycle_start() {
+	m.ending = false // an end still waiting for its grace happens now
 	if m.cycle_active {
 		m.cycle_end()
 	}
@@ -313,9 +371,31 @@ pub fn (mut m Memory) cycle_start() {
 	m.cycle_active = true
 }
 
+// end_cycle_after requests the operation cycle's end `grace_us` from `now`, the cycle-end barrier
+// (docs/diagnostics.md §7): a producer's dispatch that began before the end was decided — NM going
+// to sleep — publishes its report within one of its periods, and a report the owner reads only
+// after cycle_end would count for nothing, the qualification in it lost from the cycle it belongs
+// to and from the store. So the cycle stays open for the grace (at least the longest period of a
+// fault-owning handler), the owner consuming as usual, and ends at cycle_end_due — after one more
+// consume. Nothing ends while no cycle is open.
+pub fn (mut m Memory) end_cycle_after(now u64, grace_us u64) {
+	if !m.cycle_active || m.ending {
+		return
+	}
+	m.ending = true
+	m.end_at = now + grace_us
+}
+
+// cycle_end_due: a requested end's grace has passed — the owner consumes the producers' latest
+// reports, then calls cycle_end.
+pub fn (m &Memory) cycle_end_due(now u64) bool {
+	return m.ending && now >= m.end_at
+}
+
 // cycle_end closes it: a DTC tested and not failed this cycle is no longer pending, and a confirmed
 // one ages toward removal.
 pub fn (mut m Memory) cycle_end() {
+	m.ending = false
 	if !m.cycle_active {
 		return
 	}
@@ -338,15 +418,19 @@ pub fn (mut m Memory) cycle_end() {
 				}
 			}
 		}
+		if s.entry != 0 && s.status & (pending | confirmed) == 0 {
+			m.free_entry(i) // healed before confirming, or aged out: nothing left the snapshot explains
+		}
 	}
 }
 
-// clear is 0x14: group 0xFFFFFF clears every DTC, anything else the one DTC it names. Returns false
-// for an unknown DTC (the server answers 0x31). Each cleared slot's generation moves on, so the
-// producer resets and its older reports are ignored.
+// clear is 0x14: group 0xFFFFFF clears every DTC, anything else the one DTC it names. Each cleared
+// slot's generation moves on, so the producer resets and its older reports are ignored, and its
+// snapshot entry is freed.
 // Returns the negative response code, 0 = cleared: 0x31 for an unknown DTC, 0x22 when a slot's
 // producer has left so many clears unacknowledged that no fresh generation can be assigned — then
-// NOTHING is cleared, since a clear that reused a generation could let a pre-clear report count.
+// NOTHING is cleared, since a clear that reused a generation could let a pre-clear report count —
+// and 0x72 when the store refuses the cleared image (nothing is cleared then either).
 pub fn (mut m Memory) clear(group u32) u8 {
 	mut hit := false
 	for i in 0 .. m.n {
@@ -361,11 +445,20 @@ pub fn (mut m Memory) clear(group u32) u8 {
 	if !hit {
 		return 0x31 // requestOutOfRange: no such DTC
 	}
+	// persisted: the cleared image must be durable before anything changes in RAM — a refused
+	// write leaves live and durable state as they were, and the tester gets 0x72
+	if !m.persist_clear(group) {
+		return 0x72 // generalProgrammingFailure
+	}
 	for i in 0 .. m.n {
 		if group != 0xFFFFFF && m.slots[i].dtc != group {
 			continue
 		}
 		mut s := &m.slots[i]
+		if s.entry != 0 {
+			m.free_entry(i)
+		}
+		s.snap_due = false
 		s.status = status_cleared
 		s.occurrence = 0
 		s.failed_cycles = 0
@@ -395,12 +488,12 @@ fn (mut s Slot) renew(held bool) {
 
 // control_gen is the generation fault i's producer must apply (the owner copies it into the
 // producer's Control cell).
-pub fn (m Memory) control_gen(i int) u16 {
+pub fn (m &Memory) control_gen(i int) u16 {
 	return m.slots[i].gen
 }
 
 // control_held is whether that generation starts failed (copied beside control_gen).
-pub fn (m Memory) control_held(i int) bool {
+pub fn (m &Memory) control_held(i int) bool {
 	return m.slots[i].held
 }
 
@@ -423,6 +516,9 @@ pub fn (mut m Memory) uds_ops() uds.FaultOps {
 		entry:       ops_entry
 		clear:       ops_clear
 		set_setting: ops_setting
+		snapshot:    ops_snapshot
+		extended:    ops_extended
+		ext_records: ext_records
 		avail:       availability_mask
 	}
 }

@@ -2,19 +2,19 @@
  * foundation (threadx_min/threadx.ld) — the ThreadX bring-up triad (crt0/vectors/
  * tx_initialize_low_level) depends on these symbols (__stack_end__, __data_*,
  * __bss_*, __RAM_segment_used_end__) — retargeted to H723 memory (1 MB flash, 128 KB DTCM):
- *   FLASH 1 MB @ 0x08000000   (code + .vectors first, so reset reads it)
+ *   FLASH 768 KB @ 0x08000000 (code + .vectors first; sectors 6 + 7 are the NvM journal)
  *   DTCM  128 KB @ 0x20000000 (ThreadX static memory: stacks, ring, .data/.bss)
  * The FDCAN message RAM (SRAMCAN) is a fixed peripheral address the driver writes
  * directly and is NOT placed here (Phase 3 dumps over semihosting, no CAN yet). */
-/* The bootloader chain links the SAME image at APP_VECTORS (bootmap.h:
- * 0x08020000 header + 0x400 vector alignment): pass
- *   -Wl,--defsym,__flash_base__=0x08020400,--defsym,__flash_len__=0xDFC00
- * (make APP_LINK=boot). Default = standalone at the bank-1 base. */
+/* The bootloader chain links the SAME image at APP_VECTORS (bootmap.h: 0x08020000 header +
+ * 0x400 vector alignment), its length the app slot less the pad and signature — boot/boot.mk
+ * passes both, read from bootmap.h (scripts/boot_layout.sh). Default = standalone at the base,
+ * up to the NvM journal (bootmap.h NVM_A_ADDR, sectors 6 + 7): an image never links over it. */
 MEMORY
 {
   RAM   (wx) : ORIGIN = 0x20000000, LENGTH = 0x00020000   /* 128 KiB DTCM */
   FLASH (rx) : ORIGIN = DEFINED(__flash_base__) ? __flash_base__ : 0x08000000,
-               LENGTH = DEFINED(__flash_len__)  ? __flash_len__  : 0x00100000
+               LENGTH = DEFINED(__flash_len__)  ? __flash_len__  : 0x000C0000
   D2SRAM (wx) : ORIGIN = 0x30000000, LENGTH = 0x00008000   /* D2 SRAM1+SRAM2 (32 KiB), DMA-reachable — H723 has no SRAM3 */
 }
 

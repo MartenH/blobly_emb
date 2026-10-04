@@ -16,6 +16,18 @@
 #define APP_SIZE 0x000E0000u /* sectors 1..7 */
 #define APP_VECTORS (APP_BASE + 0x400u)
 
+/* The NvM journal's sector pair (docs/nvm.md; boards/common/nvm_map.c) = the BANK-2 TAIL,
+ * sectors 6 + 7, carved OUT of the CM4 link regions in cm4_*.ld. Bank-2 programs and erases never
+ * stall the CM7, which executes from bank 1 (true read-while-write); the CM4 executes from the
+ * bank-2 HEAD, and an intra-bank erase stalls its fetches for the erase's duration. That is
+ * accepted because erases run only at a quiet point (the append path never erases; the generated
+ * flush runs erase_pending at the NM sleep edges): a CM4 workload that must run through a sleep
+ * window copies its image to RAM at boot, or is parked by an xcore-cell handshake first. Appends
+ * (32-byte programs, microseconds) stall it negligibly. */
+#define NVM_A_ADDR 0x081C0000u /* bank 2, sector 6 */
+#define NVM_B_ADDR 0x081E0000u /* bank 2, sector 7 */
+#define NVM_SIZE 0x00020000u   /* 128 KB each */
+
 /* Handshake cells in D3 SRAM4 — survive NVIC_SystemReset, garbage after POR
  * (that's what the magics are for). Placed clear of xcore.h's map (which ends
  * well below 0x38000F00). Layout: [magic, arg] each. */

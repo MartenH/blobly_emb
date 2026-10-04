@@ -215,12 +215,15 @@ debounce = { kind = "counter", fail = 6, pass = 3, inc = 2, dec = 1 }  # fails i
 enable   = ["IgnitionOn.on"]
 confirm  = 1
 aging    = 2
+freeze   = [0xF1A0, 0xF190]            # the snapshot (0x19 04): the speed at the failure, and the ECU id
+priority = 1                           # the most important: never displaced by the idle fault
 
 [[fault]]
 name     = "EngineIdleLow"
 dtc      = 0x050600                    # P0506-00: idle rpm lower than expected
 from     = "EngineMonitor.on_10ms"
 debounce = { kind = "counter", fail = 3, pass = 3 }   # no enable condition: only the cycle gates it
+freeze   = [0xF1A0]
 
 # Signal-status faults: no FB code — the diagnostic bridge is the detector, from BrakePressure's
 # receive status (its frame is E2E-protected, with its own 300 ms timeout). Debounce counts bridge
@@ -245,6 +248,7 @@ on     = "lost"
 
 [fault_memory]
 cycle = "IgnitionOn.on"                # the operation cycle: ignition on -> off
+entries = 1                            # ONE snapshot entry: the over-rev displaces the idle fault's, never the reverse
 
 # --- Function Blocks ---------------------------------------------------------
 # (within a partition, list producers before consumers for same-cycle local data)

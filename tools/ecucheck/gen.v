@@ -292,6 +292,10 @@ fn specs() map[string]map[string]Key {
 			'enable':   k(.str_arr) // "Signal.field" bool conditions the handler reads
 			'confirm':  k(.int) // failed operation cycles to confirm (default 1)
 			'aging':    k(.int) // passing cycles to age out (default 0 = never)
+			'freeze':   k(.int_arr) // the snapshot: [[did]] ids captured at the failure (0x19 04)
+			'priority': k(.int) // displacement when the snapshot entries are full: 1 (most important) .. 255
+			'snapshot_id': k(.int) // refused by loom2v with the move to snapshot_ids
+			'snapshot_ids': k(.int_arr) // pins the snapshot's two journal blocks [A, B] (only to resolve a reported collision)
 		}
 		'fault_debounce': {
 			'kind':    k(.str) // counter (default) | time
@@ -304,7 +308,8 @@ fn specs() map[string]map[string]Key {
 			'jump':    k(.boolean) // counter: reset on a reversal ("N in a row"); default accumulates
 		}
 		'fault_memory': {
-			'cycle': k(.str) // "Signal.field" (bool), or "power": the operation cycle
+			'cycle':   k(.str) // "Signal.field" (bool), or "power": the operation cycle
+			'entries': k(.int) // snapshot entries (default one per fault with `freeze`); fewer = displacement
 		}
 		'isotp':      {
 			'bus':      req(.str)

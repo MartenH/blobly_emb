@@ -19,7 +19,7 @@ page is the plan to close that, in rungs that each ship and verify on their own.
 
 ## 1. Where we actually are
 
-As of R4c, R2's first steps and R6a — the rows R0 through R4c, R2 and R6a changed say so; the rest is the state the plan started from.
+As of R4c, R2's first steps, R6a and R6b — the rows R0 through R4c, R2, R6a and R6b changed say so; the rest is the state the plan started from.
 
 | Piece | State | Where |
 |---|---|---|
@@ -31,11 +31,11 @@ As of R4c, R2's first steps and R6a — the rows R0 through R4c, R2 and R6a chan
 | UDS on the **target** | R2, first steps: `[isotp]` on the ThreadX comm thread (the one on `[telemetry].bus`) — the same `comm/diag.Connection` the host bridge runs; constant DIDs, and live DIDs on the node's own local OUTPUTS (the cells the comm thread already reads — an input's cell is its FB's, one reader per cell); 0x27 with a TRNG seed from the board (`boards/common/diag_board.c`, weak) and the OEM's `diag_sa_key_ok` — no default is linked, so a gated node without one fails to link; blobly_net's public reference key only by name (`[uds] security_key = "reference"`, the bench's); bench-verified on all three `system_full` CAN nodes — domain (H755, `examples/system_full/test/diag_domain.lua`), the gateway sysnode (H735) and zone_a (H723, on the CAN-FD edge bus with classic-sized ISO-TP, TX_DL = 8) (`diag_nodes.lua`). 0x11 answered, then performed by the comm thread once the controller has sent the answer (bounded `tx_idle`, REQ-BOOT-012), the 0x27 failed-key counts carried across it in a reset-surviving keep cell (`diag_board.c`, D3 SRAM4), so a reset between guesses buys nothing — on domain and zone_a by `diag_domain.lua` / `diag_nodes.lua`; on sysnode, whose 0x11 is gated behind level 1 (a `[doip]` node, REQ-NET-012) so a CAN tester locked out cannot reset it, by `doip_sysnode.lua` (a DoIP unlock earned first, the keys spent from CAN; bench-run 2026-10-02). The **programming handoff** (`[boot]`): 0x10 02 answered 0x50 02 with the bootloader session's P2/P2*, then the boot request cell written and the MCU reset by the same path 0x11 takes — the CAN drain, the DoIP `doip_tx_pending()` wait, the NvM flush, the 0x27 keep cell — gated by its own `"0x10 02"` row (extended by default) and the application's conditions seam (`boot_handoff_ok`, weak, allowing — REQ-BOOT-015); generation- and host-tested; every `system_full` CAN node (domain, sysnode, zone_a) declares it and runs behind its own bootloader, built from the same config (docs/bootloader.md) — bench run pending (`test/boot_bench.sh`, `test/boot_handoff.lua`). Not yet: live DIDs on inputs, the failed-key count across a power cycle, 0x28 | `tools/loom2v/gen_diag.v`, `boards/common/boot_handoff.c` |
 | UDS config | split along the standards: `[uds]` — the ISO 14229 server (`s3_ms`, `security_attempts`, `security_delay_ms`, `security_key`, the `services` table) — and its transports, `[isotp]` (ISO 15765-2: `bus`, `rx_id`, `tx_id`, `functional_id`, `bs`, `stmin_ms`; one per node, a table) and `[doip]` (ISO 13400); + `[[did]]` (ascii / bytes / signal / writable, `read` / `write` gates). The old `[[isotp]]` array carrying server keys is refused with the move it needs | `tools/ecucheck/gen.v`, `tools/ecumodel/model.v` |
 | Rx signal status | `status = "RxStatus"` (never_received / ok / timeout / integrity) and the E2E `lost` count, bridge-owned (R3a; on CAN the host bridge only, on the SOME/IP receive path both, bridge-owned and never on the wire, on the host and the ThreadX eth thread alike, and sysgen gives both to a generated E2E receiver); the COM deadline runs from bridge start (re-arming it on NM wake is R5's: the host bridge has no NM) and from a frame that failed its check; E2E has its own sender-loss timeout, required on every received E2E frame, refreshed only by a valid message and independent of the COM deadline (R3b; on CAN and, since #299, on the SOME/IP receive path — host and ThreadX — where an eth rx signal carries the same `status`); the target's CAN comm thread rejects status, rx deadlines and E2E ("phase 6b-2b", R5) | `tools/loom2v/gen_com.v`, `gen.v` |
-| Fault memory / DTCs | R4a + R4b: `[[fault]]` generated on the host — the FB's fault port, debounce on its thread with monotonic counters, the fault memory on the diagnostic bridge (status byte through operation cycles from `[fault_memory] cycle`, confirmation, aging, clears by generation, 0x85 suppression), 0x19 01/02/0A, 0x14, 0x85; RAM only. R4c: signal-status faults (`signal` / `on` = timeout, integrity, lost), the bridge as detector. R6a: FB-tested faults on a **ThreadX target** — the same debounce on the FB's thread, the same `comm/fault` memory on the comm thread (D2), the report / control cells on the byte IOC (`boards/common/iocb.c`), 0x19 01/02/0A, 0x14, 0x85 through the one server (DoIP included); RAM only; demonstrated on `system_full` zone_a (`test/faults_zone_a.lua`). Not yet (the rest of R6): persistence, freeze frames, extended data, displacement, 0x19 03/04/06, signal-status faults on the target (needs R5), faults on a satellite core or in a multi-thread partition | `comm/fault/fault.v`, `tools/loom2v/gen.v`, `gen_com.v` |
-| Persistence | journal engine + `persist = "now" / "shutdown"` signals, ThreadX only, one journal per node, 20 B records with 634 B chains; DID write path (NvM "P4") not built | `nvm/`, `tools/loom2v/gen_nvm.v` |
+| Fault memory / DTCs | R4a + R4b: `[[fault]]` generated on the host — the FB's fault port, debounce on its thread with monotonic counters, the fault memory on the diagnostic bridge (status byte through operation cycles from `[fault_memory] cycle`, confirmation, aging, clears by generation, 0x85 suppression), 0x19 01/02/0A, 0x14, 0x85; RAM only. R4c: signal-status faults (`signal` / `on` = timeout, integrity, lost), the bridge as detector. R6a: FB-tested faults on a **ThreadX target** — the same debounce on the FB's thread, the same `comm/fault` memory on the comm thread (D2), the report / control cells on the byte IOC (`boards/common/iocb.c`), 0x19 01/02/0A, 0x14, 0x85 through the one server (DoIP included); RAM only; demonstrated on `system_full` zone_a (`test/faults_zone_a.lua`). R6b: snapshots (`freeze`, captured from the server's DIDs at the occurrence that allocates an entry), extended data (occurrence, aging, failed-cycle counters), displacement by priority over `[fault_memory] entries`, 0x19 03/04/06 on both owners; on the target the memory PERSISTED in the NvM journal (§3.3 "Storage, as built") — `[nvm]` required, the interrupted cycle ended at restore, 0x14 durable before it is answered (0x72 otherwise); bench suite `test/faults_zone_a_persist.lua` (run pending). Not yet: signal-status faults on the target (needs R5), faults on a satellite core or in a multi-thread partition, a cycle signal on the target | `comm/fault/` (`fault.v`, `entry.v`, `persist.v`), `tools/loom2v/gen.v`, `gen_com.v` |
+| Persistence | journal engine + `persist = "now" / "shutdown"` signals, ThreadX only, one journal per node, 20 B records with 634 B chains; the fault memory's status image and snapshots (R6b); the journal's sectors are the board's (`bootmap.h` NVM_*, `boards/common/nvm_map.c`, linked by the generator); DID write path (NvM "P4") not built | `nvm/`, `tools/loom2v/gen_nvm.v` |
 | Operation cycle / ECU state | the fault memory's operation cycle follows a declared bool signal on the host (`[fault_memory] cycle`, R4b); on a ThreadX target it follows NM — wake begins it, bus sleep ends it (D3's default, R6a) — and on either owner `cycle = "power"` makes it the power cycle (a node with neither NM nor a cycle signal); a cycle SIGNAL on the target is not generated yet; `ecu/` (lifecycle, mode arbiter) is still an unused library; NM states exist | `tools/loom2v/gen.v`, `gen_com.v`, `ecu/`, `comm/nm/` |
 | Cross-thread transports | last-value cells only (seqlock / double / triple, xioc); `bulk` is the one FIFO | `osal/`, `boards/common/` |
-| Tester (blobly_net) | client: 0x10 0x22 0x2E 0x3E, **0x27 with a reference key (seed XOR 0xFF)**; since N1 / N2 also 0x11 0x14 0x28 0x85, functional addressing, and 0x19 01/02/0A decoded into a DTC model with named status bits (Lua `diag:dtcs` / `supported_dtcs` / `dtc_count` / `clear_dtcs` / `dtc_setting`, `check.dtc`); its simulated server answers 0x19 01/02/0A, 0x14, 0x85. Not yet: 0x19 03/04/06 (N3), a DTC view (N4) | `blobly_net modules/uds` |
+| Tester (blobly_net) | client: 0x10 0x22 0x2E 0x3E, **0x27 with a reference key (seed XOR 0xFF)**; since N1 / N2 also 0x11 0x14 0x28 0x85, functional addressing, and 0x19 01/02/0A decoded into a DTC model with named status bits (Lua `diag:dtcs` / `supported_dtcs` / `dtc_count` / `clear_dtcs` / `dtc_setting`, `check.dtc`); its simulated server answers 0x19 01/02/0A, 0x14, 0x85. N3: 0x19 03/04/06 decoded (Lua `diag:snapshot_ids` / `snapshot` / `extended`, `check.snapshot` / `check.extended`). Not yet: a DTC view (N4) | `blobly_net modules/uds` |
 
 Three doc claims were ahead of the code; R0 (#292) and R1 (#291) corrected them: `docs/autosar-comparison.md`
 marked diagnostics "✅ have" (only the request/response half exists), `docs/communication.md` called
@@ -293,9 +293,9 @@ the clear generation the producer has acted on (below): between two readings of 
 the delta is the difference; the FIRST reading of a new generation counts from zero, because the
 producer reset its counters when it applied that generation. A reset is never read as a negative
 delta or a phantom occurrence, and occurrences between the reset and the first read are not lost.
-`snapshot` is the **freeze frame**, copied by the generated debounce at the qualifying dispatch from
-the values its thread reads — so it describes the instant of qualification, not a later pass of the
-consumer. Its size is bounded by the cell (the IOC payload limit, minus the fields above); a larger
+`snapshot` is the **freeze frame** — *as planned*, copied by the generated debounce at the qualifying
+dispatch; *as built (R6b)* it is NOT in the report: a snapshot is the DID values at storage, in the
+first owner pass after the report ("Snapshots, as built", below). Its size is bounded by the cell (the IOC payload limit, minus the fields above); a larger
 snapshot needs the `bulk` path and is refused by generation until then. Nothing is lost across a slow read and
 **no queued transport is needed** (the alternative, a per-thread event FIFO on the `bulk` rings, is the fallback
 if a use case needs the exact order of qualifications — decision D1).
@@ -385,6 +385,140 @@ prefers a second wide-record journal and says chains dissolve it — chains exis
 journal is not needed. Writes are event-driven (qualification, cycle end, clear), never cyclic, and
 ride the same bus-sleep flush choreography as persisted signals.
 
+**Storage, as built (R6b).** Two kinds of journal value, not one per entry (`comm/fault/persist.v`):
+
+- the **status image** — ONE value under one FIXED block id (`fault_memory:status`, hashed): every
+  DTC's persisted status bits, its counters (occurrence, failed cycles, aging), the open cycle's
+  per-DTC flags (tested, failed), whether the DTC holds a stored snapshot, and whether a cycle was
+  open — keyed inside by DTC NUMBER, so an update that reorders, adds or removes faults restores
+  each by its number and the block id never moves (it cannot be pruned, so a cleared DTC cannot
+  come back). A group clear, a displacement and a cycle boundary are each one atomic write of it,
+  so no clear epoch is needed;
+- TWO **snapshot blocks**, A and B, per fault with `freeze` — their ids hashed from the DTC and
+  the snapshot's schema (the DIDs and their sizes), so an update that changes a snapshot restores
+  none rather than the wrong bytes; each block also carries the schema's fingerprint, checked on
+  restore, so pinned ids (`snapshot_ids = [A, B]`) kept across such an update
+  restores none either. A collision is refused at generation, naming the pin — never resolved by
+  declaration order, which an update may change. A block holds the DTC, an allocation stamp, the
+  fingerprint and the record body; a released one is rewritten as a 1-byte TOMBSTONE.
+
+**The invariant** (`persist.v`): no block the last COMMITTED image claims is ever written or
+tombstoned; a block is released only by a committed image that no longer claims it. It holds by
+construction: the image records WHICH block it claims — and the schema fingerprint of the snapshot it claims, so
+restore accepts a block only with that fingerprint, and only when it is this firmware's (a claim
+under another schema, after an update or a rollback, is read as nothing and dropped by the next
+committed image) — a capture always writes the other one, and a
+tombstone is written only for a block the committed image does not claim and no captured snapshot
+is waiting in. So a power cut anywhere restores a committed image whose every claimed block is
+intact — through a displacement, a DTC displaced and reacquired before the image released it, a
+clear, aging, or an update that lowered `entries`. Beside it, the image is not written while a
+snapshot that displaced a stored one is unwritten (it would drop the victim's claim with nothing in
+its place). The cost: two blocks per snapshot in the journal's live set and pool (zone_a: one fault,
+a 16-byte block, 2 records).
+
+Proved by `persist_test.v`'s power-cut fuzz: a shadow of the ECU says what each step writes, the
+power is cut at a random flash program inside it or the store refuses a block, the image, or
+everything; the store must then hold exactly the image from before the step or the one it was
+writing, every claimed block whole and the one captured — and an ORACLE in the store checks the
+invariant at every write: a write or tombstone of a block the committed image claims, or an image
+claiming a block that holds no snapshot, fails at that write. Firmware-update steps change the
+snapshot schema without changing its length.
+
+**What survives a power-up** (ISO 14229-1 D.2): pendingDTC, confirmedDTC,
+testNotCompletedSinceLastClear, testFailedSinceLastClear and the counters. testFailed is not
+stored — every power-up starts untested-failed, as AUTOSAR's default status storage does — and the
+this-operation-cycle bits restart with the cycle. The cycle a power loss interrupted is ENDED at
+restore with what it collected (tested / failed) — under the DTC setting it ran under: with 0x85
+off its end changes nothing, as it would have then (the image records the setting — once that write
+is in: a power cut before it, or while the store refuses it, ends the cycle as with setting on), and
+setting is on again after the power-up — so pending clears and aging counts across a power
+cycle exactly as across an orderly cycle end; on a `cycle = "power"` node every MCU start is a new
+cycle, so a passing power cycle clears pending.
+
+**Write budget.** Nothing is written per debounce step; the image is rewritten only when what it
+stores changes, and the status rules bound that PER OPERATION CYCLE: per DTC, at its first completed
+test, at its first failure (pending, testFailedSinceLastClear, confirmed, the failed-cycle counter)
+and at the cycle's end (pending cleared, aging), plus once at each cycle start and end and at each
+tester clear and 0x85 change (the image records the setting); changes in one owner pass coalesce into one write. The image is 2 + 10 B per fault (the last 2: the claimed snapshot's schema fingerprint)
+(≤ 17 journal records for 32 faults). A LATER occurrence in the same cycle changes only the
+occurrence counter, which is DEFERRED — written with the next image write or at the next flush (a
+sleep edge, an ECUReset), never on its own — so an intermittent fault costs no write per occurrence,
+and a power cut can lose the occurrences counted since that cycle's first failure, never more and
+never doubled. A snapshot block is written once per allocation (at most one per fault per cycle: an
+entry whose DTC failed this cycle cannot be displaced) and tombstoned once when freed. A refused
+write stays outstanding and is retried no sooner than `[nvm] min_write_ms` later. On a 4096-record
+sector a `cycle = "power"` node like zone_a writes a few image records per boot — on the order of a
+hundred boots per sector fill. loom2v checks the capacity at generation: the live set (persisted
+signals, the image and BOTH blocks of every snapshot whole — a tombstone waits for the image that
+releases its block, so a refusal or a power cut can leave any of them waiting) and its full rewrite must fit one sector, and the journal pool must hold a
+row for each block.
+
+**The cycle-end barrier.** On the target an NM sleep does not end the cycle at once: a producer's
+dispatch begun before the decision may publish its report after the owner's read, and read after
+the end it would count for nothing — lost from the cycle and the store. So the end waits twice the
+longest period of a fault-testing handler (`end_cycle_after` / `cycle_end_due`), the owner reading
+as usual, and the cycle ends after one more consume; a wake inside the grace reads the producers,
+ends it there and begins the next. The sleep-edge flush lays no clean marker while the end waits
+(the end's own write in bus sleep re-runs the choreography), and an ECUReset ends a waiting cycle
+before its flush. The grace is a time window: a result from a dispatch that begins inside it counts
+in the ending cycle too. An interrupt-driven handler has no period; 50 ms stands in for it.
+
+**Where writes happen.** Every comm pass after the cycle step (`fault_target_persist`), and with a
+flush in the persisted signals' choreography at every quiet point — the NM sleep edges and before an
+ECUReset (after the latest reports are consumed and their snapshots taken). A write made in bus sleep
+re-runs the whole choreography, so the clean marker never sits below a record it does not cover. The
+journal's sectors are the BOARD's (`bootmap.h` `NVM_A_ADDR` / `NVM_B_ADDR` / `NVM_SIZE`, checked
+outside the boot and application regions by `tools/vectab`), linked with the board's flash driver by
+the generator (`boards/common/nvm_map.c`, `BOARD_FLASH`, from the emitted declarations). A node
+without NM has no sleep edge, and on the single-bank H723 an erase stalls EVERY instruction fetch
+— every thread, CAN reception, routing, diagnostics — for the sector's erase time (1–2 s), so such a
+node never erases at run time: boot, before the kernel starts, is its only erase point. There the
+sector a compaction left behind is erased, and past half a sector used the journal is compacted
+and the old sector erased too, so every run starts with at least half a sector (2048 records on
+zone_a) free. A run that writes more than the rest of the sector compacts inline (copies, no
+erase) once; past a second fill its writes are refused until the next boot (a 0x14 then answers
+0x72). On an NM node erases happen only in the sleep edges' choreography. (The ECUReset path's
+flush may still erase — after the answer, with the MCU about to restart.)
+
+**Worst-case comm-thread stall** from the fault memory, per pass: every 32-byte record it programs
+stalls the MCU on a single-bank flash for one program operation (tens of µs on the H7). A pass
+writes at most the unwritten snapshots (≤ `entries` blocks of ≤ 8 records), one image (≤ 17
+records for 32 faults) and the tombstones (1 record each), and a write that fills the sector
+first copies the live set (an inline compaction, no erase). zone_a: one 1-record snapshot block,
+a 1-record image, a live set of a few records — a handful of programs per pass, well under a
+millisecond. Never an erase at run time. `nvm.Journal.put` is synchronous, so this is bounded but
+not the incremental flash path §7 asks for.
+
+**Snapshots, as built.** Captured on the OWNER, not the producer: in the pass that consumes the
+occurrence (on the host after the receive drain, where the signal-status faults are consumed; never for a DTC whose failure a cycle end or a clear in that pass already removed), the owner refreshes the live DIDs (as before a 0x22) and copies the declared DIDs into an
+entry (`comm/fault/entry.v` `capture`). **What a snapshot means is DEFINED**: the declared DIDs'
+values AT STORAGE, taken in the first owner pass after the qualifying report — as AUTOSAR's Dem
+captures a freeze frame when it processes the event, not at detection — so at most one owner-pass
+interval after the report was published: on a ThreadX target the comm loop blocks at most 10 ticks
+between passes (1 while a stream is in flight), so 10 ms at `tick_ms = 1` (zone_a) plus the pass
+itself; on the host, one bridge pass (10 ms). A producer that dispatches several times in that
+interval has moved its outputs on, and the snapshot shows the later values. The values are not
+carried in the report: a snapshot is far larger than the 64-byte report cell. Each DID is captured at its declared size (a
+constant's bytes, a live value's width), zero-filled while nothing has published it, so a record
+always has its fixed shape. One snapshot per DTC (record 0x01), taken at the occurrence that finds it
+without one and kept until the DTC is cleared, ages out, heals before confirming (a cycle end that
+leaves it neither pending nor confirmed) or is displaced. Generation refuses a `freeze` DID that is
+not the node's, named twice, more than `fault.max_freeze` (4), or readable in fewer sessions — or
+behind another 0x27 level — than 0x19 (the side door of §7).
+
+**Extended data** (0x19 06), fixed record numbers and widths: 0x01 occurrence counter (2 B,
+big-endian, saturating), 0x02 aging counter (1 B), 0x03 failed-cycle counter (1 B, saturating); 0xFF
+returns all three; any other number, 0xFE included, and an unknown DTC are requestOutOfRange.
+
+**Displacement.** `[fault_memory] entries` (1..8, default one per fault with `freeze`) bounds the
+snapshots; every DTC keeps its status and counters whatever happens to its snapshot. A new snapshot
+with every entry taken displaces the least important entry by `priority` (1 = the most important ..
+255; default 128) — among equals one whose DTC is not currently failed before one that is, then the
+oldest — and NEVER one more important than the new DTC, one whose DTC failed in THIS operation cycle
+(the evidence of now; it also stops two faults displacing each other at every occurrence), or an
+active confirmed one (testFailed and confirmedDTC). With none displaceable the new snapshot is not
+stored. An update that lowers `entries` keeps the most important, newest snapshots at restore.
+
 **UDS side:** 0x19 subfunctions **0x01** (count by mask), **0x02** (DTCs by mask), **0x03** (snapshot
 identification), **0x04** (snapshot by DTC), **0x06** (extended data by DTC), **0x0A** (supported
 DTCs); **0x14** ClearDiagnosticInformation (group 0xFFFFFF and per-DTC, 0x78 while the journal
@@ -428,7 +562,7 @@ and — from R2 on — a bench verification on `examples/system_full` recorded i
 | **R3** | Rx status (#286) on the host: `RxStatus`, bridge-owned, integrity latch, E2E `lost` counter; `valid` migrated | host e2e (timeout / integrity / never_received) | R0 |
 | **R4** | Faults on the host: `[[fault]]`, FB fault port, generated debounce, fault memory in RAM, status byte, operation cycle, enable conditions, 0x19 01/02/0A, 0x14, 0x85; signal-status faults from R3; syscheck DTC uniqueness | host e2e: fail → pending → confirmed → cleared → aged | R1, R3, N2 |
 | **R5** | Target COM checks ("phase 6b-2b"): rx deadlines + E2E/SecOC on the comm thread, so R3's status reaches FBs on silicon (the signal-status DTCs on silicon are R6's, once faults run on the target) | bench: pull a sender, corrupt a frame, FB sees the status | R2, R3 |
-| **R6** | Fault memory persisted (diagnostic ids in the prune keep-set) + freeze frames (size-checked against the response limit) + extended data + displacement; 0x19 03/04/06; faults on the target, incl. the owner → satellite control path. **R6a (built):** FB-tested faults on a ThreadX target, RAM only — the memory on the comm thread, cells on the byte IOC, cycle from NM or "power", 0x19 01/02/0A / 0x14 / 0x85 | R6a: generation tests (`tools/loom2v/fault_target_test.v`) + bench on zone_a (`test/faults_zone_a.lua`: fail → confirmed → passing → cleared, 0x85 off records nothing). Rest: bench: fault, power-cycle, read back with snapshot; clear with 0x78 | R2, R4, N3 |
+| **R6** | Fault memory persisted (diagnostic ids in the prune keep-set) + freeze frames (size-checked against the response limit) + extended data + displacement; 0x19 03/04/06; faults on the target, incl. the owner → satellite control path. **R6a (built):** FB-tested faults on a ThreadX target, RAM only — the memory on the comm thread, cells on the byte IOC, cycle from NM or "power", 0x19 01/02/0A / 0x14 / 0x85. **R6b (built):** persistence, snapshots, extended data, displacement, 0x19 03/04/06 | R6a: generation tests (`tools/loom2v/fault_target_test.v`) + bench on zone_a (`test/faults_zone_a.lua`: fail → confirmed → passing → cleared, 0x85 off records nothing). Rest: bench: fault, power-cycle, read back with snapshot; clear with 0x78 | R2, R4, N3 |
 | **R7** | Parameters (#288): NvM P4 DID write path, `[[param]]`, range check, `apply` | bench: code a variant, reset, FB sees it | R1b, R2 |
 
 R3 and R1 can run in parallel; R5 and R6 can run in parallel after R2.
@@ -487,28 +621,28 @@ done until its obligations hold under their tests. §3 fixes the shape; this tab
 | R4 | A clear makes the prior generation obsolete: readings carrying a generation older than the one the clear requested are ignored until the producer acknowledges it, so an old-generation failure cannot recreate a cleared DTC. (Cycle transitions bump no generation — §3.3 as built in R4a.) | unit: clear with a failed producer that publishes once more before observing the control |
 | R1 | One diagnostic server per node, enforced at generation: a second ISO-TP connection is refused outright (since the `[uds]` split, `[isotp]` is a table: there is no second one to write) (a bare one still exposes sessions, 0x28, reset), so the fault memory, the clear epoch, 0x85, NM keep-awake and the handoff each have exactly one owner. *(Replaces a multi-server design that review showed widening the surface round after round.)* | generation test: a second connection is refused |
 | R4 | 0x85 DTC-setting-off is restored to on when the session ends (explicit, S3, reset), like 0x28. | unit + e2e: set off, disconnect, faults record again after S3 |
-| R6 | Displacement is atomic across its two journal writes: the replacement is written first, and recovery resolves a temporary over-capacity set deterministically (lowest priority, then oldest, is the one dropped), so an interrupted displacement never loses both entries. | power-cut fuzz over the displacement sequence |
-| R6 | A freeze frame never becomes a side door around DID access: a snapshot may only name DIDs readable in every session 0x19 is served in without security, or 0x19 04 applies the strictest gate of the DIDs it contains — decided in R6, enforced at generation. | generation test: a gated DID in `freeze` is rejected (or the gate applies) |
+| R6 | Displacement is atomic across its two journal writes: the replacement is written first, and recovery resolves a temporary over-capacity set deterministically (lowest priority, then oldest, is the one dropped), so an interrupted displacement never loses both entries. *Met in R6b:* the new snapshot is written first and the status image swaps the claims in one write; an over-capacity restore (lowered `entries`) drops the least important, then oldest. | `comm/fault/persist_test.v` `test_power_cuts_anywhere_leave_one_coherent_memory`, `test_a_lower_cap_keeps_the_most_important_snapshots` |
+| R6 | A freeze frame never becomes a side door around DID access: a snapshot may only name DIDs readable in every session 0x19 is served in without security, or 0x19 04 applies the strictest gate of the DIDs it contains — decided in R6, enforced at generation. *Met in R6b:* the first — a `freeze` DID must be readable in every session 0x19 is served in, behind no 0x27 level but 0x19's own. | `tools/loom2v/fault_target_test.v` `test_snapshot_declarations_are_checked` |
 | R2 | A non-default diagnostic session holds NM awake (REQ-ECU-003): active sessions across the node's servers aggregate into a keep-awake request, released on return to default, S3 expiry and reset — diagnostic traffic is not an NM message and does not refresh NM on its own. | bench: extended session held across the NM timeout with application demand released |
 | R2 | The programming handoff is gated on application safety conditions (REQ-BOOT-015), evaluated before the boot cell is written; failing → 0x22. *Built as a seam:* `boot_handoff_ok` (`boards/common/boot_handoff.c`, weak, allowing), which an application overrides with its own state model — no vehicle-state model is invented here; declared condition signals are not built. | host: comm/uds `test_the_conditions_seam_refuses_a_handoff`; bench: an overriding node, denied |
 | R2 | The session survives the handoff: `boot.Prog` starts in programming (not default) when the boot request cell caused its entry, so a tester that received 0x50 02 can proceed to 0x29 without a second 0x10 02. *Built:* the cell carries its kind (`bootcell.h`, `BOOTCELL_REQ_HANDOFF`), and `Prog.open_handed_off` opens the session, locked and S3-timed. | host: `boot/prog_test.v` `test_a_handed_off_boot_opens_the_programming_session`; bench: 0x10 02 → reset → 0x29 accepted |
 | R3 | An E2E sequence gap (`lost`) is visible to the application, not only counted: a published loss counter (or a degraded status) (REQ-E2E-002). | host e2e: a single skipped counter reaches the FB |
 | R4 | … and it is a fault source: `[[fault]] on = "lost"`. | host e2e: a single skipped counter raises its DTC |
 | R4 | 0x85 suppression records nothing after the positive "off" and replays no suppressed occurrence after "on". *Met through the clear generation* (§3.3, #364 — R4a's consumer-only version replayed a debounce saturated while off): status is frozen where readings are consumed, and "on" starts a fresh generation the producer applies by restarting its debounce; the accepted costs are that a qualification published before "off" but not yet read (≤ one owner pass) is not recorded, and that a result held across "on" completes again only once it debounces from zero. | unit: off, fail, on — nothing recorded, nothing replayed |
-| R6 / R7 | Live state changes only after durability: a persisted 0x2E (parameters, `apply = "next_dispatch"`) and a persisted 0x14 stage their RAM change until the journal accepts the write; on refusal (0x72) both live and durable state are unchanged. | fault-injection tests asserting the current-run value, not only the stored one |
+| R6 / R7 | Live state changes only after durability: a persisted 0x2E (parameters, `apply = "next_dispatch"`) and a persisted 0x14 stage their RAM change until the journal accepts the write; on refusal (0x72) both live and durable state are unchanged. *0x14 met in R6b* (the cleared image is put before RAM changes). | `persist_test.v` `test_a_refused_clear_answers_0x72_and_changes_nothing`; fault-injection tests asserting the current-run value, not only the stored one |
 | R0 | Physical diagnostic ids are unique per BUS, not per system: REQ-TOPO-002 and `tools/sysmodel/checks.v` (which today put every allocation and ISO-TP connection id in one global map) are revised to key physical ids by bus and to allow a shared functional id. | syscheck tests: the same physical id on two separate buses passes; twice on one bus fails |
 | R4 | The tested state is lossless like the occurrences: a monotonic tested-count per fault (not a last-value `tested` flag), so a fast producer's single evaluation followed by `.not_tested` is never lost to the test-not-completed bits or aging. | unit: one evaluation then `.not_tested`, read once late |
 | R4 / R6 | Every list-producing 0x19 response fits the transport: generation bounds 0x19 02 / 0A (all DTCs × 4 B) and 03 (all snapshot ids) against the message limit with its header, and refuses a fault table that could exceed it. | generation test at the boundary |
-| R6 | Snapshot and extended-data records carry stable on-wire record numbers — snapshot record 0x01 per DTC (one snapshot per fault), extended data 0x01 occurrence counter, 0x02 aging counter — with 0xFF (all) supported, and the numbering carried in the manifest for the tester. | unit: 0x19 03 / 04 / 06 with explicit and 0xFF record numbers; N3 decodes them |
+| R6 | Snapshot and extended-data records carry stable on-wire record numbers — snapshot record 0x01 per DTC (one snapshot per fault), extended data 0x01 occurrence counter, 0x02 aging counter — with 0xFF (all) supported, and the numbering carried in the manifest for the tester. *Met in R6b* but for the manifest: the numbers and widths are fixed (0x03 = failed cycles added) and blobly_net knows them (`blobly_ext_records`). | unit: 0x19 03 / 04 / 06 with explicit and 0xFF record numbers; N3 decodes them |
 | R0 | A functional id may be shared with OTHER functional ids on its bus, never with a physical request or response id there — checked in syscheck across the whole bus (loom2v checks the node's own ids). | syscheck test: a functional id equal to another node's physical id on the same bus fails |
-| R6 | The clear epoch has a stable block identity like the entries (fixed / schema-derived, collision-handled, in the prune keep-set), so a firmware update can never prune it and resurrect cleared entries. | power-cycle test across a firmware update that reorders faults |
-| R6 / R7 | Persistent writes never block the comm thread: `nvm.Journal.put` is synchronous (a full chain, or a compaction), so persisted 0x2E / 0x14 / fault-memory writes go through a bounded incremental flash path, with 0x78 covering the wait. | bench: CAN rx/tx, NM and 0x78 timing continue during a worst-case chain write and a compaction |
-| R6 | Automatic fault-memory writes (qualification, cycle end) that the journal refuses are kept dirty and retried with bounded pacing — including in the sleep flush — rather than waiting for the next event, since no request is there to receive a 0x72. | fault-injection: a refused qualification write survives a later power cycle |
+| R6 | The clear epoch has a stable block identity like the entries (fixed / schema-derived, collision-handled, in the prune keep-set), so a firmware update can never prune it and resurrect cleared entries. *Met in R6b by removing the epoch:* the status image, one value with a fixed id keyed by DTC number, IS the clear. | power-cycle test across a firmware update that reorders faults |
+| R6 / R7 | Persistent writes never block the comm thread: `nvm.Journal.put` is synchronous (a full chain, or a compaction), so persisted 0x2E / 0x14 / fault-memory writes go through a bounded incremental flash path, with 0x78 covering the wait. *Not met (R6b):* fault-memory writes are synchronous but bounded — an image ≤ 17 records, a 0x14 one image; an inline compaction copies the live set — and no 0x78 is sent. | bench: CAN rx/tx, NM and 0x78 timing continue during a worst-case chain write and a compaction |
+| R6 | Automatic fault-memory writes (qualification, cycle end) that the journal refuses are kept dirty and retried with bounded pacing — including in the sleep flush — rather than waiting for the next event, since no request is there to receive a 0x72. *Met in R6b* (paced by `[nvm] min_write_ms`; a flush always tries). | `persist_test.v` `test_a_refused_write_is_retried_after_the_pause`; fault-injection: a refused qualification write survives a later power cycle |
 | R7 | Parameters get the entries' identity rules: a stable, schema-derived, collision-handled block id in the prune keep-set, so a firmware update that reorders or adds parameters never restores one parameter's bytes into another. | power-cycle across a reordering update |
 | R7 | A restored parameter is revalidated against the CURRENT range before the FB first sees it; out of range → the compiled default (and a flag the tester can read), so a range narrowed by an update is never bypassed. | update test narrowing a range below a stored value |
 | R6 | Signal-status faults (timeout / integrity / lost) raise their DTCs on silicon — moved here from R5, which proves only the FB-visible status. | bench: pull a sender → its DTC reads back over 0x19 |
 | R2 | NM stays awake for a diagnostic exchange in ANY session: a request-scoped keep-awake vote from the first frame of a request until its final response has drained (diagnostic frames do not refresh NM), in addition to the session-scoped vote. | bench: a multi-frame 0x22 in the default session started near the NM timeout completes |
 | R3 / R5 | An E2E-protected signal detects total sender loss inside the E2E mechanism itself (REQ-E2E-002): `e2e.RxState` gains its own deadline (`on_valid` / `expired`) and publishes the loss, independent of the QM COM deadline. | host (R3) and bench (R5): sender removed, loss seen with the COM deadline disabled |
-| R6 | The operation-cycle END is a barrier too: before the sleep flush marks the journal clean, the fault memory waits for every producer to acknowledge the ending generation and persists what it read — power can be removed with no next cycle to drain the tail. | power-off right after bus sleep with a qualification in the last dispatch |
+| R6 | The operation-cycle END is a barrier too: before the sleep flush marks the journal clean, the fault memory waits for every producer to acknowledge the ending generation and persists what it read — power can be removed with no next cycle to drain the tail. *Met in R6b on the target:* NM's sleep REQUESTS the end (`Memory.end_cycle_after`); the cycle stays open for twice the longest period of a fault-testing handler, the owner consuming as usual, and ends after one more consume — then the in-sleep write re-lays the clean marker. A time grace, not a per-producer acknowledgement: it holds while a handler finishes within its period (an overrun is reported); the sleep-edge flush lays no clean marker until the end is done. | power-off right after bus sleep with a qualification in the last dispatch |
 | R2 | 0x27's failed-key count survives a POWER CYCLE: persisted, with the boot lockout applied only while it is non-zero. R1b keeps it across an ECU reset (RAM) but not across a power-up, which a simulator need not defend. | bench: fail twice, power-cycle, the third wrong key locks out; a clean power-up unlocks at once |
-| R6 | Persistent diagnostic counters have fixed serialized widths and SATURATE (occurrence, failed-cycle, aging); they never wrap to a small value. | unit: increment at the maximum |
+| R6 | Persistent diagnostic counters have fixed serialized widths and SATURATE (occurrence, failed-cycle, aging); they never wrap to a small value. *Met in R6b* (2 / 1 / 1 bytes). | `comm/fault/records_test.v` `test_counters_saturate_at_their_width` |

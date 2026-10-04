@@ -97,19 +97,31 @@ thread = "front_thread"
 # SteerLimiter tests the VehicleSpeed it receives (domain -> gateway -> here) for plausibility each
 # dispatch; the Loom debounces the result on front_thread, and the fault memory on the comm thread
 # keeps the DTC status the tester reads (0x19), clears (0x14) and freezes (0x85). The domain's speed
-# lies in 60..119 km/h, so only a frame the bench injects can fail it (test/faults_zone_a.lua).
+# lies in 60..119 km/h, so only a frame the bench injects can fail it (test/faults_zone_a*.lua).
+# The snapshot is the steering angle the limiter put on the wire at the failure (DID 0xF1A0, as
+# 0x22 reads it) — clamped by the implausible speed — served by 0x19 04; 0x19 06 serves the
+# occurrence, aging and failed-cycle counters.
 [[fault]]
 name     = "SpeedImplausible"
 dtc      = 0xC40100                    # U0401-00: invalid data received from the powertrain
 from     = "SteerLimiter.on_50ms"
 debounce = { kind = "counter", fail = 3, pass = 3 }   # accumulating: 150 ms to fail from 0, 300 ms back
 confirm  = 1
+aging    = 3                           # three passing power cycles after the last failure age it out
+freeze   = [0xF1A0]
 
 # The operation cycle: zone_a is in no NM cluster (the edge bus runs none) and receives no ignition,
-# so the cycle is the power cycle — begun at boot, ended by power-off. RAM-only for now: nothing
-# ages or leaves pending within it (docs/diagnostics.md R6).
+# so the cycle is the power cycle — begun at boot, ended by power-off. The memory is persisted in
+# the journal below, so the cycle power ended is closed at the next boot: pending clears after a
+# passing power cycle, and a confirmed DTC ages over them (docs/diagnostics.md §3.3).
 [fault_memory]
 cycle = "power"
+
+# The NvM journal (docs/nvm.md) the fault memory lives in: two 128 KB sectors of the H723's flash
+# (boards/h723/bootmap.h), outside the boot and application regions.
+[nvm]
+min_write_ms   = 1000
+sector_records = 4096
 
 [target]
 kind    = "threadx"

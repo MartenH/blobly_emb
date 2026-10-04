@@ -31,7 +31,8 @@ examples/<name>/   a FREESTANDING app (own Makefile, `make all`):
                        COM bus bridge + run() ┘   bus endpoints -> rx/tx codec)
 loom/   the Loom: scheduler (the de-AUTOSAR'd "RTE")
 comm/   comms stack: com, e2e (AUTOSAR E2E Profile 1), secoc (AES-CMAC), isotp (15765-2), uds (14229), nm,
-        fault (debounce + fault memory behind 0x19/0x14/0x85), diag (the UDS server on its ISO-TP
+        fault (debounce + fault memory behind 0x19/0x14/0x85; snapshots, extended data, displacement
+        and its persistence in the NvM journal — entry.v, persist.v), diag (the UDS server on its ISO-TP
         connection and the order a pass runs it — the host bridge calls it; the ThreadX comm
         thread from R2; its transport step — intake, busy guard, pump/abort, S3 hold, wire
         drain — is step.v, which the bootloader runs whole as serve_step)
@@ -164,7 +165,9 @@ the jump stay kernel-free, the stay path enters ThreadX and runs the application
 application, which also shares `doipnet.serve_mailbox` / `drain_tx`), linked from the node's
 `TX_A`/`NX_A` (`boards/common/boot_net.c`). sysnode's boot is
 ~90 KB of its 128 KB sector that way (37 KB bus-only); `boot/target/serve_{d,notd}_boot_doip.v` are
-the two variants of the serve loop.
+the two variants of the serve loop. zone_a's NvM journal (its persisted fault memory) is
+flash sectors 6 + 7 (`boards/h723/bootmap.h` NVM_*, outside the app region, which is sectors 1..5):
+`make flash` never erases it, so DTCs survive a reflash — clear them with 0x14.
 
 **CI pins the V compiler** to the release tag in `.v-version` (currently `0.5.2`), installed as the
 **prebuilt** `v_linux.zip` release asset in both jobs. It used to install master HEAD, so an upstream

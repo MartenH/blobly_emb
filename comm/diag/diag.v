@@ -338,6 +338,12 @@ fn (mut c Connection) cancel_reset() {
 	c.held_back = 0
 }
 
+// refresh_now brings the live DIDs up to date outside a dispatch — the fault memory reads its
+// snapshots from them (comm/fault capture).
+pub fn (mut c Connection) refresh_now() {
+	c.refresh_dids()
+}
+
 fn (mut c Connection) refresh_dids() {
 	if c.refresh != unsafe { nil } {
 		c.refresh(mut c.server)
