@@ -398,7 +398,7 @@ ride the same bus-sleep flush choreography as persisted signals.
   schema (the DIDs and their sizes), so an update that changes a snapshot restores none rather than
   the wrong bytes — and the block carries that schema's fingerprint too, checked on restore, so a
   pinned id kept across such an update restores none either; a collision is refused at generation, naming the pin (`snapshot_id`) — never
-  resolved by declaration order, which an update may change — holding the DTC, an allocation stamp and the record
+  resolved by declaration order, which an update may change — holding the DTC, an allocation stamp, the schema's fingerprint and the record
   body; a freed one is rewritten as a 1-byte TOMBSTONE, so freed snapshots stop occupying the
   journal.
 
@@ -416,8 +416,9 @@ testNotCompletedSinceLastClear, testFailedSinceLastClear and the counters. testF
 stored — every power-up starts untested-failed, as AUTOSAR's default status storage does — and the
 this-operation-cycle bits restart with the cycle. The cycle a power loss interrupted is ENDED at
 restore with what it collected (tested / failed) — under the DTC setting it ran under: with 0x85
-off its end changes nothing, as it would have then (the image records the setting), and setting is
-on again after the power-up — so pending clears and aging counts across a power
+off its end changes nothing, as it would have then (the image records the setting — once that write
+is in: a power cut before it, or while the store refuses it, ends the cycle as with setting on), and
+setting is on again after the power-up — so pending clears and aging counts across a power
 cycle exactly as across an orderly cycle end; on a `cycle = "power"` node every MCU start is a new
 cycle, so a passing power cycle clears pending.
 
@@ -425,7 +426,7 @@ cycle, so a passing power cycle clears pending.
 stores changes, and the status rules bound that PER OPERATION CYCLE: per DTC, at its first completed
 test, at its first failure (pending, testFailedSinceLastClear, confirmed, the failed-cycle counter)
 and at the cycle's end (pending cleared, aging), plus once at each cycle start and end and at each
-tester clear; changes in one owner pass coalesce into one write. The image is 2 + 8 B per fault
+tester clear and 0x85 change (the image records the setting); changes in one owner pass coalesce into one write. The image is 2 + 8 B per fault
 (≤ 14 journal records for 32 faults). A LATER occurrence in the same cycle changes only the
 occurrence counter, which is DEFERRED — written with the next image write or at the next flush (a
 sleep edge, an ECUReset), never on its own — so an intermittent fault costs no write per occurrence,

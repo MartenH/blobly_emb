@@ -9,7 +9,8 @@ module fault
 //   ONE value, so a group clear, a displacement and a cycle boundary are each one atomic write;
 //
 //   one SNAPSHOT block per DTC that declares `freeze` (its id derived from the DTC and the
-//   snapshot's schema): the DTC, its allocation stamp and the record body — or a 1-byte TOMBSTONE
+//   snapshot's schema): the DTC, its allocation stamp, the schema's fingerprint and the record
+//   body — or a 1-byte TOMBSTONE
 //   once the snapshot is gone, so a freed snapshot stops occupying journal space.
 //
 // A snapshot is written BEFORE the image that claims it, and a freed one is tombstoned only AFTER
@@ -29,7 +30,8 @@ module fault
 // stores changes, which the status rules bound PER OPERATION CYCLE: per DTC, at its first completed
 // test (testNotCompletedSinceLastClear, the cycle's tested flag), at its first failure (pending,
 // testFailedSinceLastClear, confirmed, the failed-cycle counter), and at the cycle's end (pending
-// cleared, aging) — plus once at each cycle start and end, and at each tester clear. Changes in one
+// cleared, aging) — plus once at each cycle start and end, and at each tester clear and 0x85 change
+// (the image records the setting, so a cycle cut with it off ends as it would have then). Changes in one
 // owner pass coalesce into one write. A later occurrence in the same cycle changes only the
 // occurrence counter, which is DEFERRED: written with the next image write or at the next flush (a
 // sleep edge, an ECUReset), never on its own — so an intermittent fault costs no write per
@@ -38,7 +40,7 @@ module fault
 // DTC per cycle: an entry that failed this cycle cannot be displaced) and tombstoned once when
 // freed. A refused write is retried no sooner than `retry_us` later.
 
-pub const image_version = u8(1)
+pub const image_version = u8(2) // 2: the setting bit, and snapshot blocks with a fingerprint
 pub const image_rec = 8 // bytes per DTC in the image
 pub const max_image = 2 + max_faults * image_rec
 pub const snap_hdr = 9 // a snapshot block: DTC (3), stamp (4), schema fingerprint (2), then the record body
@@ -153,6 +155,8 @@ pub fn (mut m Memory) persist(now u64, flush bool) bool {
 		return true
 	}
 	if !flush && now < m.retry_at {
+		m.refused = m.refused || m.clear_refused // a 0x14 refused meanwhile reaches the owner now
+		m.clear_refused = false
 		return false
 	}
 	ready, mut refused := m.write_snapshots(0, false)
@@ -190,9 +194,7 @@ pub fn (mut m Memory) persist(now u64, flush bool) bool {
 			refused = true
 		}
 	}
-	if refused {
-		m.retry_at = now + m.store.retry_us
-	}
+	m.retry_at = if refused { now + m.store.retry_us } else { u64(0) }
 	// a refusal since the last persist — this one's, or a 0x14's — stays visible to the owner,
 	// which may make room (a node without NM erases then)
 	m.refused = refused || m.clear_refused
@@ -332,12 +334,15 @@ pub fn (mut m Memory) restore() {
 fn (m &Memory) schema_fp(i int) u16 {
 	mut h := u32(0x811C9DC5)
 	for f in 0 .. m.slots[i].nfreeze {
-		for b in [u8(m.slots[i].freeze[f] >> 8), u8(m.slots[i].freeze[f]), m.slots[i].freeze_len[f]] {
-			h ^= u32(b)
-			h *= 16777619
-		}
+		h = fnv(h, u8(m.slots[i].freeze[f] >> 8))
+		h = fnv(h, u8(m.slots[i].freeze[f]))
+		h = fnv(h, m.slots[i].freeze_len[f])
 	}
 	return u16(h ^ (h >> 16))
+}
+
+fn fnv(h u32, b u8) u32 {
+	return (h ^ u32(b)) * 16777619
 }
 
 // load_snapshot reads slot i's snapshot block into a free entry; false = absent, malformed, or
@@ -353,8 +358,8 @@ fn (mut m Memory) load_snapshot(i int) bool {
 		|| u16(m.scratch[7]) << 8 | u16(m.scratch[8]) != m.schema_fp(i) {
 		return false // another DTC's, or its snapshot under another schema (a kept snapshot_id)
 	}
-	// the record's DIDs at the offsets this build's sizes put them: a snapshot of another schema
-	// under a pinned id (snapshot_id kept across an update that changed it) is not this one's
+	// and the record's DIDs at the offsets this build's sizes put them — a second guard behind the
+	// 16-bit fingerprint, against the one schema in 65536 that shares it
 	mut o := snap_hdr + 1
 	for f in 0 .. m.slots[i].nfreeze {
 		if u16(m.scratch[o]) << 8 | u16(m.scratch[o + 1]) != m.slots[i].freeze[f] {

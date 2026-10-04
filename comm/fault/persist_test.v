@@ -683,3 +683,17 @@ fn test_a_refused_clear_reaches_the_owner() {
 	r.m.persist(3, false)
 	assert !r.m.refused
 }
+
+// ... also inside a refusal's retry pause, when the pass itself writes nothing.
+fn test_a_refused_clear_reaches_the_owner_inside_the_retry_pause() {
+	mut r := new_rig(2)
+	r.f.refuse = true
+	r.pass(0, .failed, 1, 1000) // refused: the next write waits until 2000
+	r.f.refuse = false
+	assert r.m.persist(1100, true) && !r.m.refused // a flush gets through (a sleep edge, a 0x11)
+	r.f.refuse = true
+	assert r.req([u8(0x14), 0xFF, 0xFF, 0xFF]) == [u8(0x7F), 0x14, 0x72]
+	r.m.persist(1500, false)
+	assert r.m.refused, 'a refused clear stayed invisible through the retry pause'
+	r.f.refuse = false
+}

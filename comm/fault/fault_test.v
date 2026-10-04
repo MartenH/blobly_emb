@@ -791,6 +791,13 @@ fn rs_get(ctx voidptr, id u16, out &u8, cap u16) u16 {
 	return 0
 }
 
+// stored_rs: the status image a RamStore holds.
+fn stored_rs(st &RamStore) []u8 {
+	mut b := [max_image]u8{}
+	n := rs_get(st, 0x0F00, &b[0], u16(max_image))
+	return b[..n].clone()
+}
+
 // model_memory: the model's two faults with their store, restored and its power cycle begun —
 // what the comm thread does at every start.
 fn model_memory(st &RamStore) Memory {
@@ -945,21 +952,19 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 				// before the reset, suppressed or not, can count after it.
 				resets++
 				orderly := (rng >> 8) & 1 == 0
-				off := m.setting_off
-				if orderly || off {
-					// orderly: the 0x11 flush. With setting off: everything durable, then the power
-					// goes — the cycle it interrupts must end changing nothing, as it would have then
+				if orderly {
 					assert m.persist(u64(clock), true)
 				}
-				mut kept := []u8{}
-				for k in 0 .. 2 {
-					kept << m.slots[k].status & persisted_bits
-				}
+				// what the store holds: when it records setting OFF with a cycle open, the power cut
+				// ended that cycle under suppression, which changes nothing — whether the latest
+				// state was flushed or not, the restore must give back exactly the stored bits
+				img := stored_rs(st)
 				m = model_memory(st)
-				if off && !orderly {
+				if !orderly && img.len >= 2 && img[1] & (img_cycle_open | img_setting_off) == img_cycle_open | img_setting_off {
 					offs++
 					for k in 0 .. 2 {
-						assert m.slots[k].status & persisted_bits == kept[k], '${ctx}: power lost with setting off, and the restore moved fault ${k}: 0x${kept[k].hex()} -> 0x${(m.slots[k].status & persisted_bits).hex()}'
+						want := img[2 + k * image_rec + 3] & persisted_bits
+						assert m.slots[k].status & persisted_bits == want, '${ctx}: power lost with setting off, and the restore moved fault ${k}: 0x${want.hex()} -> 0x${(m.slots[k].status & persisted_bits).hex()}'
 					}
 				}
 				for k in 0 .. 2 {
