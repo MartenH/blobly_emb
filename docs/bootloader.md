@@ -213,9 +213,11 @@ comm thread runs, and a reset waits for TCP as the application's does (`doipnet.
 force holds it, and the other is refused conditionsNotCorrect (0x22) until it ends — so the 0x29
 unlock earned over one transport is never used over the other (the application's REQ-NET-012 rule,
 here by session rather than by unlock, since the boot has one level); a refused request keeps
-nothing alive (S3, the stay-window). A request over DoIP is in flight until its answer is sent, and
-no reset overtakes it; a reset asked over DoIP whose answer never left dies with the connection (a
-bus frame the controller refuses does not cancel it), and a connection that drops ends the session
+nothing alive (S3, the stay-window). A request over DoIP is in flight until its answer is
+acknowledged, and no reset overtakes it; a reset asked over DoIP whose answer was never acknowledged
+dies with the connection, one whose answer was acknowledged never does (a request pipelined behind
+it dropping takes nothing with it), and a bus frame the controller refuses cancels neither — one
+rule, `uds.RemoteReset` (comm/uds remote.v), which the application's server keeps too; and a connection that drops ends the session
 it held once it has spoken in it — a stray connection that drops first does not end a handoff. A
 DoIP message holds one ISO-TP message (`comm/doip` `max_msg` = header + addresses + 520), so the
 boot's 512-byte TransferData blocks fit — blobly_net's `flash.program` runs over a DoIP connection

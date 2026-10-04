@@ -114,8 +114,7 @@ pub mut:
 	owner u8
 	// a network request whose answer is not sent yet (DoIP acknowledges every request, answered
 	// or not): no reset overtakes it — and whether the pending reset was asked over the network
-	remote_inflight bool
-	reset_remote    bool
+	remote uds.RemoteReset // comm/uds remote.v: the rule the application's server keeps too
 	// the network has been heard in the session it holds: only then does a dropped connection end
 	// it — a connection that drops before its first request (a stray peer, a refused activation)
 	// is not the tester a handed-off session waits for
@@ -137,9 +136,6 @@ pub mut:
 	work_addr u32
 	work_end  u32
 	erase_unit u32
-	// the reset's own answer has been acknowledged over the network: a later request's connection
-	// dropping cannot cancel it any more
-	reset_sent bool
 	// the longest that wait may last: the node's link start-up allowance plus its whole
 	// announcement sequence (gen/boot_gen.h BOOT_DOIP_NET_WAIT_MS — every announcement goes out
 	// before the DoIP listener opens); 0 = net_wait_default_us
@@ -161,7 +157,7 @@ pub fn (mut p Prog) handle(req &u8, req_len int, resp &u8) int {
 // remote_sent — its acknowledgement goes out whether or not there is an answer — and none is
 // served once a reset is pending. A functional request is not served: the bus side serves none.
 pub fn (mut p Prog) serve_remote(req &u8, req_len int, functional bool, resp &u8) int {
-	p.remote_inflight = true
+	p.remote.begin()
 	if req_len < 1 || functional || p.reset_pending {
 		return 0
 	}
@@ -173,21 +169,16 @@ pub fn (mut p Prog) serve_remote(req &u8, req_len int, functional bool, resp &u8
 // — queued is not sent: an answer still in TCP's queue dies with a connection that drops, and the
 // drop (remote_dropped) then cancels the reset it announced.
 pub fn (mut p Prog) remote_sent() {
-	p.remote_inflight = false
-	if p.reset_pending && p.reset_remote {
-		p.reset_sent = true // TCP acknowledges in order: the reset's answer has been, too
-	}
+	p.remote.sent()
 }
 
 // remote_dropped: the network connection is gone. A reset it asked for whose answer never left is
 // abandoned (never reset unanswered); a session it held ends — relocked, a download abandoned —
 // since no tester outlives its connection's session.
 pub fn (mut p Prog) remote_dropped() {
-	if p.remote_inflight && p.reset_remote && !p.reset_sent {
-		p.reset_pending = false
+	if p.remote.dropped() {
+		p.reset_pending = false // its own reset, whose answer was never acknowledged
 	}
-	p.remote_inflight = false
-	p.reset_remote = false
 	if p.owner == via_net && p.remote_spoke {
 		p.end_session()
 	}
@@ -221,7 +212,7 @@ fn (mut p Prog) handle_via(via u8, req &u8, req_len int, resp &u8) int {
 	p.owner = if p.srv.session == 0x01 { u8(0) } else { via }
 	p.remote_spoke = p.owner == via_net
 	if p.reset_pending {
-		p.reset_remote = via == via_net
+		p.remote.asked(via == via_net)
 	}
 	return n
 }
@@ -321,12 +312,12 @@ fn elapsed(now u64, since u64) u64 {
 // and its cancellation when that answer is lost (comm/diag serve_step: never reset unanswered).
 // Not while a network answer is still on its way: no reset overtakes an answer, whoever asked.
 pub fn (p &Prog) reset_due() bool {
-	return p.reset_pending && !p.remote_inflight
+	return p.reset_pending && !p.remote.inflight
 }
 
 // A reset the network asked for is not the bus's to cancel: its answer is not the one the bus lost.
 pub fn (mut p Prog) cancel_reset() {
-	if !p.reset_remote {
+	if !p.remote.reset {
 		p.reset_pending = false
 	}
 }
@@ -353,7 +344,7 @@ pub fn (mut p Prog) tick(now u64) {
 	if p.work != 0 {
 		p.stamp(now) // a routine running is an exchange in flight
 	}
-	if p.remote_inflight {
+	if p.remote.inflight {
 		// a network exchange in flight — its answer not yet acknowledged — holds S3 and the
 		// stay-window, as a bus exchange in flight does (comm/diag serve_step)
 		p.heard_via(via_net, now)
@@ -370,7 +361,7 @@ pub fn (mut p Prog) tick(now u64) {
 // work_due: routine work for `via` waits on its next step — over the network only once the
 // previous response has been acknowledged (the bus side asks once its link and wire are idle)
 pub fn (p &Prog) work_due(via u8) bool {
-	return p.work != 0 && p.work_via == via && (via != via_net || !p.remote_inflight)
+	return p.work != 0 && p.work_via == via && (via != via_net || !p.remote.inflight)
 }
 
 // work_pending / work: the bus side's routine work, for comm/diag serve_step
@@ -393,7 +384,7 @@ pub fn (mut p Prog) step(now u64, resp &u8) int {
 	}
 	p.stamp(now)
 	if p.work_via == via_net {
-		p.remote_inflight = true
+		p.remote.inflight = true
 	}
 	if p.work == work_check {
 		p.work = 0

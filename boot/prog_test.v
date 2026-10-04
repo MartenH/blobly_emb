@@ -698,7 +698,7 @@ fn test_a_functional_network_request_is_acknowledged_unanswered() {
 	mut resp := []u8{len: 64}
 	assert p.serve_remote(&req[0], 2, true, unsafe { &resp[0] }) == 0
 	assert p.srv.session == 0x01
-	assert p.remote_inflight, 'its acknowledgement still goes out'
+	assert p.remote.inflight, 'its acknowledgement still goes out'
 }
 
 // The handoff over DoIP: the application answered 50 02 and reset, and the tester reconnects once

@@ -785,12 +785,12 @@ fn security_model(gated bool) {
 		rng ^= rng >> 17
 		rng ^= rng << 5
 		tr := int(rng & 1) // 0 = bus, 1 = remote
-		op := (rng >> 1) % 11
+		op := (rng >> 1) % 12
 		ctx := 'step ${step} op ${op} over ${if tr == 1 { 'remote' } else { 'bus' }}'
 		// a reset is asked over DoIP (6, 7) or the bus (8..10) — the op draws the transport. On the
 		// gated table it is served only in extended under THAT transport's own unlock; refused, it
 		// changes nothing, whatever drop or abort follows it
-		rt := if op >= 8 { 0 } else { 1 }
+		rt := if op in [u32(8), 9, 10] { 0 } else { 1 }
 		reset_ok := !gated || (m.session == 0x03 && m.unlocked[rt])
 		refusal := [u8(0x7F), 0x11, if m.session != 0x03 { u8(0x7F) } else { u8(0x33) }]
 		match op {
@@ -863,6 +863,28 @@ fn security_model(gated bool) {
 					}
 				} else {
 					c.abort_tx()
+				}
+			}
+			11 {
+				// a reset asked over DoIP, its answer ACKNOWLEDGED, then a request pipelined behind it
+				// (acknowledged by DoIP, unanswered) whose connection drops: the reset still happens —
+				// uds.RemoteReset, the rule the bootloader keeps too
+				r := remote(mut c, [u8(0x11), 0x01], false)
+				assert r == if reset_ok { [u8(0x51), 0x01] } else { refusal }, '${ctx}: ${r} model ${m}'
+				c.remote_sent()
+				assert remote(mut c, [u8(0x3E), 0x00], false).len == 0 || !reset_ok, ctx
+				c.remote_dropped()
+				if reset_ok {
+					assert c.reset_due() == 0x01, '${ctx}: an acknowledged reset was cancelled'
+					c.housekeep(now)
+					m.enter(0x01, false)
+					m.pending = [-1, -1]!
+				} else {
+					if m.remote_owns {
+						m.enter(0x01, false)
+					}
+					m.unlocked[1] = false
+					m.pending[1] = -1
 				}
 			}
 			else {

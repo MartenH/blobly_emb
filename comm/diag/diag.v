@@ -42,11 +42,12 @@ mut:
 	// (a request that did not change it does not move this), and an answer of its not yet sent —
 	// ANY answer: no reset, whichever transport asked for it, may overtake an executed request's
 	// answer
-	remote_owns     bool
-	remote_inflight bool
-	// the pending reset (server.reset_req) was asked over the other transport: a bus transfer that
-	// fails cannot cancel it — that answer was not the reset's
-	reset_remote bool
+	remote_owns bool
+	// the other transport's requests and the reset they may have asked for: uds.RemoteReset, the
+	// rule the bootloader keeps too (a reset is due only once no network answer is in flight; a
+	// failed bus transfer cannot cancel a network reset; a drop cancels one only while its answer
+	// is unacknowledged)
+	remote uds.RemoteReset
 	// the security level unlocked (server.unlocked) was earned over the other transport. An unlock
 	// belongs to the transport that ran 0x27: a request over the other one sees the server locked
 	// (REQ-NET-012 — a network tester never inherits a bus tester's unlock, nor the reverse)
@@ -94,7 +95,7 @@ pub fn (mut c Connection) init(rx_id u32, tx_id u32, functional_id u32, bs u8, s
 pub fn (mut c Connection) housekeep(now u64) {
 	c.link.tick(now)
 	c.apply_answered_reset()
-	if in_flight(&c.link) || c.remote_inflight {
+	if in_flight(&c.link) || c.remote.inflight {
 		c.server.hold_s3(now) // an exchange still in flight on either transport
 	}
 	c.server.tick(now)
@@ -131,7 +132,7 @@ fn (mut c Connection) functional(f &can.Frame) Rx {
 	before, held := c.enter(false)
 	rlen := c.server.handle_functional(&f.data[1], n, &c.resp[0])
 	c.leave(before, held, false)
-	c.reset_remote = false // a reset asked here is the bus's (none was pending, or this was not served)
+	c.remote.asked(false) // a reset asked here is the bus's (none was pending, or this was not served)
 	if rlen > 0 && !c.link.send(&c.resp[0], rlen) {
 		c.cancel_reset() // never reset unanswered
 	}
@@ -155,7 +156,7 @@ pub fn (mut c Connection) serve() {
 		before, held := c.enter(false)
 		rlen := c.server.handle(&c.req[0], n, &c.resp[0])
 		c.leave(before, held, false)
-		c.reset_remote = false
+		c.remote.asked(false)
 		if rlen > 0 && !c.link.send(&c.resp[0], rlen) {
 			c.cancel_reset() // the answer could not be queued: never reset unanswered
 		}
@@ -171,7 +172,7 @@ pub fn (mut c Connection) serve() {
 pub fn (mut c Connection) serve_remote(req &u8, n int, functional bool, resp &u8) int {
 	// whatever the answer — none included — the transport sends its own acknowledgement (DoIP acks
 	// every diagnostic message), and no reset may overtake it
-	c.remote_inflight = true
+	c.remote.begin()
 	if n < 1 || c.server.reset_req != 0 {
 		return 0
 	}
@@ -186,28 +187,27 @@ pub fn (mut c Connection) serve_remote(req &u8, n int, functional bool, resp &u8
 	c.server.handoff_elsewhere = false
 	c.leave(before, held, true)
 	if c.server.reset_req != 0 {
-		c.reset_remote = true
+		c.remote.asked(true)
 	}
 	return rlen
 }
 
 // remote_sent: the other transport has sent the answer serve_remote gave.
 pub fn (mut c Connection) remote_sent() {
-	c.remote_inflight = false
+	c.remote.sent()
 }
 
-// remote_dropped: the other transport's connection is gone. A reset whose answer it never sent is
-// abandoned; one whose answer it did send still happens (a tester disconnects right after it).
+// remote_dropped: the other transport's connection is gone. A reset whose answer it never had
+// acknowledged is abandoned; one whose answer was acknowledged still happens (a tester disconnects
+// right after it, or a request pipelined behind it is what dropped) — uds.RemoteReset.
 // If the session in force was entered over it, the server returns to the default session (a reset
 // the bus asked for still stands), and an unlock it earned ends either way — neither outlives the
 // tester that opened it. A bus tester that entered the session since keeps it; requests that
 // changed nothing decide nothing.
 pub fn (mut c Connection) remote_dropped() {
-	if c.remote_inflight && c.reset_remote {
-		c.cancel_reset() // its own reset, whose answer never left
-		c.reset_remote = false
+	if c.remote.dropped() {
+		c.cancel_reset() // its own reset, whose answer was never acknowledged
 	}
-	c.remote_inflight = false
 	if c.remote_owns {
 		c.server.end_session() // a reset the other transport asked for still happens
 	}
@@ -289,7 +289,7 @@ pub fn (mut c Connection) abort_tx() {
 // answer_lost: the bus answer in flight was abandoned — a reset it announced is cancelled, unless
 // the other transport asked for it (that answer was not this one)
 fn (mut c Connection) answer_lost() {
-	if !c.reset_remote {
+	if !c.remote.reset {
 		c.cancel_reset()
 	}
 }
@@ -306,7 +306,7 @@ pub fn (c &Connection) active() bool {
 // (`owner_resets`). The link being done is not the wire being done: the
 // owner still waits for its controller to transmit the answer (REQ-BOOT-012).
 pub fn (c &Connection) reset_due() u8 {
-	if c.server.reset_req != 0 && !c.link.busy() && !c.remote_inflight {
+	if c.server.reset_req != 0 && !c.link.busy() && !c.remote.inflight {
 		return c.server.reset_req
 	}
 	return 0
@@ -315,7 +315,7 @@ pub fn (c &Connection) reset_due() u8 {
 // reset_asked_remotely: the pending reset was asked over the other transport — for a handoff, the
 // transport the bootloader's session belongs to (boards/common/bootcell.h BOOTCELL_REQ_HANDOFF_NET).
 pub fn (c &Connection) reset_asked_remotely() bool {
-	return c.reset_remote
+	return c.remote.reset
 }
 
 // apply_answered_reset: ECUReset is two-phase — once its answer has left, the diagnostic state
