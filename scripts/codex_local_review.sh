@@ -74,7 +74,7 @@ merge_base=$(git merge-base "$base" "$head")
 
 # The V this build uses: $V, else `v` on PATH. It need not match the CI pin (.v-version) —
 # `make v-pin` says how it differs — so the review is told which one it is running.
-v_bin=${V:-$(command -v v || true)}
+v_bin=$(command -v "${V:-v}" || true)
 probe_note="Put any probe or scratch files under /tmp, never in the repository."
 gates="the host unit tests \`$v_bin -enable-globals test <module>/\` for the touched modules (CI runs comm driver tools ecu loom nvm wdg bcrypto boot, and examples), \`make lint\` (no-alloc + isolation, must pass), \`make check\` and \`make trace-check\`. tools/vectab needs the CMSIS headers under third_party/; if they are absent, skip it rather than fetching them. Do not flash or touch hardware (never \`make hwtest\` or \`make flash\`)"
 if [ -n "$v_bin" ] && [ -x "$v_bin" ]; then
