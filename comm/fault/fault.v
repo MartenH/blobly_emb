@@ -243,6 +243,7 @@ pub mut:
 	cap        int
 	next_stamp u32 // the allocation order: older entries are displaced first among equals
 	displaced  u32 // snapshots displaced since power-on (observability)
+	pruned     u32 // claims restore did not load: another structure or format, a block id not this firmware's, no snapshot configured, unreadable (observability)
 	// persistence (persist.v): nil store = RAM only
 	store    Store
 	img      [max_image]u8 // the status image the store holds (img_len 0 = none known)
@@ -286,6 +287,7 @@ pub fn (mut m Memory) init() {
 	m.end_at = 0
 	m.next_stamp = 1
 	m.displaced = 0
+	m.pruned = 0
 	m.img_len = 0
 	m.retry_at = 0
 	m.wrote = 0

@@ -311,8 +311,9 @@ fn chain_records(len int) int {
 // The STATUS IMAGE has one fixed id — it is keyed inside by DTC number, so no update to the fault
 // table moves it, and a firmware update can never prune it and resurrect cleared DTCs. Each
 // snapshot has TWO blocks, A and B (comm/fault persist.v), their ids hashes of its DTC and its schema
-// (the DIDs and their sizes), so an update that changes a snapshot restores none rather than the
-// wrong bytes; a collision with a persisted
+// (the DIDs and their sizes), so an update that changes a snapshot usually moves to other blocks —
+// the identity itself is the exact structure each block states, which restore compares (persist.v),
+// so a pinned or coinciding id still restores none rather than the wrong bytes; a collision with a persisted
 // signal, the status image or another snapshot is refused, naming the pin (`snapshot_ids`) that
 // resolves it — never resolved by declaration order, which an update may change.
 fn derive_fault_nvm(m Model) (u16, []u16, []u16) {
@@ -394,11 +395,12 @@ fn fault_live_records(m Model) int {
 			continue
 		}
 		nsnap++
-		mut body := 1
+		mut s := fault.Slot{}
 		for n in fault_freeze_lens(m, f) {
-			body += 2 + n
+			s.freeze_len[s.nfreeze] = u8(n)
+			s.nfreeze++
 		}
-		r := chain_records(fault.snap_hdr + body)
+		r := chain_records(s.block_len())
 		if r > snap_recs {
 			snap_recs = r
 		}
