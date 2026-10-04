@@ -79,7 +79,7 @@ fn test_a_received_frame_the_dbc_protects_takes_its_deadline_from_the_dbc() {
 	assert code == 0, out
 	assert glue.contains('check(&rx.data[0], int(brake_status_dlc), u16(0x44), 4, 5)')
 	// the decision is com.RxMonitor's, suspended by the 0x28 latch (overspeed has a diag link)
-	assert glue.contains('p_brake_status := st.rxm_brake_status.checked(now, chk_brake_status, st.rxg.on, st.rxg.suspended())'), glue
+	assert glue.contains('p_brake_status := st.rxm_brake_status.checked(now, chk_brake_status, st.rxg.on, st.rxg.receiving(), st.rxg.suspended())'), glue
 	// and without an E2ETimeout, a received protected frame is refused for having no deadline
 	code2, out2, _ := overspeed_with_dbc('rxnotmo', fn (src string) string {
 		return src

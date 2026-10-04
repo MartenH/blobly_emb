@@ -199,7 +199,7 @@ fn rx_frame_arm(m Model, msg string, list []string, ext bool, bname string, owne
 		'st.rxm_${msg}.e2e.check(${e2e_args})'
 	}
 	accept := if e2e_on {
-		'st.rxm_${msg}.checked(now, chk_${msg}, ${on}, ${owner.suspended()})'
+		'st.rxm_${msg}.checked(now, chk_${msg}, ${on}, ${owner.receiving()}, ${owner.suspended()})'
 	} else {
 		'st.rxm_${msg}.received(now, ${on})'
 	}

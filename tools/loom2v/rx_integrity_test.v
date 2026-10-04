@@ -31,7 +31,7 @@ fn test_only_an_authentic_frame_reaches_the_e2e_check() {
 	}
 	refused := out.index('p_brake = st.rxm_brake.rejected(now, st.rxg.on)') or { -1 }
 	assert verify >= 0 && check > verify && refused > check, out
-	assert out.contains('p_brake = st.rxm_brake.checked(now, chk_brake, st.rxg.on, st.rxg.suspended())'), out
+	assert out.contains('p_brake = st.rxm_brake.checked(now, chk_brake, st.rxg.on, st.rxg.receiving(), st.rxg.suspended())'), out
 }
 
 // A signal with no status has nothing to carry a protection failure: an integrity verdict publishes

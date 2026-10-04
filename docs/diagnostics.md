@@ -256,6 +256,19 @@ the decoded signal crosses to the FB thread whole, status and lost count include
 signal-status faults step `g_fmem` there. A received frame that needs none of it (no deadline, no
 protection, one plain u32 signal with no status) keeps the lean copy through the scalar IOC pool.
 
+**The comm pass has ONE order** (`comm_pass_order`, `tools/loom2v/gen_rx_target.v`), because three
+things change state inside a pass — a 0x28 served on CAN or over DoIP, an NM frame waking the
+network, a deadline running out — and each must take effect before anything it governs is judged:
+housekeep → open (the gate's first sampling) → reports → remote (a DoIP request, then a re-sample) →
+drain (a served CAN request re-samples; an NM frame that wakes the network re-samples and starts the
+operation cycle before the next frame) → tick (NM) → cycle → settle (re-sample, restart, deadlines) →
+persist (the snapshots after the pass's last consume, then the journal write). The generator emits
+the steps from that one list (pinned by `rx_target_test.v`), and `pass_model_test.v` runs the real
+comm modules in the same order against mid-pass 0x28 and NM wakes: no frame passes a closed gate, an
+occurrence after a wake is recorded in its cycle, no DTC is persisted with its snapshot still due.
+Asleep, a frame that arrives is published but ends no silence: the gaps of the whole sleep stay out
+of the lost count. A checked signal's struct must fit a byte-IOC cell (64 B), or generation refuses it.
+
 ### 3.3 Faults and fault memory (#287)
 
 **Declaration.**

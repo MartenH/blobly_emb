@@ -48,6 +48,7 @@ mut:
 	com     RxState
 	e2e     e2e.RxState
 	was_off bool // the 0x28 silence latch (diag_rx_was_off)
+	awake   bool = true // the network as last sampled: asleep, a frame ends no silence
 	quiet   bool // e2e_quiet
 	hidden  u32 // e2e_hidden
 	pubs    []Pub
@@ -58,6 +59,7 @@ fn (mut r Ref) publish(st RxPublish) {
 }
 
 fn (mut r Ref) sample(rx_on bool, awake bool) bool {
+	r.awake = awake
 	if !rx_on || !awake {
 		r.was_off = true
 		r.quiet = true
@@ -85,7 +87,7 @@ fn (mut r Ref) frame(now u64, f [64]u8, forged bool, rx_ok bool) {
 		if r.quiet {
 			r.hidden += r.e2e.lost_frames - lf
 		}
-		if rx_ok && chk.usable() {
+		if rx_ok && r.awake && chk.usable() {
 			r.quiet = false
 		}
 		v := r.e2e.receive_ex(now, chk, r.was_off)
@@ -162,7 +164,7 @@ fn (mut s Impl) frame(now u64, f [64]u8, forged bool) {
 	}
 	if s.cfg.e2e {
 		chk := s.mon.e2e.check(&f[0], dlc, data_id, crc_pos, ctr_pos)
-		s.note(s.mon.checked(now, chk, s.gate.on, s.gate.suspended()))
+		s.note(s.mon.checked(now, chk, s.gate.on, s.gate.receiving(), s.gate.suspended()))
 		return
 	}
 	s.note(s.mon.received(now, s.gate.on))
@@ -384,11 +386,11 @@ fn test_a_valid_frame_after_an_unseen_e2e_timeout_is_late() {
 	mut m := mon(0, 100_000)
 	f := protected(mut s, 0)
 	st := m.e2e.check(&f[0], dlc, data_id, crc_pos, ctr_pos)
-	assert m.checked(150_000, st, true, false) == .timeout
+	assert m.checked(150_000, st, true, true, false) == .timeout
 	// ...unless a silence is latched: then the deadline it would be judged by is stale
 	mut m2 := mon(0, 100_000)
 	st2 := m2.e2e.check(&f[0], dlc, data_id, crc_pos, ctr_pos)
-	assert m2.checked(150_000, st2, true, true) == .ok
+	assert m2.checked(150_000, st2, true, true, true) == .ok
 }
 
 fn test_a_corrupt_frame_restarts_the_com_deadline_but_not_a_running_e2e_one() {
@@ -397,7 +399,7 @@ fn test_a_corrupt_frame_restarts_the_com_deadline_but_not_a_running_e2e_one() {
 	mut f := protected(mut s, 0)
 	f[0] ^= 1
 	st := m.e2e.check(&f[0], dlc, data_id, crc_pos, ctr_pos)
-	assert m.checked(90_000, st, true, false) == .integrity
+	assert m.checked(90_000, st, true, true, false) == .integrity
 	// the COM deadline now runs from the corrupt frame; the E2E one still from start
 	assert !m.com.expired(150_000)
 	assert m.e2e.expired(150_000), 'a corrupt-only sender kept E2E alive'
@@ -409,7 +411,7 @@ fn test_frames_missed_while_reception_is_off_are_not_lost() {
 	mut g := RxGate{}
 	g.sample(true, true)
 	f1 := protected(mut s, 0)
-	m.checked(1000, m.e2e.check(&f1[0], dlc, data_id, crc_pos, ctr_pos), g.on, g.suspended())
+	m.checked(1000, m.e2e.check(&f1[0], dlc, data_id, crc_pos, ctr_pos), g.on, g.receiving(), g.suspended())
 	if g.sample(false, true) {
 		m.silenced()
 	}
@@ -423,12 +425,12 @@ fn test_frames_missed_while_reception_is_off_are_not_lost() {
 		m.restart(2000)
 	}
 	f2 := protected(mut s, 0)
-	assert m.checked(3000, m.e2e.check(&f2[0], dlc, data_id, crc_pos, ctr_pos), g.on, g.suspended()) == .ok
+	assert m.checked(3000, m.e2e.check(&f2[0], dlc, data_id, crc_pos, ctr_pos), g.on, g.receiving(), g.suspended()) == .ok
 	assert m.e2e.lost_frames == 3
 	assert m.lost() == 0
 	// a real gap after it is counted
 	f3 := protected(mut s, 1)
-	m.checked(4000, m.e2e.check(&f3[0], dlc, data_id, crc_pos, ctr_pos), g.on, g.suspended())
+	m.checked(4000, m.e2e.check(&f3[0], dlc, data_id, crc_pos, ctr_pos), g.on, g.receiving(), g.suspended())
 	assert m.lost() == 1
 }
 
@@ -476,4 +478,24 @@ fn test_reception_back_is_not_live_until_its_restart_has_run() {
 	assert !g.live()
 	assert g.settle()
 	assert g.live()
+}
+
+// REQ-COM-009: the whole of an NM sleep is a commanded silence for the lost count. A frame that
+// arrives while the network sleeps is published (reception is on), but it does not end the silence,
+// so a gap between two such frames — or before the first frame after the wake — is not loss.
+fn test_frames_received_while_asleep_hide_their_gaps() {
+	mut s := Sender{}
+	mut m := mon(0, 1_000_000)
+	mut g := RxGate{}
+	f0 := protected(mut s, 0)
+	m.checked(1000, m.e2e.check(&f0[0], dlc, data_id, crc_pos, ctr_pos), g.on, g.receiving(), g.suspended())
+	if g.sample(true, false) {
+		m.silenced()
+	}
+	f1 := protected(mut s, 3)
+	assert m.checked(2000, m.e2e.check(&f1[0], dlc, data_id, crc_pos, ctr_pos), g.on, g.receiving(), g.suspended()) == .ok
+	f2 := protected(mut s, 2)
+	m.checked(2010, m.e2e.check(&f2[0], dlc, data_id, crc_pos, ctr_pos), g.on, g.receiving(), g.suspended())
+	assert m.e2e.lost_frames == 5
+	assert m.lost() == 0, 'a gap inside the sleep leaked into lost()'
 }

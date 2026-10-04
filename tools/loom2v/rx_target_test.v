@@ -192,7 +192,7 @@ fn test_an_e2e_frame_is_checked_on_the_comm_thread() {
 		'if st.rxg.sample(g_diag.server.rx_enabled(), g_nm.awake()) {',
 		'st.rxm_cmd_frame.silenced()',
 		'chk_cmd_frame := st.rxm_cmd_frame.e2e.check(&rx.data[0], int(cmd_frame_dlc), u16(0x55), 4, 5)',
-		'p_cmd_frame := st.rxm_cmd_frame.checked(now, chk_cmd_frame, st.rxg.on, st.rxg.suspended())',
+		'p_cmd_frame := st.rxm_cmd_frame.checked(now, chk_cmd_frame, st.rxg.on, st.rxg.receiving(), st.rxg.suspended())',
 		'command.lost = u16(st.rxm_cmd_frame.lost())',
 		'C.iocb_pub(0, &command)',
 		'match g_diag.on_frame(',
@@ -228,9 +228,10 @@ fn test_a_signal_status_fault_is_debounced_on_the_comm_thread() {
 		'g_fmem.consume(2, st.sdeb_2.rep)',
 		'st.slost_2 = command.lost',
 	])
-	// an occurrence the drain consumed has its snapshot taken after the drain, as on the host
-	in_order_rt(glue, ['C.iocb_pub(0, &command)', 't1 := C.board_now_us()',
-		'if g_fmem.capture_due() {', 'if st.rxg.settle()'])
+	// an occurrence the drain or a deadline consumed has its snapshot taken after the pass's last
+	// consume and before the journal write
+	in_order_rt(glue, ['C.iocb_pub(0, &command)', 't1 := C.board_now_us()', 'if st.rxg.settle()',
+		'st.rxm_cmd_frame.expire(now)', 'if g_fmem.capture_due() {', 'g_fmem.persist('])
 	// the receive status feeds no fault through the host's channels on a target
 	assert !glue.contains('st.fmem'), "a target fault hook named the host bridge's memory"
 }
@@ -380,4 +381,66 @@ fn test_a_checked_frame_without_a_deadline_reads_no_clock() {
 	assert code == 0, out
 	assert glue.contains('if rx.id == cmd_frame_id && rx.len == cmd_frame_dlc'), glue
 	assert !glue.contains('now := C.board_now_us()'), 'an unused clock read'
+}
+
+// A byte-IOC cell carries at most IOC_MAX bytes (iocb.c parks the image at boot past it): a checked
+// signal whose struct is larger is refused at generation, and the bound is ioc.h's.
+fn test_a_checked_signal_too_big_for_a_cell_is_refused() {
+	h := os.read_file(os.join_path(@VMODROOT, 'boards', 'common', 'ioc.h')) or { panic(err) }
+	assert h.contains('#define IOC_MAX ${ioc_max}\n'), 'ioc_max is not ioc.h IOC_MAX'
+	assert sig_struct_size(SigInfo{
+		fields: [SigField{'level', 'u16'}, SigField{'status', 'RxStatus'}, SigField{'lost', 'u32'}]
+	}) == 8
+	wide := 'fields = { a = "f64", b = "f64", c = "f64", d = "f64", e = "f64", f = "f64", g = "f64", h = "f64", status = "RxStatus" }'
+	code, out, _ := rt_generate('toobig', fn [wide] (src string) string {
+		return src.replace('fields = { code = "u32" }', wide)
+	}, '', false)
+	assert code != 0
+	assert out.contains('is 72 bytes as a struct, but a byte-IOC cell carries at most 64'), out
+}
+
+// The comm pass runs in ONE order (comm_pass_order), with the gate re-sampled wherever it can change
+// and the snapshots after the last consume. Pinned on a node with everything that moves state
+// mid-pass: a diagnostic connection (0x28 on CAN), NM (a wake inside the drain), an NM-driven
+// operation cycle, signal-status faults with a snapshot.
+fn test_the_comm_pass_runs_in_one_order() {
+	faults := rt_faults.replace('[fault_memory]\ncycle = "power"\n', '')
+	code, out, glue := rt_generate('order', fn (src string) string {
+		return src.replace('fields = { code = "u32" }', 'fields = { code = "u32", status = "RxStatus", lost = "u16" }')
+	}, rt_conn + faults, true)
+	assert code == 0, out
+	// the markers, exactly the declared order
+	mut steps := []string{}
+	for line in glue.split_into_lines() {
+		t := line.trim_space()
+		if t.starts_with('// pass: ') {
+			steps << t.all_after('// pass: ')
+		}
+	}
+	assert steps == comm_pass_order.map(it.str()), steps.str()
+	in_order_rt(glue, [
+		'// pass: open',
+		'st.rxg.sample(g_diag.server.rx_enabled(), g_nm.awake())', // the first sampling
+		'// pass: reports',
+		'// pass: drain',
+		'mut nm_seen := g_nm.awake()',
+		'for ch.recv(mut rx) {',
+		'p_cmd_frame := st.rxm_cmd_frame.checked(',
+		'g_diag.serve()',
+		'st.rxg.sample(g_diag.server.rx_enabled(), g_nm.awake())', // a 0x28 on CAN
+		'g_nm.on_peers(',
+		'if g_nm.awake() != nm_seen {', // an NM frame that woke the network ...
+		'st.rxg.sample(g_diag.server.rx_enabled(), g_nm.awake())', // ... re-samples the gate
+		'g_fmem.cycle_start()', // ... and starts the cycle, before the next frame
+		'// pass: tick',
+		'g_nm.produce(t1, mut nm_txf)',
+		'// pass: cycle',
+		'g_fmem.end_cycle_after(t1',
+		'// pass: settle',
+		'if st.rxg.settle()',
+		'st.rxm_cmd_frame.expire(now)', // a deadline occurrence, consumed ...
+		'// pass: persist',
+		'if g_fmem.capture_due() {', // ... captured before ...
+		'g_fmem.persist(t1, false)', // ... the journal write
+	])
 }

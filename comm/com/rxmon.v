@@ -46,18 +46,21 @@ pub fn (r &RxMonitor) lost() u32 {
 	return r.e2e.lost_frames - r.hidden
 }
 
-// checked: an authentic frame E2E judged `st`. `gate` = reception is on (publish); `suspended` = a
-// silence is latched whose restart has not run, so the stale deadline judges nothing late. A
+// checked: an authentic frame E2E judged `st`. `gate` = reception is on (publish); `receiving` =
+// reception on AND the network awake (RxGate.receiving): only a usable frame received then ends the
+// commanded silence the lost count leaves out, so the whole of an NM sleep stays hidden even though
+// frames arriving in it are published; `suspended` = a silence is latched whose restart has not run,
+// so the stale deadline judges nothing late. A
 // usable frame refreshes the E2E timeout even with reception off — protection-level state, like the
 // counter — and the COM deadline only when published; a corrupt one restarts the COM deadline (it
 // runs from that frame) and the E2E timeout only once that has fired (e2e.RxState.receive_ex).
-pub fn (mut r RxMonitor) checked(now u64, st e2e.Status, gate bool, suspended bool) RxPublish {
+pub fn (mut r RxMonitor) checked(now u64, st e2e.Status, gate bool, receiving bool, suspended bool) RxPublish {
 	gap := r.e2e.lost_frames - r.seen
 	r.seen = r.e2e.lost_frames
 	if r.quiet {
 		r.hidden += gap
 	}
-	if gate && st.usable() {
+	if receiving && st.usable() {
 		r.quiet = false
 	}
 	v := r.e2e.receive_ex(now, st, suspended)

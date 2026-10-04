@@ -2838,63 +2838,91 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				} else {
 					glue << '\t\tC.comm_rx_wait(10) // block up to 10 ticks; the FDCAN Rx ISR wakes us on a new frame'
 				}
-				glue << diag_target_housekeep(m)
-				glue << rx_target_top(m)
-				glue << fault_target_pass(m)
-				glue << doip_target_serve(m)
-				if m.doip.on {
-					// a 0x28 that arrived over DoIP gates the frames this pass drains
-					glue << rx_target_resample(m, '\t\t')
-				}
-				glue << '\t\t// CONSUMER: drain the Rx FIFO (non-blocking); account each external rx frame'
-				glue << '\t\tfor ch.recv(mut rx) {'
-				for si in rx_sigs {
-					// Gate on the DBC DLC too: recv reuses the frame and copies only the bytes that
-					// arrived, so a short same-id frame would leave stale high bytes in the decode.
-					glue << '\t\t\tif rx.id == u32(0x${si.dbc_id.hex()}) && rx.len == ${si.dbc_dlc} && rx.ext == ${si.dbc_ext} { // ${si.dbc_msg}'
-					glue << '\t\t\t\tg_rx_count++'
-					glue << '\t\t\t\tg_rx_last = u32(rx.data[0]) | (u32(rx.data[1]) << 8) | (u32(rx.data[2]) << 16) | (u32(rx.data[3]) << 24)'
-					if idx := msg_ioc_idx[si.dbc_id] {
-						// This message carries an FB-read signal (keyed by DBC id, so it fires even when
-						// the de-duped representative is a different, un-read signal): publish the decoded
-						// value (byte-0 scalar) into its IOC cell so the app thread picks it up wait-free
-						// — while 0x28 has reception on.
-						if m.isotp_conns.len > 0 {
-							glue << '\t\t\t\tif st.rxg.on {'
-							glue << '\t\t\t\t\tC.ioc_pub(${idx}, g_rx_last, u32(0))'
-							glue << '\t\t\t\t}'
-						} else {
-							glue << '\t\t\t\tC.ioc_pub(${idx}, g_rx_last, u32(0))'
+				// the pass, in the ONE order comm_pass_order states (gen_rx_target.v)
+				for step in comm_pass_order {
+					glue << '\t\t// pass: ${step}'
+					match step {
+						.housekeep {
+							glue << diag_target_housekeep(m)
+						}
+						.open {
+							glue << rx_target_top(m)
+						}
+						.reports {
+							glue << fault_target_pass(m)
+						}
+						.remote {
+							glue << doip_target_serve(m)
+							if m.doip.on {
+								glue << rx_target_resample(m, '\t\t')
+							}
+						}
+						.drain {
+							glue << comm_nm_seen(m)
+						glue << '\t\t// CONSUMER: drain the Rx FIFO (non-blocking); account each external rx frame'
+						glue << '\t\tfor ch.recv(mut rx) {'
+						for si in rx_sigs {
+							// Gate on the DBC DLC too: recv reuses the frame and copies only the bytes that
+							// arrived, so a short same-id frame would leave stale high bytes in the decode.
+							glue << '\t\t\tif rx.id == u32(0x${si.dbc_id.hex()}) && rx.len == ${si.dbc_dlc} && rx.ext == ${si.dbc_ext} { // ${si.dbc_msg}'
+							glue << '\t\t\t\tg_rx_count++'
+							glue << '\t\t\t\tg_rx_last = u32(rx.data[0]) | (u32(rx.data[1]) << 8) | (u32(rx.data[2]) << 16) | (u32(rx.data[3]) << 24)'
+							if idx := msg_ioc_idx[si.dbc_id] {
+								// This message carries an FB-read signal (keyed by DBC id, so it fires even when
+								// the de-duped representative is a different, un-read signal): publish the decoded
+								// value (byte-0 scalar) into its IOC cell so the app thread picks it up wait-free
+								// — while 0x28 has reception on.
+								if m.isotp_conns.len > 0 {
+									glue << '\t\t\t\tif st.rxg.on {'
+									glue << '\t\t\t\t\tC.ioc_pub(${idx}, g_rx_last, u32(0))'
+									glue << '\t\t\t\t}'
+								} else {
+									glue << '\t\t\t\tC.ioc_pub(${idx}, g_rx_last, u32(0))'
+								}
+							}
+							glue << '\t\t\t}'
+						}
+						glue << rx_target_arms(m)
+						glue << trace_rx_arms(m, part)
+					glue << shell_rx_arms(m)
+					glue << diag_target_rx_arm(m)
+					glue << nm_rx_arms(m)
+					// an NM frame that woke the network: the next frame sees the new state
+					glue << comm_nm_transition(m)
+					glue << xcore_trace_rx_arm(m)
+						// GATEWAY: forward routes whose SOURCE is the telem bus (`ch`) — raw copy +
+						// id remap onto the destination channel (tx_ready-gated).
+						glue << gateway_forward_arms(m, m.telem.bus)
+						glue << '\t\t}'
+						// GATEWAY: drain each OTHER route bus and forward its routes. Same wake
+						// semaphore, so one comm_rx_wait covers every bus; recv is non-blocking.
+						for b in gw_extra {
+							glue << '\t\tfor ch_${snake(b)}.recv(mut rx) { // route bus ${b}'
+							glue << gateway_forward_arms(m, b)
+							glue << '\t\t}'
+						}
+						}
+						.tick {
+							glue << '\t\tt1 := C.board_now_us()'
+							// NM drains FIRST: produce() ticks the state machine, so the gate
+							// below reflects THIS pass's state — otherwise the producers get one
+							// free frame past the sleep boundary (codex on emb#135).
+							glue << diag_target_nm_hold(m)
+							glue << nm_produce_drain(m)
+						}
+						.cycle {
+							glue << fault_target_cycle(m, 't1', '\t\t')
+						}
+						.settle {
+							glue << rx_target_settle(m)
+						}
+						.persist {
+							// after the pass's last consume, so a DTC persisted now has its snapshot
+							glue << fault_capture_lines(m, 'g_fmem', 'g_diag', '\t\t')
+							glue << fault_target_persist(m, ioc_idx)
 						}
 					}
-					glue << '\t\t\t}'
 				}
-				glue << rx_target_arms(m)
-				glue << trace_rx_arms(m, part)
-			glue << shell_rx_arms(m)
-			glue << diag_target_rx_arm(m)
-			glue << nm_rx_arms(m)
-			glue << xcore_trace_rx_arm(m)
-				// GATEWAY: forward routes whose SOURCE is the telem bus (`ch`) — raw copy +
-				// id remap onto the destination channel (tx_ready-gated).
-				glue << gateway_forward_arms(m, m.telem.bus)
-				glue << '\t\t}'
-				// GATEWAY: drain each OTHER route bus and forward its routes. Same wake
-				// semaphore, so one comm_rx_wait covers every bus; recv is non-blocking.
-				for b in gw_extra {
-					glue << '\t\tfor ch_${snake(b)}.recv(mut rx) { // route bus ${b}'
-					glue << gateway_forward_arms(m, b)
-					glue << '\t\t}'
-				}
-				glue << '\t\tt1 := C.board_now_us()'
-				// NM drains FIRST: produce() ticks the state machine, so the gate
-				// below reflects THIS pass's state — otherwise the producers get one
-				// free frame past the sleep boundary (codex on emb#135).
-				glue << diag_target_nm_hold(m)
-				glue << nm_produce_drain(m)
-				glue << rx_target_settle(m)
-				glue << fault_target_cycle(m)
-				glue << fault_target_persist(m, ioc_idx)
 				if m.nm.on {
 					// REQ-COM-007: every producer below gates on this — the bus is
 					// SILENT in sleep; NM's own drain is exempt (its state machine
@@ -5415,34 +5443,34 @@ fn fault_target_consume(m Model, ind string) []string {
 // after the NM tick, so this pass's state is the one acted on. What the FBs reported since the pass
 // top is consumed before the cycle ends, so a result from the cycle's last dispatches lands inside
 // it (the host's falling edge follows its frame's results the same way, rx_group_hooks).
-fn fault_target_cycle(m Model) []string {
+fn fault_target_cycle(m Model, now string, ind string) []string {
 	if !fault_target_on(m) || !m.nm.on || m.fault_cycle != '' {
 		return []string{}
 	}
 	// bus sleep REQUESTS the end: the cycle stays open for the barrier's grace, so a report a
 	// dispatch from before the edge publishes after this pass's read still lands in it (§7)
 	mut g := [
-		'\t\tif g_nm.awake() != g_fcycle_on { // the operation cycle follows NM (D3)',
-		'\t\t\tg_fcycle_on = g_nm.awake()',
-		'\t\t\tif g_fcycle_on {',
-		'\t\t\t\tif g_fmem.ending { // woken inside the grace: what the ending cycle saw is read into it first',
+		'${ind}if g_nm.awake() != g_fcycle_on { // the operation cycle follows NM (D3)',
+		'${ind}\tg_fcycle_on = g_nm.awake()',
+		'${ind}\tif g_fcycle_on {',
+		'${ind}\t\tif g_fmem.ending { // woken inside the grace: what the ending cycle saw is read into it first',
 	]
-	g << fault_target_consume(m, '\t\t\t\t\t')
-	g << fault_capture_lines(m, 'g_fmem', 'g_diag', '\t\t\t\t\t')
+	g << fault_target_consume(m, ind + '\t\t\t')
+	g << fault_capture_lines(m, 'g_fmem', 'g_diag', ind + '\t\t\t')
 	g << [
-		'\t\t\t\t}',
-		'\t\t\t\tg_fmem.cycle_start()',
-		'\t\t\t} else {',
-		'\t\t\t\tg_fmem.end_cycle_after(t1, u64(${m.fault_grace_us})) // the cycle-end barrier: the producers publish first',
-		'\t\t\t}',
-		'\t\t}',
-		'\t\tif g_fmem.cycle_end_due(t1) {',
+		'${ind}\t\t}',
+		'${ind}\t\tg_fmem.cycle_start()',
+		'${ind}\t} else {',
+		'${ind}\t\tg_fmem.end_cycle_after(${now}, u64(${m.fault_grace_us})) // the cycle-end barrier: the producers publish first',
+		'${ind}\t}',
+		'${ind}}',
+		'${ind}if g_fmem.cycle_end_due(${now}) {',
 	]
-	g << fault_target_consume(m, '\t\t\t')
-	g << fault_capture_lines(m, 'g_fmem', 'g_diag', '\t\t\t')
+	g << fault_target_consume(m, ind + '\t')
+	g << fault_capture_lines(m, 'g_fmem', 'g_diag', ind + '\t')
 	g << [
-		'\t\t\tg_fmem.cycle_end()',
-		'\t\t}',
+		'${ind}\tg_fmem.cycle_end()',
+		'${ind}}',
 	]
 	return g
 }

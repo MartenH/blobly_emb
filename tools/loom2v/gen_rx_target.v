@@ -103,6 +103,68 @@ fn rx_iocb_idx(m Model) map[string]int {
 	return idx
 }
 
+// CommStep is one step of the ThreadX comm thread's pass. comm_pass_order is the ONE order the
+// generator emits them in (emit_run_target), with the reception gate re-sampled at every point that
+// can change it, so no frame is judged by a stale gate:
+//   housekeep  the connection's timers (S3, a pending reset)
+//   open       the pass clock; the gate's first sampling; signal-status faults' level steps
+//   reports    the FBs' fault reports consumed
+//   remote     a DoIP request served — then the gate re-sampled (a 0x28 over IP)
+//   drain      the FIFO, frame by frame: a CAN request served re-samples the gate (a 0x28 on CAN);
+//              an NM frame that wakes the network re-samples it and starts the operation cycle
+//              (comm_nm_transition) before the next frame is judged
+//   tick       NM's state machine
+//   cycle      the operation cycle follows the tick — before settle consumes a deadline occurrence
+//   settle     the gate's last sampling, the restart, the deadlines
+//   persist    the snapshots after the pass's LAST consume, then the journal write — a DTC stored
+//              is never one whose snapshot is still due
+// (the producers — NM's gate, the diagnostic answer, telemetry, COM tx — follow, unchanged)
+enum CommStep {
+	housekeep
+	open
+	reports
+	remote
+	drain
+	tick
+	cycle
+	settle
+	persist
+}
+
+const comm_pass_order = [CommStep.housekeep, .open, .reports, .remote, .drain, .tick, .cycle, .settle,
+	.persist]
+
+// comm_nm_watched: an NM transition inside the drain matters to the pass — the gate waits on NM's
+// sleep, or NM moves the operation cycle.
+fn comm_nm_watched(m Model) bool {
+	return m.nm.on && (rx_target_owner(m).awake != '' || (fault_target_on(m) && m.fault_cycle == ''))
+}
+
+// comm_nm_seen: NM's awake state as the drain last acted on it.
+fn comm_nm_seen(m Model) []string {
+	if !comm_nm_watched(m) {
+		return []string{}
+	}
+	return ['\t\tmut nm_seen := g_nm.awake() // NM as the drain last acted on it']
+}
+
+// comm_nm_transition: after the NM arm, inside the drain — an NM frame that woke the network takes
+// effect before the next frame: the gate re-sampled (the deadlines and loss suppression see the
+// wake) and the operation cycle started, so an occurrence after the wake is recorded in it.
+fn comm_nm_transition(m Model) []string {
+	if !comm_nm_watched(m) {
+		return []string{}
+	}
+	mut out := [
+		'\t\t\tif g_nm.awake() != nm_seen { // an NM frame moved NM: what follows sees it',
+		'\t\t\t\tnm_seen = g_nm.awake()',
+	]
+	out << rx_target_resample(m, '\t\t\t\t')
+	out << fault_target_cycle(m, 'C.board_now_us()', '\t\t\t\t')
+	out << '\t\t\t}'
+	return out
+}
+
 // rx_target_bus: the bus the comm thread receives on (its telemetry bus).
 fn rx_target_bus(m Model) string {
 	return m.telem.bus
@@ -214,17 +276,14 @@ fn rx_target_resample(m Model, ind string) []string {
 	return rx_gate_lines(m, rx_checked_msgs(m), rx_target_bus(m), rx_target_owner(m), ind)
 }
 
-// rx_target_settle: after the drain and NM's tick — the snapshots the drain's signal-status
-// occurrences wait for, the gate's last sampling, the restart and the deadlines.
+// rx_target_settle: after the drain, NM's tick and the cycle it moves — the gate's last sampling,
+// the restart and the deadlines (their occurrences are captured at .persist).
 fn rx_target_settle(m Model) []string {
 	if !rx_target_on(m) {
 		return []string{}
 	}
 	mut out := []string{}
 	owner := rx_target_owner(m)
-	if owner.faults {
-		out << fault_capture_lines(m, 'g_fmem', 'g_diag', '\t\t')
-	}
 	sigs := rx_target_sigs(m)
 	mut list_of := map[string][]string{}
 	for msg in rx_checked_msgs(m) {
@@ -248,6 +307,30 @@ fn rx_target_boot(m Model) []string {
 	return out
 }
 
+// ioc_max: boards/common/ioc.h IOC_MAX, the most one IOC cell carries (pinned by rx_target_test.v)
+const ioc_max = 64
+
+// sig_struct_size: the byte size of a signal's generated struct (sig.<Name>), laid out as C lays
+// out its fields in declaration order — each aligned to its own size, the whole to the largest.
+fn sig_struct_size(si SigInfo) int {
+	mut off := 0
+	mut align := 1
+	for f in si.fields {
+		n := match f.typ {
+			'bool', 'u8', 'i8', 'RxStatus' { 1 }
+			'u16', 'i16' { 2 }
+			'u32', 'i32', 'f32' { 4 }
+			else { 8 }
+		}
+		// u64, i64, f64
+		off = (off + n - 1) / n * n + n
+		if n > align {
+			align = n
+		}
+	}
+	return (off + align - 1) / align * align
+}
+
 // diag_tx_gate: the comm thread's application producers wait on 0x28's transmit gate too.
 fn diag_tx_gate(m Model) string {
 	if m.target.threadx && m.isotp_conns.len > 0 {
@@ -263,6 +346,12 @@ fn validate_rx_target(m Model) {
 	idx := rx_iocb_idx(m)
 	eth := eth_iocb_idx(m)
 	for sname, _ in idx {
+		// a cell carries one whole signal struct, at most IOC_MAX bytes: iocb_cfg parks the image at
+		// boot on a larger one, so it is refused here
+		size := sig_struct_size(m.sig_of[sname] or { SigInfo{} })
+		if size > ioc_max {
+			panic('loom2v: [target] kind="threadx": signal "${sname}" is ${size} bytes as a struct, but a byte-IOC cell carries at most ${ioc_max} (boards/common/ioc.h IOC_MAX) — split it')
+		}
 		if sname in eth {
 			continue
 		}
