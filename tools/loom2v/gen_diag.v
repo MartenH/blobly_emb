@@ -688,7 +688,6 @@ fn diag_target_reset(m Model, ioc_idx map[string]int) []string {
 	}
 	mut g := [
 		'\t\tif g_diag.reset_due() != 0 {',
-		'\t\t\tdiag_t0 := C.board_now_us()',
 		'\t\t\tdiag.wire_drain(mut ch, diag_now_us) // REQ-BOOT-012: the answer on the wire, bounded',
 	]
 	g << doip_reset_wait(m)
