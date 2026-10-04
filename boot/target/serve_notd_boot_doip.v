@@ -17,3 +17,5 @@ fn net_serves() bool {
 fn net_pass(now u64) {}
 
 fn net_drain() {}
+
+fn rest() {}

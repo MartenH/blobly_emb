@@ -110,6 +110,13 @@ pub mut:
 	// or not): no reset overtakes it — and whether the pending reset was asked over the network
 	remote_inflight bool
 	reset_remote    bool
+	// the network has been heard in the session it holds: only then does a dropped connection end
+	// it — a connection that drops before its first request (a stray peer, a refused activation)
+	// is not the tester a handed-off session waits for
+	remote_spoke bool
+	// the time of the last tick: a network request is stamped with it (the mailbox carries none,
+	// and the serve loop ticks every pass)
+	clock u64
 	// a session handed off over the network: S3 does not time it until the boot's own network is
 	// up (net_up) — no tester can reach the boot before — and at most net_wait_us
 	await_net bool
@@ -126,15 +133,15 @@ pub fn (mut p Prog) handle(req &u8, req_len int, resp &u8) int {
 }
 
 // serve_remote serves one request that arrived over the network (DoIP, through the doip thread's
-// mailbox), stamped as tester activity at `now`. Every network request is in flight until
+// mailbox), stamped as tester activity at the last tick. Every network request is in flight until
 // remote_sent — its acknowledgement goes out whether or not there is an answer — and none is
 // served once a reset is pending. A functional request is not served: the bus side serves none.
-pub fn (mut p Prog) serve_remote(req &u8, req_len int, functional bool, resp &u8, now u64) int {
+pub fn (mut p Prog) serve_remote(req &u8, req_len int, functional bool, resp &u8) int {
 	p.remote_inflight = true
 	if req_len < 1 || functional || p.reset_pending {
 		return 0
 	}
-	p.heard(now)
+	p.heard_via(via_net, p.clock)
 	return p.handle_via(via_net, req, req_len, resp)
 }
 
@@ -152,7 +159,7 @@ pub fn (mut p Prog) remote_dropped() {
 	}
 	p.remote_inflight = false
 	p.reset_remote = false
-	if p.owner == via_net {
+	if p.owner == via_net && p.remote_spoke {
 		p.end_session()
 	}
 }
@@ -162,7 +169,7 @@ pub fn (mut p Prog) remote_dropped() {
 pub fn (mut p Prog) net_up(now u64) {
 	if p.await_net {
 		p.await_net = false
-		p.heard(now)
+		p.stamp(now)
 	}
 }
 
@@ -177,6 +184,7 @@ fn (mut p Prog) handle_via(via u8, req &u8, req_len int, resp &u8) int {
 	}
 	n := p.dispatch(req, req_len, resp)
 	p.owner = if p.srv.session == 0x01 { u8(0) } else { via }
+	p.remote_spoke = p.owner == via_net
 	if p.reset_pending {
 		p.reset_remote = via == via_net
 	}
@@ -227,14 +235,27 @@ pub fn (mut p Prog) open_handed_off(now u64, via u8) {
 	p.srv.session = 0x02
 	p.owner = via
 	p.await_net = via == via_net
+	p.remote_spoke = false
 	p.unlocked = false
 	p.challenge_valid = false
-	p.heard(now)
+	p.stamp(now)
 }
 
-// heard stamps tester activity at `now` — every request the owner hands to handle(), and the
-// handed-off session's start. The silence clocks run from it.
+// heard stamps bus activity at `now` — every bus request the owner hands to handle(), and the
+// bus exchange in flight (comm/diag serve_step). The silence clocks run from it.
 pub fn (mut p Prog) heard(now u64) {
+	p.heard_via(via_bus, now)
+}
+
+// heard_via: activity over `via` counts only when that transport may use the session in force —
+// a request the other transport's session refuses keeps nothing alive (S3, the stay-window)
+fn (mut p Prog) heard_via(via u8, now u64) {
+	if p.srv.session == 0x01 || p.owner == 0 || p.owner == via {
+		p.stamp(now)
+	}
+}
+
+fn (mut p Prog) stamp(now u64) {
 	p.last_rx_us = now
 	p.heard = true
 }
@@ -252,8 +273,11 @@ pub fn (p &Prog) reset_due() bool {
 	return p.reset_pending && !p.remote_inflight
 }
 
+// A reset the network asked for is not the bus's to cancel: its answer is not the one the bus lost.
 pub fn (mut p Prog) cancel_reset() {
-	p.reset_pending = false
+	if !p.reset_remote {
+		p.reset_pending = false
+	}
 }
 
 // S3server (ISO 14229): a non-default session dies after 5 s of tester silence.
@@ -273,6 +297,7 @@ pub const net_wait_us = u64(10_000_000)
 // torn image is refused by the valid-mark-last rule anyway — conservative wins).
 // Call it from the serve loop; handle() stamps the activity clock.
 pub fn (mut p Prog) tick(now u64) {
+	p.clock = now
 	if p.await_net && elapsed(now, p.last_rx_us) > net_wait_us {
 		p.await_net = false // the network never came: time the session from the handoff
 	}
@@ -291,6 +316,7 @@ fn (mut p Prog) end_session() {
 	p.erased = false
 	p.owner = 0
 	p.await_net = false
+	p.remote_spoke = false
 }
 
 // idle_return_due: the serve loop's exit question (REQ-BOOT-014). Only in the

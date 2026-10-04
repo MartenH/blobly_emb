@@ -607,7 +607,7 @@ allow_bench_key = true
 	// the answer leaves over TCP before the reset: the wait 0x11 already has, then the cell —
 	// naming the transport that asked, so the bootloader's session is the network tester's
 	in_order(glue, [
-		'for C.doip_tx_pending() != 0',
+		'doipnet.drain_tx(diag_now_us)',
 		'if g_diag.reset_due() == uds.reset_into_boot {',
 		'C.boot_handoff_request(if g_diag.reset_asked_remotely() { 1 } else { 0 })',
 		'C.diag_sys_reset()',

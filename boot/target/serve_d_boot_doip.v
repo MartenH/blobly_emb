@@ -8,9 +8,10 @@ import driver.doipnet
 // runs the application's own network seam — NetX through driver/eth/netx_up.c, the DoIP entity
 // through driver/eth/doip_netx.c (ARP gleaning included) and driver/doipnet's loop — as the SAME
 // entity the application is. A DoIP request reaches boot.Prog across doip_netx.c's mailbox, which
-// this loop answers on every pass, as the application's comm thread does.
+// this loop answers as the application's comm thread does (doipnet.serve_mailbox).
 
 fn C.boot_net_start()
+fn C.boot_net_rest()
 fn C.boot_doip_logical() u16
 fn C.boot_doip_functional() u16
 fn C.boot_doip_vin(&u8)
@@ -19,16 +20,7 @@ fn C.boot_doip_act_types(&u8) int
 fn C.boot_doip_announce_count() int
 fn C.boot_doip_announce_ms() int
 fn C.doip_mb_init(&u8, &u8)
-fn C.doip_mb_take(&int) int
-fn C.doip_mb_answer(int)
-fn C.doip_mb_take_sent() int
-fn C.doip_mb_take_dropped() int
-fn C.doip_tx_pending() int
 fn C.doip_net_ready() int
-
-// how long a reset waits for the answers already handed to TCP to be acknowledged (the
-// application's comm thread waits as long)
-const tcp_drain_us = u64(500_000)
 
 __global (
 	g_doip      doip.Server // DoIP framing on the doip thread; the server is g_prog
@@ -40,7 +32,13 @@ __global (
 )
 
 fn serve() {
-	// the entity's identity and policy: the node's, as its application announces them
+	C.boot_net_start() // never returns: tx_application_define, then the boot thread's boot_serve
+}
+
+// boot_net_init: from tx_application_define, before any thread runs — the entity's identity and
+// policy (the node's, as its application announces them) and the mailbox
+@[export: 'blobly_boot_net_init']
+fn boot_net_init() {
 	g_doip.entity_addr = C.boot_doip_logical()
 	g_doip.functional_addr = C.boot_doip_functional()
 	C.boot_doip_vin(&g_doip.vin[0])
@@ -48,7 +46,6 @@ fn serve() {
 	g_doip.n_act_types = C.boot_doip_act_types(&g_doip.act_types[0])
 	g_doip.serve.answer = doipnet.answer // g_prog, across the mailbox
 	C.doip_mb_init(&g_doip_req[0], &g_doip_resp[0])
-	C.boot_net_start() // never returns: the boot thread runs blobly_boot_serve
 }
 
 // boot_serve: the boot thread (boot_net.c) — ThreadX's low-level init started the DWT clock
@@ -75,30 +72,21 @@ fn net_serves() bool {
 }
 
 // net_pass: the network's share of a pass — the listener coming up (a session handed off over DoIP
-// starts its S3 then), what the doip thread reported (an answer sent: a reset waiting on it may go;
-// a connection dropped: what it held ends), then a request waiting in the mailbox
+// starts its S3 then), then the mailbox
 fn net_pass(now u64) {
 	if !g_net_ready && C.doip_net_ready() != 0 {
 		g_net_ready = true
 		g_prog.net_up(now)
 	}
-	if C.doip_mb_take_sent() != 0 {
-		g_prog.remote_sent()
-	}
-	if C.doip_mb_take_dropped() != 0 {
-		g_prog.remote_dropped()
-	}
-	mut functional := 0
-	n := C.doip_mb_take(&functional)
-	if n >= 0 {
-		C.doip_mb_answer(g_prog.serve_remote(&g_doip_req[0], n, functional != 0, &g_doip_resp[0],
-			now))
-	}
+	doipnet.serve_mailbox(mut g_prog, &g_doip_req[0], &g_doip_resp[0])
 }
 
-// net_drain: before a reset, the DoIP answers already handed to TCP leave it — bounded, as the bus
-// drain is (a peer that never acknowledges gets the reset all the same)
 fn net_drain() {
-	t0 := C.board_now_us()
-	for C.doip_tx_pending() != 0 && C.board_now_us() - t0 < tcp_drain_us {}
+	doipnet.drain_tx(now_us)
+}
+
+// rest: up to a tick for the network threads (the serve loop is above them), woken at once by a
+// request posted to the mailbox
+fn rest() {
+	C.boot_net_rest()
 }

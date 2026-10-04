@@ -178,11 +178,6 @@ fn doip_target_fns(m Model) []string {
 		'fn C.doip_net_seed(u32)',
 		'fn C.doip_net_tcb(int) voidptr',
 		'fn C.doip_mb_init(&u8, &u8)',
-		'fn C.doip_mb_take(&int) int',
-		'fn C.doip_mb_answer(int)',
-		'fn C.doip_tx_pending() int',
-		'fn C.doip_mb_take_sent() int',
-		'fn C.doip_mb_take_dropped() int',
 	]
 	if sa_levels(m) == 0 {
 		// the TCP sequence-number seed comes from the board TRNG (declared with 0x27 otherwise)
@@ -333,25 +328,13 @@ fn doip_target_init(m Model) []string {
 
 // doip_target_serve: the top of every pass, after housekeep — what the doip thread reported (an
 // answer sent: a reset waiting on it may go; a connection dropped: what it opened ends), then a
-// request waiting in the mailbox, served by the one server.
+// request waiting in the mailbox, served by the one server (driver/doipnet serve_mailbox — the
+// bootloader's serve loop runs the same).
 fn doip_target_serve(m Model) []string {
 	if !m.doip.on {
 		return []string{}
 	}
-	return [
-		'\t\tif C.doip_mb_take_sent() != 0 {',
-		'\t\t\tg_diag.remote_sent()',
-		'\t\t}',
-		'\t\tif C.doip_mb_take_dropped() != 0 {',
-		'\t\t\tg_diag.remote_dropped()',
-		'\t\t}',
-		'\t\tmut doip_fn := 0',
-		'\t\tdoip_n := C.doip_mb_take(&doip_fn)',
-		'\t\tif doip_n >= 0 {',
-		'\t\t\tdoip_rn := g_diag.serve_remote(&g_doip_req[0], doip_n, doip_fn != 0, &g_doip_resp[0])',
-		'\t\t\tC.doip_mb_answer(doip_rn)',
-		'\t\t}',
-	]
+	return ['\t\tdoipnet.serve_mailbox(mut g_diag, &g_doip_req[0], &g_doip_resp[0])']
 }
 
 // doip_reset_wait: before the MCU resets, the DoIP answers already handed to TCP leave it — bounded,
@@ -360,8 +343,7 @@ fn doip_reset_wait(m Model) []string {
 	if !m.doip.on {
 		return []string{}
 	}
-	return ['\t\t\tfor C.doip_tx_pending() != 0 && C.board_now_us() - diag_t0 < 500000 {',
-		'\t\t\t\tC._tx_thread_sleep(1)', '\t\t\t}']
+	return ['\t\t\tdoipnet.drain_tx(diag_now_us)']
 }
 
 // bus_interface: [bus.<name>].interface ('' = no such bus or no interface)

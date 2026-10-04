@@ -573,7 +573,8 @@ fn test_session_change_clears_auth() {
 
 fn ask_net(mut p Prog, req []u8, now u64) []u8 {
 	mut resp := []u8{len: 600}
-	n := p.serve_remote(&req[0], req.len, false, unsafe { &resp[0] }, now)
+	p.tick(now) // the serve loop ticks every pass; a network request is stamped by it
+	n := p.serve_remote(&req[0], req.len, false, unsafe { &resp[0] })
 	return resp[..n]
 }
 
@@ -668,7 +669,7 @@ fn test_a_functional_network_request_is_acknowledged_unanswered() {
 	mut p := new_prog(mut f)
 	req := [u8(0x10), 0x02]
 	mut resp := []u8{len: 64}
-	assert p.serve_remote(&req[0], 2, true, unsafe { &resp[0] }, 0) == 0
+	assert p.serve_remote(&req[0], 2, true, unsafe { &resp[0] }) == 0
 	assert p.srv.session == 0x01
 	assert p.remote_inflight, 'its acknowledgement still goes out'
 }
@@ -720,6 +721,45 @@ fn test_a_session_handed_off_over_the_network_waits_for_the_network() {
 	assert b.srv.session == 0x01
 }
 
+// a request the other transport's session refuses keeps nothing alive
+fn test_a_refused_request_does_not_hold_the_other_transports_session() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	unlock_via(mut p, via_bus, proof(), 0)
+	for t := u64(1_000_000); t <= s3_server_us; t += 1_000_000 {
+		assert ask_net(mut p, [u8(0x3E), 0x00], t) == [u8(0x7F), 0x3E, 0x22]
+		p.remote_sent()
+		p.tick(t)
+	}
+	p.tick(s3_server_us + 1)
+	assert p.srv.session == 0x01 && !p.unlocked, 'the network kept the bus session alive'
+}
+
+// a reset the network asked for is not cancelled by a bus answer the controller refused
+fn test_a_bus_failure_does_not_cancel_a_network_reset() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	assert ask_net(mut p, [u8(0x11), 0x01], 0) == [u8(0x51), 0x01]
+	p.cancel_reset() // comm/diag serve_step: a bus frame refused
+	p.remote_sent()
+	assert p.reset_due()
+}
+
+// a handed-off session waits for ITS tester: a connection that drops before any request does not
+// end it — one that spoke in it and drops does
+fn test_a_handoff_survives_a_connection_that_never_spoke() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	p.open_handed_off(0, via_net)
+	p.net_up(1)
+	p.remote_dropped()
+	assert p.srv.session == 0x02
+	assert ask_net(mut p, [u8(0x29), 0x01], 2)[..2] == [u8(0x69), 0x01]
+	p.remote_sent()
+	p.remote_dropped()
+	assert p.srv.session == 0x01 && !p.challenge_valid
+}
+
 // ---- the reference model ----
 
 struct Model {
@@ -731,6 +771,7 @@ mut:
 	pending   bool // a reset answered
 	remote    bool // ... asked over the network
 	inflight  bool
+	spoke     bool // the network has been heard in the session it holds
 	heard     u64
 }
 
@@ -739,6 +780,7 @@ fn (mut m Model) end() {
 	m.owner = 0
 	m.unlocked = false
 	m.challenge = false
+	m.spoke = false
 }
 
 // request: the answer the rules give (its first bytes: the positive SID, or 7F SID NRC)
@@ -749,11 +791,11 @@ fn (mut m Model) request(via u8, req []u8, now u64) []u8 {
 	if m.pending {
 		return []u8{}
 	}
-	m.heard = now
 	sid := req[0]
 	if m.session != 0x01 && m.owner != via {
-		return [u8(0x7F), sid, 0x22]
+		return [u8(0x7F), sid, 0x22] // and keeps nothing alive
 	}
+	m.heard = now
 	mut out := []u8{}
 	match sid {
 		0x10 {
@@ -789,6 +831,7 @@ fn (mut m Model) request(via u8, req []u8, now u64) []u8 {
 		}
 	}
 	m.owner = if m.session == 0x01 { u8(0) } else { via }
+	m.spoke = m.owner == via_net
 	return out
 }
 
@@ -798,7 +841,7 @@ fn (mut m Model) dropped() {
 	}
 	m.inflight = false
 	m.remote = false
-	if m.owner == via_net {
+	if m.owner == via_net && m.spoke {
 		m.end()
 	}
 }
@@ -846,6 +889,8 @@ fn test_two_transports_against_the_reference_model() {
 	for step in 0 .. 1000 {
 		op := rand.intn(12) or { 0 }
 		now += u64(rand.intn(400_000) or { 0 })
+		p.tick(now) // the serve loop ticks every pass, before it serves
+		m.tick(now)
 		match op {
 			0...7 {
 				via := if rand.intn(2) or { 0 } == 0 { via_bus } else { via_net }

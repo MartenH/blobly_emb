@@ -145,6 +145,8 @@ fn serve_loop() {
 	if !can_ok && !net_serves() {
 		for {} // no transport, nothing to serve — parked, but flashable over SWD
 	}
+	rx_id := C.boot_rx_id()
+	tx_id := C.boot_tx_id()
 	boot_t0 := C.board_now_us() // REQ-BOOT-014: the stay-window baseline
 	if g_handoff != 0 {
 		// the application answered 0x10 02 already: the tester holds a programming session, and
@@ -159,8 +161,8 @@ fn serve_loop() {
 		// pumped with a refusal aborting it, S3 held while an exchange is in flight
 		mut due := false
 		if can_ok {
-			due = diag.serve_step(mut g_prog, mut g_link, C.boot_rx_id(), C.boot_tx_id(), now, mut
-				ch, &g_req[0], &g_rsp[0])
+			due = diag.serve_step(mut g_prog, mut g_link, rx_id, tx_id, now, mut ch, &g_req[0],
+				&g_rsp[0])
 		} else {
 			g_prog.tick(now)
 			due = g_prog.reset_due()
@@ -177,6 +179,9 @@ fn serve_loop() {
 		if g_requested && g_app_ok && g_prog.idle_return_due(now, boot_t0) {
 			C.boot_info_normal()
 			C.boot_sys_reset() // no request pending -> the boot jumps to the app
+		}
+		if !diag.in_flight(&g_link) {
+			rest() // nothing in flight on the bus: give the rest of the image its turn
 		}
 	}
 }

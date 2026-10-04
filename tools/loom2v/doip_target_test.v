@@ -109,13 +109,7 @@ fn test_the_comm_thread_serves_doip_from_the_mailbox() {
 	steps := [
 		'C.doip_net_seed(doip_seed)',
 		'g_diag.housekeep(',
-		'if C.doip_mb_take_sent() != 0 {',
-		'g_diag.remote_sent()',
-		'if C.doip_mb_take_dropped() != 0 {',
-		'g_diag.remote_dropped()',
-		'doip_n := C.doip_mb_take(&doip_fn)',
-		'g_diag.serve_remote(&g_doip_req[0], doip_n, doip_fn != 0, &g_doip_resp[0])',
-		'C.doip_mb_answer(doip_rn)',
+		'doipnet.serve_mailbox(mut g_diag, &g_doip_req[0], &g_doip_resp[0])',
 		'for ch.recv(mut rx) {',
 	]
 	mut at := -1
@@ -137,7 +131,7 @@ fn test_the_comm_thread_serves_doip_from_the_mailbox() {
 	assert !glue.contains('functional_addr'), 'the default functional address is comm/doip\'s'
 	// a reset waits for the CAN controller, then for DoIP answers still in TCP's transmit queue
 	can_wait := glue.index('diag.wire_drain(mut ch') or { -1 }
-	tcp_wait := glue.index('for C.doip_tx_pending() != 0') or { -1 }
+	tcp_wait := glue.index('doipnet.drain_tx(diag_now_us)') or { -1 }
 	reset := glue.index('\t\t\tC.diag_sys_reset()') or { -1 } // the call, not its declaration
 	assert can_wait >= 0 && can_wait < tcp_wait && tcp_wait < reset
 	// 0x27 (the 0x11 gate) declares the TRNG seam, which the TCP seed shares

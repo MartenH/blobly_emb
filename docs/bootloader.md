@@ -200,20 +200,23 @@ application's generated doip thread now calls too.
 
 **Kernel-free decision, kernel on the stay path.** The decision and the jump still run first, from
 near-reset state, before anything is initialized (`crt0` only copies `.data` and zeroes `.bss`).
-Staying, the boot enters ThreadX (`boards/common/boot_net.c`): NetX's IP thread and the two doip
-threads at the top, and the serve loop (`boot/target`, `serve_d_boot_doip.v`) as the LOWEST thread,
-never sleeping — the network preempts it whenever it has work, a flash erase stalls only it, and the
-loop on a bus-only node is unchanged (`serve_notd_boot_doip.v`, a bare superloop). Each pass serves
-the bus (`diag.serve_step`) and the DoIP mailbox (`doip_netx.c`'s, the one the application's comm
-thread answers). The serve thread has a 16 KB stack: the deepest frames are the Ed25519 verifies
+Staying, the boot enters ThreadX (`boards/common/boot_net.c`): the serve loop (`boot/target`,
+`serve_d_boot_doip.v`) at the top — a LAN flood must not starve an ISO-TP transfer on the bus — and
+NetX's IP thread and the two doip threads below it. The loop rests a tick whenever nothing is in
+flight on the bus, woken at once when the doip thread posts a request; on a bus-only node it is
+unchanged (`serve_notd_boot_doip.v`, a bare superloop). Each pass serves the bus
+(`diag.serve_step`) and the DoIP mailbox through `doipnet.serve_mailbox`, the one the application's
+comm thread runs, and a reset waits for TCP as the application's does (`doipnet.drain_tx`). The serve thread has a 16 KB stack: the deepest frames are the Ed25519 verifies
 (`bcrypto` verify_start 1.8 KB, finish 1.3 KB, add_pt 1.2 KB per gcc's `-fstack-usage`).
 
 **One server, two transports** (`boot.Prog`): the transport whose request opened the session in
 force holds it, and the other is refused conditionsNotCorrect (0x22) until it ends — so the 0x29
 unlock earned over one transport is never used over the other (the application's REQ-NET-012 rule,
-here by session rather than by unlock, since the boot has one level). A request over DoIP is in
-flight until its answer is sent, and no reset overtakes it; a reset asked over DoIP whose answer
-never left dies with the connection, and a connection that drops ends the session it held. A
+here by session rather than by unlock, since the boot has one level); a refused request keeps
+nothing alive (S3, the stay-window). A request over DoIP is in flight until its answer is sent, and
+no reset overtakes it; a reset asked over DoIP whose answer never left dies with the connection (a
+bus frame the controller refuses does not cancel it), and a connection that drops ends the session
+it held once it has spoken in it — a stray connection that drops first does not end a handoff. A
 DoIP message holds one ISO-TP message (`comm/doip` `max_msg` = header + addresses + 520), so the
 boot's 512-byte TransferData blocks fit — blobly_net's `flash.program` runs over a DoIP connection
 unchanged (checked against an in-process entity answering 514-byte blocks).
@@ -229,7 +232,9 @@ probes the dead connection and reconnects into the same handle) and goes on with
 DoIP listener is open (`doip_net_ready`, `Prog.net_up`) — no tester can speak before the PHY has
 negotiated and the announcements are out, a few seconds — and runs in full from then; a network that
 never comes up stops the wait at `net_wait_us` (10 s), after which S3 and the stay-window give the
-ECU back to its application. `boot/prog_test.v` holds the rules against a reference model of
+ECU back to its application. The cell value is new (`BOOTCELL_REQ_HANDOFF_NET`): a bootloader
+older than this binding reads it as a bench request and serves the bus only, so a `[doip]` node's
+application and bootloader go on together (`make flash` writes both). `boot/prog_test.v` holds the rules against a reference model of
 interleaved bus and network requests, drops and resets.
 
 **Dual-bank caveat for P4:** a full-bank swap swaps the bootloader out with the app —
