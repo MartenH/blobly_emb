@@ -344,8 +344,16 @@ fn rx_publish_hooks(m Model, sname string, fld string, owner RxOwner, ind string
 		return []string{}
 	}
 	fm := owner.fmem
+	// a publication while the network sleeps is published but is no test result: it steps no
+	// debounce and leaves NOTHING behind a later level step could replay — no status, no event,
+	// no lost baseline (RxOwner.receiving, the one predicate the lost count asks too)
+	gated := owner.gated()
+	i0 := if gated { ind + '\t' } else { ind }
 	mut out := []string{}
-	out << '${ind}st.fsrc_${snake(sname)} = ${fld}.status'
+	if gated {
+		out << '${ind}if ${owner.receiving()} { // asleep: published, not judged'
+	}
+	out << '${i0}st.fsrc_${snake(sname)} = ${fld}.status'
 	for i, f in m.faults {
 		if f.signal != sname {
 			continue
@@ -366,13 +374,16 @@ fn rx_publish_hooks(m Model, sname string, fld string, owner RxOwner, ind string
 				'if ${d} != 0 && ${d} < ${half} { fault.TestResult.failed } else if ${fld}.status == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }'
 			}
 		}
-		out << '${ind}st.sdeb_${i}.apply(${fm}.control_gen(${i}), ${fm}.control_held(${i}))'
-		out << '${ind}st.sdeb_${i}.step(${res}, now, ${owner.receiving()})'
-		out << '${ind}${fm}.consume(${i}, st.sdeb_${i}.rep)'
-		out << '${ind}st.sev_${i} = true'
+		out << '${i0}st.sdeb_${i}.apply(${fm}.control_gen(${i}), ${fm}.control_held(${i}))'
+		out << '${i0}st.sdeb_${i}.step(${res}, now, true)'
+		out << '${i0}${fm}.consume(${i}, st.sdeb_${i}.rep)'
+		out << '${i0}st.sev_${i} = true'
 		if f.on == 'lost' {
-			out << '${ind}st.slost_${i} = ${fld}.lost'
+			out << '${i0}st.slost_${i} = ${fld}.lost'
 		}
+	}
+	if gated {
+		out << '${ind}}'
 	}
 	return out
 }

@@ -40,6 +40,10 @@ mut:
 	closed_publications int // a value published while 0x28 had reception off
 	publications        int
 	timeouts            int // `timeout` publications: each one steps the timeout fault's debounce
+	results             int // debounce steps that judged a result (enabled, passed or failed)
+	fsrc                com.RxPublish // the watched status as last published (st.fsrc_*)
+	sev                 bool // a publication stepped the faults since the pass top (st.sev_*)
+	wake_at_tick        bool // this node's own request, taken by NM's tick this pass
 	consumed_late       bool // a consume after this pass's persist step: its snapshot waits a pass
 	persisted_due       bool // a persist found a snapshot still due
 }
@@ -97,18 +101,52 @@ fn (mut p PassModel) publish(r com.RxPublish, persisted bool) {
 	rt := if r == .timeout {
 		fault.TestResult.failed
 	} else if r == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }
-	p.integ.apply(p.mem.control_gen(0), p.mem.control_held(0))
-	p.integ.step(ri, p.now, p.gate.receiving())
-	p.mem.consume(0, p.integ.rep)
-	p.tmo.apply(p.mem.control_gen(1), p.mem.control_held(1))
-	p.tmo.step(rt, p.now, p.gate.receiving())
-	p.mem.consume(1, p.tmo.rep)
+	if !p.gate.receiving() {
+		// asleep: published, not judged, nothing cached
+		return
+	}
+	p.fsrc = r
+	p.step(ri, rt, true)
+	p.sev = true
 }
 
 fn (mut p PassModel) sample() {
 	if p.gate.sample(p.rx_on, p.nmm.awake()) {
 		p.mon.silenced()
+		p.fsrc = .none // the status goes stale when reception stops
 	}
+}
+
+// step: both signal-status faults' debounce, one result each (rx_publish_hooks / the level step)
+fn (mut p PassModel) step(ri fault.TestResult, rt fault.TestResult, enabled bool) {
+	for r in [ri, rt] {
+		if enabled && r != .not_tested {
+			p.results++
+		}
+	}
+	p.integ.apply(p.mem.control_gen(0), p.mem.control_held(0))
+	p.integ.step(ri, p.now, enabled)
+	p.mem.consume(0, p.integ.rep)
+	p.tmo.apply(p.mem.control_gen(1), p.mem.control_held(1))
+	p.tmo.step(rt, p.now, enabled)
+	p.mem.consume(1, p.tmo.rep)
+}
+
+// level: the pass-top step of the watched status (signal_fault_step_lines), for a pass whose drain
+// published nothing
+fn (mut p PassModel) level() {
+	if p.sev && p.gate.live() {
+		p.sev = false
+		return
+	}
+	p.sev = false
+	ri := if p.fsrc == .integrity {
+		fault.TestResult.failed
+	} else if p.fsrc == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }
+	rt := if p.fsrc == .timeout {
+		fault.TestResult.failed
+	} else if p.fsrc == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }
+	p.step(ri, rt, p.gate.live())
 }
 
 // cycle: the operation cycle follows NM (fault_target_cycle)
@@ -136,6 +174,7 @@ fn (mut p PassModel) pass(dt u64, remote int, drain []Ev) {
 			.housekeep, .reports {}
 			.open {
 				p.sample()
+				p.level()
 			}
 			.remote {
 				if remote != 0 {
@@ -168,6 +207,7 @@ fn (mut p PassModel) pass(dt u64, remote int, drain []Ev) {
 							if p.nmm.awake() != p.seen {
 								p.seen = p.nmm.awake()
 								p.sample()
+								p.fsrc = .none // nothing from before the wake is replayed
 								p.cycle()
 							}
 						}
@@ -175,6 +215,10 @@ fn (mut p PassModel) pass(dt u64, remote int, drain []Ev) {
 				}
 			}
 			.tick {
+				if p.wake_at_tick {
+					p.wake_at_tick = false
+					p.nmm.request(p.now)
+				}
 				_ = p.nmm.tick(p.now)
 			}
 			.cycle {
@@ -268,4 +312,53 @@ fn test_one_silence_is_one_debounce_step() {
 		p.pass(10_000, 0, [])
 	}
 	assert p.timeouts == 1, 'one silence stepped the debounce ${p.timeouts} times'
+}
+
+// pass_to_sleep runs passes with nothing wanting the bus until NM has it asleep
+fn (mut p PassModel) pass_to_sleep() {
+	p.nmm.release()
+	for _ in 0 .. 100 {
+		p.pass(10_000, 0, [])
+		if !p.nmm.awake() {
+			return
+		}
+	}
+	assert false, 'NM never slept'
+}
+
+// NOTHING a frame received while the network sleeps produces feeds a test result — not at its
+// publication, and not later, when the level step would replay the status it left behind: a corrupt
+// frame cannot raise the integrity DTC, a good one cannot heal it, after a wake with no frame.
+fn test_a_frame_received_asleep_feeds_no_result() {
+	for kind in [Ev.corrupt, .good] {
+		for by_tick in [false, true] {
+			mut p := new_model()
+			p.nmm.request(0)
+			p.pass(10_000, 0, [])
+			if kind == .good {
+				// a failed integrity test before the sleep: a sleep-time good frame must not heal it
+				p.pass(10_000, 0, [Ev.corrupt])
+			} else {
+				p.pass(10_000, 0, [Ev.good])
+			}
+			before := p.mem.slots[0].status & (fault.test_failed | fault.confirmed)
+			p.pass_to_sleep()
+			results := p.results
+			// a frame received asleep, then a wake — an NM frame later in the same drain, or this node's
+			// own request taking effect at the tick — then passes with no frame
+			if by_tick {
+				p.wake_at_tick = true
+				p.pass(10_000, 0, [kind])
+			} else {
+				p.pass(10_000, 0, [kind, .nm_wake])
+			}
+			assert p.nmm.awake()
+			for _ in 0 .. 3 {
+				p.pass(10_000, 0, [])
+			}
+			assert p.results == results, '${kind}: a sleep-time frame fed ${p.results - results} result(s)'
+			after := p.mem.slots[0].status & (fault.test_failed | fault.confirmed)
+			assert after == before, '${kind}: the integrity DTC moved: 0x${before.hex()} -> 0x${after.hex()}'
+		}
+	}
 }

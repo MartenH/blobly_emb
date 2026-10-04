@@ -160,6 +160,12 @@ fn comm_nm_transition(m Model) []string {
 		'\t\t\t\tnm_seen = g_nm.awake()',
 	]
 	out << rx_target_resample(m, '\t\t\t\t')
+	if rx_target_owner(m).faults {
+		// nothing from before the wake is a level a step may replay after it
+		for src in fault_sources(m) {
+			out << '\t\t\t\tst.fsrc_${snake(src)} = .never_received'
+		}
+	}
 	out << fault_target_cycle(m, 'C.board_now_us()', '\t\t\t\t')
 	out << '\t\t\t}'
 	return out

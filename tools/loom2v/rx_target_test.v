@@ -222,9 +222,11 @@ fn test_a_signal_status_fault_is_debounced_on_the_comm_thread() {
 		'now, st.rxg.live())', // the level is not judged while reception is paused
 		'g_fmem.consume(0, st.sdeb_0.rep)',
 		'C.iocb_pub(0, &command)',
+		// a frame published while the network sleeps is no result and caches nothing: the
+		// status, the steps, the event flags and the lost baseline all wait on receiving
+		'if st.rxg.receiving() { // asleep: published, not judged',
 		'st.fsrc_command = command.status',
 		'st.sdeb_0.apply(g_fmem.control_gen(0), g_fmem.control_held(0))',
-		'now, st.rxg.receiving())', // a frame published while the network sleeps is not a result
 		'g_fmem.consume(2, st.sdeb_2.rep)',
 		'st.slost_2 = command.lost',
 	])
@@ -432,6 +434,7 @@ fn test_the_comm_pass_runs_in_one_order() {
 		'g_nm.on_peers(',
 		'if g_nm.awake() != nm_seen {', // an NM frame that woke the network ...
 		'st.rxg.sample(g_diag.server.rx_enabled(), g_nm.awake())', // ... re-samples the gate
+		'st.fsrc_command = .never_received', // ... clears what a level step could replay
 		'g_fmem.cycle_start()', // ... and starts the cycle, before the next frame
 		'// pass: tick',
 		'g_nm.produce(t1, mut nm_txf)',
