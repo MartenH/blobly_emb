@@ -73,7 +73,7 @@ period_ms = 500
 # hook, TraceCmd/Rsp handshake and ISO-TP block dump as the host trace_demo, on the board's DWT µs
 # clock with no osal, riding the one FDCAN bus (can0) so the dump and CpuLoad share it. There are
 # no threads here, so FB records are the whole trace (level = "fb"); real preemptive thread/ISR
-# capture is the ThreadX shape (h735_threadx).
+# capture is the ThreadX shape (h755_threadx, system_full's domain).
 #
 # The ids are NOT the docs/telemetry.md defaults (0x7E2..0x7E6): this image runs on the H735-DK,
 # which is system_full's sysnode board, on its compute bus. There the defaults collide: domain

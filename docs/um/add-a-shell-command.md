@@ -19,8 +19,8 @@ fc  = 0x7F2                    # host flow control
 
 ## 2. Implement it in the example's `target_ext.c`
 
-`target_ext.c` is the example's own C beside the shared glue (`h735_threadx`, `h755_threadx`
-and system_full's `domain` have one). A node without one creates it and lists it in its
+`target_ext.c` is the example's own C beside the shared glue (`h755_threadx` and
+system_full's `domain` have one). A node without one creates it and lists it in its
 Makefile's `BSP` next to `$(LOOM_GLUE_SRCS)`; it defines only its own symbols — never one the
 shared glue files define (`tools/loom2v/threadx_makefiles_test.v` refuses that).
 

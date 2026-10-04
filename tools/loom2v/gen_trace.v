@@ -5,7 +5,7 @@
 // (ISR = Cortex-M exec-change, thread = RTOS/Loom, FB = the Loom's set_trace_hook); loom2v only WIRES
 // — parse [trace], validate what the target can honour, and emit the few config-shaped fragments.
 //
-// This file currently generates the ThreadX exec-hook RAW STREAM (the HW-verified h735_threadx path):
+// This file currently generates the ThreadX exec-hook RAW STREAM (HW-verified on the H735 and the H755):
 // the comm thread freezes + snapshots the C ring (trace_hooks.c) on a host stop and serves it on
 // record_id, tx_ready-gated. The host command-driven protocol (arm/stop/dump via routed TraceCmd)
 // is served by comm/trace's TraceModule and lands via frame->module routing — not generated here.

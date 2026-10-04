@@ -4,8 +4,11 @@ import os
 
 // The diagnostic server on a ThreadX comm thread (docs/diagnostics.md R2): what the generator
 // wires, in what order, and what it refuses until the next R2 steps. Runs the real generator on
-// examples/h735_threadx (ThreadX, NM, trace and shell on can0, no [nvm]) with a connection added —
+// testdata/threadx_node (ThreadX, NM, trace and shell on can0, no [nvm]) with a connection added —
 // a refusal is a panic, which cannot be caught in-process.
+
+// the ThreadX node config these tests generate from (test input, never built)
+const fixture_dir = os.join_path(@DIR, 'testdata', 'threadx_node')
 
 const diag_conn = '
 [isotp]
@@ -29,7 +32,7 @@ fn loom2v_bin() string {
 	return bin
 }
 
-// generate runs loom2v on h735_threadx's config with `extra` appended; returns the exit code, the
+// generate runs loom2v on the fixture's config with `extra` appended; returns the exit code, the
 // output and the generated glue.
 fn generate(name string, extra string) (int, string, string) {
 	return generate_edited(name, fn (src string) string {
@@ -37,20 +40,24 @@ fn generate(name string, extra string) (int, string, string) {
 	}, extra)
 }
 
-// generate_edited is generate with h735_threadx's config edited first.
+// generate_edited is generate with the fixture's config edited first.
 fn generate_edited(name string, edit fn (string) string, extra string) (int, string, string) {
 	tmp := os.join_path(os.temp_dir(), 'diag_target_${name}_${os.getpid()}')
 	defer {
 		os.rmdir_all(tmp) or {}
 	}
-	return run_in_scratch(tmp, 'h735_threadx', edit, extra)
+	return run_in_scratch(tmp, fixture_dir, edit, extra)
 }
 
-// run_in_scratch runs loom2v on a copy of example `name`'s config (edited, `extra` appended) placed
-// in a sibling layout under `tmp`, so paths the config resolves against itself stay inside `tmp`.
-fn run_in_scratch(tmp string, name string, edit fn (string) string, extra string) (int, string, string) {
-	ex := os.join_path(@VMODROOT, 'examples', name)
-	scratch_ex := os.join_path(tmp, name)
+fn example_dir(name string) string {
+	return os.join_path(@VMODROOT, 'examples', name)
+}
+
+// run_in_scratch runs loom2v on a copy of the config in directory `ex` (edited, `extra` appended)
+// placed in a sibling layout under `tmp`, so paths the config resolves against itself stay inside
+// `tmp`.
+fn run_in_scratch(tmp string, ex string, edit fn (string) string, extra string) (int, string, string) {
+	scratch_ex := os.join_path(tmp, os.base(ex))
 	os.mkdir_all(scratch_ex) or { panic(err) }
 	src := os.read_file(os.join_path(ex, 'ecu.toml')) or { panic(err) }
 	ecu := os.join_path(scratch_ex, 'ecu.toml')
@@ -188,7 +195,7 @@ fn test_a_diagnostic_id_in_the_nm_range_or_wider_than_11_bits_is_refused() {
 fn test_the_nm_range_is_checked_on_the_comm_threads_channel() {
 	peers := 'peers = [0x500, 0x53F]'
 	code, out, _ := generate_edited('nmlabel', fn [peers] (src string) string {
-		assert src.contains(peers), 'h735_threadx [nm] changed shape — update this test'
+		assert src.contains(peers), 'the fixture [nm] changed shape — update this test'
 		return src.replace(peers, peers + '\nbus   = "can1"')
 	}, diag_conn.replace('rx_id         = 0x7B0', 'rx_id         = 0x510') +
 		'\n[bus.can1]\ninterface = "vcan1"\n')
@@ -210,7 +217,7 @@ fn test_a_live_did_is_encoded_in_its_values_width() {
 fn test_a_live_did_wider_than_the_cell_is_refused() {
 	field := 'fields = { v = "u32" }'
 	code, out, _ := generate_edited('wide_did', fn [field] (src string) string {
-		assert src.contains(field), 'h735_threadx Workload changed shape — update this test'
+		assert src.contains(field), 'the fixture Workload changed shape — update this test'
 		return src.replace(field, 'fields = { v = "u64" }')
 	}, diag_conn + '
 [[did]]
@@ -255,7 +262,7 @@ fn test_the_reset_flushes_the_journal_first() {
 		os.rmdir_all(tmp) or {}
 	}
 	// the satellite partition's `image = "../h755_m4_app"` resolves into the scratch layout
-	code, out, g := run_in_scratch(tmp, 'h755_threadx', fn (s string) string {
+	code, out, g := run_in_scratch(tmp, example_dir('h755_threadx'), fn (s string) string {
 		return s
 	}, diag_conn)
 	assert code == 0, out
@@ -279,7 +286,7 @@ fn generate_host(name string, edit fn (string) string, extra string) (int, strin
 	defer {
 		os.rmdir_all(tmp) or {}
 	}
-	return run_in_scratch(tmp, 'overspeed', edit, extra)
+	return run_in_scratch(tmp, example_dir('overspeed'), edit, extra)
 }
 
 fn same(src string) string {
@@ -565,7 +572,7 @@ fn test_a_handoff_that_cannot_be_performed_or_reached_is_refused() {
 	defer {
 		os.rmdir_all(tmp) or {}
 	}
-	code, out, _ := run_in_scratch(tmp, 'overspeed', fn (src string) string {
+	code, out, _ := run_in_scratch(tmp, example_dir('overspeed'), fn (src string) string {
 		return src
 	}, '\n[boot]' + boot_conn.all_after('[boot]'))
 	assert code != 0 && out.contains('[boot] is a ThreadX target'), out
@@ -611,7 +618,7 @@ fn test_a_boot_node_gets_its_bootloader_config() {
 	defer {
 		os.rmdir_all(tmp) or {}
 	}
-	code, out, _ := run_in_scratch(tmp, 'h735_threadx', fn (src string) string {
+	code, out, _ := run_in_scratch(tmp, fixture_dir, fn (src string) string {
 		return src
 	}, boot_conn.replace('functional_id = 0x7DF', 'functional_id = 0x7DF\nbs = 8\nstmin_ms = 2'))
 	assert code == 0, out
@@ -626,7 +633,7 @@ fn test_a_boot_node_gets_its_bootloader_config() {
 	defer {
 		os.rmdir_all(tmp3) or {}
 	}
-	c3, o3, _ := run_in_scratch(tmp3, 'h735_threadx', fn (src string) string {
+	c3, o3, _ := run_in_scratch(tmp3, fixture_dir, fn (src string) string {
 		return src
 	}, boot_conn.replace('rx_id         = 0x7B0', 'rx_id         = 0x7C0').replace('tx_id         = 0x7B8',
 		'tx_id         = 0x7C8'))
@@ -640,7 +647,7 @@ fn test_a_boot_node_gets_its_bootloader_config() {
 	defer {
 		os.rmdir_all(tmp2) or {}
 	}
-	c2, o2, _ := run_in_scratch(tmp2, 'h735_threadx', fn (src string) string {
+	c2, o2, _ := run_in_scratch(tmp2, fixture_dir, fn (src string) string {
 		return src
 	}, boot_conn.all_before('[boot]'))
 	assert c2 == 0, o2
