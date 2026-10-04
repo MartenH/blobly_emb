@@ -15,8 +15,9 @@
 //   write = { session = ["extended"], security = 1 }
 //
 // An FB reads it by naming it in a handler's `reads`, like any input — there is no `to`: the
-// reads are the one statement of who consumes it. Its journal block is a hash of its name; its
-// record states its structure exactly — field count, each type, its `version` (comm/param). On a ThreadX target the comm thread is the one
+// reads are the one statement of who consumes it. Its journal block is its DID — assigned, not
+// derived (or a pinned `nvm_id`); its record states its structure exactly — field count, each type,
+// its `version` (comm/param). On a ThreadX target the comm thread is the one
 // writer of each parameter's IOC cell (the rx-signal path's shape): it publishes the restored value
 // before the kernel starts, and a coded one after the journal has accepted it.
 module main
@@ -326,9 +327,15 @@ fn derive_param_nvm(mut m Model) {
 		}
 	}
 	for i, p in m.params {
-		id := if p.nvm_id != 0 { p.nvm_id } else { nvm_hash16('param:${p.name}') }
+		// ASSIGNED, never derived: the parameter's DID (unique, 1..0xFFFF, checked where it is read),
+		// or a pin. A derived id — a hash of the name — let a retired parameter's record be inherited
+		// by a new one whose name hashed alike, with the same types (codex on #376)
+		if p.nvm_id == 0 && p.did == 0xFFFF {
+			panic('loom2v: [[param]] "${p.name}" is coded on DID 0xFFFF, which the journal reserves as a block id — pin its block with `nvm_id = <1..65534>`')
+		}
+		id := if p.nvm_id != 0 { p.nvm_id } else { u16(p.did) }
 		if prev := used[id] {
-			panic('loom2v: [[param]] "${p.name}": its journal block 0x${id.hex()} collides with ${prev} — pin one side (`nvm_id = <1..65534>` on the parameter or the signal) and keep the pin')
+			panic('loom2v: [[param]] "${p.name}": its journal block 0x${id.hex()} (its DID, unless pinned) collides with ${prev} — pin one side (`nvm_id = <1..65534>` on the parameter or the signal) and keep the pin')
 		}
 		used[id] = '[[param]] "${p.name}"'
 		m.params[i].id = id

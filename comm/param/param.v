@@ -13,8 +13,11 @@ module param
 //   [ format | the parameter's version | field count | each field's type code | each field,
 //     big-endian, at its width ]
 //
-// The block id is derived from the parameter's NAME (pinnable on a collision generation refuses),
-// so declaration order never moves it. What a record IS is stated EXACTLY, never hashed: a hash of
+// The block id is ASSIGNED, never derived: the parameter's DID (or a pinned `nvm_id`), so neither
+// declaration order nor a name moves it, and a retired parameter's record can never be inherited by
+// a new one whose name happened to hash alike — a new parameter on another DID has another block, and
+// boot's prune drops the old one. (A DID REUSED for a new parameter of the same types is the author's
+// assignment: bump the `version`.) What a record IS is stated EXACTLY, never hashed: a hash of
 // any width can be attacked by a constructed collision, so the header is the identity — a record is
 // restored only when its whole header matches this firmware's, byte for byte. The identity is
 // POSITIONAL — field 0, field 1 — since names are not in it (a name in the record would be a hash

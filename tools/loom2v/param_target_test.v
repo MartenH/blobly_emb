@@ -307,6 +307,54 @@ fn test_what_generation_refuses() {
 	assert two.code != 0 && two.out.contains('parameter "Trim" is read on threads'), two.out
 }
 
+// the block is ASSIGNED: the parameter's DID (or a pin), never a hash of its name. Firmware A's
+// Param116 retired and firmware B's Param506 added — names whose old 16-bit hash was one block —
+// land on their own DIDs' blocks, so B can never inherit A's coded bytes; and a parameter renamed on
+// its DID keeps its block (and, its header unchanged, its coding)
+fn test_a_parameters_block_is_its_did() {
+	a := pt_generate('blk_a', reads_params, pt_conn + pt_param)
+	assert a.code == 0, a.out
+	id_a, _ := id_header(a.glue, 0)
+	assert id_a.all_after('= ').starts_with('u16(0x110)'), id_a // LoadCap on DID 0x0110
+	id_t, _ := id_header(a.glue, 1)
+	assert id_t.all_after('= ').starts_with('u16(0x111)'), id_t
+	retired := pt_param.replace('"LoadCap"', '"Param116"')
+	added := pt_param.replace('"LoadCap"', '"Param506"').replace('id    = 0x0110', 'id    = 0x0120')
+	ra := pt_generate('blk_retired', fn (s string) string {
+		return reads_params(s).replace('"LoadCap"', '"Param116"')
+	}, pt_conn + retired)
+	rb := pt_generate('blk_added', fn (s string) string {
+		return reads_params(s).replace('"LoadCap"', '"Param506"')
+	}, pt_conn + added)
+	assert ra.code == 0 && rb.code == 0, ra.out + rb.out
+	ida, _ := id_header(ra.glue, 0)
+	idb, _ := id_header(rb.glue, 0)
+	assert ida.all_after('= ').starts_with('u16(0x110)') && idb.all_after('= ').starts_with('u16(0x120)'), '${ida} / ${idb}'
+	// a rename on the same DID keeps the block
+	assert ida.all_after('= ') == id_a.all_after('= ')
+	// a pin overrides the DID
+	pinned := pt_generate('blk_pin', reads_params, pt_conn + pt_param.replace('apply   = "reset"', 'apply   = "reset"\nnvm_id  = 0x1234'))
+	assert pinned.code == 0, pinned.out
+	idp, _ := id_header(pinned.glue, 1)
+	assert idp.all_after('= ').starts_with('u16(0x1234)'), idp
+}
+
+// an id is read whole and held to its range BEFORE anything narrows it: 0x10110 is not the DID
+// 0x0110 (it would have collided with it at run time and bound the parameter to the weaker row),
+// and a CAN id past 32 bits is not its low half
+fn test_ids_are_bounded_where_they_are_read() {
+	cases := {
+		'did_wide':     [pt_conn + pt_param + '\n[[did]]\nid = 0x10110\nbytes = "00"\n', '[[did]] (a 16-bit data identifier) id = 0x10110 is out of range']
+		'isotp_wide':   [pt_conn.replace('rx_id         = 0x7B0', 'rx_id         = 0x1000007B0') + pt_param, '[isotp] rx_id = 0x1000007b0 is out of range']
+		'did_ffff':     [pt_conn + pt_param.replace('id    = 0x0111\nparam = "Trim"', 'id    = 0xFFFF\nparam = "Trim"'), 'is coded on DID 0xFFFF, which the journal reserves']
+	}
+	for name, c in cases {
+		o := pt_generate(name, reads_params, c[0])
+		assert o.code != 0, 'loom2v accepted: ${name}'
+		assert o.out.contains(c[1]), '${name}: ${o.out}'
+	}
+}
+
 // a 0x2E service row gating the write is the gate a parameter DID without its own needs
 fn test_the_service_row_can_be_the_gate() {
 	row := '\n[uds.services]\n"0x10" = {}\n"0x22" = {}\n"0x27" = {}\n"0x2E" = { sessions = ["extended"], security = 1 }\n"0x3E" = {}\n'

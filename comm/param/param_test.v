@@ -91,6 +91,7 @@ mut:
 	steer_max   i64 = 360
 	steer_def   i64 = 360
 	steer_ver   u8 // SteerLimit's declared version
+	steer_id    u16 = 0x2001 // SteerLimit's block (its DID on a target)
 	steer_two   bool // an update gives SteerLimit a second field
 	offset_i16s bool // Offset's two fields both i16 (the positional test)
 	offset_ver  u8   // Offset's declared version
@@ -150,7 +151,7 @@ fn (mut r Rig) reboot() {
 	r.ps = Params{}
 	r.ps.p[steer] = Param{
 		did:     0x0110
-		id:      0x2001
+		id:      r.sch.steer_id
 		version: r.sch.steer_ver
 		nfields: 1
 	}
@@ -608,4 +609,21 @@ fn test_a_same_type_reorder_is_taken_by_position_unless_the_version_says_otherwi
 			assert r.cell_a[offset] == 5 && r.cell_b[offset] == 7 // by position, whatever the names
 		}
 	}
+}
+
+// a retired parameter's record is never applied to a new one: firmware B retires SteerLimit and
+// adds a parameter of the SAME type and version in its place, on another DID — so another block,
+// because the block is assigned (the DID), not derived. It starts at its default, not at the coding
+fn test_a_retired_parameters_record_is_never_applied_to_a_new_one() {
+	mut r := new_rig()
+	r.unlock()
+	assert r.write(0x0110, [u8(0x00), 0x64])[0] == 0x6E // SteerLimit coded to 100
+	r.sch.steer_id = 0x2009 // the new parameter's block (its DID)
+	r.reboot()
+	assert r.status(steer) == status_default
+	assert r.cell_a[steer] == 360
+	// the control: the same assignment keeps the coding
+	r.sch.steer_id = 0x2001
+	r.reboot()
+	assert r.status(steer) == status_coded && r.cell_a[steer] == 100
 }

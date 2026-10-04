@@ -183,6 +183,22 @@ fn (f FrameCfg) secoc_here(frame string, bus string) bool {
 // bus.dbc (message id/dlc/ext/trivial). Value field = the single non-"valid" field.
 // parse_nvm_id: range-check BEFORE narrowing — nvm_id = 65536 must fail, not
 // silently become 0 (= auto-hash) through the u16 cast.
+// toml_int: an integer key read WHOLE (i64) and held to [lo, hi] before anything narrows it —
+// the one reader for ids and other bounded integers. toml.Any.int() truncates to 32 bits, and a
+// u16 / u32 cast afterwards truncates again, so 0x10110 read through them was the DID 0x0110 (codex
+// on #376). Absent = `def`; a non-integer is refused, never read as 0.
+fn toml_int(m map[string]toml.Any, key string, def i64, lo i64, hi i64, what string) int {
+	v := m[key] or { return int(def) }
+	if v !is i64 {
+		panic('loom2v: ${what} ${key} must be an integer')
+	}
+	n := v.i64()
+	if n < lo || n > hi {
+		panic('loom2v: ${what} ${key} = 0x${n.hex()} is out of range (0x${lo.hex()}..0x${hi.hex()})')
+	}
+	return int(n)
+}
+
 fn parse_nvm_id(name string, v int) u16 {
 	if v < 0 || v > 65534 {
 		panic('ecu.toml: signal "${name}" nvm_id = ${v} is out of range (0 = auto, 1..65534 = pin)')
@@ -267,7 +283,7 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool, eth string) (m
 			name:      name
 			transport: transport
 			persist:   (m['persist'] or { toml.Any('') }).string()
-			nvm_id:    parse_nvm_id(name, int((m['nvm_id'] or { toml.Any(0) }).int()))
+			nvm_id:    parse_nvm_id(name, toml_int(m, 'nvm_id', 0, 0, 65534, 'signal "${name}"'))
 			from:      from
 			to:        to
 			local:     from == to
@@ -556,7 +572,7 @@ fn parse_routes(doc toml.Doc, dbc string, frames FrameCfg) []Route {
 			from_bus:   fb
 			from_frame: (fm['frame'] or { toml.Any('') }).string()
 			to_bus:     (tm['bus'] or { toml.Any('') }).string()
-			to_id:      int((tm['id'] or { toml.Any(0) }).int())
+			to_id:      toml_int(tm, 'id', 0, 0, 0x1FFFFFFF, 'route to')
 			signal:     sig
 			to_frame:   (tm['frame'] or { toml.Any('') }).string()
 		}
@@ -907,11 +923,11 @@ fn parse_isotp(doc toml.Doc) []IsotpConn {
 	c := IsotpConn{
 		name:          'diag'
 		bus:           (m['bus'] or { toml.Any('') }).string()
-		rx_id:         int((m['rx_id'] or { toml.Any(0) }).int())
-		tx_id:         int((m['tx_id'] or { toml.Any(0) }).int())
+		rx_id:         toml_int(m, 'rx_id', 0, 0, 0x1FFFFFFF, '[isotp]')
+		tx_id:         toml_int(m, 'tx_id', 0, 0, 0x1FFFFFFF, '[isotp]')
 		bs:            int((m['bs'] or { toml.Any(0) }).int())
 		stmin:         int((m['stmin_ms'] or { toml.Any(0) }).int())
-		functional_id: int((m['functional_id'] or { toml.Any(0) }).int())
+		functional_id: toml_int(m, 'functional_id', 0, 0, 0x1FFFFFFF, '[isotp]')
 	}
 	// the connection matches and sends its ids as standard frames: a wider value never matches
 	// on receive and goes out masked on transmit
@@ -940,7 +956,9 @@ fn parse_dids(doc toml.Doc) []DidCfg {
 	mut dids := []DidCfg{}
 	for d in ecumodel.toml_arr(doc, 'did') {
 		m := d.as_map()
-		id := int((m['id'] or { toml.Any(0) }).int())
+		// 1..0xFFFF, refused here — the one place every DID consumer reads it from — before the
+		// server's u16 narrows it
+		id := toml_int(m, 'id', 0, 0, 0xFFFF, '[[did]] (a 16-bit data identifier)')
 		if id == 0 {
 			continue
 		}
@@ -1224,7 +1242,7 @@ fn parse_frames(doc toml.Doc, eth string, buses map[string]bool, bus_kind map[st
 		if 'secoc' in fm {
 			sm := (fm['secoc'] or { toml.Any('') }).as_map()
 			f.secoc_on[fk] = true
-			f.secoc_id[fk] = int((sm['data_id'] or { toml.Any(0) }).int())
+			f.secoc_id[fk] = toml_int(sm, 'data_id', 0, 0, 0xFFFF, 'frame "${fk}" secoc')
 			if f.secoc_id[fk] < 0 || f.secoc_id[fk] > 0xffff {
 				panic('frame "${fk}": secoc data_id 0x${f.secoc_id[fk].hex()} is out of range (0..0xFFFF)')
 			}
@@ -1268,8 +1286,8 @@ fn parse_telemetry(doc toml.Doc) TelemetryCfg {
 		tm := tcfg.as_map()
 		t.on = (tm['enabled'] or { toml.Any(false) }).bool()
 		t.bus = (tm['bus'] or { toml.Any('') }).string()
-		t.id = u32((tm['id'] or { toml.Any(0) }).int())
-		t.detail_id = u32((tm['detail_id'] or { toml.Any(0) }).int())
+		t.id = u32(toml_int(tm, 'id', 0, 0, 0x1FFFFFFF, '[telemetry]'))
+		t.detail_id = u32(toml_int(tm, 'detail_id', 0, 0, 0x1FFFFFFF, '[telemetry]'))
 		if pms := tm['period_ms'] {
 			t.period_us = u64(pms.int()) * 1000
 		}

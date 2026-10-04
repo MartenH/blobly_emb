@@ -68,11 +68,7 @@ fn parse_nvm(doc toml.Doc) NvmCfg {
 // nvm_range: a bounded positive [nvm] integer — a negative typo must fail
 // generation, not wrap through a u32 cast into "never writes for 49 days".
 fn nvm_range(nm map[string]toml.Any, key string, def int, lo int, hi int) u32 {
-	v := int((nm[key] or { toml.Any(def) }).int())
-	if v < lo || v > hi {
-		panic('loom2v: [nvm] ${key} = ${v} is out of range (${lo}..${hi})')
-	}
-	return u32(v)
+	return u32(toml_int(nm, key, def, lo, hi, '[nvm]'))
 }
 
 // field_width: packed bytes of one signal field (persist supports unsigned scalars).
