@@ -5,7 +5,7 @@ name: ci
 #
 # Scope: the HOST/SIM side — unit tests, config validation, the requirement→verification trace —
 # plus the STM32H7 cross builds: gcc-arm-none-eabi from apt and `make deps` (~10s of clones),
-# then every image — 16 of them, a few minutes from clean. That gate
+# then every image — 17 of them, a few minutes from clean. That gate
 # is worth having, because a broken target build otherwise merges behind a green board — exactly
 # what happened to examples/trace_comm and trace_multicore (#191), and to h735_app during the fix
 # for them. It also runs scripts/lint_vinit.sh, which only exists on the freestanding path.

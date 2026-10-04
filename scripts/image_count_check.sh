@@ -25,5 +25,16 @@ for f in CLAUDE.md .github/workflows/ci.yml; do
 		fail=1
 	fi
 done
+# ...and no other count statement may contradict it: every "<N> cross/STM32H7 images" and
+# "every image — <N> of them", line breaks folded, must name the same number
+for f in CLAUDE.md .github/workflows/ci.yml; do
+	stale=$(tr '\n' ' ' <"$f" | sed 's/#//g' | tr -s ' ' |
+		grep -oE '\b[0-9]+ (cross|STM32H7) images|every image — [0-9]+ of them' |
+		sed -E 's/^([0-9]+) .*/\1/; s/^every image — ([0-9]+) of them$/\1/' | grep -vx "$images" | sort -u | tr '\n' ' ')
+	if [ -n "$stale" ]; then
+		echo "image_count_check: $f still states a different image count: $stale(want $images)"
+		fail=1
+	fi
+done
 [ $fail = 0 ] && echo "image_count_check: $images images ($apps applications, $boots bootloaders), $dirs directories"
 exit $fail

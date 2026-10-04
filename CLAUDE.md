@@ -178,7 +178,7 @@ module builder`), failing both jobs in the *install* step with nothing to do wit
 Note `vlang/setup-v` does not solve this on its own: given a tag or SHA it downloads the SOURCE and
 self-hosts it, and that build is what breaks (0.5.2 from source dies on a duplicate `C.open`; master
 `8631b280` on an empty `builder error:`). The release asset is already built. Bump `.v-version`
-deliberately, and re-run the full local gate on the new compiler — the host suite AND the 16 cross
+deliberately, and re-run the full local gate on the new compiler — the host suite AND the 17 cross
 images, since the bare-metal path is the one that historically needed a specific V (#27564).
 Your local V does **not** have to match the pin (working against master is often deliberate), but it
 usually explains a local/CI disagreement — `make v-pin` prints both and says whether they differ.
