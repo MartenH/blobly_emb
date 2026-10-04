@@ -396,7 +396,8 @@ ride the same bus-sleep flush choreography as persisted signals.
   so no clear epoch is needed;
 - one **snapshot block** per fault with `freeze` — its id hashed from the DTC and the snapshot's
   schema (the DIDs and their sizes), so an update that changes a snapshot restores none rather than
-  the wrong bytes; a collision is refused at generation, naming the pin (`snapshot_id`) — never
+  the wrong bytes — and the block carries that schema's fingerprint too, checked on restore, so a
+  pinned id kept across such an update restores none either; a collision is refused at generation, naming the pin (`snapshot_id`) — never
   resolved by declaration order, which an update may change — holding the DTC, an allocation stamp and the record
   body; a freed one is rewritten as a 1-byte TOMBSTONE, so freed snapshots stop occupying the
   journal.
@@ -414,7 +415,9 @@ snapshot whole and the one captured.
 testNotCompletedSinceLastClear, testFailedSinceLastClear and the counters. testFailed is not
 stored — every power-up starts untested-failed, as AUTOSAR's default status storage does — and the
 this-operation-cycle bits restart with the cycle. The cycle a power loss interrupted is ENDED at
-restore with what it collected (tested / failed), so pending clears and aging counts across a power
+restore with what it collected (tested / failed) — under the DTC setting it ran under: with 0x85
+off its end changes nothing, as it would have then (the image records the setting), and setting is
+on again after the power-up — so pending clears and aging counts across a power
 cycle exactly as across an orderly cycle end; on a `cycle = "power"` node every MCU start is a new
 cycle, so a passing power cycle clears pending.
 
@@ -460,6 +463,9 @@ then — the one runtime erase, once per sector fill — or nothing, a 0x14 incl
 until the next boot (a 0x14 refused meanwhile answers 0x72 and the tester retries).
 `nvm.Journal.put` is synchronous: an image write is ≤ 14 records (microseconds each), an inline
 compaction copies the live set — bounded, but not the incremental flash path §7 asks for.
+
+A producer publishes its fault report AFTER the handler's outputs, so a snapshot of a DID the same
+handler writes holds this dispatch's value.
 
 **Snapshots, as built.** Captured on the OWNER, not the producer: in the pass that consumes the
 occurrence (on the host after the receive drain, where the signal-status faults are consumed; never for a DTC whose failure a cycle end or a clear in that pass already removed), the owner refreshes the live DIDs (as before a 0x22) and copies the declared DIDs into an

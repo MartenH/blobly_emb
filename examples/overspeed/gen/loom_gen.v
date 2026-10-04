@@ -72,6 +72,7 @@ fn handler_ctrl_engine_monitor_on_10ms(ctx voidptr) {
 	osal.ioc_acquire2(ignition_on_ch, &inp.ignition_on, u8(sizeof(inp.ignition_on)))
 	mut outp := ports.EngineMonitorOut{}
 	st.engine_monitor.on_10ms(inp, mut outp)
+	st.cell_high_rev = outp.high_rev // local
 	fault_now := osal.now_us()
 	osal.ioc_acquire(fault_ctl_engine_monitor_ch, &st.fctl_engine_monitor, u8(sizeof(st.fctl_engine_monitor)))
 	st.fdeb_engine_monitor[0].apply(st.fctl_engine_monitor.gen[0], st.fctl_engine_monitor.held[0])
@@ -81,7 +82,6 @@ fn handler_ctrl_engine_monitor_on_10ms(ctx voidptr) {
 	st.fdeb_engine_monitor[1].step(outp.fault.engine_idle_low, fault_now, true)
 	st.frep_engine_monitor.r[1] = st.fdeb_engine_monitor[1].rep
 	osal.ioc_publish(fault_rep_engine_monitor_ch, &st.frep_engine_monitor, u8(sizeof(st.frep_engine_monitor)))
-	st.cell_high_rev = outp.high_rev // local
 }
 
 fn handler_ctrl_brake_monitor_on_10ms(ctx voidptr) {

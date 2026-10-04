@@ -812,6 +812,7 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 	mut held_restarts := 0
 	mut waits := 0
 	mut resets := 0
+	mut offs := 0
 	mut clock := 0
 	for run in 0 .. 400 {
 		rng ^= rng << 13
@@ -944,10 +945,23 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 				// before the reset, suppressed or not, can count after it.
 				resets++
 				orderly := (rng >> 8) & 1 == 0
-				if orderly {
+				off := m.setting_off
+				if orderly || off {
+					// orderly: the 0x11 flush. With setting off: everything durable, then the power
+					// goes — the cycle it interrupts must end changing nothing, as it would have then
 					assert m.persist(u64(clock), true)
 				}
+				mut kept := []u8{}
+				for k in 0 .. 2 {
+					kept << m.slots[k].status & persisted_bits
+				}
 				m = model_memory(st)
+				if off && !orderly {
+					offs++
+					for k in 0 .. 2 {
+						assert m.slots[k].status & persisted_bits == kept[k], '${ctx}: power lost with setting off, and the restore moved fault ${k}: 0x${kept[k].hex()} -> 0x${(m.slots[k].status & persisted_bits).hex()}'
+					}
+				}
 				for k in 0 .. 2 {
 					s := m.slots[k]
 					assert s.occurrence <= abs[k].occ, '${ctx}: fault ${k} came back with ${s.occurrence} occurrences, it had ${abs[k].occ}'
@@ -1034,11 +1048,12 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 			}
 		}
 	}
-	println('fault model: ${storms} storms, ${waits} waits, ${held_restarts} held restarts, ${resets} resets')
+	println('fault model: ${storms} storms, ${waits} waits, ${held_restarts} held restarts, ${resets} resets (${offs} with setting off)')
 	assert storms > 3, 'the model never exhausted the generations'
 	assert waits > 0, 'no slot ever waited for a fresh generation'
 	assert held_restarts > 100, 'the model rarely restarted a failed debounce'
 	assert resets > 1000, 'the model rarely reset'
+	assert offs > 100, 'the model rarely lost power with setting off'
 }
 
 // The cycle-end barrier (docs/diagnostics.md §7): NM decides to sleep while a producer's dispatch

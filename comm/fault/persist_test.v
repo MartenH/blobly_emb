@@ -95,6 +95,7 @@ mut:
 	puts       int
 	image_puts int
 	cap        int
+	swapped    bool // an update swapped the snapshot's DID sizes (F1A0 18 B, F190 4 B): same length
 	order      [4]int // which configured slot carries DTC k (an update may reorder)
 	n          int
 }
@@ -152,9 +153,9 @@ fn (mut r Rig) restart(power_cycle bool) {
 		s.priority = u8(100 + k)
 		if k < 3 {
 			s.freeze[0] = 0xF1A0
-			s.freeze_len[0] = 4
+			s.freeze_len[0] = if r.swapped { u8(18) } else { 4 }
 			s.freeze[1] = 0xF190
-			s.freeze_len[1] = 18
+			s.freeze_len[1] = if r.swapped { u8(4) } else { 18 }
 			s.nfreeze = 2
 			s.snap_id = u16(0x1000 + k)
 		}
@@ -184,6 +185,10 @@ fn (mut r Rig) restart(power_cycle bool) {
 		len: 18
 	}
 	r.srv.ndid = 2
+	// where the swapped schema looks for its second DID id, the old record holds 0xF190: reading
+	// the record's content alone would take the old bytes for the new schema
+	r.srv.dids[1].data[12] = 0xF1
+	r.srv.dids[1].data[13] = 0x90
 	for k in 0 .. 4 {
 		r.d[k] = Debounce{
 			fail_thr: 1
@@ -394,9 +399,11 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 	mut mid_image := 0
 	mut refusals := 0
 	mut held := 0
+	mut flips := 0
 	for run in 0 .. 40 {
 		mut r := new_rig(2)
 		mut captured := map[string][]u8{} // dtc:stamp -> the record captured
+		mut schema_of := map[string]bool{} // dtc:record -> captured under the swapped schema
 		mut now := u64(1)
 		for step in 0 .. 300 {
 			rng ^= rng << 13
@@ -405,6 +412,22 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 			now += 7
 			ctx := 'run ${run} step ${step}'
 			op := rng % 100
+			if (rng >> 20) % 61 == 0 {
+				// a firmware update that changes the snapshot's schema but not its length: no
+				// snapshot of the old schema comes back as one of the new
+				r.swapped = !r.swapped
+				r.reboot()
+				for k in 0 .. r.m.cap {
+					e := r.m.entries[k]
+					if e.used {
+						rec := '${r.m.slots[e.slot].dtc}:${e.data[..e.len].hex()}'
+						assert schema_of[rec] == r.swapped, '${ctx}: a snapshot of the old schema was restored under the new one (${rec})'
+					}
+				}
+				flips++
+				r.m.persist(now, true) // the first pass after the update: claims of the old schema dropped
+				continue
+			}
 			old := stored_image(r)
 			mut sh := shadow(r)
 			do_step(mut sh, op, rng, step, now)
@@ -450,7 +473,9 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 			for k in 0 .. r.m.cap {
 				e := r.m.entries[k]
 				if e.used {
-					captured['${r.m.slots[e.slot].dtc}:${e.stamp}'] = e.data[..e.len].clone()
+					key := '${r.m.slots[e.slot].dtc}:${e.stamp}'
+					schema_of['${r.m.slots[e.slot].dtc}:${e.data[..e.len].hex()}'] = r.swapped // RAM holds the schema in force
+					captured[key] = e.data[..e.len].clone()
 				}
 			}
 			if !r.f.dead {
@@ -495,8 +520,8 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 			}
 		}
 	}
-	println('persistence fuzz: ${cuts} power cuts (${mid_image} of them in a step that changed the image), ${refusals} refusals (${held} of the new snapshot of a displacement), ${displaced} displacements')
-	assert cuts > 300 && mid_image > 50 && displaced > 20 && refusals > 300 && held > 10
+	println('persistence fuzz: ${cuts} power cuts (${mid_image} of them in a step that changed the image), ${refusals} refusals (${held} of the new snapshot of a displacement), ${displaced} displacements, ${flips} schema changes')
+	assert cuts > 300 && mid_image > 50 && displaced > 20 && refusals > 300 && held > 10 && flips > 20
 }
 
 // claimed: the DTCs a status image claims a stored snapshot for.
@@ -627,4 +652,34 @@ fn test_a_kept_pin_does_not_restore_another_schema() {
 	m.store = r.m.store
 	m.restore()
 	assert m.slots[0].entry == 0 && m.slots[0].status & confirmed != 0
+}
+
+// Power lost with DTC setting off (0x85): the interrupted cycle ends as it would have then —
+// changing nothing — and setting is on again after the power-up.
+fn test_a_cycle_interrupted_with_setting_off_ends_changing_nothing() {
+	mut r := new_rig(2)
+	r.pass(0, .failed, 1, 1)
+	r.reboot() // cycle 1 failed: pending
+	r.pass(0, .passed, 1, 2) // cycle 2 tested and passed ...
+	r.m.set_setting(false) // ... and then DTC setting off, and the power goes
+	r.m.persist(3, false)
+	before := r.slot(0).status & persisted_bits
+	r.reboot()
+	assert r.slot(0).status & persisted_bits == before, 'the suppressed cycle end cleared pending or aged'
+	assert r.slot(0).aging_count == 0 && r.slot(0).entry != 0
+	assert !r.m.setting_off
+}
+
+// A refused 0x14 stays visible to the owner through the next persist, so a node without NM can
+// make room (its runtime erase) instead of answering 0x72 until the next boot.
+fn test_a_refused_clear_reaches_the_owner() {
+	mut r := new_rig(2)
+	r.pass(0, .failed, 1, 1)
+	r.f.refuse = true
+	assert r.req([u8(0x14), 0xFF, 0xFF, 0xFF]) == [u8(0x7F), 0x14, 0x72]
+	r.f.refuse = false
+	r.m.persist(2, false)
+	assert r.m.refused, 'the refused clear was forgotten by the pass that followed it'
+	r.m.persist(3, false)
+	assert !r.m.refused
 }

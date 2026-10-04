@@ -41,7 +41,7 @@ module fault
 pub const image_version = u8(1)
 pub const image_rec = 8 // bytes per DTC in the image
 pub const max_image = 2 + max_faults * image_rec
-pub const snap_hdr = 7 // a snapshot block: DTC (3), stamp (4), then the record body
+pub const snap_hdr = 9 // a snapshot block: DTC (3), stamp (4), schema fingerprint (2), then the record body
 pub const max_block = max_image // the larger of an image and a snapshot block (test_the_scratch_holds_either)
 
 // the status bits the image keeps
@@ -52,6 +52,7 @@ const img_tested = u8(0x01) // tested in the cycle in progress
 const img_failed = u8(0x02) // failed in the cycle in progress
 const img_snapshot = u8(0x40) // holds a stored snapshot
 const img_cycle_open = u8(0x01) // image byte 1: an operation cycle was in progress
+const img_setting_off = u8(0x02) // image byte 1: DTC setting was off (0x85) — so was its end
 
 // Store is the persistence seam: `put` replaces a block's value (false = refused, nothing
 // changed), `get` reads it (its length, 0 = absent). Nil `put` = RAM only.
@@ -72,7 +73,11 @@ fn (m &Memory) stored() bool {
 // DTCs `group` names are written as a clear leaves them (0x14's image, built before RAM changes).
 fn (mut m Memory) image(clearing bool, group u32) int {
 	m.scratch[0] = image_version
-	m.scratch[1] = if m.cycle_active { img_cycle_open } else { u8(0) }
+	m.scratch[1] = (if m.cycle_active { img_cycle_open } else { u8(0) }) | (if m.setting_off {
+		img_setting_off
+	} else {
+		u8(0)
+	})
 	for i in 0 .. m.n {
 		s := &m.slots[i]
 		o := 2 + i * image_rec
@@ -188,7 +193,10 @@ pub fn (mut m Memory) persist(now u64, flush bool) bool {
 	if refused {
 		m.retry_at = now + m.store.retry_us
 	}
-	m.refused = refused
+	// a refusal since the last persist — this one's, or a 0x14's — stays visible to the owner,
+	// which may make room (a node without NM erases then)
+	m.refused = refused || m.clear_refused
+	m.clear_refused = false
 	return !refused && !deferred
 }
 
@@ -233,6 +241,9 @@ fn (mut m Memory) snapshot_block(k int) int {
 	m.scratch[4] = u8(e.stamp >> 16)
 	m.scratch[5] = u8(e.stamp >> 8)
 	m.scratch[6] = u8(e.stamp)
+	fp := m.schema_fp(e.slot)
+	m.scratch[7] = u8(fp >> 8)
+	m.scratch[8] = u8(fp)
 	for b in 0 .. e.len {
 		m.scratch[snap_hdr + b] = e.data[b]
 	}
@@ -248,12 +259,12 @@ fn (mut m Memory) persist_clear(group u32) bool {
 	// the snapshots first, for the reason persist writes them first
 	ready, _ := m.write_snapshots(group, true)
 	if !ready {
-		m.refused = true
+		m.clear_refused = true
 		return false
 	}
 	n := m.image(true, group)
 	if !m.store.put(m.store.ctx, m.store.id, &m.scratch[0], u16(n)) {
-		m.refused = true
+		m.clear_refused = true
 		return false
 	}
 	m.commit_image(n)
@@ -272,9 +283,11 @@ pub fn (mut m Memory) restore() {
 	n := int(m.store.get(m.store.ctx, m.store.id, &m.img[0], u16(max_image)))
 	m.img_len = 0
 	mut open := false
+	mut off := false
 	if n >= 2 && m.img[0] == image_version && (n - 2) % image_rec == 0 {
 		m.img_len = n
 		open = m.img[1] & img_cycle_open != 0
+		off = m.img[1] & img_setting_off != 0
 		for r in 0 .. (n - 2) / image_rec {
 			o := 2 + r * image_rec
 			dtc := u32(m.img[o]) << 16 | u32(m.img[o + 1]) << 8 | u32(m.img[o + 2])
@@ -304,9 +317,27 @@ pub fn (mut m Memory) restore() {
 			|| int(m.store.get(m.store.ctx, s.snap_id, &m.scratch[0], 2)) > 1
 	}
 	if open {
+		// the cycle power interrupted ends with what it saw — under the DTC setting it ended
+		// under: with 0x85 off its end changes nothing, as it would have changed nothing then.
+		// Setting is on again: a power-up ends every session.
 		m.cycle_active = true
-		m.cycle_end() // the cycle power interrupted ends with what it saw
+		m.setting_off = off
+		m.cycle_end()
+		m.setting_off = false
 	}
+}
+
+// schema_fp: slot i's snapshot schema — its DIDs and their sizes — folded to 16 bits (FNV-1a),
+// stored in every snapshot block so a snapshot of another schema is never restored as this one.
+fn (m &Memory) schema_fp(i int) u16 {
+	mut h := u32(0x811C9DC5)
+	for f in 0 .. m.slots[i].nfreeze {
+		for b in [u8(m.slots[i].freeze[f] >> 8), u8(m.slots[i].freeze[f]), m.slots[i].freeze_len[f]] {
+			h ^= u32(b)
+			h *= 16777619
+		}
+	}
+	return u16(h ^ (h >> 16))
 }
 
 // load_snapshot reads slot i's snapshot block into a free entry; false = absent, malformed, or
@@ -318,8 +349,9 @@ fn (mut m Memory) load_snapshot(i int) bool {
 		return false
 	}
 	dtc := u32(m.scratch[0]) << 16 | u32(m.scratch[1]) << 8 | u32(m.scratch[2])
-	if dtc != m.slots[i].dtc || int(m.scratch[snap_hdr]) != m.slots[i].nfreeze {
-		return false
+	if dtc != m.slots[i].dtc || int(m.scratch[snap_hdr]) != m.slots[i].nfreeze
+		|| u16(m.scratch[7]) << 8 | u16(m.scratch[8]) != m.schema_fp(i) {
+		return false // another DTC's, or its snapshot under another schema (a kept snapshot_id)
 	}
 	// the record's DIDs at the offsets this build's sizes put them: a snapshot of another schema
 	// under a pinned id (snapshot_id kept across an update that changed it) is not this one's

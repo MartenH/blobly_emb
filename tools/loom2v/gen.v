@@ -3450,7 +3450,6 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 				}
 				glue << '\tmut outp := ports.${cname}Out{}'
 				glue << '\tst.${field}.${hname}(inp, mut outp)'
-				glue << fault_step_lines(m, cname, hname)
 				for w in writes {
 					wn := w.string()
 					si := m.sig_of[wn] or { SigInfo{} }
@@ -3513,6 +3512,10 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 						glue << '\tosal.${publish_fn(si.transport)}(${snake(wn)}_ch, &outp.${snake(wn)}, u8(sizeof(outp.${snake(wn)})))'
 					}
 				}
+				// the fault report AFTER the outputs: a snapshot the owner takes on reading it then
+				// sees this dispatch's outputs, not the previous one's (a fault may freeze a DID its
+				// own handler writes — zone_a's SteerLimiter and SteeringAngle)
+				glue << fault_step_lines(m, cname, hname)
 				glue << '}'
 				if multi {
 					all_regs['${part}/${fb_thr[cname]}'] << '\tsched.every(${period_us}, ${gname}, &st)'

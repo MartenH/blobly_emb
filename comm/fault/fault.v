@@ -248,7 +248,8 @@ pub mut:
 	scratch  [max_block]u8 // an image or a snapshot block being built
 	retry_at u64 // a refused write is retried no sooner than this
 	wrote    int  // writes the last persist / clear made (the owner re-lays its clean marker)
-	refused  bool // the store refused the last persist or clear (the owner may make room)
+	refused  bool // the store refused a write since the last persist, a 0x14's included (the owner may make room)
+	clear_refused bool // a 0x14 the store refused, carried into the next persist's `refused`
 }
 
 // init sets every configured slot to the power-on status. Call after filling dtc / confirm / aging.
@@ -285,6 +286,7 @@ pub fn (mut m Memory) init() {
 	m.retry_at = 0
 	m.wrote = 0
 	m.refused = false
+	m.clear_refused = false
 }
 
 // consume applies slot i's latest Report. Call every owner pass for every fault.

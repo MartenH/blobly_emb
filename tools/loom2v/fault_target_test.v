@@ -107,6 +107,8 @@ fn test_the_comm_thread_owns_the_fault_memory_and_nm_moves_its_cycle() {
 		'fctl_load_slow fault.Control',
 		'frep_load_slow fault.Reports',
 		'st.load_slow.on_100ms(inp, mut outp)',
+		'C.ioc_pub(', // the handler's outputs (Workload) BEFORE its fault report: a snapshot taken on
+		// reading the report sees this dispatch's outputs, not the previous one's
 		'fault_now := C.board_now_us()',
 		'C.iocb_get(1, &st.fctl_load_slow)',
 		'st.fdeb_load_slow[0].apply(st.fctl_load_slow.gen[0], st.fctl_load_slow.held[0])',
