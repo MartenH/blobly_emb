@@ -298,7 +298,8 @@ fn test_what_the_target_does_not_generate_yet_is_refused() {
 		'\n[fault_memory]\ncycle = "Command.code"\n')
 	assert code != 0
 	assert out.contains('a cycle signal on the target is not generated yet'), out
-	// a signal-status fault: the target's comm thread runs no rx status yet (R5)
+	// a signal-status fault watches a status the signal must carry (the host's rule; rx_target_test
+	// covers the target's detector)
 	sigf := '
 [[fault]]
 name   = "CommandTimeout"
@@ -308,7 +309,7 @@ on     = "timeout"
 '
 	c2, o2, _, _ := ft_generate('sigfault', same, ft_conn + sigf)
 	assert c2 != 0
-	assert o2.contains('a signal-status fault on the target needs'), o2
+	assert o2.contains('Command needs `status = "RxStatus"`'), o2
 	// faults in a multi-thread partition (the original layout), as on the host
 	c3, o3, _, _ := ft_generate('multi', fn (src string) string {
 		return os.read_file(os.join_path(fixture_dir, 'ecu.toml')) or {
