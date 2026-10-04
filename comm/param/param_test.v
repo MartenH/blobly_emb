@@ -92,6 +92,8 @@ mut:
 	steer_def   i64 = 360
 	steer_ver   u8 // SteerLimit's declared version
 	steer_two   bool // an update gives SteerLimit a second field
+	offset_i16s bool // Offset's two fields both i16 (the positional test)
+	offset_ver  u8   // Offset's declared version
 	trailer_two bool // an update gives TrailerFitted a second field, a u8
 	trailer_id  u16 = 0x2002
 	offset_x_lo i64 = -100
@@ -211,6 +213,10 @@ fn (mut r Rig) reboot() {
 		max:    10
 		def:    0
 	}
+	if r.sch.offset_i16s {
+		r.ps.p[offset].fields[1].width = 2
+	}
+	r.ps.p[offset].version = r.sch.offset_ver
 	r.ps.n = 3
 	r.ps.store = Store{
 		ctx: r
@@ -577,4 +583,29 @@ fn test_power_cuts_anywhere_leave_an_acknowledged_coding() {
 		}
 	}
 	assert cuts > 100 && wrote > 1000, 'the fuzz exercised too little: ${cuts} cuts, ${wrote} writes'
+}
+
+// the identity is POSITIONAL: two fields of one type declared the other way round look, to the
+// header, exactly like both being renamed — so their stored values are taken by position, unless
+// the update bumps the version, which reverts. Offset is { x i16, y i16 } in both builds here; the
+// rig names no fields, so "the other way round" is precisely an unchanged header.
+fn test_a_same_type_reorder_is_taken_by_position_unless_the_version_says_otherwise() {
+	for bump in [false, true] {
+		mut r := new_rig()
+		r.sch.offset_i16s = true
+		r.reboot()
+		r.unlock()
+		assert r.write(0x0112, [u8(0x00), 0x05, 0x00, 0x07])[0] == 0x6E // positions 0, 1 = 5, 7
+		if bump {
+			r.sch.offset_ver = 1 // the update says the fields' meaning moved
+		}
+		r.reboot()
+		if bump {
+			assert r.status(offset) == status_reverted
+			assert r.cell_a[offset] == 0 && r.cell_b[offset] == 0
+		} else {
+			assert r.status(offset) == status_coded
+			assert r.cell_a[offset] == 5 && r.cell_b[offset] == 7 // by position, whatever the names
+		}
+	}
 }

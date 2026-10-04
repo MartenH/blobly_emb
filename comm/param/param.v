@@ -16,11 +16,16 @@ module param
 // The block id is derived from the parameter's NAME (pinnable on a collision generation refuses),
 // so declaration order never moves it. What a record IS is stated EXACTLY, never hashed: a hash of
 // any width can be attacked by a constructed collision, so the header is the identity — a record is
-// restored only when its whole header matches this firmware's, byte for byte:
+// restored only when its whole header matches this firmware's, byte for byte. The identity is
+// POSITIONAL — field 0, field 1 — since names are not in it (a name in the record would be a hash
+// again, or a string):
 //   - a field RENAMED keeps the coded value (the bytes mean what they meant, as a widened range);
-//   - a field's TYPE changed, the ORDER changed, a field added or removed: reverted;
-//   - a change of MEANING with the same types (a field that now counts in other units) is said by
-//     bumping the parameter's declared `version`: reverted.
+//   - a field's TYPE changed, a field added or removed, or fields of DIFFERENT types reordered (the
+//     type codes then differ by position): reverted;
+//   - fields of the SAME type reordered, like any change of MEANING with the same types (a field that
+//     now counts in other units), is the author's to say by bumping the parameter's declared
+//     `version`: reverted. WITHOUT a bump the stored values are taken by position — a swap of two
+//     u16 fields swaps their values.
 // The RANGE is not in it: a range is not a layout, the stored bytes still mean the same thing under
 // a new range, and a workshop's coding must not be lost to an update that only widens one.
 // Instead every restored value is REVALIDATED against this firmware's range before an FB sees it

@@ -204,7 +204,7 @@ fn test_a_parameters_identity_is_its_name_and_its_exact_header() {
 	assert h1.replace('[1]', '[0]') == h0, 'a rename or a range changed the header: the coding would be lost'
 	for name, edit in {
 		'type':    pt_param.replace('iters = "u16"', 'iters = "i16"')
-		'order':   pt_param.replace('fields  = { iters = "u16", strict = "bool" }', 'fields  = { strict = "bool", iters = "u16" }')
+		'order_of_two_types': pt_param.replace('fields  = { iters = "u16", strict = "bool" }', 'fields  = { strict = "bool", iters = "u16" }')
 		'version': pt_param.replace('range   = {', 'version = 1\nrange   = {')
 	} {
 		o := pt_generate('id_${name}', reads_params, pt_conn + edit)
@@ -213,6 +213,21 @@ fn test_a_parameters_identity_is_its_name_and_its_exact_header() {
 		assert id.all_after('= ') == id0.all_after('= '), '${name} moved the block: the old record would be pruned, not refused'
 		assert h != h0, '${name} left the header as it was: the old bytes would be read under it'
 	}
+	// POSITIONAL: two fields of ONE type declared the other way round leave the header as it was —
+	// the values are taken by position — and only a version bump says otherwise
+	two := pt_param.replace('fields  = { iters = "u16", strict = "bool" }', 'fields  = { iters = "u16", cap = "u16" }').replace('default = { iters = 500, strict = false }',
+		'default = { iters = 500, cap = 7 }')
+	oa := pt_generate('pos_a', reads_params, pt_conn + two)
+	ob := pt_generate('pos_b', reads_params, pt_conn + two.replace('fields  = { iters = "u16", cap = "u16" }',
+		'fields  = { cap = "u16", iters = "u16" }'))
+	oc := pt_generate('pos_c', reads_params, pt_conn + two.replace('fields  = { iters = "u16", cap = "u16" }',
+		'fields  = { cap = "u16", iters = "u16" }').replace('range   = {', 'version = 1\nrange   = {'))
+	assert oa.code == 0 && ob.code == 0 && oc.code == 0, oa.out + ob.out + oc.out
+	_, ha := id_header(oa.glue, 0)
+	_, hb := id_header(ob.glue, 0)
+	_, hc := id_header(oc.glue, 0)
+	assert ha == hb, 'a same-type reorder changed the header: ${ha} / ${hb}'
+	assert hc != ha, 'a version bump left the header as it was'
 }
 
 fn test_what_generation_refuses() {

@@ -580,15 +580,20 @@ param_status = true                         # one byte per parameter: 0 default,
   collision generation reports; kept in the prune keep-set) — it only places the record. What the
   record IS, the header states exactly, and a record is restored only when its whole header matches
   this firmware's byte for byte: a hash of ANY width can be attacked with a constructed collision
-  (codex found one in a 32-bit fold on #376), a stated structure cannot. So:
+  (codex found one in a 32-bit fold on #376), a stated structure cannot. The identity is therefore
+  **POSITIONAL**: fields are identified by position — the count, the type at each position, and the
+  `version` — never by name (a name in the record would be a hash again, or a string). So:
   - a field **renamed** keeps the coded value (the bytes mean what they meant, as with a widened
-    range), and declaration order moves nothing;
-  - a field's **type** changed, the field **order** changed, a field **added or removed**: the old
-    record is refused — status `reverted`, never the old bytes read under the new structure, and
-    never a coding silently gone (a layout-derived block id would have pruned it and read `default`);
-  - a change of **meaning** with the same types (a field that now counts in other units) is the
-    author's to say: bump the parameter's `version` (`version = 1`, a u8, default 0), and the old
-    record reverts too.
+    range), and the parameters' declaration order moves nothing;
+  - a field's **type** changed, a field **added or removed**, or fields of **different types
+    reordered** (the type at a position then differs): the old record is refused — status
+    `reverted`, never the old bytes read under the new structure, and never a coding silently gone
+    (a layout-derived block id would have pruned it and read `default`);
+  - fields of the **same type reordered** are indistinguishable from both being renamed, so the old
+    values are taken **by position** (`{ low, high }` → `{ high, low }`, both u16, swaps them) —
+    like any change of **meaning** with the same types (a field that now counts in other units), it
+    is the author's to say: bump the parameter's `version` (`version = 1`, a u8, default 0), and the
+    old record reverts.
 - **The range is not identity — it is revalidated.** A range is not a layout: the stored bytes mean
   the same thing under a new one, and a vehicle's coding must not be lost to an update that only
   widens it. So a restored value is checked against THIS firmware's range before any FB sees it:
@@ -720,7 +725,7 @@ done until its obligations hold under their tests. §3 fixes the shape; this tab
 | R6 | The clear epoch has a stable block identity like the entries (fixed / schema-derived, collision-handled, in the prune keep-set), so a firmware update can never prune it and resurrect cleared entries. *Met in R6b by removing the epoch:* the status image, one value with a fixed id keyed by DTC number, IS the clear. | power-cycle test across a firmware update that reorders faults |
 | R6 / R7 | Persistent writes never block the comm thread: `nvm.Journal.put` is synchronous (a full chain, or a compaction), so persisted 0x2E / 0x14 / fault-memory writes go through a bounded incremental flash path, with 0x78 covering the wait. *Not met (R6b):* fault-memory writes are synchronous but bounded — an image ≤ 17 records, a 0x14 one image; an inline compaction copies the live set — and no 0x78 is sent. *R7 the same:* a parameter's 0x2E is one synchronous record (an inline compaction at a sector's end copies the live set), no 0x78. | bench: CAN rx/tx, NM and 0x78 timing continue during a worst-case chain write and a compaction |
 | R6 | Automatic fault-memory writes (qualification, cycle end) that the journal refuses are kept dirty and retried with bounded pacing — including in the sleep flush — rather than waiting for the next event, since no request is there to receive a 0x72. *Met in R6b* (paced by `[nvm] min_write_ms`; a flush always tries). | `persist_test.v` `test_a_refused_write_is_retried_after_the_pause`; fault-injection: a refused qualification write survives a later power cycle |
-| R7 | Parameters get the entries' identity rules: a stable, schema-derived, collision-handled block id in the prune keep-set, so a firmware update that reorders or adds parameters never restores one parameter's bytes into another. *Met in R7:* the id hashes the parameter's name (pinnable on a collision, which generation refuses), and the record's header states its structure exactly — field count, each type, a declared `version` — so an update that changes a type, the order or the count, or bumps the version, refuses the old bytes and says `reverted`; no hash is trusted for identity. | `tools/loom2v/param_target_test.v` `test_a_parameters_identity_is_its_name_and_its_exact_header`; `comm/param/param_test.v` `test_a_record_is_restored_only_under_its_exact_header` |
+| R7 | Parameters get the entries' identity rules: a stable, schema-derived, collision-handled block id in the prune keep-set, so a firmware update that reorders or adds parameters never restores one parameter's bytes into another. *Met in R7:* the id hashes the parameter's name (pinnable on a collision, which generation refuses), and the record's header states its structure exactly and by position — field count, the type at each position, a declared `version` — so an update that changes a type at a position or the count, or bumps the version, refuses the old bytes and says `reverted`; a reorder of same-type fields needs the version bump (without it values are taken by position); no hash is trusted for identity. | `tools/loom2v/param_target_test.v` `test_a_parameters_identity_is_its_name_and_its_exact_header`; `comm/param/param_test.v` `test_a_record_is_restored_only_under_its_exact_header` |
 | R7 | A restored parameter is revalidated against the CURRENT range before the FB first sees it; out of range → the compiled default (and a flag the tester can read), so a range narrowed by an update is never bypassed. *Met in R7:* the status DID reads `reverted` (2). | `comm/param/param_test.v` `test_a_restored_value_is_revalidated_against_this_firmwares_range` |
 | R6 | Signal-status faults (timeout / integrity / lost) raise their DTCs on silicon — moved here from R5, which proves only the FB-visible status. | bench: pull a sender → its DTC reads back over 0x19 |
 | R2 | NM stays awake for a diagnostic exchange in ANY session: a request-scoped keep-awake vote from the first frame of a request until its final response has drained (diagnostic frames do not refresh NM), in addition to the session-scoped vote. | bench: a multi-frame 0x22 in the default session started near the NM timeout completes |
