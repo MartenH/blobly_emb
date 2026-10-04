@@ -116,6 +116,8 @@ fn test_the_comm_thread_serves_doip_from_the_mailbox() {
 		'doip_n := C.doip_mb_take(&doip_fn)',
 		'g_diag.serve_remote(&g_doip_req[0], doip_n, doip_fn != 0, &g_doip_resp[0])',
 		'C.doip_mb_answer(doip_rn)',
+		// a 0x28 that arrived over DoIP gates this pass's drain (R5)
+		'st.rxg.sample(g_diag.server.rx_enabled()',
 		'for ch.recv(mut rx) {',
 	]
 	mut at := -1

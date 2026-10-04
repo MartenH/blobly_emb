@@ -439,6 +439,7 @@ fn test_the_network_asleep_suspends_the_deadlines_but_hides_no_value() {
 	g.settle()
 	assert g.sample(true, false), 'asleep is silent'
 	assert g.on, 'asleep, reception is still on: a frame that arrives is published'
+	assert !g.receiving(), 'asleep, a published frame was judged as a test result'
 	assert m.received(10_000, g.on) == .ok
 	g.settle()
 	assert !g.live()
@@ -448,6 +449,7 @@ fn test_the_network_asleep_suspends_the_deadlines_but_hides_no_value() {
 	assert g.settle()
 	m.restart(600_000)
 	assert g.live()
+	assert g.receiving()
 	assert !m.expire(650_000)
 	assert m.expire(700_001)
 }

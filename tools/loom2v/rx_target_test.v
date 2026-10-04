@@ -224,6 +224,7 @@ fn test_a_signal_status_fault_is_debounced_on_the_comm_thread() {
 		'C.iocb_pub(0, &command)',
 		'st.fsrc_command = command.status',
 		'st.sdeb_0.apply(g_fmem.control_gen(0), g_fmem.control_held(0))',
+		'now, st.rxg.receiving())', // a frame published while the network sleeps is not a result
 		'g_fmem.consume(2, st.sdeb_2.rep)',
 		'st.slost_2 = command.lost',
 	])
@@ -371,4 +372,12 @@ fn test_a_satellites_tx_waits_on_0x28() {
 	}
 	out := xcore_produce_drain(m).join('\n')
 	assert out.count('if g_diag.server.tx_enabled() && C.xcore_layout_ok() != 0') == 2, out
+}
+
+// A frame checked only for its layout or its status keeps no deadline: no clock is read for it.
+fn test_a_checked_frame_without_a_deadline_reads_no_clock() {
+	code, out, glue := rt_generate('noclock', with_status, '', false)
+	assert code == 0, out
+	assert glue.contains('if rx.id == cmd_frame_id && rx.len == cmd_frame_dlc'), glue
+	assert !glue.contains('now := C.board_now_us()'), 'an unused clock read'
 }

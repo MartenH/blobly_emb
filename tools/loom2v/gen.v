@@ -2842,6 +2842,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << rx_target_top(m)
 				glue << fault_target_pass(m)
 				glue << doip_target_serve(m)
+				if m.doip.on {
+					// a 0x28 that arrived over DoIP gates the frames this pass drains
+					glue << rx_target_resample(m, '\t\t')
+				}
 				glue << '\t\t// CONSUMER: drain the Rx FIFO (non-blocking); account each external rx frame'
 				glue << '\t\tfor ch.recv(mut rx) {'
 				for si in rx_sigs {
@@ -4145,14 +4149,11 @@ fn main() {
 		// Which signals FB handlers read vs write. An rx signal READ by an FB flows through the
 		// target IOC pool (6b-2b); an rx signal WRITTEN by an FB is a config error (an input isn't
 		// written). Everything else external is still deferred (rejected below).
-		mut read_count := map[string]int{} // how many FB handlers read each signal
+		read_count := m.fb_reads.clone() // how many FB handlers read each signal (fb_read_counts)
 		mut written_count := map[string]int{} // how many FB handlers write each signal
 		for fb in ecumodel.toml_arr(doc, 'fb') {
 			for h in (fb.as_map()['handler'] or { toml.Any([]toml.Any{}) }).array() {
 				hm := h.as_map()
-				for r in (hm['reads'] or { toml.Any([]toml.Any{}) }).array() {
-					read_count[r.string()]++
-				}
 				for w in (hm['writes'] or { toml.Any([]toml.Any{}) }).array() {
 					written_count[w.string()]++
 				}
@@ -5292,15 +5293,15 @@ fn validate_fault_snapshots(m Model) {
 const fault_cycle_power = 'power'
 
 // iocb_pool_n: the byte-IOC channels a ThreadX image has (boards/common/iocb.c IOCB_POOL_N),
-// shared by the eth signals and the fault cells.
+// shared by the eth signals, the checked received signals and the fault cells (iocb_overflow).
 const iocb_pool_n = 8
 
 // validate_fault_target: what a ThreadX image's fault memory needs beyond the host's rules. The
 // memory runs on the comm thread (D2) — the owner of the diagnostic connection, which
 // validate_diag_threadx keeps on that thread's bus; each fault-owning FB reaches it through two
 // byte-IOC cells (fault_cell). The operation cycle is NM's wake -> bus sleep (D3's default), or
-// "power"; a cycle SIGNAL is not generated there yet: the comm thread's lean rx decode publishes a
-// byte-0 scalar into the FB's cell and keeps no bool it could watch.
+// "power"; a cycle SIGNAL is not generated there yet: the comm thread keeps no edge state for one
+// (the host bridge's rx_group_hooks cycle edges are not wired on the target).
 fn validate_fault_target(m Model) {
 	if m.fault_cycle == '' && !m.nm.on {
 		panic('loom2v: [[fault]] on the target needs an operation cycle: [nm] (D3\'s default, wake -> bus sleep) or [fault_memory] cycle = "power"')
@@ -5311,9 +5312,8 @@ fn validate_fault_target(m Model) {
 	if !m.nvm.on {
 		panic('loom2v: [[fault]] on the target needs [nvm] — the fault memory keeps its DTCs, counters and snapshots in the NvM journal across resets and power loss (docs/diagnostics.md §3.3); declare the storage')
 	}
-	cells := rx_iocb_idx(m).len + 2 * fault_fbs(m).len
-	if cells > iocb_pool_n {
-		panic('loom2v: [[fault]]: ${fault_fbs(m).len} fault-owning FB(s) need ${2 * fault_fbs(m).len} byte-IOC cells beside ${rx_iocb_idx(m).len} signal cell(s) — the pool holds ${iocb_pool_n} (boards/common/iocb.c IOCB_POOL_N)')
+	if why := iocb_overflow(m) {
+		panic('loom2v: [[fault]]: ${why}')
 	}
 }
 

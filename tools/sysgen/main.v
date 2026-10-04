@@ -291,6 +291,7 @@ fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 	}
 	// consumed signals (an FB here reads a signal ANOTHER node produces): rx.
 	// dedup repeated reads — two handlers reading one signal is a single rx port.
+	protected := e2e_signals(sys, bus)
 	mut rx_seen := map[string]bool{}
 	for name in view.fb_reads {
 		if name in rx_seen {
@@ -313,7 +314,7 @@ fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 		// receive status and lost count ride along, as on a someip E2E event — loom2v requires
 		// the status, so an E2E timeout never reaches the FB as a healthy-looking zero
 		mut rx_fields := sig.fields.clone()
-		if can_rx_e2e(sys, bus, sig.name) {
+		if protected[sig.name] {
 			rx_fields['status'] = 'RxStatus'
 			rx_fields['lost'] = 'u32'
 		}
@@ -498,18 +499,30 @@ fn frame_of_signal(sys sysmodel.System, bus sysmodel.Bus, sig string) !string {
 	return hits[0]
 }
 
-// can_rx_e2e: the frame carrying `sig` on CAN bus `bus` declares E2E protection in the bus's DBC
-// (blobly_net's docs/dbc_attributes.md) — so its receiver's bridge checks it and reports a status.
-fn can_rx_e2e(sys sysmodel.System, bus sysmodel.Bus, sig string) bool {
-	fr := frame_of_signal(sys, bus, sig) or { return false }
+// e2e_signals: the signals CAN bus `bus` carries in a frame its DBC declares E2E-protected
+// (blobly_net's docs/dbc_attributes.md) — a receiver's bridge checks those and reports a status.
+// One parse of the bus's DBC; a signal in several frames is frame_of_signal's to refuse, so it is
+// marked only when every frame carrying it is protected. A DBC that does not load marks nothing:
+// the lowering's own DBC reads report it.
+fn e2e_signals(sys sysmodel.System, bus sysmodel.Bus) map[string]bool {
+	mut out := map[string]bool{}
+	if bus.dbc == '' {
+		return out
+	}
 	path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(sys.dir, bus.dbc) }
-	db := candb.load_dbc_file(path) or { return false }
+	db := candb.load_dbc_file(path) or { return out }
+	mut seen := map[string]bool{}
 	for m in db.messages {
-		if m.name == fr {
-			return m.e2e.declared()
+		for s in m.signals {
+			if s.name in seen {
+				out[s.name] = out[s.name] && m.e2e.declared()
+			} else {
+				seen[s.name] = true
+				out[s.name] = m.e2e.declared()
+			}
 		}
 	}
-	return false
+	return out
 }
 
 // signal_partitions maps each signal a node's FBs read/write to the partition

@@ -175,7 +175,7 @@ fn rx_target_top(m Model) []string {
 	}
 	owner := rx_target_owner(m)
 	mut out := []string{}
-	if rx_checked_msgs(m).len > 0 || owner.faults {
+	if rx_checked_msgs(m).any(rx_monitored(m, it, rx_target_bus(m))) || owner.faults {
 		out << '\t\tnow := C.board_now_us() // the receive rule\'s clock for this pass'
 	}
 	out << rx_gate_lines(m, rx_checked_msgs(m), rx_target_bus(m), owner, '\t\t')
@@ -277,8 +277,19 @@ fn validate_rx_target(m Model) {
 			panic('loom2v: [target] kind="threadx": received signal "${sname}" is read on ${threads.len} threads (${threads.join(', ')}) — its byte-IOC cell has one reader slot; read it on one thread')
 		}
 	}
-	cells := idx.len + 2 * fault_fbs(m).len
-	if cells > iocb_pool_n {
-		panic('loom2v: [target] kind="threadx": ${idx.len} signal cell(s) (eth signals and checked received ones) and ${2 * fault_fbs(m).len} fault cell(s) exceed the byte-IOC pool of ${iocb_pool_n} (boards/common/iocb.c IOCB_POOL_N)')
+	if why := iocb_overflow(m) {
+		panic('loom2v: [target] kind="threadx": ${why}')
 	}
+}
+
+// iocb_overflow: why the image's byte-IOC cells do not fit the pool — the signal cells (eth signals
+// and checked received ones, rx_iocb_idx) and two per fault-owning FB — or none. The one statement
+// of the bound, asked by the fault and the receive validations alike.
+fn iocb_overflow(m Model) ?string {
+	sigs := rx_iocb_idx(m).len
+	faults := 2 * fault_fbs(m).len
+	if sigs + faults <= iocb_pool_n {
+		return none
+	}
+	return '${sigs} signal cell(s) (eth signals and checked received ones) and ${faults} fault cell(s) exceed the byte-IOC pool of ${iocb_pool_n} (boards/common/iocb.c IOCB_POOL_N)'
 }

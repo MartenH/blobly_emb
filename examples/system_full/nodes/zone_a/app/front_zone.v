@@ -57,10 +57,10 @@ pub fn (mut fb SteerLimiter) on_50ms(inp ports.SteerLimiterIn, mut out ports.Ste
 	out.breath_led.duty = inp.led_level.permille
 }
 
-// safety_level_max: the most a SafetyCmd level may be (compute.dbc / edge.dbc range)
+// safety_level_max: the most a SafetyCmd level may be (its range in edge.dbc)
 const safety_level_max = u16(1000)
 
-// SafetyMonitor acts on the tester's protected SafetyCmd only while its receive status is ok —
+// SafetyMonitor acts on the chassis node's protected SafetyCmd only while its receive status is ok —
 // never received, timed out or corrupt, it holds the safe level 0 (docs/diagnostics.md §3.2: the
 // FB sees the status beside the value and chooses its reaction). It reports what it saw on
 // SafetyView: byte 0 the status, byte 1 the lost-frame count (wrapping), bytes 2-3 the level acted on.

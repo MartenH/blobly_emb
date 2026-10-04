@@ -25,6 +25,11 @@ fn (o RxOwner) on() string {
 	return if o.gated() { 'st.rxg.on' } else { 'true' }
 }
 
+// receiving: a publication now is a test result — reception on and the network awake.
+fn (o RxOwner) receiving() string {
+	return if o.gated() { 'st.rxg.receiving()' } else { 'true' }
+}
+
 // suspended: a silence is latched whose restart has not run.
 fn (o RxOwner) suspended() string {
 	return if o.gated() { 'st.rxg.suspended()' } else { 'false' }
@@ -362,7 +367,7 @@ fn rx_publish_hooks(m Model, sname string, fld string, owner RxOwner, ind string
 			}
 		}
 		out << '${ind}st.sdeb_${i}.apply(${fm}.control_gen(${i}), ${fm}.control_held(${i}))'
-		out << '${ind}st.sdeb_${i}.step(${res}, now, ${owner.on()})'
+		out << '${ind}st.sdeb_${i}.step(${res}, now, ${owner.receiving()})'
 		out << '${ind}${fm}.consume(${i}, st.sdeb_${i}.rep)'
 		out << '${ind}st.sev_${i} = true'
 		if f.on == 'lost' {

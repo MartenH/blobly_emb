@@ -136,6 +136,12 @@ pub fn (g &RxGate) suspended() bool {
 	return g.latched
 }
 
+// receiving: reception is on and the network awake — a publication now is a test result (asleep, a
+// frame that arrives is published, but nothing is judged by it).
+pub fn (g &RxGate) receiving() bool {
+	return !g.silent
+}
+
 // live: the deadlines may fire and a signal's level may be judged — nothing is silent now or
 // pending its restart.
 pub fn (g &RxGate) live() bool {

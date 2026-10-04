@@ -63,8 +63,11 @@ end)
 test("zone_a rx: a corrupt CRC is an integrity fault, and the FB holds the safe level", function()
   local d = diag()
   clean(d)
-  fault("bad_crc", 700) -- past the 300 ms timeout: no valid frame, so lost communication too
-  local seen = views(600)
+  fault("bad_crc", 900) -- past the 300 ms timeout: no valid frame, so lost communication too
+  -- a SafetyView lags the frame it reports by up to ~200 ms (a 50 ms frame, the FB's 50 ms
+  -- dispatch, the 100 ms view cycle): read only views the corruption has reached
+  sleep_ms(250)
+  local seen = views(500)
   local held = true
   for _, v in ipairs(seen) do
     if v.status == OK or v.level ~= 0 then held = false end
