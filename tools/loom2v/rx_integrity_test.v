@@ -33,3 +33,27 @@ fn test_only_an_authentic_frame_reaches_the_e2e_check() {
 	assert verify >= 0 && check > verify && refused > check, out
 	assert out.contains('p_brake = st.rxm_brake.checked(now, chk_brake, st.rxg.on, st.rxg.suspended())'), out
 }
+
+// A signal with no status has nothing to carry a protection failure: an integrity verdict publishes
+// nothing to it (its last value stands), and moves no operation cycle it drives.
+fn test_an_integrity_failure_skips_a_signal_without_a_status() {
+	mut m := Model{}
+	m.frames.e2e_on['ign'] = true
+	m.frames.frame_bus['ign'] = 'can0'
+	m.frames.e2e_timeout_us['ign'] = 300_000
+	m.sig_of['Ign'] = SigInfo{
+		name: 'Ign'
+		bus: 'can0'
+		val_field: 'on'
+		val_type: 'bool'
+		dbc_msg: 'ign'
+	}
+	owner := RxOwner{
+		fmem: 'st.fmem'
+		publish: fn (si SigInfo, fld string) string {
+			return 'PUBLISH(${fld})'
+		}
+	}
+	out := rx_frame_arm(m, 'ign', ['Ign'], false, 'can0', owner, '\t').join('\n')
+	assert out.contains('if p_ign != .integrity {\n\t\t\t\tPUBLISH(ign)'), out
+}

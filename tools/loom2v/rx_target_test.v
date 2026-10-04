@@ -44,11 +44,16 @@ BA_ "E2ETimeout" BO_ 291 300;
 '
 
 const rt_faults = '
+[[did]]
+id    = 0xF190
+ascii = "RX"
+
 [[fault]]
 name   = "CmdTimeout"
 dtc    = 0xC16400
 signal = "Command"
 on     = "timeout"
+freeze = [0xF190]
 
 [[fault]]
 name   = "CmdIntegrity"
@@ -155,6 +160,7 @@ rx   = { timeout_ms = 200 }
 		'for ch.recv(mut rx) {',
 		'if rx.id == cmd_frame_id && rx.len == cmd_frame_dlc && rx.ext == false {',
 		'p_cmd_frame := st.rxm_cmd_frame.received(now, st.rxg.on)',
+		'if p_cmd_frame == .ok {', // the value only from a good frame
 		'command.code = u32(cmd_frame_command_phys(rx.data))',
 		'command.status = rx_status_of(p_cmd_frame)',
 		'C.iocb_pub(0, &command)',
@@ -170,7 +176,7 @@ rx   = { timeout_ms = 200 }
 	// the FB reads the whole struct where the comm thread published it, and boot sized its cell
 	assert glue.contains('C.iocb_get(0, &inp.command)'), glue
 	assert glue.contains('C.iocb_cfg(0, u16(sizeof(cfg_command))) // Command: received, checked'), glue
-	assert !glue.contains('C.ioc_pub(${0}, g_rx_last'), 'the checked frame took the lean copy too'
+	assert !glue.contains('if rx.id == u32(0x123)'), 'the checked frame kept a lean arm too'
 	assert glue.contains('fn rx_status_of(p com.RxPublish) sig.RxStatus {')
 }
 
@@ -190,8 +196,8 @@ fn test_an_e2e_frame_is_checked_on_the_comm_thread() {
 		'command.lost = u16(st.rxm_cmd_frame.lost())',
 		'C.iocb_pub(0, &command)',
 		'match g_diag.on_frame(',
-		'g_diag.serve()',
-		'st.rxg.sample(g_diag.server.rx_enabled(), g_nm.awake())', // a 0x28 served now gates what follows
+		// a 0x28 served now gates what follows it in the drain
+		'g_diag.serve()\n\t\t\t\t\t\tif st.rxg.sample(g_diag.server.rx_enabled(), g_nm.awake())',
 	])
 }
 
@@ -213,6 +219,7 @@ fn test_a_signal_status_fault_is_debounced_on_the_comm_thread() {
 		'st.fsrc_command = .never_received', // a status going stale when reception stops
 		'if st.sev_0 && st.rxg.live() {',
 		'st.sdeb_0.step(if st.fsrc_command == .timeout',
+		'now, st.rxg.live())', // the level is not judged while reception is paused
 		'g_fmem.consume(0, st.sdeb_0.rep)',
 		'C.iocb_pub(0, &command)',
 		'st.fsrc_command = command.status',
@@ -220,6 +227,9 @@ fn test_a_signal_status_fault_is_debounced_on_the_comm_thread() {
 		'g_fmem.consume(2, st.sdeb_2.rep)',
 		'st.slost_2 = command.lost',
 	])
+	// an occurrence the drain consumed has its snapshot taken after the drain, as on the host
+	in_order_rt(glue, ['C.iocb_pub(0, &command)', 't1 := C.board_now_us()',
+		'if g_fmem.capture_due() {', 'if st.rxg.settle()'])
 	// the receive status feeds no fault through the host's channels on a target
 	assert !glue.contains('st.fmem'), "a target fault hook named the host bridge's memory"
 }
@@ -289,4 +299,76 @@ fn test_an_unchecked_frame_keeps_the_lean_copy() {
 	assert code == 0, out
 	assert !glue.contains('rxm_'), 'a plain frame grew a monitor'
 	in_order_rt(glue, ['if rx.id == u32(0x123)', 'if st.rxg.on {', 'C.ioc_pub('])
+}
+
+// A deadline is a check too: a frame with one takes the checked path even when its signal has no
+// status — the FB then sees the zero value the deadline publishes, as on the host bridge.
+fn test_a_deadline_without_a_status_is_still_checked() {
+	code, out, glue := rt_generate('nostatus', fn (src string) string {
+		return src
+	}, '
+[[frame]]
+name = "CmdFrame"
+bus  = "can0"
+rx   = { timeout_ms = 200 }
+', false)
+	assert code == 0, out
+	in_order_rt(glue, ['p_cmd_frame := st.rxm_cmd_frame.received(now, st.rxg.on)',
+		'C.iocb_pub(0, &command)', 'if st.rxg.live() && st.rxm_cmd_frame.expire(now) {',
+		'mut command := sig.Command{}', 'C.iocb_pub(0, &command)'])
+}
+
+// The byte-IOC numbering: the checked signals first, then each fault-owning FB's two cells — one
+// numbering the FB glue, the comm thread and boot share.
+fn test_fault_cells_follow_the_checked_signals() {
+	code, out, glue := rt_generate('cells', fn (src string) string {
+		return src.replace('fields = { code = "u32" }', rt_status)
+	}, rt_conn + '
+[[fault]]
+name     = "LoadImplausible"
+dtc      = 0xC40100
+from     = "LoadSlow.on_100ms"
+debounce = { kind = "counter", fail = 3, pass = 3 }
+
+[fault_memory]
+cycle = "power"
+
+[nvm]
+min_write_ms = 1000
+', false)
+	assert code == 0, out
+	for want in ['C.iocb_pub(0, &command)', 'C.iocb_get(0, &inp.command)',
+		'C.iocb_pub(1, &st.frep_load_slow)', 'C.iocb_get(1, &g_frep_load_slow)',
+		'C.iocb_get(2, &st.fctl_load_slow)', 'C.iocb_pub(2, &g_fctl_load_slow)',
+		'C.iocb_cfg(0, u16(sizeof(cfg_command)))', 'C.iocb_cfg(1, u16(sizeof(fcfg_rep)))'] {
+		assert glue.contains(want), 'missing: ${want}'
+	}
+}
+
+// 0x28's transmit gate covers a satellite's signals too: the comm thread sends them for it.
+fn test_a_satellites_tx_waits_on_0x28() {
+	mut m := Model{}
+	m.target.threadx = true
+	m.isotp_conns = [IsotpConn{
+		name: 'diag'
+		bus: 'can0'
+	}]
+	m.xcore_names = ['Pair', 'Wide']
+	m.xcore_idx['Pair'] = 0
+	m.xcore_xw_off['Wide'] = 0
+	m.sig_of['Pair'] = SigInfo{
+		name: 'Pair'
+		external: true
+		dbc_dlc: 4
+		fields: [SigField{'a', 'u32'}]
+	}
+	m.sig_of['Wide'] = SigInfo{
+		name: 'Wide'
+		external: true
+		wide: true
+		dbc_dlc: 12
+		fields: [SigField{'a', 'u32'}, SigField{'b', 'u32'}, SigField{'c', 'u32'}]
+	}
+	out := xcore_produce_drain(m).join('\n')
+	assert out.count('if g_diag.server.tx_enabled() && C.xcore_layout_ok() != 0') == 2, out
 }
