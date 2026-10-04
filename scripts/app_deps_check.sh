@@ -33,7 +33,16 @@ for mk in examples/*/Makefile examples/*/nodes/*/Makefile; do
 			fail=1
 		fi
 		make -C "$d" "$rel" >/dev/null 2>&1 || { echo "app_deps_check: $c rebuild failed"; fail=1; }
-		echo "app_deps_check: $c ok (${src#./})"
+		# and the rule that records the dependencies
+		for rule in scripts/vdeps.sh tools/tools.mk; do
+			touch "$rule"
+			if make -C "$d" -q "$rel" >/dev/null 2>&1; then
+				echo "app_deps_check: touching $rule leaves $c up to date"
+				fail=1
+			fi
+			make -C "$d" "$rel" >/dev/null 2>&1 || { echo "app_deps_check: $c rebuild failed"; fail=1; }
+		done
+		echo "app_deps_check: $c ok (${src#./}, the rule)"
 	done
 done
 exit $fail

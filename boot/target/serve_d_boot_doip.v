@@ -19,6 +19,7 @@ fn C.boot_doip_testers(&u16) int
 fn C.boot_doip_act_types(&u8) int
 fn C.boot_doip_announce_count() int
 fn C.boot_doip_announce_ms() int
+fn C.boot_doip_net_wait_ms() u32
 fn C.doip_mb_init(&u8, &u8)
 fn C.doip_net_ready() int
 
@@ -45,6 +46,8 @@ fn boot_net_init() {
 	g_doip.n_testers = C.boot_doip_testers(&g_doip.testers[0])
 	g_doip.n_act_types = C.boot_doip_act_types(&g_doip.act_types[0])
 	g_doip.serve.answer = doipnet.answer // g_prog, across the mailbox
+	// a session handed off over DoIP waits this long for the listener (the node's announcements)
+	g_prog.net_wait_us = u64(C.boot_doip_net_wait_ms()) * 1000
 	C.doip_mb_init(&g_doip_req[0], &g_doip_resp[0])
 }
 

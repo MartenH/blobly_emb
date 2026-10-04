@@ -93,7 +93,7 @@ tool_sig = $(strip $(TOOL_DIR)/.tool-$(1) | $(V) | $(TOOL_V_PATH) | $(TOOL_V_VER
 tool_same = $(and $(findstring $(1),$(2)),$(findstring $(2),$(1)))
 tool_recorded = $(and $(wildcard $(TOOL_DIR)/.tool-$(1).d),$(call tool_same,$(call tool_sig,$(1)),$(strip $(if $(wildcard $(TOOL_DIR)/.tool-$(1).sig),$(file <$(TOOL_DIR)/.tool-$(1).sig)))))
 
-$(TOOL_DIR)/.tool-%: $(TOOL_REPO)/tools/tools.mk $(TOOL_REPO)/scripts/build_tool.sh
+$(TOOL_DIR)/.tool-%: $(TOOL_REPO)/tools/tools.mk $(TOOL_REPO)/scripts/build_tool.sh $(TOOL_REPO)/scripts/vdeps.sh
 	@test -n "$(TOOL_SRC_$*)" || { echo "tools.mk: no tool named '$*'"; exit 1; }
 	V="$(V)" TOOL_SIG='$(call tool_sig,$*)' $(TOOL_REPO)/scripts/build_tool.sh $@ "$(TOOL_FLAGS_$*)" $(call tool_src,$*)
 # the records are written by the build above, never made on their own

@@ -1,15 +1,24 @@
-/* driver/eth/doip_mb.h — when the answer the server gave last counts as SENT over DoIP, as a pure
- * function so the rule is host-tested (doip_mb_test.v) and doip_netx.c only feeds it.
+/* driver/eth/doip_mb.h — the sequence rules of the DoIP mailbox (driver/eth/doip_netx.c), as pure
+ * functions over one state, so the whole protocol is host-tested against a reference model
+ * (doip_mb_test.v) and doip_netx.c only locks, copies and feeds it.
  *
- * Sent means the tester ACKNOWLEDGED it, not that NetX queued it: a reset waits for its answer to be
- * sent (comm/diag Connection.reset_due, boot.Prog.reset_due), and an answer still in TCP's
- * transmit queue dies with a connection that drops — which must cancel the reset, never let it
- * through. So nothing is reported unless the socket is in a state where an empty transmit queue
- * means acknowledged: ESTABLISHED, or CLOSE_WAIT (the tester closed after acknowledging — a FIN
- * arrives in sequence, behind its ACKs). An RST releases the queue too (it empties with nothing
- * acknowledged) but leaves the socket CLOSED or listening, so it is never read as an
- * acknowledgement, whether or not the doip thread has recycled the connection yet; the drop then
- * reports itself (doip_mb_take_dropped) with the answer still in flight. */
+ * The doip thread POSTS one request at a time and waits; the server's thread (the application's
+ * comm thread, or the bootloader's serve loop) TAKES it and ANSWERS it — it is then SERVED — or, not
+ * taken in time, the doip thread WITHDRAWS it, and it is settled without ever having been served.
+ * The doip thread COLLECTS a served answer and QUEUES it to TCP. The server's thread asks two things
+ * each pass, about the request it served last and nothing else:
+ *   doip_mb_sent_take    — its answer has been ACKNOWLEDGED by the tester: queued, nothing left
+ *                          unacknowledged, on a socket still ESTABLISHED or in CLOSE_WAIT (the
+ *                          tester closed behind its ACKs). An RST empties the queue with nothing
+ *                          acknowledged but leaves the socket CLOSED or listening, so it is never
+ *                          read as an acknowledgement; a reset waiting on the answer waits on;
+ *   doip_mb_dropped_take — a connection dropped after that request was posted: the answer, if not
+ *                          acknowledged, died with it (a reset it announced is cancelled).
+ * A withdrawn request is never served, so it never stands in for the served one: an answer still
+ * in flight is acknowledged, or dropped, whatever was withdrawn after it.
+ *
+ * Fields written by one thread and read by another are single aligned words; doip_netx.c holds
+ * its mailbox mutex around post / take / answer / withdraw / collect. */
 #ifndef BLOBLY_DRIVER_ETH_DOIP_MB_H
 #define BLOBLY_DRIVER_ETH_DOIP_MB_H
 
@@ -19,21 +28,77 @@
 #define DOIP_MB_TCP_ESTABLISHED 5u
 #define DOIP_MB_TCP_CLOSE_WAIT 6u
 
-/* sent_seq: the answer handed to TCP last; answered: the one the server gave last; *seen: the last
- * one reported (updated); state / unacked: the socket's TCP state and its unacknowledged bytes,
- * read together. 1 = report the answer sent, once. */
-static inline int doip_mb_sent_take(uint32_t sent_seq, uint32_t answered, uint32_t *seen, uint32_t state,
-                                    uint32_t unacked) {
-	if (sent_seq != answered) {
-		*seen = sent_seq; /* an earlier answer's send: nothing to say about this one */
+typedef struct {
+	volatile uint32_t posted;     /* the request posted last */
+	volatile uint32_t settled;    /* the request settled last: served, or withdrawn */
+	volatile uint32_t served;     /* the request the server answered last (never a withdrawn one) */
+	volatile uint32_t queued;     /* the served answer handed to TCP last */
+	volatile uint32_t reported;   /* the served answer reported acknowledged last */
+	volatile uint32_t drops;      /* connections dropped */
+	volatile uint32_t drop_after; /* the request posted last when the latest one dropped */
+	volatile uint32_t drops_seen; /* the server thread's last reading of drops */
+} doip_mb_t;
+
+/* doip thread: a new request; its sequence */
+static inline uint32_t doip_mb_post(doip_mb_t *m) {
+	m->posted = m->posted + 1u;
+	return m->posted;
+}
+
+/* server thread: a request is waiting to be taken */
+static inline int doip_mb_waiting(const doip_mb_t *m) {
+	return m->settled != m->posted;
+}
+
+/* server thread: the waiting request is answered */
+static inline void doip_mb_serve(doip_mb_t *m) {
+	m->served = m->posted;
+	m->settled = m->posted;
+}
+
+/* doip thread: request `seq`, not taken in time, is withdrawn — settled, never served */
+static inline void doip_mb_withdraw(doip_mb_t *m, uint32_t seq) {
+	m->settled = seq;
+}
+
+/* doip thread: 1 when request `seq` has been served — its answer is there to collect */
+static inline int doip_mb_collect(const doip_mb_t *m, uint32_t seq) {
+	return m->served == seq;
+}
+
+/* doip thread: a response went to TCP — it carries the answer served last, or follows it (the doip
+ * thread posts the next request only after sending this one's answer) */
+static inline void doip_mb_queue(doip_mb_t *m) {
+	m->queued = m->served;
+}
+
+/* doip thread: the connection dropped — and whatever it had queued with it: an answer queued on
+ * a connection that is gone is never acknowledged, whatever the next connection's queue says */
+static inline void doip_mb_drop(doip_mb_t *m) {
+	m->queued = 0u;
+	m->drop_after = m->posted;
+	m->drops = m->drops + 1u;
+}
+
+/* server thread: 1 once the answer it served last has been acknowledged (above), reported once;
+ * state / unacked: the socket's TCP state and its unacknowledged bytes, read together */
+static inline int doip_mb_sent_take(doip_mb_t *m, uint32_t state, uint32_t unacked) {
+	uint32_t s = m->served;
+	if (s == m->reported || m->queued != s || unacked != 0u ||
+	    (state != DOIP_MB_TCP_ESTABLISHED && state != DOIP_MB_TCP_CLOSE_WAIT)) {
 		return 0;
 	}
-	if (sent_seq == *seen || unacked != 0u ||
-	    (state != DOIP_MB_TCP_ESTABLISHED && state != DOIP_MB_TCP_CLOSE_WAIT)) {
-		return 0; /* reported already, or not acknowledged (yet, or ever: the connection went) */
-	}
-	*seen = sent_seq;
+	m->reported = s;
 	return 1;
+}
+
+/* server thread: 1 once a connection has dropped that the request it served last came over — a
+ * drop before that request was posted belongs to a tester whose state is already superseded */
+static inline int doip_mb_dropped_take(doip_mb_t *m) {
+	uint32_t d = m->drops;
+	int r = d != m->drops_seen && m->drop_after >= m->served;
+	m->drops_seen = d;
+	return r;
 }
 
 #endif

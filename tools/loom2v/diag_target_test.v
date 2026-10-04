@@ -1,6 +1,7 @@
 module main
 
 import os
+import comm.doip as doippolicy
 
 // The diagnostic server on a ThreadX comm thread (docs/diagnostics.md R2): what the generator
 // wires, in what order, and what it refuses until the next R2 steps. Runs the real generator on
@@ -652,6 +653,7 @@ allow_bench_key  = true
 		'#define BOOT_DOIP_N_TESTERS 2', '#define BOOT_DOIP_TESTERS {0xe00, 0xe80}',
 		'#define BOOT_DOIP_N_ACT_TYPES 0', '#define BOOT_DOIP_INITIAL_MS 2000u',
 		'#define BOOT_DOIP_ANNOUNCE_COUNT 2', '#define BOOT_DOIP_ANNOUNCE_MS 500',
+		'#define BOOT_DOIP_NET_WAIT_MS 6000u',
 		'#define BOOT_RX_ID 0x7b0u'] {
 		assert h.contains(want), '${want} missing:\n${h}'
 	}
@@ -724,4 +726,19 @@ fn test_a_boot_on_an_fd_bus_opens_it_in_fd() {
 	assert '#define BOOT_CAN_IDX 1 /* the [isotp] bus "can1": the comm thread\'s FDCAN */' in h
 	assert '#define BOOT_CAN_FD 1 /* its frame format, as the application opens it */' in h
 	assert fdcan_index('can10') == '' && fdcan_index('can3') == '' && fdcan_index('edge') == ''
+}
+
+// the bound a handed-off DoIP session waits for the boot's listener covers the longest
+// announcement sequence a valid policy allows, plus the link start-up (boot/prog_test.v drives
+// Prog at that maximum)
+fn test_the_network_wait_covers_every_valid_announcement_policy() {
+	assert doip_net_wait_ms(10, 1000) == 15000
+	for count in [i64(0), 1, 3, 10] {
+		for interval in [i64(doippolicy.announce_interval_min_ms), 500, 1000, doippolicy.announce_interval_max_ms] {
+			if doippolicy.announce_ok(count, interval) {
+				assert doip_net_wait_ms(count, interval) >= doip_link_allowance_ms + count * interval
+				assert doip_net_wait_ms(count, interval) <= doip_link_allowance_ms + doippolicy.announce_total_max_ms
+			}
+		}
+	}
 }

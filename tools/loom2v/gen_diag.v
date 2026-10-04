@@ -118,6 +118,16 @@ fn boot_gen_h(m Model, can_idx string, fd bool) []string {
 	return g
 }
 
+// doip_link_allowance_ms: PHY auto-negotiation (1.5..3 s on the boards' LAN8742) and the NetX
+// bring-up before the first announcement, with margin
+const doip_link_allowance_ms = 5000
+
+// doip_net_wait_ms: the longest a handed-off session waits for the boot's DoIP listener
+// (boot.Prog.net_wait_us): the link allowance plus every announcement interval of the policy
+fn doip_net_wait_ms(count i64, interval_ms i64) i64 {
+	return doip_link_allowance_ms + count * interval_ms
+}
+
 // boot_gen_doip: a [doip] node's bootloader serves DoIP too (boot/target serve_d_boot_doip.v,
 // boards/common/boot_net.c) — as the SAME entity the application is: its address, logical
 // address, VIN (DID 0xF190), routing-activation policy, timers and announcements, so a tester
@@ -148,6 +158,9 @@ fn boot_gen_doip(m Model) []string {
 		'#define BOOT_DOIP_GENERAL_MS ${p.int_of('general_inactivity_ms')}u',
 		'#define BOOT_DOIP_ANNOUNCE_COUNT ${p.int_of('announce_count')}',
 		'#define BOOT_DOIP_ANNOUNCE_MS ${p.int_of('announce_interval_ms')}',
+		'/* how long a session handed off over DoIP waits for the network: the link start-up allowance',
+		' * plus the whole announcement sequence, which goes out before the listener opens */',
+		'#define BOOT_DOIP_NET_WAIT_MS ${doip_net_wait_ms(p.int_of('announce_count'), p.int_of('announce_interval_ms'))}u',
 	]
 }
 
