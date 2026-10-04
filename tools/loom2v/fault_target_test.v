@@ -238,10 +238,14 @@ fn test_the_fault_memory_is_persisted_in_the_journal() {
 	assert c2 == 0, o2
 	assert !g2.contains('g_nvm.erase_pending() // the boot quiet point')
 	assert !g2.contains('g_fmem.refused && g_nvm.pending_erase'), 'an NM node erased outside its sleep edges'
-	in_order(g2, ['g_fmem.end_cycle_after(t1, u64(200000)) // the cycle-end barrier',
+	in_order(g2, ['if g_fmem.ending { // woken inside the grace', 'g_fmem.consume(0, g_frep_load_slow.r[0])',
+		'g_fmem.cycle_start()', 'g_fmem.end_cycle_after(t1, u64(200000)) // the cycle-end barrier',
 		'if g_fmem.cycle_end_due(t1) {', 'g_fmem.consume(0, g_frep_load_slow.r[0])', 'g_fmem.cycle_end()',
 		'g_fmem.persist(t1, false)', 'if g_fmem.wrote > 0 && g_nm.state() == .bus_sleep {',
-		'if !g_fmem.persist(t1, true) {', 'g_nvm.mark_clean()'])
+		'if !g_fmem.persist(t1, true) {', 'if g_fmem.ending {', 'nvm_flush_ok = false', 'g_nvm.mark_clean()'])
+	// an ECUReset ends a cycle still waiting for its barrier, before its flush
+	in_order(g2, ['if g_diag.reset_due() != 0 {', 'g_fmem.consume(0, g_frep_load_slow.r[0])',
+		'if g_fmem.ending {', 'g_fmem.cycle_end()', 'if !g_fmem.persist(t1, true) {', 'C.diag_sys_reset()'])
 	// and no persistence without the storage declared
 	c3, o3, _, _ := ft_generate('nonvm', same, ft_conn + ft_fault.all_before('[nvm]'))
 	assert c3 != 0
@@ -387,9 +391,9 @@ fn test_the_host_bridge_takes_the_power_cycle_too() {
 	assert g.count('st.fmem.cycle_start()') == 1, 'a frame still moves the cycle'
 	// one capture site, after the drain where the signal-status faults are consumed and a cycle edge
 	// or a clear may move the status, before the request is served
-	assert g.count('st.fmem.capture(') == 1
-	in_order(g, ['st.fmem.consume(0, st.frep_engine_monitor.r[0])', 'for st.chan.recv(mut rx) {',
-		'st.fmem.capture(&st.conn_diag.server)', 'st.conn_diag.serve()'])
+	assert g.count('st.fmem.capture(') == 2
+	in_order(g, ['st.fmem.consume(0, st.frep_engine_monitor.r[0])', 'st.fmem.capture(&st.conn_diag.server)',
+		'for st.chan.recv(mut rx) {', 'st.fmem.capture(&st.conn_diag.server)', 'st.conn_diag.serve()'])
 	assert !g.contains('st.fmem.cycle_end()')
 }
 

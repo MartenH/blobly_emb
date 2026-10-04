@@ -4918,6 +4918,9 @@ fn parse_faults(doc toml.Doc) []FaultCfg {
 		if 'snapshot_id' in m && (snapshot_id < 1 || snapshot_id > 0xFFFE) {
 			panic('loom2v: [[fault]] "${name}": snapshot_id ${snapshot_id} must be 1..65534')
 		}
+		if 'snapshot_id' in m && freeze.len == 0 {
+			panic('loom2v: [[fault]] "${name}": snapshot_id pins a snapshot block, but the fault declares no `freeze`')
+		}
 		priority := (m['priority'] or { toml.Any(default_fault_priority) }).i64()
 		if priority < 1 || priority > 255 {
 			panic('loom2v: [[fault]] "${name}": priority ${priority} must be 1 (the most important) .. 255')
@@ -5355,6 +5358,12 @@ fn fault_target_cycle(m Model) []string {
 		'\t\tif g_nm.awake() != g_fcycle_on { // the operation cycle follows NM (D3)',
 		'\t\t\tg_fcycle_on = g_nm.awake()',
 		'\t\t\tif g_fcycle_on {',
+		'\t\t\t\tif g_fmem.ending { // woken inside the grace: what the ending cycle saw is read into it first',
+	]
+	g << fault_target_consume(m, '\t\t\t\t\t')
+	g << fault_capture_lines(m, 'g_fmem', 'g_diag', '\t\t\t\t\t')
+	g << [
+		'\t\t\t\t}',
 		'\t\t\t\tg_fmem.cycle_start()',
 		'\t\t\t} else {',
 		'\t\t\t\tg_fmem.end_cycle_after(t1, u64(${m.fault_grace_us})) // the cycle-end barrier: the producers publish first',
@@ -5390,8 +5399,15 @@ fn fault_grace_us(m Model, doc toml.Doc) u64 {
 			}
 		}
 	}
+	// an interrupt-driven handler has no period: a floor stands in for it
+	if longest < fault_grace_floor_ms {
+		longest = fault_grace_floor_ms
+	}
 	return 2 * longest * 1000
 }
+
+// fault_grace_floor_ms: the barrier's period floor, for interrupt-driven fault-testing handlers
+const fault_grace_floor_ms = u64(50)
 
 // fault_target_cycle_boot: right after NM's init, before the loop's first pass consumes a report —
 // NM may start awake (request = true), and then the operation cycle has already begun: a result the

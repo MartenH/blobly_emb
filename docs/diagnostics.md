@@ -440,8 +440,11 @@ row for each block.
 dispatch begun before the decision may publish its report after the owner's read, and read after
 the end it would count for nothing — lost from the cycle and the store. So the end waits twice the
 longest period of a fault-testing handler (`end_cycle_after` / `cycle_end_due`), the owner reading
-as usual, and the cycle ends after one more consume; a wake inside the grace ends it there and
-begins the next.
+as usual, and the cycle ends after one more consume; a wake inside the grace reads the producers,
+ends it there and begins the next. The sleep-edge flush lays no clean marker while the end waits
+(the end's own write in bus sleep re-runs the choreography), and an ECUReset ends a waiting cycle
+before its flush. The grace is a time window: a result from a dispatch that begins inside it counts
+in the ending cycle too. An interrupt-driven handler has no period; 50 ms stands in for it.
 
 **Where writes happen.** Every comm pass after the cycle step (`fault_target_persist`), and with a
 flush in the persisted signals' choreography at every quiet point — the NM sleep edges and before an
@@ -604,6 +607,6 @@ done until its obligations hold under their tests. §3 fixes the shape; this tab
 | R6 | Signal-status faults (timeout / integrity / lost) raise their DTCs on silicon — moved here from R5, which proves only the FB-visible status. | bench: pull a sender → its DTC reads back over 0x19 |
 | R2 | NM stays awake for a diagnostic exchange in ANY session: a request-scoped keep-awake vote from the first frame of a request until its final response has drained (diagnostic frames do not refresh NM), in addition to the session-scoped vote. | bench: a multi-frame 0x22 in the default session started near the NM timeout completes |
 | R3 / R5 | An E2E-protected signal detects total sender loss inside the E2E mechanism itself (REQ-E2E-002): `e2e.RxState` gains its own deadline (`on_valid` / `expired`) and publishes the loss, independent of the QM COM deadline. | host (R3) and bench (R5): sender removed, loss seen with the COM deadline disabled |
-| R6 | The operation-cycle END is a barrier too: before the sleep flush marks the journal clean, the fault memory waits for every producer to acknowledge the ending generation and persists what it read — power can be removed with no next cycle to drain the tail. *Met in R6b on the target:* NM's sleep REQUESTS the end (`Memory.end_cycle_after`); the cycle stays open for twice the longest period of a fault-testing handler, the owner consuming as usual, and ends after one more consume — then the in-sleep write re-lays the clean marker. A time grace, not a per-producer acknowledgement: it holds while a handler finishes within its period (an overrun is reported). | power-off right after bus sleep with a qualification in the last dispatch |
+| R6 | The operation-cycle END is a barrier too: before the sleep flush marks the journal clean, the fault memory waits for every producer to acknowledge the ending generation and persists what it read — power can be removed with no next cycle to drain the tail. *Met in R6b on the target:* NM's sleep REQUESTS the end (`Memory.end_cycle_after`); the cycle stays open for twice the longest period of a fault-testing handler, the owner consuming as usual, and ends after one more consume — then the in-sleep write re-lays the clean marker. A time grace, not a per-producer acknowledgement: it holds while a handler finishes within its period (an overrun is reported); the sleep-edge flush lays no clean marker until the end is done. | power-off right after bus sleep with a qualification in the last dispatch |
 | R2 | 0x27's failed-key count survives a POWER CYCLE: persisted, with the boot lockout applied only while it is non-zero. R1b keeps it across an ECU reset (RAM) but not across a power-up, which a simulator need not defend. | bench: fail twice, power-cycle, the third wrong key locks out; a clean power-up unlocks at once |
 | R6 | Persistent diagnostic counters have fixed serialized widths and SATURATE (occurrence, failed-cycle, aging); they never wrap to a small value. *Met in R6b* (2 / 1 / 1 bytes). | `comm/fault/records_test.v` `test_counters_saturate_at_their_width` |

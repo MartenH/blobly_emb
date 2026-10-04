@@ -657,6 +657,13 @@ fn diag_target_reset(m Model, ioc_idx map[string]int) []string {
 		// the results the FBs reported since the pass top, and their snapshots, before the flush
 		g << fault_target_consume(m, '\t\t\t')
 		g << fault_capture_lines(m, 'g_fmem', 'g_diag', '\t\t\t')
+		if m.nm.on {
+			// a reset ends the operation cycle too: one still waiting for its barrier ends here,
+			// after the read above, so the flush below can mark the journal clean
+			g << '\t\t\tif g_fmem.ending {'
+			g << '\t\t\t\tg_fmem.cycle_end()'
+			g << '\t\t\t}'
+		}
 	}
 	if nvm_on(m) {
 		// an orderly shutdown, as a sleep edge is: every persisted value durable and the journal

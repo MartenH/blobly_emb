@@ -593,3 +593,38 @@ fn test_counters_keep_their_width_and_a_foreign_snapshot_is_refused() {
 	assert r.slot(1).entry == 0 && r.slot(1).status & confirmed != 0
 	assert r.req([u8(0x19), 0x03]) == [u8(0x59), 0x03]
 }
+
+// A refused snapshot that displaced nothing holds nothing back: the image is written without
+// claiming it, and a 0x14 of another DTC is answered — the hold is only for a displacement, whose
+// victim the durable image must keep claiming until its replacement is in.
+fn test_only_a_displacing_snapshot_holds_the_image() {
+	mut r := new_rig(2)
+	r.refuse_id = 0x1001
+	r.pass(1, .failed, 1, 1) // its snapshot is refused; nothing was displaced
+	r.pass(0, .failed, 1, 2)
+	assert r.req([u8(0x14), 0xC1, 0x00, 0x00]) == [u8(0x54)]
+	r.refuse_id = 0
+	r.reboot()
+	assert r.slot(1).status & confirmed != 0 && r.slot(0).status == status_cleared
+}
+
+// A pinned snapshot id kept across an update that changed the snapshot restores nothing rather
+// than the old record under the new schema.
+fn test_a_kept_pin_does_not_restore_another_schema() {
+	mut r := new_rig(2)
+	r.pass(0, .failed, 7, 1)
+	r.reboot()
+	assert r.slot(0).entry != 0
+	// the same block id, the same sizes, another first DID
+	mut m := Memory{}
+	for i in 0 .. r.m.n {
+		m.slots[i] = r.m.slots[i]
+	}
+	m.slots[0].freeze[0] = 0xF1A1
+	m.n = r.m.n
+	m.cap = r.m.cap
+	m.init()
+	m.store = r.m.store
+	m.restore()
+	assert m.slots[0].entry == 0 && m.slots[0].status & confirmed != 0
+}

@@ -150,15 +150,17 @@ pub fn (mut m Memory) persist(now u64, flush bool) bool {
 	if !flush && now < m.retry_at {
 		return false
 	}
-	mut refused := !m.write_snapshots(0, false)
+	ready, mut refused := m.write_snapshots(0, false)
+	hold := !ready
 	mut deferred := false
-	// 2. the image — only once every snapshot it is to claim is durable: an image written while
-	// one is not would drop that claim AND, for a displacement, its victim's, so a power cut
-	// would leave neither (the old image still claims the victim, whose block is untouched)
+	// 2. the image — not while a snapshot that DISPLACED a stored one is unwritten: that image
+	// would drop the victim's claim with nothing in its place, and a power cut would leave neither
+	// (the durable image still claims the victim, whose block is untouched). Another refused
+	// snapshot holds nothing back: the image simply does not claim it yet.
 	n := m.image(false, 0)
 	changed, only_occ := m.image_change(n)
-	if refused {
-		// held back with everything after it until the snapshot is written
+	if hold {
+		refused = true
 	} else if changed && (flush || !only_occ) {
 		if m.store.put(m.store.ctx, m.store.id, &m.scratch[0], u16(n)) {
 			m.commit_image(n)
@@ -169,7 +171,8 @@ pub fn (mut m Memory) persist(now u64, flush bool) bool {
 	} else if changed {
 		deferred = true // only occurrence counters: durable with the next image write or flush
 	}
-	// 3. tombstones, only for blocks the durable image no longer claims
+	// 3. tombstones, only for blocks the durable image no longer claims (safe whatever was refused:
+	// the claims are the durable image's)
 	for i in 0 .. m.n {
 		if !m.slots[i].blk_live || m.slots[i].entry != 0 || m.slots[i].claim_durable {
 			continue
@@ -190,10 +193,12 @@ pub fn (mut m Memory) persist(now u64, flush bool) bool {
 }
 
 // write_snapshots writes every captured snapshot not yet in the store — before any image that
-// claims it — skipping those of the DTCs a clear of `group` is about to free (`clearing`). False
-// when the store refused one.
-fn (mut m Memory) write_snapshots(group u32, clearing bool) bool {
+// claims it — skipping those of the DTCs a clear of `group` is about to free (`clearing`); it
+// returns (every snapshot that displaced a stored one is in — else the image must wait for it,
+// any write was refused).
+fn (mut m Memory) write_snapshots(group u32, clearing bool) (bool, bool) {
 	mut ok := true
+	mut refused := false
 	for k in 0 .. m.cap {
 		if !m.entries[k].used || m.entries[k].durable {
 			continue
@@ -208,10 +213,13 @@ fn (mut m Memory) write_snapshots(group u32, clearing bool) bool {
 			m.slots[i].blk_live = true
 			m.wrote++
 		} else {
-			ok = false
+			refused = true
+			if m.entries[k].took_claim {
+				ok = false
+			}
 		}
 	}
-	return ok
+	return ok, refused
 }
 
 // snapshot_block builds entry k's block into m.scratch and returns its length.
@@ -237,8 +245,9 @@ fn (mut m Memory) persist_clear(group u32) bool {
 	if !m.stored() {
 		return true
 	}
-	// the snapshots the cleared image still claims first, for the reason persist writes them first
-	if !m.write_snapshots(group, true) {
+	// the snapshots first, for the reason persist writes them first
+	ready, _ := m.write_snapshots(group, true)
+	if !ready {
 		m.refused = true
 		return false
 	}
@@ -311,6 +320,15 @@ fn (mut m Memory) load_snapshot(i int) bool {
 	dtc := u32(m.scratch[0]) << 16 | u32(m.scratch[1]) << 8 | u32(m.scratch[2])
 	if dtc != m.slots[i].dtc || int(m.scratch[snap_hdr]) != m.slots[i].nfreeze {
 		return false
+	}
+	// the record's DIDs at the offsets this build's sizes put them: a snapshot of another schema
+	// under a pinned id (snapshot_id kept across an update that changed it) is not this one's
+	mut o := snap_hdr + 1
+	for f in 0 .. m.slots[i].nfreeze {
+		if u16(m.scratch[o]) << 8 | u16(m.scratch[o + 1]) != m.slots[i].freeze[f] {
+			return false
+		}
+		o += 2 + int(m.slots[i].freeze_len[f])
 	}
 	mut k := -1
 	for j in 0 .. max_entries {

@@ -39,6 +39,9 @@ pub mut:
 	slot    int
 	stamp   u32
 	durable bool // written to the store since it was captured
+	// it displaced a snapshot the durable image claims: no image may be written until this one is
+	// durable, or a power cut would leave neither (persist.v)
+	took_claim bool
 	len     int
 	data    [max_snapshot]u8
 }
@@ -110,6 +113,7 @@ pub fn (mut m Memory) capture(srv &uds.Server) {
 
 // allocate gives slot i an entry: a free one, else the victim's. -1 = none may be taken.
 fn (mut m Memory) allocate(i int) int {
+	mut took := false
 	mut k := -1
 	for j in 0 .. m.cap {
 		if !m.entries[j].used {
@@ -122,9 +126,12 @@ fn (mut m Memory) allocate(i int) int {
 		if k < 0 {
 			return -1
 		}
-		m.slots[m.entries[k].slot].entry = 0 // displaced: its snapshot goes, its status and counters stay
+		v := m.entries[k].slot
+		m.slots[v].entry = 0 // displaced: its snapshot goes, its status and counters stay
 		m.displaced++
+		took = m.slots[v].claim_durable || m.entries[k].took_claim
 	}
+	m.entries[k].took_claim = took
 	m.entries[k].used = true
 	m.entries[k].slot = i
 	m.entries[k].stamp = m.next_stamp

@@ -722,6 +722,13 @@ fn nvm_flush_choreo(m Model, ioc_idx map[string]int, ind string) []string {
 	g << '${ind}\t// inline compact) earns ONE quiet-point erase, then a retry'
 	g << '${ind}\tg_nvm.erase_pending()'
 	g << '${ind}}'
+	if fault_persist_on(m) && m.nm.on {
+		// no clean marker while the fault cycle's end waits for its barrier: the end's own write,
+		// in bus sleep, re-runs this choreography and lays it then
+		g << '${ind}if g_fmem.ending {'
+		g << '${ind}\tnvm_flush_ok = false'
+		g << '${ind}}'
+	}
 	g << '${ind}if nvm_flush_ok {'
 	g << '${ind}\t// clean ONLY when every value is durable (a failed mark stays unclean: retried on'
 	g << '${ind}\t// the next in-sleep write or edge); nvm_flush_ok then says values AND marker'

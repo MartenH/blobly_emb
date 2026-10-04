@@ -212,6 +212,10 @@ fn io_can0_10ms(ctx voidptr) {
 	st.fctl_engine_monitor.gen[1] = st.fmem.control_gen(1)
 	st.fctl_engine_monitor.held[1] = st.fmem.control_held(1)
 	osal.ioc_publish(fault_ctl_engine_monitor_ch, &st.fctl_engine_monitor, u8(sizeof(st.fctl_engine_monitor)))
+	if st.fmem.capture_due() {
+		st.conn_diag.refresh_now()
+		st.fmem.capture(&st.conn_diag.server) // the snapshot: the DIDs as 0x22 reads them now
+	}
 	mut rx := can.Frame{}
 	for st.chan.recv(mut rx) {
 		if rx.id == powertrain_id && rx.len == powertrain_dlc && rx.ext == false {
