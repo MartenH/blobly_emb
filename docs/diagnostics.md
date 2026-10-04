@@ -436,6 +436,13 @@ signals, the image and EVERY snapshot block whole — a tombstone waits for the 
 block, so a refusal or a power cut can leave any of them waiting) and its full rewrite must fit one sector, and the journal pool must hold a
 row for each block.
 
+**The cycle-end barrier.** On the target an NM sleep does not end the cycle at once: a producer's
+dispatch begun before the decision may publish its report after the owner's read, and read after
+the end it would count for nothing — lost from the cycle and the store. So the end waits twice the
+longest period of a fault-testing handler (`end_cycle_after` / `cycle_end_due`), the owner reading
+as usual, and the cycle ends after one more consume; a wake inside the grace ends it there and
+begins the next.
+
 **Where writes happen.** Every comm pass after the cycle step (`fault_target_persist`), and with a
 flush in the persisted signals' choreography at every quiet point — the NM sleep edges and before an
 ECUReset (after the latest reports are consumed and their snapshots taken). A write made in bus sleep
@@ -451,8 +458,8 @@ until the next boot (a 0x14 refused meanwhile answers 0x72 and the tester retrie
 `nvm.Journal.put` is synchronous: an image write is ≤ 14 records (microseconds each), an inline
 compaction copies the live set — bounded, but not the incremental flash path §7 asks for.
 
-**Snapshots, as built.** Captured on the OWNER, not the producer: at the pass that consumes the
-occurrence, the owner refreshes the live DIDs (as before a 0x22) and copies the declared DIDs into an
+**Snapshots, as built.** Captured on the OWNER, not the producer: in the pass that consumes the
+occurrence (on the host after the receive drain, where the signal-status faults are consumed; never for a DTC whose failure a cycle end or a clear in that pass already removed), the owner refreshes the live DIDs (as before a 0x22) and copies the declared DIDs into an
 entry (`comm/fault/entry.v` `capture`) — at most one owner pass after the qualifying dispatch, since a
 snapshot is far larger than a producer's report cell. Each DID is captured at its declared size (a
 constant's bytes, a live value's width), zero-filled while nothing has published it, so a record
@@ -597,6 +604,6 @@ done until its obligations hold under their tests. §3 fixes the shape; this tab
 | R6 | Signal-status faults (timeout / integrity / lost) raise their DTCs on silicon — moved here from R5, which proves only the FB-visible status. | bench: pull a sender → its DTC reads back over 0x19 |
 | R2 | NM stays awake for a diagnostic exchange in ANY session: a request-scoped keep-awake vote from the first frame of a request until its final response has drained (diagnostic frames do not refresh NM), in addition to the session-scoped vote. | bench: a multi-frame 0x22 in the default session started near the NM timeout completes |
 | R3 / R5 | An E2E-protected signal detects total sender loss inside the E2E mechanism itself (REQ-E2E-002): `e2e.RxState` gains its own deadline (`on_valid` / `expired`) and publishes the loss, independent of the QM COM deadline. | host (R3) and bench (R5): sender removed, loss seen with the COM deadline disabled |
-| R6 | The operation-cycle END is a barrier too: before the sleep flush marks the journal clean, the fault memory waits for every producer to acknowledge the ending generation and persists what it read — power can be removed with no next cycle to drain the tail. | power-off right after bus sleep with a qualification in the last dispatch |
+| R6 | The operation-cycle END is a barrier too: before the sleep flush marks the journal clean, the fault memory waits for every producer to acknowledge the ending generation and persists what it read — power can be removed with no next cycle to drain the tail. *Met in R6b on the target:* NM's sleep REQUESTS the end (`Memory.end_cycle_after`); the cycle stays open for twice the longest period of a fault-testing handler, the owner consuming as usual, and ends after one more consume — then the in-sleep write re-lays the clean marker. A time grace, not a per-producer acknowledgement: it holds while a handler finishes within its period (an overrun is reported). | power-off right after bus sleep with a qualification in the last dispatch |
 | R2 | 0x27's failed-key count survives a POWER CYCLE: persisted, with the boot lockout applied only while it is non-zero. R1b keeps it across an ECU reset (RAM) but not across a power-up, which a simulator need not defend. | bench: fail twice, power-cycle, the third wrong key locks out; a clean power-up unlocks at once |
 | R6 | Persistent diagnostic counters have fixed serialized widths and SATURATE (occurrence, failed-cycle, aging); they never wrap to a small value. *Met in R6b* (2 / 1 / 1 bytes). | `comm/fault/records_test.v` `test_counters_saturate_at_their_width` |

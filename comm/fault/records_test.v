@@ -319,3 +319,19 @@ fn test_displacement_prefers_a_passive_entry() {
 	fail_once(mut m, mut d[2], 2, &s)
 	assert m.slots[1].entry == 0 && m.slots[0].entry != 0, 'a failed entry went before a passive one'
 }
+
+// No snapshot for a DTC whose failure is no longer stored when the owner gets to it — a cycle end
+// that healed it, or a clear, in the same pass: it would describe nothing the memory holds.
+fn test_no_snapshot_for_a_failure_no_longer_stored() {
+	mut m := snap_memory(1, 1)
+	mut s := snap_server(mut m, 1)
+	mut d := rcounter(1, 1)
+	m.cycle_start()
+	d.apply(m.control_gen(0), m.control_held(0))
+	d.step(.failed, 0, true)
+	m.consume(0, d.rep)
+	assert m.capture_due()
+	m.slots[0].status &= ~(pending | confirmed) // what a healing cycle end leaves
+	m.capture(&s)
+	assert m.slots[0].entry == 0 && !m.capture_due()
+}

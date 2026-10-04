@@ -921,6 +921,9 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 					a.occ += dfails
 					a.base = a.cell
 				}
+				if m.cycle_end_due(now) {
+					m.cycle_end() // a requested end, its grace passed, after this pass's consume
+				}
 				m.persist(u64(clock), false) // the comm thread writes what changed, every pass
 			} else if op < 88 {
 				if !m.setting_off {
@@ -975,10 +978,10 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 			} else if op == 98 {
 				// an operation cycle boundary: while off it changes no status
 				before := [m.slots[0].status, m.slots[1].status]
-				if (rng >> 8) & 1 == 0 {
-					m.cycle_start()
-				} else {
-					m.cycle_end()
+				match (rng >> 8) % 3 {
+					0 { m.cycle_start() }
+					1 { m.cycle_end() }
+					else { m.end_cycle_after(now, 30) } // NM's sleep: the end waits for the barrier
 				}
 				if m.setting_off {
 					assert [m.slots[0].status, m.slots[1].status] == before, '${ctx}: a cycle boundary changed a status while off'
@@ -1036,4 +1039,35 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 	assert waits > 0, 'no slot ever waited for a fresh generation'
 	assert held_restarts > 100, 'the model rarely restarted a failed debounce'
 	assert resets > 1000, 'the model rarely reset'
+}
+
+// The cycle-end barrier (docs/diagnostics.md §7): NM decides to sleep while a producer's dispatch
+// has qualified a failure it has not published yet. The end waits out its grace, the owner reading
+// as usual, so that report lands in the cycle it belongs to — and in the store. Ended at once, the
+// owner would read it outside any cycle and count nothing.
+fn test_a_report_published_after_the_end_was_decided_lands_in_that_cycle() {
+	mut st := &RamStore{}
+	mut m := model_memory(st)
+	mut d := counter(1, 1)
+	mut cell := Report{}
+	d.apply(m.control_gen(0), m.control_held(0))
+	d.step(.failed, 0, true) // qualified on the producer's thread ...
+	m.consume(0, cell) // ... while the owner reads the cell it has not published to yet
+	m.end_cycle_after(1000, 200) // bus sleep
+	assert m.cycle_active && !m.cycle_end_due(1100)
+	cell = d.rep // the producer publishes
+	m.consume(0, cell)
+	assert !m.cycle_end_due(1199)
+	assert m.cycle_end_due(1200)
+	m.consume(0, cell)
+	m.cycle_end()
+	assert m.slots[0].occurrence == 1 && m.slots[0].failed_cycles == 1
+	assert m.slots[0].status & (pending | confirmed) == pending | confirmed
+	assert m.persist(1200, true)
+	m = model_memory(st)
+	assert m.slots[0].occurrence == 1 && m.slots[0].status & confirmed != 0, 'the qualification never reached the store'
+	// a wake before the grace runs out ends the old cycle there and begins the next
+	m.end_cycle_after(2000, 200)
+	m.cycle_start()
+	assert m.cycle_active && !m.cycle_end_due(9999)
 }

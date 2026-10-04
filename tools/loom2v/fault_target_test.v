@@ -238,7 +238,9 @@ fn test_the_fault_memory_is_persisted_in_the_journal() {
 	assert c2 == 0, o2
 	assert !g2.contains('g_nvm.erase_pending() // the boot quiet point')
 	assert !g2.contains('g_fmem.refused && g_nvm.pending_erase'), 'an NM node erased outside its sleep edges'
-	in_order(g2, ['g_fmem.persist(t1, false)', 'if g_fmem.wrote > 0 && g_nm.state() == .bus_sleep {',
+	in_order(g2, ['g_fmem.end_cycle_after(t1, u64(200000)) // the cycle-end barrier',
+		'if g_fmem.cycle_end_due(t1) {', 'g_fmem.consume(0, g_frep_load_slow.r[0])', 'g_fmem.cycle_end()',
+		'g_fmem.persist(t1, false)', 'if g_fmem.wrote > 0 && g_nm.state() == .bus_sleep {',
 		'if !g_fmem.persist(t1, true) {', 'g_nvm.mark_clean()'])
 	// and no persistence without the storage declared
 	c3, o3, _, _ := ft_generate('nonvm', same, ft_conn + ft_fault.all_before('[nvm]'))
@@ -383,6 +385,11 @@ fn test_the_host_bridge_takes_the_power_cycle_too() {
 	in_order(g, ['st.fmem.init()', 'st.conn_diag.server.faults = st.fmem.uds_ops()',
 		'st.fmem.cycle_start() // [fault_memory] cycle = "power"'])
 	assert g.count('st.fmem.cycle_start()') == 1, 'a frame still moves the cycle'
+	// one capture site, after the drain where the signal-status faults are consumed and a cycle edge
+	// or a clear may move the status, before the request is served
+	assert g.count('st.fmem.capture(') == 1
+	in_order(g, ['st.fmem.consume(0, st.frep_engine_monitor.r[0])', 'for st.chan.recv(mut rx) {',
+		'st.fmem.capture(&st.conn_diag.server)', 'st.conn_diag.serve()'])
 	assert !g.contains('st.fmem.cycle_end()')
 }
 
@@ -390,4 +397,78 @@ fn test_the_host_bridge_takes_the_power_cycle_too() {
 fn test_the_byte_ioc_pool_bound_is_the_glues() {
 	c := os.read_file(os.join_path(@VMODROOT, 'boards', 'common', 'iocb.c')) or { panic(err) }
 	assert c.contains('#define IOCB_POOL_N     ${iocb_pool_n}\n'), 'iocb_pool_n (${iocb_pool_n}) is not boards/common/iocb.c IOCB_POOL_N'
+}
+
+// snap_model: a persisted ThreadX memory with the given faults, each with a snapshot of DID 0xF190.
+fn snap_model(faults []FaultCfg) Model {
+	mut m := Model{}
+	m.target.on = true
+	m.target.threadx = true
+	m.nvm.on = true
+	m.nvm.sector_records = 4096
+	m.dids = [DidCfg{
+		id:    0xF190
+		bytes: [u8(1), 2, 3]
+	}]
+	m.faults = faults
+	return m
+}
+
+// A snapshot's block id is the fault's own — its DTC and its snapshot's schema — whatever order
+// the faults are declared in: an update that reorders them restores every snapshot.
+fn test_snapshot_ids_do_not_depend_on_declaration_order() {
+	a := FaultCfg{
+		name:   'A'
+		dtc:    0x010101
+		freeze: [0xF190]
+	}
+	b := FaultCfg{
+		name:   'B'
+		dtc:    0x020202
+		freeze: [0xF190]
+	}
+	c := FaultCfg{
+		name: 'C'
+		dtc:  0x030303
+	}
+	st1, ids1 := derive_fault_nvm(snap_model([a, b, c]))
+	st2, ids2 := derive_fault_nvm(snap_model([c, b, a]))
+	assert st1 == st2
+	assert ids1[0] == ids2[2] && ids1[1] == ids2[1] && ids1[2] == 0 && ids2[0] == 0
+	assert ids1[0] != ids1[1]
+}
+
+// A collision is refused at generation, naming the pin, rather than resolved by declaration
+// order; a pinned id is used as given.
+fn test_a_snapshot_id_collision_is_refused_and_a_pin_resolves_it() {
+	did := '[[did]]\nid    = 0xF190\nascii = "BLOBLY"\n'
+	first := nvm_hash16('fault_snapshot:${0xC40100}:${0xF190}=6')
+	second := '\n[[fault]]\nname     = "LoadLow"\ndtc      = 0xC40101\nfrom     = "LoadSlow.on_100ms"\nfreeze   = [0xF190]\nsnapshot_id = ${first}\n'
+	base := ft_conn + did + ft_fault.replace('fail = 3, pass = 3 }', 'fail = 3, pass = 3 }\nfreeze = [0xF190]')
+	code, out, _, _ := ft_generate('snapcollide', same, base.replace('[nvm]', second + '\n[nvm]'))
+	assert code != 0 && out.contains('collides with the snapshot of [[fault]] "LoadImplausible"')
+		&& out.contains('snapshot_id'), out
+	c2, o2, g2, _ := ft_generate('snappin', same, base.replace('[nvm]', second.replace('${first}',
+		'4242') + '\n[nvm]'))
+	assert c2 == 0, o2
+	assert g2.contains('g_fmem.slots[1].snap_id = u16(0x${u16(4242).hex()})')
+	assert g2.contains('g_fmem.slots[0].snap_id = u16(0x${first.hex()})')
+}
+
+// The journal budget holds EVERY snapshot block whole, not only the entries' worth: a tombstone
+// waits for the image that frees its block, so refusals and power cuts can leave all of them live.
+// Three 42-byte snapshot blocks (3 records each) with one entry: 2 (image) + 9 + 1 (marker) = 12,
+// twice that 24 — over 22, which a budget of "2 x entries whole" (20) would have passed.
+fn test_the_journal_budget_holds_every_snapshot_whole() {
+	wide := '[[did]]\nid    = 0xF192\nascii = "${'W'.repeat(32)}"\n'
+	mut extra := ''
+	for k in 1 .. 3 {
+		extra += '\n[[fault]]\nname     = "Load${k}"\ndtc      = 0xC4010${k}\nfrom     = "LoadSlow.on_100ms"\nfreeze   = [0xF192]\n'
+	}
+	cfg := ft_conn + wide + ft_fault.replace('fail = 3, pass = 3 }', 'fail = 3, pass = 3 }\nfreeze = [0xF192]').replace('[nvm]',
+		extra + '\n[fault_memory]\nentries = 1\n\n[nvm]') + 'sector_records = 22\n'
+	code, out, _, _ := ft_generate('budget', same, cfg)
+	assert code != 0 && out.contains('the journal needs 24 records'), out
+	c2, o2, _, _ := ft_generate('budget_ok', same, cfg.replace('sector_records = 22', 'sector_records = 24'))
+	assert c2 == 0, o2
 }
