@@ -112,6 +112,9 @@ local function handoff(n)
   local bl = boot_up(d, n)
   log(string.format("%s: app image v%d handed off; bootloader %s", n.name, ver, tohex(bl)))
   check.equal(be32(d:read_did(0xF195)), ver, "the boot reports the image it was handed off from")
+  if n.doip then
+    check.equal(d:read_did(0xF190), n.ident, "the boot answers the VIN its DoIP entity announces")
+  end
   -- the session survives the handoff: 0x29 at once, no second 0x10 02
   local ch = d:raw("\x29\x01")
   check.equal(tohex(ch:sub(1, 2)), "69 01")

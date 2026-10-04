@@ -116,22 +116,14 @@ fn main() {
 	// identification (REQ-BOOT-009): F180 = bootloader version, F181 = app state, F195 = the
 	// valid installed image's sw_version at boot (0 when there is none) — the DID the application
 	// answers too
-	g_prog.srv.dids[0].id = 0xF180
-	g_prog.srv.dids[0].data[0] = 0x00
-	g_prog.srv.dids[0].data[1] = 0x02
-	g_prog.srv.dids[0].len = 2
-	g_prog.srv.dids[1].id = 0xF181
-	g_prog.srv.dids[1].data[0] = if g_app_ok { u8(1) } else { 0 }
-	g_prog.srv.dids[1].len = 1
+	bl := [u8(0x00), 0x02]!
+	g_prog.add_did(0xF180, &bl[0], 2)
+	state := [u8(if g_app_ok { 1 } else { 0 })]!
+	g_prog.add_did(0xF181, &state[0], 1)
 	hdr := boot.parse_header(unsafe { &u8(app_base) })
 	ver := if g_app_ok { hdr.sw_version } else { u32(0) } // a version that cannot run is no version
-	g_prog.srv.dids[2].id = 0xF195
-	g_prog.srv.dids[2].data[0] = u8(ver >> 24)
-	g_prog.srv.dids[2].data[1] = u8(ver >> 16)
-	g_prog.srv.dids[2].data[2] = u8(ver >> 8)
-	g_prog.srv.dids[2].data[3] = u8(ver)
-	g_prog.srv.dids[2].len = 4
-	g_prog.srv.ndid = 3
+	vb := [u8(ver >> 24), u8(ver >> 16), u8(ver >> 8), u8(ver)]!
+	g_prog.add_did(0xF195, &vb[0], 4)
 	serve() // never returns: the serve loop, on its transports (the serve_*_boot_doip.v variant)
 }
 

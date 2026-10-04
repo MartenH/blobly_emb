@@ -75,11 +75,14 @@ every V file `-dump-files` reports (vlib's too), every C source and `#flag -I` d
 `tools/loom2v/no_v_run_makefiles_test.v` changes each kind of input and asks make, pins that no
 Makefile runs `v run`, and that including `tools.mk` leaves every default goal where it was.
 The same goes for what an IMAGE transpiles: every `app.c` (and a bootloader's `boot.c`) depends on
-what V compiled into it — `$(call v_unrecorded,$(BUILD)/app.c)` among its prerequisites (no record,
-remade), `$(call v_dump,$@)` on the V line, `$(call v_deps,$@)` after it (a failed record removes
+what V compiled into it and how V was run — `$(call v_unrecorded,$(BUILD)/app.c)` among its
+prerequisites (no record, remade), `$(call v_sign,$(BUILD)/app.c,$(TRANSPILE_FLAGS))` (the V command,
+version, the rule's flags with its defines, `$(VFLAGS)`: a signature rewritten only when it changes,
+as `tool_sig` is for tools), V run with exactly `$(TRANSPILE_FLAGS)` and `$(call v_dump,$@)`, `$(call v_deps,$@)` after it (a failed record removes
 the C), `-include $(BUILD)/app.c.d` (`tools.mk`, `scripts/vdeps.sh`, the writer `build_tool.sh`
 shares) — never a hand list of module directories; `scripts/app_deps_check.sh` (CI cross job) pins
-the rule's shape, that `tools.mk` is included before it, and asks make each way it can go stale.
+the rule's shape, that `tools.mk` is included before it, and asks make each way it can go stale
+(a module, the recording rule, a missing record, another define).
 
 Examples use classic CAN (`[bus] fd = false`) so blobly_net (classic) can drive
 them; the driver picks classic vs CAN-FD from that flag. Integration tests live in

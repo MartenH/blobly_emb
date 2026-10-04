@@ -247,6 +247,22 @@ pub fn (mut p Prog) open_handed_off(now u64, via u8) {
 	p.stamp(now)
 }
 
+// add_did adds an identification DID the boot answers 0x22 with (REQ-BOOT-009): `n` bytes from
+// `data`; false when the table or the DID cannot hold it (nothing is added)
+pub fn (mut p Prog) add_did(id u16, data &u8, n int) bool {
+	if p.srv.ndid >= uds.max_dids || n < 0 || n > uds.max_did_data {
+		return false
+	}
+	mut d := &p.srv.dids[p.srv.ndid]
+	d.id = id
+	for i in 0 .. n {
+		d.data[i] = unsafe { data[i] }
+	}
+	d.len = u8(n)
+	p.srv.ndid++
+	return true
+}
+
 // heard stamps bus activity at `now` — every bus request the owner hands to handle(), and the
 // bus exchange in flight (comm/diag serve_step). The silence clocks run from it.
 pub fn (mut p Prog) heard(now u64) {

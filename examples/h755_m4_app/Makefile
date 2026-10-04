@@ -50,10 +50,10 @@ ifneq ($(MAKECMDGOALS),clean)
 -include gen/loom_build.mk
 endif
 
-$(BUILD)/app.c: main.v gen/loom_gen.v $(call v_unrecorded,$(BUILD)/app.c) | $(BUILD)
-	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
-	  -path "@vlib|@vmodules|.|examples/$(NAME)" \
-	  $(call v_dump,$@) -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
+# how V is run for it — also its signature (tools/tools.mk v_sign)
+TRANSPILE_FLAGS = -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) -path "@vlib|@vmodules|.|examples/$(NAME)"
+$(BUILD)/app.c: main.v gen/loom_gen.v $(call v_unrecorded,$(BUILD)/app.c) $(call v_sign,$(BUILD)/app.c,$(TRANSPILE_FLAGS)) | $(BUILD)
+	cd $(REPO) && $(V) $(TRANSPILE_FLAGS) $(call v_dump,$@) -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
 	$(call v_deps,$@)
 	$(REPO)/scripts/lint_vinit.sh $@
 # what V compiled into it (tools/tools.mk v_deps)

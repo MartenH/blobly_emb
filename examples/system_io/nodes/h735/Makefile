@@ -59,10 +59,10 @@ ifneq ($(MAKECMDGOALS),clean)
 endif
 
 # 2) transpile the V stack (shared main.v + this node's app/) to freestanding C.
-$(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) | $(BUILD)
-	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
-	  -path "@vlib|@vmodules|.|examples/system_io/nodes/h735" \
-	  $(call v_dump,$@) -o examples/system_io/nodes/h735/$(BUILD)/app.c examples/system_io/main.v
+# how V is run for it — also its signature (tools/tools.mk v_sign)
+TRANSPILE_FLAGS = -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) -path "@vlib|@vmodules|.|examples/system_io/nodes/h735"
+$(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) $(call v_sign,$(BUILD)/app.c,$(TRANSPILE_FLAGS)) | $(BUILD)
+	cd $(REPO) && $(V) $(TRANSPILE_FLAGS) $(call v_dump,$@) -o examples/system_io/nodes/h735/$(BUILD)/app.c examples/system_io/main.v
 	$(call v_deps,$@)
 	$(REPO)/scripts/lint_vinit.sh $@
 # what V compiled into it (tools/tools.mk v_deps)
