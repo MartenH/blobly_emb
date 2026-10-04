@@ -2840,6 +2840,8 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				}
 				// the pass, in the ONE order comm_pass_order states (gen_rx_target.v)
 				for step in comm_pass_order {
+					// a step this node has nothing for leaves no marker
+					at := glue.len
 					glue << '\t\t// pass: ${step}'
 					match step {
 						.housekeep {
@@ -2921,6 +2923,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 							glue << fault_capture_lines(m, 'g_fmem', 'g_diag', '\t\t')
 							glue << fault_target_persist(m, ioc_idx)
 						}
+					}
+					if glue.len == at + 1 {
+						glue.delete(at)
 					}
 				}
 				if m.nm.on {

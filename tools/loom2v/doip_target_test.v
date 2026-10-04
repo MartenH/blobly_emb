@@ -109,6 +109,7 @@ fn test_the_comm_thread_serves_doip_from_the_mailbox() {
 	steps := [
 		'C.doip_net_seed(doip_seed)',
 		'g_diag.housekeep(',
+		'// pass: remote', // the DoIP step of comm_pass_order, ahead of the drain
 		'if C.doip_mb_take_sent() != 0 {',
 		'g_diag.remote_sent()',
 		'if C.doip_mb_take_dropped() != 0 {',
@@ -118,6 +119,7 @@ fn test_the_comm_thread_serves_doip_from_the_mailbox() {
 		'C.doip_mb_answer(doip_rn)',
 		// a 0x28 that arrived over DoIP gates this pass's drain (R5)
 		'st.rxg.sample(g_diag.server.rx_enabled()',
+		'// pass: drain',
 		'for ch.recv(mut rx) {',
 	]
 	mut at := -1

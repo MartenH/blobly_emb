@@ -370,6 +370,7 @@ fn comm_thread_entry(input u32) {
 	for {
 		wait_ticks := if g_tm.is_dumping() { u32(1) } else { u32(10) }
 		C.comm_rx_wait(wait_ticks) // the FDCAN Rx ISR wakes us early on a new frame
+		// pass: drain
 		// CONSUMER: drain the Rx FIFO (non-blocking); account each external rx frame
 		for ch.recv(mut rx) {
 			if rx.id == u32(0x123) && rx.len == 4 && rx.ext == false { // cmd_frame
@@ -409,6 +410,7 @@ fn comm_thread_entry(input u32) {
 				}
 			}
 		}
+		// pass: tick
 		t1 := C.board_now_us()
 		for ch.tx_ready() && g_nm.produce(t1, mut nm_txf) {
 			ch.send(nm_txf)

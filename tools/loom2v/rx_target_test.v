@@ -409,7 +409,7 @@ fn test_the_comm_pass_runs_in_one_order() {
 		return src.replace('fields = { code = "u32" }', 'fields = { code = "u32", status = "RxStatus", lost = "u16" }')
 	}, rt_conn + faults, true)
 	assert code == 0, out
-	// the markers, exactly the declared order
+	// the markers: a step with nothing on this node leaves none
 	mut steps := []string{}
 	for line in glue.split_into_lines() {
 		t := line.trim_space()
@@ -417,7 +417,8 @@ fn test_the_comm_pass_runs_in_one_order() {
 			steps << t.all_after('// pass: ')
 		}
 	}
-	assert steps == comm_pass_order.map(it.str()), steps.str()
+	// every step but `remote` (no DoIP here; doip_target_test pins it), in the declared order
+	assert steps == comm_pass_order.map(it.str()).filter(it != 'remote'), steps.str()
 	in_order_rt(glue, [
 		'// pass: open',
 		'st.rxg.sample(g_diag.server.rx_enabled(), g_nm.awake())', // the first sampling

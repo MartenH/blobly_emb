@@ -251,7 +251,7 @@ fn io_can0_10ms(ctx voidptr) {
 		}
 		if rx.id == brake_status_id && rx.len == brake_status_dlc && rx.ext == false {
 			chk_brake_status := st.rxm_brake_status.e2e.check(&rx.data[0], int(brake_status_dlc), u16(0x44), 4, 5)
-			p_brake_status := st.rxm_brake_status.checked(now, chk_brake_status, st.rxg.on, st.rxg.suspended())
+			p_brake_status := st.rxm_brake_status.checked(now, chk_brake_status, st.rxg.on, st.rxg.receiving(), st.rxg.suspended())
 			if p_brake_status != .none {
 				mut brake_pressure := sig.BrakePressure{}
 				if p_brake_status == .ok {

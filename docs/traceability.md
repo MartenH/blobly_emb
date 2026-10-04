@@ -53,7 +53,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-006 | QM | test | verified | com_test.v (pass) |
 | REQ-COM-007 | QM | test | uncovered | — |
 | REQ-COM-008 | QM | test | covered | rx_faults_zone_a.lua (pending), rx_target_test.v (pass), rxmon_test.v (pass), rxstatus.lua (pending) |
-| REQ-COM-009 | QM | test | verified | rxmon_test.v (pass) |
+| REQ-COM-009 | QM | test | verified | pass_model_test.v (pass), rxmon_test.v (pass) |
 | REQ-DIAG-001 | QM | test | verified | diag_test.v (pass), uds-on-target-domain (approved), uds-on-target-sysnode (approved), uds-on-target-zone-a (approved), uds_test.v (pass) |
 | REQ-DIAG-002 | QM | test | covered | diag.lua (pending), diag_test.v (pass), uds-on-target-live-did (approved), uds-on-target-zone-a (approved) |
 | REQ-DIAG-003 | QM | test | covered | diag.lua (pending), diag_test.v (pass), uds_test.v (pass) |
@@ -64,7 +64,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-008 | QM | test | covered | diag.lua (pending), uds-on-target-reset (approved), uds_test.v (pass) |
 | REQ-DIAG-009 | QM | test | verified | fault_test.v (pass) |
 | REQ-DIAG-010 | QM | test | verified | fault_test.v (pass) |
-| REQ-DIAG-011 | QM | test | covered | faults.lua (pending), net_faults.lua (pending), rx_faults_zone_a.lua (pending), rx_target_test.v (pass) |
+| REQ-DIAG-011 | QM | test | covered | faults.lua (pending), net_faults.lua (pending), pass_model_test.v (pass), rx_faults_zone_a.lua (pending), rx_target_test.v (pass) |
 | REQ-DIAG-012 | QM | test | verified | fault_group_test.v (pass), fault_target_test.v (pass) |
 | REQ-DIAG-013 | QM | test | covered | faults.lua (pending), faults_zone_a_persist.lua (pending), records_test.v (pass) |
 | REQ-DIAG-014 | QM | test | covered | faults.lua (pending), faults_zone_a_persist.lua (pending), records_test.v (pass) |
