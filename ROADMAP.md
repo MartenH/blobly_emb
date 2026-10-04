@@ -156,9 +156,11 @@ the FB never calls a service API.
   changes need DoIP's own unlock, REQ-NET-012, #347); the programming-session handoff's app side
   generated from `[boot]` (0x10 02 answered, then the boot cell and the reset by 0x11's path).
   The bootloader is one platform program built per node from that config (`boot/boot.mk`), and
-  every `system_full` CAN node (domain, sysnode, zone_a) runs behind its own. Left: the bench run
-  (`test/boot_bench.sh`: handoff → 0x29 → flash → new version), and tcu (Ethernet only) waits for
-  the bootloader's DoIP binding
+  every `system_full` CAN node (domain, sysnode, zone_a) runs behind its own. A `[doip]` node's
+  bootloader is its DoIP entity too (ThreadX + NetX on the stay path, the application's own network
+  seam; REQ-BOOT-019), so sysnode is field-updatable over DoIP as well as CAN. Left: the bench runs
+  (`test/boot_bench.sh`: handoff → 0x29 → flash → new version, `sysnode-doip` included), and tcu
+  (Ethernet only) behind a DoIP-only bootloader
 - 🧭 **R5 target COM checks** — rx deadlines + E2E/SecOC on the comm thread, so receive
   status reaches FBs on silicon
 - 🧭 **R6 fault memory on the target** — *R6a landed (#350, 2026-10-02):* `[[fault]]` on a

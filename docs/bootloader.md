@@ -5,6 +5,9 @@
 > as built"), and the boot manager is ONE platform program built per node ("One boot manager,
 > every node", below): every `system_full` CAN node — domain (H755), sysnode (H735), zone_a (H723)
 > — runs behind its own. Bench run pending (`examples/system_full/test/boot_bench.sh`).
+> 2026-10-04: **the DoIP binding** (REQ-BOOT-019, "The DoIP binding", below): a `[doip]` node's
+> bootloader is its DoIP entity too, so sysnode is field-updatable over DoIP as well as CAN. Bench
+> run pending (`boot_bench.sh sysnode-doip`).
 > The chain runs on real silicon: header-verified jump, CAN reflash + torn-image
 > recovery, S3/return-to-app session timers, and full asymmetric authenticity —
 > Ed25519 image signatures verified on the CM7 (no heap) + a 0x29 session gate
@@ -109,9 +112,9 @@ allows both for a server that must jump to boot software to enter programming: t
 send the positive response before the jump, or answer responsePending and leave the final positive
 response to the boot software. This stack sends it from the application because:
 
-- **DoIP has no second half**: a network tester's TCP connection dies with the reset and the
-  bootloader has no DoIP binding (P7), so a 0x78 over DoIP is a promise nobody can keep. One rule
-  for both transports beats a per-transport answer.
+- **DoIP has no second half**: a network tester's TCP connection dies with the reset, and the
+  bootloader's DoIP entity (below) is a new connection that never saw the request, so a 0x78 over
+  DoIP is a promise nobody can keep. One rule for both transports beats a per-transport answer.
 - **The bootloader would answer a request it never received**: the final response needs the
   request's addressing and suppress bit carried across the reset in the cell — state the boot
   manager does not otherwise need, for an answer the application can give with what it has.
@@ -173,9 +176,61 @@ restarts both cores. Bench check: with the boot in programming mode, `st-flash r
 nodes/domain_m4 flash`), as before (non-goal: multi-image orchestration).
 
 **tcu** (H723, Ethernet only) has no CAN, so no CAN bootloader reaches it: it does not declare
-`[boot]`, and it stays unflashable over the wire until the DoIP binding (P7) exists — that would
-need a NetX (or a smaller UDP/TCP) stack in the boot manager, the DoIP entity's activation and
-the same `Prog` behind it, and its own `bootmap.h` decision on the H723's single bank.
+`[boot]` yet. The DoIP binding (below) is what it needs; what is left is a diagnostic server on a
+node with no `[isotp]`, and a boot with no bus to open.
+
+### The DoIP binding (as built, REQ-BOOT-019)
+
+A `[boot]` node that also declares `[doip]` gets a bootloader that is its **DoIP entity too** — the
+same address, logical address, VIN (DID 0xF190), routing-activation policy, timers and
+announcements as the application (loom2v writes them into `gen/boot_gen.h`; `BOOT_DOIP := 1` in
+`gen/loom_build.mk` tells `boot/boot.mk` to link the network). A tester reconnects to the
+bootloader exactly as it connected to the application.
+
+**The network stack: the application's, not a second one.** Measured on sysnode (H735): the bus-only
+boot is 37.3 KB of text; with ThreadX, NetX Duo (ARP/IP/ICMP/UDP/TCP), the ETH driver and the DoIP
+seam it is 89.4 KB text + 0.9 KB data — 70% of the 128 KB boot sector (`BOOT_SIZE`, the same on the
+H723), and the link refuses an image past it. A bare-metal TCP stack would save ~50 KB the sector
+does not need, and be a second network stack (retransmission, windows, ARP) with none of the bench
+history of this one — the ARP gleaning of #368 included, which the boot gets by linking the same
+`driver/eth/doip_netx.c`. So the boot links the same files the application does:
+`driver/eth/netx_up.c`, `doip_netx.c`, the board's `eth.c` and NetX driver, and the loop in
+**`driver/doipnet`** (announcements, then one tester at a time, fed to `comm/doip`), which the
+application's generated doip thread now calls too.
+
+**Kernel-free decision, kernel on the stay path.** The decision and the jump still run first, from
+near-reset state, before anything is initialized (`crt0` only copies `.data` and zeroes `.bss`).
+Staying, the boot enters ThreadX (`boards/common/boot_net.c`): NetX's IP thread and the two doip
+threads at the top, and the serve loop (`boot/target`, `serve_d_boot_doip.v`) as the LOWEST thread,
+never sleeping — the network preempts it whenever it has work, a flash erase stalls only it, and the
+loop on a bus-only node is unchanged (`serve_notd_boot_doip.v`, a bare superloop). Each pass serves
+the bus (`diag.serve_step`) and the DoIP mailbox (`doip_netx.c`'s, the one the application's comm
+thread answers). The serve thread has a 16 KB stack: the deepest frames are the Ed25519 verifies
+(`bcrypto` verify_start 1.8 KB, finish 1.3 KB, add_pt 1.2 KB per gcc's `-fstack-usage`).
+
+**One server, two transports** (`boot.Prog`): the transport whose request opened the session in
+force holds it, and the other is refused conditionsNotCorrect (0x22) until it ends — so the 0x29
+unlock earned over one transport is never used over the other (the application's REQ-NET-012 rule,
+here by session rather than by unlock, since the boot has one level). A request over DoIP is in
+flight until its answer is sent, and no reset overtakes it; a reset asked over DoIP whose answer
+never left dies with the connection, and a connection that drops ends the session it held. A
+DoIP message holds one ISO-TP message (`comm/doip` `max_msg` = header + addresses + 520), so the
+boot's 512-byte TransferData blocks fit — blobly_net's `flash.program` runs over a DoIP connection
+unchanged (checked against an in-process entity answering 514-byte blocks).
+
+**The handoff over DoIP.** The application's server accepts a remote 0x10 02 only when its
+bootloader serves DoIP (`Connection.handoff_remote`, generated for `[boot]` + `[doip]`; otherwise
+0x22 as before), still behind the network tester's own level (REQ-NET-012). It answers `50 02`,
+waits for TCP to acknowledge it (bounded 500 ms), and writes the request cell as
+`BOOTCELL_REQ_HANDOFF_NET`, so the bootloader opens the programming session **held by the network**.
+The tester's connection dies with the reset; it reconnects (blobly_net: `uds.open` on the channel
+probes the dead connection and reconnects into the same handle) and goes on with 0x29 — no second
+0x10 02. **The time is bounded**: S3 does not run on a session handed off over DoIP until the boot's
+DoIP listener is open (`doip_net_ready`, `Prog.net_up`) — no tester can speak before the PHY has
+negotiated and the announcements are out, a few seconds — and runs in full from then; a network that
+never comes up stops the wait at `net_wait_us` (10 s), after which S3 and the stay-window give the
+ECU back to its application. `boot/prog_test.v` holds the rules against a reference model of
+interleaved bus and network requests, drops and resets.
 
 **Dual-bank caveat for P4:** a full-bank swap swaps the bootloader out with the app —
 so bank-swap activation means either boot duplicated at the base of BOTH banks, or
@@ -435,8 +490,8 @@ lighter middle ground if the trade pinches before a full PKI earns its way in.
    Irreversible — validated on a sacrificial board. Optional siblings: a
    certificate chain (rotation/revocation/delegation), anti-rollback, image
    encryption — each earns its way in against the threat model above.
-7. **Ethernet/DoIP binding** when hardware with Ethernet lands — by construction a
-   new binding, not a redesign.
+7. **Ethernet/DoIP binding** — *built* (REQ-BOOT-019, "The DoIP binding" above): a new binding,
+   not a redesign — the same `Prog`, the application's network seam.
 
 ## Non-goals (now)
 

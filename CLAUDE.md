@@ -148,7 +148,13 @@ manager program (`boot/target/main.v`, `boards/common/boot_glue.c`) built for th
 at the app slot, `make image SW_VERSION=<n>`, and `make flash` = boot + factory image
 (`threadx_makefiles_test.v` pins that). The system_full CAN nodes all run that way, so
 **`make flash` on domain / sysnode / zone_a writes the boot at 0x08000000 and the app at
-0x08020000** — not one image at 0x08000000 any more.
+0x08020000** — not one image at 0x08000000 any more. A `[boot]` node with **`[doip]`** gets a
+bootloader that is its DoIP entity too (`BOOT_DOIP := 1` in `gen/loom_build.mk`): the decision and
+the jump stay kernel-free, the stay path enters ThreadX and runs the application's own network seam
+(`driver/eth/netx_up.c`, `doip_netx.c`, the loop in **`driver/doipnet`**, shared with the
+application), linked from the node's `TX_A`/`NX_A` (`boards/common/boot_net.c`). sysnode's boot is
+~90 KB of its 128 KB sector that way (37 KB bus-only); `boot/target/serve_{d,notd}_boot_doip.v` are
+the two variants of the serve loop.
 
 **CI pins the V compiler** to the release tag in `.v-version` (currently `0.5.2`), installed as the
 **prebuilt** `v_linux.zip` release asset in both jobs. It used to install master HEAD, so an upstream

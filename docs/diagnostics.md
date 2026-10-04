@@ -181,9 +181,9 @@ What it adds, all table-driven so an unsupported path answers the right NRC rath
   0x10 02 is the **handoff** (R2) — **two-phase like 0x11** (below): the server answers 0x50 02 and
   records `reset_req = uds.reset_into_boot`, and the comm thread, once that answer has left the CAN
   controller (or the DoIP connection), writes the boot request cell and resets into the bootloader.
-  The answer is sent by the application, BEFORE the reset, on both transports — the bootloader has
-  no DoIP binding to answer a network tester from, and an answer it owed after the reset would be to
-  a request it never received (docs/bootloader.md, "App → boot"). Then S3 return-to-default; **every session
+  The answer is sent by the application, BEFORE the reset, on both transports — a network tester's
+  TCP connection dies with the reset, so it could never receive an answer the bootloader owed, and
+  that answer would be to a request the bootloader never received (docs/bootloader.md, "App → boot"). Then S3 return-to-default; **every session
   transition — explicit or by S3 — relocks security** (REQ-BOOT-013's rule, and what `boot.Prog`
   already does), so an expired unlocked session cannot be re-entered without a new seed / key; and per-service, per-subfunction and per-DID session and
   security gating, answered in ISO 14229-1's NRC-evaluation order: 0x11 / 0x7F, 0x12 / 0x7E, 0x13,
@@ -468,7 +468,9 @@ the one server over TCP as well (`tools/loom2v/gen_doip.v`) — the comm thread 
 from a mailbox (`driver/eth/doip_netx.c`) through `comm/diag`'s `serve_remote`, so a CAN and a DoIP
 tester share one session — while a 0x27 unlock belongs to the transport that earned it, so a
 network tester never writes under a bus tester's unlock (REQ-NET-012) — and a reset a DoIP tester asks for waits for its
-answer to be acknowledged. Not built: a host-side DoIP transport, and the bootloader's DoIP binding.
+answer to be acknowledged. A `[boot]` node with `[doip]` has a bootloader that is its DoIP entity
+too, so its handoff may be asked over DoIP (docs/bootloader.md, "The DoIP binding"). Not built: a
+host-side DoIP transport.
 
 ## 7. Obligations carried into the rungs
 
