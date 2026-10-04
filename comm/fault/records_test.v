@@ -371,3 +371,69 @@ fn test_each_record_subfunction_needs_only_its_own_seam() {
 	assert rcall(mut s, [u8(0x19), 0x04, 0xC1, 0x00, 0x00, 0x01]) == [u8(0x7F), 0x19, 0x12]
 	assert rcall(mut s, [u8(0x19), 0x06, 0xC1, 0x00, 0x00, 0x01])[0] == 0x59
 }
+
+// An extended data provider writes into the response itself, bounded by the room left: a record
+// longer than any fixed buffer is served whole, and one that claims more than the room (a lying
+// or a too-large record) is refused as responseTooLong, never written past the buffer.
+struct LongExt {
+mut:
+	len  int // the record's length
+	says int // the length the provider returns (a liar says more than it wrote)
+}
+
+fn long_count(ctx voidptr) int {
+	return 1
+}
+
+fn long_entry(ctx voidptr, i int) u32 {
+	return u32(0xC10000) << 8 | 0x09
+}
+
+fn long_clear(ctx voidptr, group u32) u8 {
+	return 0
+}
+
+fn long_ext(ctx voidptr, i int, rec u8, out &u8, cap int) int {
+	p := unsafe { &LongExt(ctx) }
+	if rec != 1 {
+		return 0
+	}
+	if p.len > cap {
+		return -1
+	}
+	for b in 0 .. p.len {
+		unsafe {
+			out[b] = u8(0xA0 + b)
+		}
+	}
+	return p.says
+}
+
+fn test_an_extended_record_is_bounded_by_the_response_not_a_buffer() {
+	mut p := &LongExt{
+		len:  20
+		says: 20
+	}
+	mut s := uds.Server{}
+	s.init(256)
+	s.faults = uds.FaultOps{
+		ctx:         p
+		count:       long_count
+		entry:       long_entry
+		clear:       long_clear
+		extended:    long_ext
+		ext_records: 1
+		avail:       0x7F
+	}
+	r := rcall(mut s, [u8(0x19), 0x06, 0xC1, 0x00, 0x00, 0x01])
+	assert r.len == 7 + 20 && r[6] == 0x01 && r[7] == 0xA0 && r[26] == 0xA0 + 19
+	p.says = 300 // claims more than the room left
+	assert rcall(mut s, [u8(0x19), 0x06, 0xC1, 0x00, 0x00, 0x01]) == [u8(0x7F), 0x19, 0x14]
+	p.len = 300 // does not fit at all: the provider says so
+	p.says = 300
+	assert rcall(mut s, [u8(0x19), 0x06, 0xC1, 0x00, 0x00, 0xFF]) == [u8(0x7F), 0x19, 0x14]
+	// the fault memory's own records refuse a room too small for them
+	mut m := snap_memory(1, 1)
+	mut b := [2]u8{}
+	assert m.extended_of(0, 0x01, &b[0], 1) == -1 && m.extended_of(0, 0x01, &b[0], 2) == 2
+}

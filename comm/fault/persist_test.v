@@ -142,6 +142,7 @@ mut:
 	puts       int
 	image_puts int
 	cap        int
+	aging      u8 // every fault's aging threshold
 	committed  map[u32][]u8 // per DTC, the snapshot block the last COMMITTED image claims, as it was then
 	swapped    bool // an update swapped the snapshot's DID sizes (F1A0 18 B, F190 4 B): same length
 	order      [4]int // which configured slot carries DTC k (an update may reorder)
@@ -152,8 +153,9 @@ const rig_dtcs = [u32(0xC10000), 0xC10001, 0xC10002, 0xC10003]
 
 fn new_rig(cap int) &Rig {
 	mut r := &Rig{
-		cap: cap
-		n:   4
+		cap:   cap
+		n:     4
+		aging: 2
 	}
 	for k in 0 .. 4 {
 		r.order[k] = k
@@ -197,7 +199,7 @@ fn (mut r Rig) restart(power_cycle bool) {
 		mut s := &r.m.slots[i]
 		s.dtc = rig_dtcs[k]
 		s.confirm = 1
-		s.aging = 2
+		s.aging = r.aging
 		s.priority = u8(100 + k)
 		if k < 3 {
 			s.freeze[0] = 0xF1A0
@@ -863,4 +865,93 @@ fn test_repeated_clears_leave_the_journal_alone() {
 		assert r.req([u8(0x14), 0xC1, 0x00, 0x00]) == [u8(0x54)]
 	}
 	assert r.f.calls == calls, 'a repeated clear wrote ${r.f.calls - calls} records'
+}
+
+// The cycle a power loss interrupted is ended at restore in RAM, and that end is durable only with
+// the next image write — so a power loss right after boot (or a store refusing every write) ends
+// the SAME stored cycle again at the next restore. That is idempotent, not cumulative: the end is
+// applied to the STORED state, whose aging and open flag the lost end never changed. Aging
+// advances at most once per real cycle whatever the losses between.
+fn test_repeated_power_loss_after_boot_ends_a_cycle_once() {
+	mut r := new_rig(2)
+	r.pass(0, .failed, 1, 1) // cycle 1 fails: confirmed
+	r.reboot()
+	r.pass(0, .passed, 1, 2) // cycle 2 tested and passed: its end ages the DTC by one
+	stored := r.slot(0).aging_count
+	for k in 0 .. 5 {
+		r.reboot() // power lost each time before the first persist after boot
+		assert r.slot(0).aging_count == stored + 1, 'loss ${k}: aging ${r.slot(0).aging_count}, stored ${stored}'
+		assert r.slot(0).status & confirmed != 0
+	}
+	r.f.refuse = true // the store refuses everything: nothing the restores end becomes durable
+	for k in 0 .. 5 {
+		r.reboot()
+		r.pass(0, .passed, 1, u64(1000 * k + 5000))
+		assert r.slot(0).aging_count == stored + 1, 'refused ${k}: aging ${r.slot(0).aging_count}'
+	}
+	r.f.refuse = false
+	r.reboot()
+	r.pass(-1, .not_tested, 0, 90000) // durable now: cycle 2 ended once, this cycle open and untested
+	r.reboot()
+	assert r.slot(0).aging_count == stored + 1, 'an untested cycle aged the DTC'
+}
+
+// The same as a property: a random life of boots — with a persist or power lost right after,
+// under refusal or not — and passing tests; stored aging never runs ahead of the cycles in which a
+// test really passed, and no restore advances it by more than one.
+fn test_aging_advances_at_most_once_per_real_cycle() {
+	mut rng := u32(0x1234567)
+	for run in 0 .. 50 {
+		mut r := new_rig(2)
+		r.aging = 255 // never ages out: aging is counted, not reset
+		r.reboot()
+		r.pass(0, .failed, 1, 1)
+		mut passing := 0 // cycles in which the test ran and passed
+		mut now := u64(10)
+		for step in 0 .. 40 {
+			rng ^= rng << 13
+			rng ^= rng >> 17
+			rng ^= rng << 5
+			now += 5000
+			before := stored_aging(r)
+			r.f.refuse = rng % 4 == 0
+			r.reboot()
+			assert r.slot(0).aging_count <= before + 1, 'run ${run} step ${step}: a restore aged by more than one'
+			if (rng >> 4) % 3 != 0 {
+				r.pass(0, .passed, 1, now)
+				passing++
+			}
+			if (rng >> 7) % 2 == 0 {
+				r.m.persist(now + 1, true)
+			}
+			r.f.refuse = false
+			assert int(stored_aging(r)) <= passing, 'run ${run} step ${step}: stored aging ${stored_aging(r)} after ${passing} passing cycles'
+		}
+	}
+}
+
+// stored_aging: DTC 0's aging counter as the store holds it.
+fn stored_aging(r &Rig) u8 {
+	img := stored_image(r)
+	if img.len < 2 + image_rec {
+		return 0
+	}
+	return img[2 + r.order[0] * image_rec + 5]
+}
+
+// ... and on a node whose cycle waits for NM: the restore ends the interrupted cycle, the first
+// image records it CLOSED, and later restores — before any wake — end nothing more.
+fn test_an_ended_cycle_is_stored_closed_before_the_next_wake() {
+	mut r := new_rig(2)
+	r.aging = 255
+	r.reboot()
+	r.pass(0, .failed, 1, 1)
+	r.reboot()
+	r.pass(0, .passed, 1, 2) // an open cycle, tested and passed
+	stored := r.slot(0).aging_count
+	for k in 0 .. 4 {
+		r.restart(false) // power-up with no wake: the interrupted cycle ends here
+		assert r.slot(0).aging_count == stored + 1, 'restart ${k}: aging ${r.slot(0).aging_count}'
+		r.m.persist(u64(1000 * k + 10000), true)
+	}
 }

@@ -95,7 +95,8 @@ pub mut:
 // = 0x85 is not; nil `snapshot` / `extended` = 0x19 03/04 / 06 are not. `entry(i)` returns DTC
 // (3 bytes) << 8 | status for i in 0 .. count(). `snapshot(i, out, cap)` copies DTC i's snapshot
 // record 0x01 body (out nil = only its length; 0 = none stored, -1 = larger than cap);
-// `extended(i, rec, out)` writes extended data record `rec` (1 .. ext_records) and returns its length.
+// `extended(i, rec, out, cap)` writes extended data record `rec` (1 .. ext_records) into out, at most
+// `cap` bytes, and returns its length (0 = no such record, -1 = longer than cap).
 pub struct FaultOps {
 pub mut:
 	ctx         voidptr
@@ -104,7 +105,7 @@ pub mut:
 	clear       fn (ctx voidptr, group u32) u8 // the NRC, 0 = cleared
 	set_setting fn (ctx voidptr, on bool)
 	snapshot    fn (ctx voidptr, i int, out &u8, cap int) int
-	extended    fn (ctx voidptr, i int, rec u8, out &u8) int
+	extended    fn (ctx voidptr, i int, rec u8, out &u8, cap int) int
 	ext_records u8 // extended data records 0x01 .. ext_records
 	avail       u8 // the status availability mask; 0 = not wired (the services stay unsupported)
 }
@@ -1079,20 +1080,19 @@ fn (mut s Server) dtc_records(sub u8, req &u8, resp &u8) int {
 	}
 	first := if rec == 0xFF { u8(1) } else { rec }
 	last := if rec == 0xFF { s.faults.ext_records } else { rec }
-	mut tmp := [8]u8{}
 	for r in first .. last + 1 {
-		len := s.faults.extended(s.faults.ctx, i, r, &tmp[0])
-		if len <= 0 {
-			continue
-		}
-		if o + 1 + len > cap {
+		// straight into the response, bounded by what is left of it (a record that does not exist
+		// needs no room)
+		room := if cap - o - 1 > 0 { cap - o - 1 } else { 0 }
+		len := s.faults.extended(s.faults.ctx, i, r, unsafe { &resp[o + 1] }, room)
+		if len < 0 || len > room {
 			return negative(resp, 0x19, nrc_response_too_long)
+		}
+		if len == 0 {
+			continue
 		}
 		unsafe {
 			resp[o] = r
-			for b in 0 .. len {
-				resp[o + 1 + b] = tmp[b]
-			}
 		}
 		o += 1 + len
 	}

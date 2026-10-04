@@ -232,11 +232,19 @@ pub fn (m &Memory) snapshot_of(i int, out &u8, cap int) int {
 	return e.len
 }
 
-// extended_of writes slot i's extended data record `rec` into out and returns its length; 0 = no
-// such record (0x01 .. ext_records).
-pub fn (m &Memory) extended_of(i int, rec u8, out &u8) int {
+// extended_of writes slot i's extended data record `rec` into out (at most `cap` bytes) and returns
+// its length; 0 = no such record (0x01 .. ext_records), -1 = it does not fit.
+pub fn (m &Memory) extended_of(i int, rec u8, out &u8, cap int) int {
 	if i < 0 || i >= m.n {
 		return 0
+	}
+	need := match rec {
+		0x01 { 2 }
+		0x02, 0x03 { 1 }
+		else { 0 }
+	}
+	if need > cap {
+		return -1
 	}
 	s := &m.slots[i]
 	match rec {
@@ -270,7 +278,7 @@ fn ops_snapshot(ctx voidptr, i int, out &u8, cap int) int {
 	return m.snapshot_of(i, out, cap)
 }
 
-fn ops_extended(ctx voidptr, i int, rec u8, out &u8) int {
+fn ops_extended(ctx voidptr, i int, rec u8, out &u8, cap int) int {
 	m := unsafe { &Memory(ctx) }
-	return m.extended_of(i, rec, out)
+	return m.extended_of(i, rec, out, cap)
 }
