@@ -23,20 +23,21 @@ local LEVEL = 500 -- the simulated chassis's command (rx_faults.blobnet)
 local function diag() return uds.open("edge", { tx = 0x7C0, rx = 0x7C8 }) end
 local function fault(kind, ms) sim.fault("edge", "chassis", "SafetyCmdFrame", kind, ms) end
 
--- every SafetyView zone_a sends within `ms`: { status, lost, level } each
+-- every SafetyView zone_a sends within `ms` of WALL time: { status, lost, level } each. Timed by
+-- run(), not by counting bus.recv calls: recv returns at the next frame on the bus, so on a busy
+-- edge (the gateway's routed frames, zone_a's own, telemetry) a loop of "10 ms" receives lasted a
+-- fraction of the time it claimed, and a window meant to start after a fault ended inside it.
+local seen_views = {}
+on_message("edge", 0x134, function(f)
+  local b = { string.byte(f.data, 1, 4) }
+  seen_views[#seen_views + 1] = { status = b[1], lost = b[2], level = b[3] + 256 * b[4] }
+end)
 local function views(ms)
   while bus.recv("edge", 0) do end
-  local out, t = {}, 0
-  while t < ms do
-    local f = bus.recv("edge", 10)
-    if f and f.id == 0x134 then
-      local b = { string.byte(f.data, 1, 4) }
-      out[#out + 1] = { status = b[1], lost = b[2], level = b[3] + 256 * b[4] }
-    end
-    t = t + 10
-  end
-  check.truthy(#out > 0, "no SafetyView within " .. ms .. " ms")
-  return out
+  seen_views = {}
+  run(ms)
+  check.truthy(#seen_views > 0, "no SafetyView within " .. ms .. " ms")
+  return seen_views
 end
 
 local function last(ms) local v = views(ms); return v[#v] end
