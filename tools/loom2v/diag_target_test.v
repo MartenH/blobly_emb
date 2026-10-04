@@ -604,12 +604,59 @@ allow_bench_key = true
 	gated := doip.replace('"0x22" = {}', '"0x10 02" = { security = 1 }\n"0x22" = {}')
 	c2, o2, glue := generate('boot_doip_gated', gated)
 	assert c2 == 0, o2
-	// the answer leaves over TCP before the reset: the wait 0x11 already has, then the cell
+	// the answer leaves over TCP before the reset: the wait 0x11 already has, then the cell —
+	// naming the transport that asked, so the bootloader's session is the network tester's
 	in_order(glue, [
 		'for C.doip_tx_pending() != 0',
 		'if g_diag.reset_due() == uds.reset_into_boot {',
+		'C.boot_handoff_request(if g_diag.reset_asked_remotely() { 1 } else { 0 })',
 		'C.diag_sys_reset()',
 	])
+	// its bootloader serves DoIP too, so a network tester may ask for the handoff
+	assert glue.contains('g_diag.handoff_remote = true')
+}
+
+// a [doip] node's bootloader is the application's DoIP entity too (REQ-BOOT-019): gen/boot_gen.h
+// carries the address, logical address, VIN and policy, and boot/boot.mk is told to link the network
+fn test_a_doip_nodes_bootloader_is_the_same_entity() {
+	tmp := os.join_path(os.temp_dir(), 'diag_target_boot_doip_${os.getpid()}')
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	cfg := '
+[uds]
+security_key = "reference"
+
+[uds.services]
+"0x10" = {}
+"0x10 02" = { security = 1 }
+"0x11" = { sessions = ["extended"], security = 1 }
+"0x22" = {}
+"0x27" = {}
+"0x3E" = {}
+' + boot_conn.replace('ascii = "BLOBLY-TEST"', 'ascii = "BLOBLYH735THREADX"') + '
+[doip]
+address          = "192.168.0.50"
+logical_address  = 0x07B0
+testers          = [0x0E00, 0x0E80]
+announce_count   = 2
+allow_bench_key  = true
+'
+	code, out, _ := run_in_scratch(tmp, fixture_dir, fn (src string) string {
+		return src
+	}, cfg)
+	assert code == 0, out
+	h := os.read_file(os.join_path(tmp, 'boot_gen.h')) or { panic(err) }
+	for want in ['#define BOOT_DOIP 1', '#define BOOT_DOIP_ADDR "192.168.0.50"',
+		'#define BOOT_DOIP_LOGICAL 0x7b0u', '#define BOOT_DOIP_VIN {0x42, 0x4c,',
+		'#define BOOT_DOIP_N_TESTERS 2', '#define BOOT_DOIP_TESTERS {0xe00, 0xe80}',
+		'#define BOOT_DOIP_N_ACT_TYPES 0', '#define BOOT_DOIP_INITIAL_MS 2000u',
+		'#define BOOT_DOIP_ANNOUNCE_COUNT 2', '#define BOOT_DOIP_ANNOUNCE_MS 500',
+		'#define BOOT_RX_ID 0x7b0u'] {
+		assert h.contains(want), '${want} missing:\n${h}'
+	}
+	mk := os.read_file(os.join_path(tmp, 'loom_build.mk')) or { panic(err) }
+	assert mk.contains('BOOT_DOIP := 1\ninclude ' + r'$(REPO)/boot/boot.mk'), mk
 }
 
 // the node's bootloader is built from the same config: gen/boot_gen.h carries the [isotp] ids, its
@@ -654,6 +701,8 @@ fn test_a_boot_node_gets_its_bootloader_config() {
 	}, boot_conn.all_before('[boot]'))
 	assert c2 == 0, o2
 	assert !os.exists(os.join_path(tmp2, 'boot_gen.h'))
+	// and a node without [doip] has a bus-only bootloader
+	assert !h.contains('BOOT_DOIP') && !mk.contains('BOOT_DOIP'), h
 	assert !(os.read_file(os.join_path(tmp2, 'loom_build.mk')) or { '' }).contains('boot.mk')
 }
 

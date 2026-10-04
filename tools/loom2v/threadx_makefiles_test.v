@@ -208,6 +208,7 @@ fn test_no_c_file_redefines_the_glue() {
 		if f.ends_with(os.join_path('boards', 'common', 'comm_glue.c'))
 			|| f.ends_with(os.join_path('boards', 'common', 'shell_glue.c'))
 			|| f.ends_with(os.join_path('boards', 'common', 'boot_handoff.c'))
+			|| f.ends_with(os.join_path('boards', 'common', 'boot_net.c')) // the bootloader's image, never the glue's
 			|| f.contains('/build/') {
 			continue
 		}
