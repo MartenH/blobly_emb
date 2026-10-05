@@ -5,11 +5,6 @@
 # [someip], GwStatus) and its [doip] from system.toml — its endpoint and DoIP entity address are the
 # SYSTEM's — and this file adds the on-target bits. The one FB is GwHealth: the uptime it publishes
 # on tel.
-#
-# ORDER MATTERS: the V TOML parser mishandles a dotted array-of-tables ([[partition.thread]])
-# immediately followed by a plain [table], so [target] is authored FIRST and the partition and FB
-# LAST (sysgen appends this verbatim after the generated tables — nothing may follow them).
-# See the vlang toml nested-block limitation.
 
 [target]
 kind    = "threadx"
