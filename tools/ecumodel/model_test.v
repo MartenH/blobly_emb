@@ -8,9 +8,7 @@ fn errs_of(text string) []string {
 }
 
 // The structurally valid tail every fixture appends AFTER its bare tables — a single
-// partition/thread + fb, the shape every example uses. (Bare tables must precede the
-// array-of-tables blocks: V's TOML parser mis-parses a bare [table] that follows a
-// [[array.of.tables]] — the same ordering the real ecu.toml files use.)
+// partition/thread + fb, the shape every example uses.
 const app = '
 [[partition]]
 name = "app"
@@ -28,6 +26,22 @@ thread = "app_main"
 
 fn test_good_config_has_no_errors() {
 	assert errs_of(app) == []
+}
+
+// A bare [table] AFTER the array-of-tables tail reads the same as one before it: the order
+// in an ecu.toml is the author's choice, not a parser constraint.
+fn test_bare_table_after_array_of_tables_reads_the_same() {
+	bare := '
+[bus.can0]
+interface = "vcan0"
+
+[trace]
+bus = "can9"
+'
+	before := errs_of(bare + app)
+	after := errs_of(app + bare)
+	assert after == before
+	assert after.any(it.contains('[trace] bus "can9"'))
 }
 
 fn test_partition_needs_core_and_thread() {
@@ -717,8 +731,6 @@ thread = "far_main"
 // requirement also demands enforcement on RECEPTION (the source filter), which
 // arrives with the rx rung; config-time fixing alone does not verify it.
 
-// bare tables ([bus.eth0], [someip]) must precede the array-of-tables blocks —
-// the same ordering rule the real ecu.toml files follow.
 const eth_head = '
 [bus.eth0]
 kind      = "eth"
