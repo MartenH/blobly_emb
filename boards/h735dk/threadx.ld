@@ -14,6 +14,7 @@ MEMORY
 {
   RAM    (wx) : ORIGIN = 0x20000000, LENGTH = 0x00020000   /* 128 KiB DTCM */
   D2SRAM (wx) : ORIGIN = 0x30000000, LENGTH = 0x00008000   /* 32 KiB D2 AHB SRAM1+2 */
+  AXISRAM (wx): ORIGIN = 0x24000000, LENGTH = 0x00050000   /* 320 KiB AXI SRAM (TCM_AXI_SHARED = 00) */
   FLASH  (rx) : ORIGIN = DEFINED(__flash_base__) ? __flash_base__ : 0x08000000,
                 LENGTH = DEFINED(__flash_len__)  ? __flash_len__  : 0x00100000
 }
@@ -149,4 +150,13 @@ SECTIONS
     *(.dma_buf .dma_buf.*)   /* ADC/DMA latest-value buffers share D2 SRAM */
     . = ALIGN(4);
   } > D2SRAM
+
+  /* The display thread's own memory (boards/h735dk/display.c: its stack, LVGL's pool) — the AXI
+   * SRAM keeps it out of the DTCM the real-time threads use. NOLOAD, and empty (zero cost) in
+   * every image without [display]. */
+  .axisram (NOLOAD) :
+  {
+    . = ALIGN(64);
+    *(.axisram .axisram.*)
+  } > AXISRAM
 }

@@ -72,6 +72,13 @@ functional_id = 0x7DF
 bs            = 8
 stmin_ms      = 0
 
+# The H735-DK's 4.3" touch LCD as the gateway's local status screen: one more ThreadX thread, below
+# every other one, that owns the LCD, the touch panel and LVGL (boards/h735dk/display.c). The screen
+# itself — uptime, CPU, both CAN controllers, Ethernet and DoIP — is display_ui.c. Its build needs
+# LVGL: `make -C ../../../.. deps-lvgl` once.
+[display]
+ui = "display_ui.c"
+
 # The same server is reachable over DoIP (ISO 13400) on the H735's Ethernet — TCP and UDP 13400 —
 # declared in system.toml (the node's `endpoint` + `doip`) and lowered into [doip]. One server, so a
 # CAN and a DoIP tester share one session; a 0x27 unlock is the transport's that earned it

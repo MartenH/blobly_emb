@@ -229,8 +229,10 @@ jobs:
       # together — the "minutes, not seconds" this job was originally scoped around was simply
       # wrong, and it cost us: a hand-written ThreadX example (since retired) had not compiled since blob_can_recv gained
       # a parameter, and nothing noticed because the gate skipped it.
-      - name: Third-party sources (CMSIS + ThreadX + NetX Duo, pinned)
-        run: make deps
+      # LVGL is optional for a user (only a [display] node needs it, docs/display.md) but not for
+      # CI: an image the cross loop below cannot build is one that stops compiling unnoticed.
+      - name: Third-party sources (CMSIS + ThreadX + NetX Duo + LVGL, pinned)
+        run: make deps deps-lvgl
 
       # Every example whose image is bare-metal. Each build ends in scripts/lint_vinit.sh (wired
       # into the example Makefiles): V compiles a __global's field defaults into _vinit(), which a

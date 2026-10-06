@@ -222,22 +222,7 @@ fn doip_target_globals(m Model) []string {
 // thread at the same priority as the CAN owner or an FB thread would never yield to it. Diagnostics
 // over IP are best effort; the FBs' periods and the bus are not.
 fn doip_net_prio(m Model) int {
-	mut lowest := 0
-	for pname, thrs in m.part.threads_of {
-		if m.part.external[pname] {
-			continue
-		}
-		for t in thrs {
-			p := m.part.thread_prio[t] or { 10 }
-			if p > lowest {
-				lowest = p
-			}
-		}
-	}
-	if lowest == 0 {
-		lowest = 10
-	}
-	return lowest + 1
+	return lowest_app_prio(m) + 1
 }
 
 // doip_target_create: in tx_application_define, before any thread runs — the identity the

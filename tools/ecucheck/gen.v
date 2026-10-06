@@ -80,6 +80,7 @@ fn specs() map[string]map[string]Key {
 			'uds':       sub(.tbl, false, 'uds') // ISO 14229: the node's one diagnostic server
 			'doip':      sub(.tbl, false, 'doip') // the diagnostic server over DoIP too (ThreadX target)
 			'boot':      sub(.tbl, false, 'boot') // the node runs behind the bootloader: 0x10 02 hands over to it
+			'display':   sub(.tbl, false, 'display') // a local screen: one more ThreadX thread (boards/<board>/display.c)
 			'did':       sub(.arr, false, 'did')
 			'fault':        sub(.arr, false, 'fault') // docs/diagnostics.md §3.3
 			'param':        sub(.arr, false, 'param') // docs/diagnostics.md §3.4
@@ -341,6 +342,9 @@ fn specs() map[string]map[string]Key {
 			'security_key': k(.str) // "reference" = blobly_net's public bench key (a target); absent = the OEM's diag_sa_key_ok
 			'services': sub(.namedmap, false, 'uds_service') // "0xSID" = { ... } ("0x10 02": the [boot] handoff); absent = the default table
 		}
+		'display':    {
+			'ui': req(.str) // the node's screen (ui_create, ui_update), a C file relative to the node
+		}
 		'boot':       {
 			'image_key':   req(.str) // the image-signing PUBLIC key, 64 hex (docs/bootloader.md)
 			'session_key': req(.str) // the 0x29 session PUBLIC key, 64 hex
@@ -419,7 +423,7 @@ fn label(ctx string) string {
 		'route_to' { '[[route]] to' }
 		'did_access' { '[[did]] read/write' }
 		'param_range' { '[[param]] range' }
-		'import', 'telemetry', 'trace', 'target', 'someip' { '[${ctx}]' }
+		'import', 'telemetry', 'trace', 'target', 'someip', 'display' { '[${ctx}]' }
 		else { '[[${ctx}]]' }
 	}
 }

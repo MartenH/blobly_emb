@@ -29,7 +29,7 @@ TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
            $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
 # + what the config's fault memory links (gen/loom_build.mk: the byte IOC its cells ride)
 BSP      = $(BOARD_BSP_THREADX) $(LOOM_GLUE_SRCS) $(REPO)/boards/common/trace_hooks.c \
-           $(LOOM_FAULT_SRCS)
+           $(LOOM_FAULT_SRCS) $(LOOM_DISPLAY_SRCS)
 
 all: $(BUILD)/$(NAME).bin
 
@@ -56,6 +56,7 @@ gen/.stamp: $(SYSDIR)/system.toml ecu.toml $(SYSDIR)/edge.dbc $(wildcard app/*.v
 ifneq ($(MAKECMDGOALS),clean)
 -include gen/loom_build.mk
 endif
+CFLAGS += $(LOOM_DISPLAY_DEFS) # [display]: LVGL's include path (empty without one)
 gen/loom_build.mk: gen/.stamp ;
 
 # how V is run for it — also its signature (tools/tools.mk v_sign)

@@ -62,6 +62,9 @@ fn test_every_threadx_makefile_links_the_generated_sources() {
 		bsp := bsp_definition(src)
 		assert bsp.contains('$(LOOM_FAULT_SRCS)'), '${mk}: BSP does not list $(LOOM_FAULT_SRCS)'
 		assert bsp.contains('$(LOOM_GLUE_SRCS)'), '${mk}: BSP does not list $(LOOM_GLUE_SRCS)'
+		// [display] (gen_display.v): its sources and LVGL's include path, empty without one
+		assert bsp.contains('$(LOOM_DISPLAY_SRCS)'), '${mk}: BSP does not list $(LOOM_DISPLAY_SRCS)'
+		assert src.contains('\nCFLAGS += $(LOOM_DISPLAY_DEFS)'), '${mk}: CFLAGS does not take $(LOOM_DISPLAY_DEFS)'
 		// a prerequisite list is expanded where the rule is read: the include must come first
 		elf := src.index('.elf: ') or {
 			assert false, '${mk}: no .elf rule'

@@ -38,6 +38,7 @@ codegen output) and must not be hand-edited — change `config/` or the generato
 | `[[did]]` (`ascii`/`bytes`/`signal`/`writable`) | diagnostics | UDS DataIdentifier → entry in the bridge's `uds.Server` (constant / live signal / RAM) |
 | `[[route]]` (`from`/`to`) | communication | raw-PDU gateway: forward a frame bus→bus untouched (the source bridge sends on the destination channel) |
 | `[[fb]]` / `[[fb.handler]]` | application | `gen.partition_*`: Loom wiring (state, handler glue, schedule) via `loom2v` |
+| `[display]` (`ui`) | platform | a local screen on a ThreadX node: one more thread, below every other one, that owns the LCD, touch and LVGL (`boards/<board>/display.c`); the node's screen is the C file `ui` names (docs/display.md) |
 | `[nm.*]` | network management | timings (placeholder until NM exists) |
 | `[[nvm.block]]` | memory stack | NvM block layout (placeholder until NvM exists) |
 

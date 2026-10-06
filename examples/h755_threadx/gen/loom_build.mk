@@ -4,3 +4,5 @@ LOOM_GLUE_SRCS = $(REPO)/boards/common/comm_glue.c $(REPO)/boards/common/shell_g
 LOOM_NET_SRCS :=
 LOOM_NET_DEFS :=
 LOOM_FAULT_SRCS :=
+LOOM_DISPLAY_SRCS :=
+LOOM_DISPLAY_DEFS :=
