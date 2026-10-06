@@ -1,7 +1,8 @@
 /* LVGL configuration for the H735-DK display (boards/h735dk/display.c) — the v9.6.0
  * lv_conf_template.h with the changes below (diff it against third_party/lvgl/lv_conf_template.h
  * to see them all): enabled, 30 Hz refresh cap, Montserrat 20, the DMA2D header = the CMSIS
- * device header, and the attribute overrides in lv_attr.h (LVGL's pool in the AXI SRAM). */
+ * device header, the attribute overrides in lv_attr.h (LVGL's pool in the AXI SRAM), and a note at
+ * LV_USE_DRAW_DMA2D on why it stays 0. */
 /**
  * @file lv_conf.h
  * Configuration file for v9.6.0
@@ -539,6 +540,8 @@
 #endif /*LV_USE_PPA*/
 
 /** Accelerate blends, fills and image decoding with the STM32 DMA2D peripheral. */
+/* Left off on purpose: measured on the H735-DK, no gain for this UI, and enabling it arms DMA2D_IRQn,
+ * which this board routes to __tx_BadHandler — docs/display.md "DMA2D: measured, not used". */
 #define LV_USE_DRAW_DMA2D 0
 
 #if LV_USE_DRAW_DMA2D
