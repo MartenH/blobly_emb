@@ -14,12 +14,14 @@ LVGL_C        := $(shell find $(LVGL)/src -name '*.c' 2>/dev/null)
 LVGL_OBJ       = $(patsubst $(LVGL)/src/%.c,$(BUILD)/lvgl/%.o,$(LVGL_C))
 
 # LVGL at -O2: its software renderer is the display thread's whole cost; -O2 took the demonstrator
-# from ~21.5% to ~18.5% of the CPU for ~85 KB of flash. A pinned third-party archive, rebuilt when
-# its configuration or the node's flags change (its Makefile), like the ThreadX objects
-# (scripts/app_deps_check.sh exempts both).
-$(BUILD)/lvgl/%.o: $(LVGL)/src/%.c $(BOARD_DIR)/lv_conf.h $(BOARD_DIR)/lv_attr.h $(BOARD_DIR)/display.mk Makefile
+# from ~21.5% to ~18.5% of the CPU for ~85 KB of flash. A pinned third-party archive, compiled
+# like the ThreadX objects (tools/tools.mk c_object): each object is remade when a header it reads
+# changes (lv_conf.h, lv_attr.h, the forced board.h) and all of them when the command does.
+LVGL_CMD       = $(CC) $(CFLAGS) $(DISPLAY_CFLAGS) -O2
+$(BUILD)/lvgl/%.o: $(LVGL)/src/%.c $$(call c_unrecorded,$$@) $$(call c_sign,$(LVGL_A),$$(LVGL_CMD))
 	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) $(DISPLAY_CFLAGS) -O2 -c $< -o $@
+	@$(call c_object,$(LVGL_CMD))
 $(LVGL_A): $(LVGL_OBJ)
 	@[ -n "$(LVGL_C)" ] || { echo "LVGL missing: run make -C $(REPO) deps-lvgl"; exit 1; }
 	@$(AR) -rc $@ $^
+-include $(call c_records,$(LVGL_OBJ))

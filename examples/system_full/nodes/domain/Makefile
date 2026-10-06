@@ -23,6 +23,7 @@ LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
 
 BUILD    = build
 TX_A     = $(BUILD)/tx.a
+TX_CMD   = $(CC) $(CFLAGS)
 TX_ASM   = $(wildcard $(PORT)/src/*.S)
 TX_C     = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
@@ -64,23 +65,26 @@ $(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) 
 # what V compiled into it (tools/tools.mk v_deps)
 -include $(BUILD)/app.c.d
 
-$(BUILD)/tx/%.o: $(PORT)/src/%.S Makefile
+$(BUILD)/tx/%.o: $(PORT)/src/%.S $$(call c_unrecorded,$$@) $$(call c_sign,$(TX_A),$$(TX_CMD))
 	@mkdir -p $(BUILD)/tx
-	$(CC) $(CFLAGS) -c $< -o $@
-$(BUILD)/tx/%.o: $(TX)/common/src/%.c Makefile
+	$(call c_object,$(TX_CMD))
+$(BUILD)/tx/%.o: $(TX)/common/src/%.c $$(call c_unrecorded,$$@) $$(call c_sign,$(TX_A),$$(TX_CMD))
 	@mkdir -p $(BUILD)/tx
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(call c_object,$(TX_CMD))
 $(TX_A): $(TX_OBJ)
 	$(AR) -rc $@ $^
+-include $(call c_records,$(TX_OBJ))
 
-$(BUILD)/app.o: $(BUILD)/app.c Makefile $(call c_unrecorded,$(BUILD)/app.o)
-	$(call c_build,$(CC) $(CFLAGS) -w -c $<)
+APPO_CMD = $(CC) $(CFLAGS) -w -c $(BUILD)/app.c
+$(BUILD)/app.o: $(BUILD)/app.c $(call c_unrecorded,$(BUILD)/app.o) $$(call c_sign,$$@,$$(APPO_CMD))
+	$(call c_build,$(APPO_CMD))
 -include $(BUILD)/app.o.d
 
 # io_backend.c textually includes the STM32 implementation; that and every header reach the
 # link through its dependency record (tools/tools.mk c_build), never a hand list
-$(BUILD)/$(NAME).elf: $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(TX_A) $(BOARD_LD_THREADX) $(call c_unrecorded,$(BUILD)/$(NAME).elf)
-	$(call c_build,$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(TX_A))
+ELF_CMD = $(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(TX_A)
+$(BUILD)/$(NAME).elf: $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(TX_A) $(BOARD_LD_THREADX) $(call c_unrecorded,$(BUILD)/$(NAME).elf) $$(call c_sign,$$@,$$(ELF_CMD))
+	$(call c_build,$(ELF_CMD))
 	$(SIZE) $@
 	@$(REPO)/scripts/lint_vinit.sh $@   # the _vinit-trap gate (host CI can't cross-compile; run it here)
 -include $(BUILD)/$(NAME).elf.d

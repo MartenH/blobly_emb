@@ -43,11 +43,13 @@ LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
 
 BUILD  = build
 TX_A   = $(BUILD)/tx.a
+TX_CMD = $(CC) $(CFLAGS)
 TX_ASM = $(wildcard $(TX_PORT)/src/*.S)
 TX_C   = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ = $(patsubst $(TX_PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
          $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
 NX_A   = $(BUILD)/nx.a
+NX_CMD = $(CC) $(CFLAGS)
 NX_C   = $(wildcard $(NX)/common/src/*.c)
 NX_OBJ = $(patsubst $(NX)/common/src/%.c,$(BUILD)/nx/%.o,$(NX_C))
 # the kernel and the network stack resolve each other: one archive group
@@ -101,25 +103,28 @@ $(BUILD)/app.c: main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) $(call v_s
 -include $(BUILD)/app.c.d
 
 # 2) ThreadX + NetX kernel/stack objects.
-$(BUILD)/tx/%.o: $(TX_PORT)/src/%.S Makefile
+$(BUILD)/tx/%.o: $(TX_PORT)/src/%.S $$(call c_unrecorded,$$@) $$(call c_sign,$(TX_A),$$(TX_CMD))
 	@mkdir -p $(BUILD)/tx
-	$(CC) $(CFLAGS) -c $< -o $@
-$(BUILD)/tx/%.o: $(TX)/common/src/%.c Makefile
+	$(call c_object,$(TX_CMD))
+$(BUILD)/tx/%.o: $(TX)/common/src/%.c $$(call c_unrecorded,$$@) $$(call c_sign,$(TX_A),$$(TX_CMD))
 	@mkdir -p $(BUILD)/tx
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(call c_object,$(TX_CMD))
 $(TX_A): $(TX_OBJ)
 	$(AR) -rc $@ $^
-$(BUILD)/nx/%.o: $(NX)/common/src/%.c Makefile
+-include $(call c_records,$(TX_OBJ))
+$(BUILD)/nx/%.o: $(NX)/common/src/%.c $$(call c_unrecorded,$$@) $$(call c_sign,$(NX_A),$$(NX_CMD))
 	@mkdir -p $(BUILD)/nx
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(call c_object,$(NX_CMD))
 $(NX_A): $(NX_OBJ)
 	$(AR) -rc $@ $^
+-include $(call c_records,$(NX_OBJ))
 
 # 3) cross-compile + link.
 # eth.h (descriptor counts, buffer sizes), bootmap.h and every other header the sources include
 # reach the link through its dependency record (tools/tools.mk c_build), never a hand list
-$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(NX_A) $(BOARD_LD_THREADX) $(call c_unrecorded,$(BUILD)/$(NAME).elf)
-	$(call c_build,$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(LINKLIBS))
+ELF_CMD = $(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(LINKLIBS)
+$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(NX_A) $(BOARD_LD_THREADX) $(call c_unrecorded,$(BUILD)/$(NAME).elf) $$(call c_sign,$$@,$$(ELF_CMD))
+	$(call c_build,$(ELF_CMD))
 	$(SIZE) $@
 -include $(BUILD)/$(NAME).elf.d
 

@@ -89,7 +89,7 @@ shares) — never a hand list of module directories; `scripts/app_deps_check.sh`
 the rule's shape, that `tools.mk` is included before it, and asks make each way it can go stale
 (a module, the recording rule, a missing record, another define).
 And for what the C COMPILER reads (#375): every rule that runs it — an image's ELF, an `app.o`, a
-bootloader's `boot.elf` — runs it as `$(call c_build,<command>)`, which compiles and then records
+bootloader's `boot.elf` — runs it as `$(call c_build,$(<CMD>))`, which compiles and then records
 the same command's `-MM -MP` (`<target>.d`, `-include`d after the rule), with
 `$(call c_unrecorded,<target>)` among its prerequisites. So `bootmap.h`, the board headers, the
 forced `board.h`, `boot_gen.h` and a textually included backend (`can_fdcan.c`, `io_stm32.c`) are
@@ -97,12 +97,26 @@ derived from the compile, never listed (boot/boot.mk still names `bootmap.h` bes
 for the LINK flags `boot_layout.sh` reads from it, not for a compile); a `-Wl,` group goes in a
 variable (a literal comma splits the call). Each compiled source gets an empty rule in the record,
 as `-MP` gives each header one, so dropping a source from the list remakes rather than stops make. The same script pins that no recipe runs `$(CC)` any
-other way (the pinned ThreadX/NetX/LVGL archive objects aside), that no such rule names a header, and
+other way (an archive object runs it through `c_object`, below), that no such rule names a header, and
 asks make's what-if (`-W`), with the target's generated C and objects held old (`-o`), that an edit
 to `bootmap.h` (where the image reads it — every `[boot]` node's app and bootloader must),
-`board.h` or `tools.mk` leaves each image stale. Flags are not recorded yet, nor the archive
-objects' headers (#382). Host builds are unaffected: their `build` target is phony and V
-recompiles everything.
+`board.h` or `tools.mk` leaves each image stale. **How** the compiler is run is recorded too
+(#382), as `v_sign` records a transpile: the rule's command is a variable (`ELF_CMD`, `APPO_CMD`,
+`BOOT_CMD`) that the recipe runs as `$(call c_build,$(ELF_CMD))` and the rule signs as
+`$$(call c_sign,$$@,$$(ELF_CMD))` — every flag, define and source, plus the compiler's path and
+`--version`, in `<target>.sig`, rewritten only when it differs — so `DEBUG=1`, a `board.mk` edit
+to `CAN_DEFS` or `SYSTEM_CLOCK`, or a link address remakes the image (h755_threadx's old
+`LINKSTAMP` is gone), and `c_build` refuses a command its signature does not record. `tools.mk`
+turns on `.SECONDEXPANSION` for the `$$`: the signature is taken once the whole Makefile is read,
+`CFLAGS +=` lines after an include included. The ThreadX/NetX/LVGL archive objects get the same
+two records per object: `$(call c_object,$(TX_CMD))` compiles with `-MMD -MP`, the archive's
+objects share one signature (`$$(call c_sign,$(TX_A),$$(TX_CMD))`), `$$(call c_unrecorded,$$@)`
+asks for each object's record and `-include $(call c_records,$(TX_OBJ))` reads them. An object's
+record leaves out the pinned trees' own headers (`third_party/`, which move only with a pin — run
+`make clean` after moving one): naming them made a no-op make in sysnode 2.5 s instead of 0.5 s. The same
+script pins that shape, and asks make that another flag (`MCU`, and `DEBUG=1` where a Makefile
+has one) leaves each image and one object of each archive stale, the unchanged command current.
+Host builds are unaffected: their `build` target is phony and V recompiles everything.
 
 **`[display]` needs LVGL: `make deps-lvgl`**, which `make deps` deliberately does not run (a
 sparse, pinned fetch, ~33 MB into the ignored `third_party/lvgl`); CI's cross job runs both. A
