@@ -97,6 +97,11 @@ jobs:
           # dirties the worktree and fails the "Generated outputs are fresh" gate below.
           PYTHONPYCACHEPREFIX="$RUNNER_TEMP/pycache" python3 -m py_compile scripts/codex_review.py
           ./scripts/codex_review_watch_test.sh
+      # Which codex the local review runs: the first candidate that actually runs, never an empty or
+      # broken one (an interrupted extension update once left a 0-byte copy, which failed the review
+      # as "codex wrote no final message" with no cause named). Through --check-codex: no git, no net.
+      - name: codex local review binary tests (scripts/codex_local_review_test.sh)
+        run: bash scripts/codex_local_review_test.sh
 
       # The no-alloc + isolation lint. AGENTS.md calls this MUST pass, and it guards the defining
       # constraint of the whole stack — no dynamic allocation — so it belongs in the gate, not in

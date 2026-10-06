@@ -293,6 +293,9 @@ The loop, in this order — not a subset, and not a different order:
    list and misses most of what GitHub's codex finds. It does NOT replace `@codex review`, which
    still finds defects that need protocol knowledge, and a clean local run proves nothing. Its
    P3s include out-of-range inputs; an input no caller can produce is not worth code to refuse.
+   It runs the first codex CLI that actually runs (`$CODEX`, else PATH, else the VS Code
+   extension's copies newest first); `--check-codex` prints which, and exit 3 means none does —
+   reload the Codex extension (pinned by `scripts/codex_local_review_test.sh` in CI).
 4. **`@codex review`**, iterated until clean before merging. Before the first request run
    `scripts/review_preflight.sh`; start every round with `scripts/request_codex_review.sh <pr>
    --post` and watch it with the command that prints. Do not hand-roll the polling.
