@@ -10,7 +10,7 @@
  * -Q board (PLL 8/2*200/2). BENCH-VERIFIED on a NUCLEO-H723ZG as system_full's zone_a
  * (2026-07-26): SYSCLK reached 400 MHz and FDCAN1 carried the edge bus. The waits are all
  * bounded regardless, so a rail that never readies HANGS (board_clock_fault) rather than run
- * on a degraded clock. FDCAN kernel clock stays HSE 8 MHz (see board.mk timing).
+ * on a degraded clock. The FDCAN kernel clock is PLL2_Q = 80 MHz off the same HSE (see board.mk timing).
  */
 #include <stm32h723xx.h>
 
@@ -20,7 +20,7 @@
 static volatile uint32_t g_cpu_mhz = 64;
 
 /* board_clock_fault — a clock we can't bring up is a HARD FAULT, not a limp (an ECU on the
- * wrong clock violates its real-time timing, and the FDCAN kernel clock rides the same HSE).
+ * wrong clock violates its real-time timing, and the FDCAN kernel clock (PLL2) rides the same HSE).
  * Hang deterministically; SWD reads the PC + the RCC/PWR registers to see which rail failed.
  * Unreachable on healthy silicon. Same policy as boards/h755zi. */
 static void __attribute__((noreturn)) board_clock_fault(void) {
@@ -43,7 +43,7 @@ void board_clock_init(void) {
 		if (t >= 4000000u) board_clock_fault(); /* supply not ready -> hang (hard fault) */
 	}
 
-	/* 2. HSE (8 MHz bypass from the ST-LINK MCO): PLL source + FDCAN kernel clock. */
+	/* 2. HSE (8 MHz bypass from the ST-LINK MCO): the PLL1 and PLL2 (FDCAN kernel clock) source. */
 	RCC->CR |= RCC_CR_HSEBYP | RCC_CR_HSEON;
 	for (t = 0; (RCC->CR & RCC_CR_HSERDY) == 0u; t++) {
 		if (t >= 4000000u) board_clock_fault();
@@ -109,18 +109,18 @@ uint64_t board_now_us(void) {
 	return r;
 }
 
-/* FDCAN1 kernel clock (HSE) + APB clock + PD0 (RX) / PD1 (TX) AF9 — identical to the
+/* FDCAN1 kernel clock (PLL2_Q off HSE) + APB clock + PD0 (RX) / PD1 (TX) AF9 — identical to the
  * -Q Nucleo (both route FDCAN1 to the Zio CN9 PD0/PD1 pair). */
 void board_can_clock_pins_init(void) {
 	RCC->CR |= RCC_CR_HSEBYP;
 	RCC->CR |= RCC_CR_HSEON;
 	/* BOUNDED, like board_clock_init's HSE wait. In practice unreachable — board_clock_init
 	 * already brought HSE up (or hung), so HSE is ready here — but a never-ready HSE hangs
-	 * (board_clock_fault) for the same reason: FDCAN off its 8 MHz kernel clock is unusable. */
+	 * (board_clock_fault) for the same reason: without HSE there is no PLL2, so no FDCAN kernel clock. */
 	for (uint32_t t = 0; (RCC->CR & RCC_CR_HSERDY) == 0u; t++) {
 		if (t >= 4000000u) board_clock_fault();
 	}
-	/* FDCAN kernel clock from PLL2_Q = 80 MHz (was HSE 8 MHz). A common 80 MHz FDCAN kernel across
+	/* FDCAN kernel clock from PLL2_Q = 80 MHz. A common 80 MHz FDCAN kernel across
 	 * every FD node makes the nominal + data bit timing identical to the other boards, so sample
 	 * points match by construction (needed once the edge bus runs CAN-FD). PLL2 otherwise unused.
 	 * HSE 8 /DIVM2=2 = 4 MHz ref, xN2=80 = 320 MHz VCO (wide), /Q2=4 = 80 MHz. No spread-spectrum,
