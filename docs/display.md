@@ -102,17 +102,42 @@ the two agree.
 
 - **Where the cost is:** almost all of it is software rendering of what changes. A moving needle
   invalidates most of a gauge, so the gauge is redrawn every frame.
-- **Double buffering's cost:** about 8 points. LVGL draws into uncached external memory, then
-  copies each frame's dirty areas into the other buffer.
+- **Double buffering's cost:** about 8 points. Writing to the HyperRAM is about 7× slower than
+  writing to on-chip SRAM (the table below), and each frame's dirty areas are written twice: drawn,
+  then copied into the other buffer.
 - **Frame rate:** the refresh is capped at **30 fps** (`LV_DEF_REFR_PERIOD` 33 ms).
-- **Untried lever:** LVGL's DMA2D backend (`LV_USE_DRAW_DMA2D`, which is register-level and needs no
-  HAL).
 - **sysnode on the Overview tab, chaser strip running:** the whole core reads **7.6%** at about
   12 fps, with no bus traffic.
 - **Large animated backgrounds are expensive:** three drifting circles behind the cards cost 51%
   (71% peak) at 30 fps, because everything they cross is re-blended every frame.
 - **A full-face gauge redrawn continuously** (a needle sweeping at 30 fps, tried on sysnode and
   removed) cost the whole core 19%, peaking at 21%, at 27.5 fps.
+
+## DMA2D: measured, not used
+
+LVGL's DMA2D backend (`LV_USE_DRAW_DMA2D`, register-level, no HAL) was tried on sysnode on
+2026-10-06 and left off (`lv_conf.h`). It worked: the DMA2D's registers showed LVGL's plain fills
+going through it. But a full-screen redraw took **14.9 ms against 14.8 ms** without it, and the
+steady load stayed at 7.5%. Bandwidth, measured on the board (64 KiB each):
+
+| | HyperRAM | on-chip AXI SRAM |
+|---|---|---|
+| DMA2D fill (write) | 174 MB/s | 549 MB/s |
+| CPU write | 159 MB/s | 1080 MB/s |
+| CPU read, 16 bits at a time (as a blend reads) | 81 MB/s | 84 MB/s |
+
+- **Memory is not the bottleneck.** Reads from the HyperRAM run at on-chip speed for this pattern,
+  because the OCTOSPI prefetches. A whole-screen write is about 1.5 ms.
+- **The cost is CPU rendering, which DMA2D cannot take:**
+  - **What it cannot do:** anti-aliased text, rounded corners, circles, lines. It takes only plain,
+    unrounded, ungradiented rectangles and image copies, a small share of this UI.
+  - **No CPU freed:** with `LV_OS_NONE` LVGL waits for each transfer (`LV_USE_DRAW_DMA2D_INTERRUPT`
+    needs an OS), so even the fills it takes free nothing.
+- **When to revisit:** a UI made of large plain rectangles or images, or LVGL running with an OS
+  integration so DMA2D transfers overlap rendering.
+- **Interrupt caveat:** enabling the backend also enables `DMA2D_IRQn` in the NVIC, which this
+  board's vector table routes to the bad-handler trap. With `LV_USE_DRAW_DMA2D_INTERRUPT 0` nothing
+  raises it, but an interrupt-driven setup needs a handler there first.
 
 ## Bench notes
 
