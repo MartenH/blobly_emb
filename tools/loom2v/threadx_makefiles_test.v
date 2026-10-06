@@ -62,6 +62,16 @@ fn test_every_threadx_makefile_links_the_generated_sources() {
 		bsp := bsp_definition(src)
 		assert bsp.contains('$(LOOM_FAULT_SRCS)'), '${mk}: BSP does not list $(LOOM_FAULT_SRCS)'
 		assert bsp.contains('$(LOOM_GLUE_SRCS)'), '${mk}: BSP does not list $(LOOM_GLUE_SRCS)'
+		// [display] (gen_display.v): a board that can drive one (a boards/<board>/display.mk)
+		// lists its sources and LVGL's include path, so a display needs no Makefile edit there;
+		// any other board's Makefile has no business with them
+		board := src.split_into_lines().filter(it.starts_with('BOARD ') && it.contains('=')).map(it.all_after('=').trim_space())
+		assert board.len == 1, '${mk}: no single BOARD := line'
+		display_board := os.exists(os.join_path(@VMODROOT, 'boards', board[0], 'display.mk'))
+		assert bsp.contains('$(LOOM_DISPLAY_SRCS)') == display_board, '${mk}: BSP lists $(LOOM_DISPLAY_SRCS) ' +
+			'if and only if boards/${board[0]} has a display.mk'
+		assert src.contains('\nCFLAGS += $(LOOM_DISPLAY_DEFS)') == display_board, '${mk}: CFLAGS takes ' +
+			'$(LOOM_DISPLAY_DEFS) if and only if boards/${board[0]} has a display.mk'
 		// a prerequisite list is expanded where the rule is read: the include must come first
 		elf := src.index('.elf: ') or {
 			assert false, '${mk}: no .elf rule'

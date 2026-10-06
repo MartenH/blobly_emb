@@ -3,7 +3,7 @@ REPO := .
 # every repo tool a target runs is built once into bin/ (tools/tools.mk), never `v run` (#333)
 include tools/tools.mk
 
-.PHONY: example run-example list check deps deps-cmsis trace trace-check lint vcan clean demo demo-threadx bench v-pin
+.PHONY: example run-example list check deps deps-cmsis deps-lvgl trace trace-check lint vcan clean demo demo-threadx bench v-pin
 
 # ---- Examples ---------------------------------------------------------------
 # Each example is a self-contained app under examples/<NAME>/ with its own
@@ -53,6 +53,19 @@ deps-cmsis:
 	@[ -d third_party/cmsis_core ]       || git clone -q --depth 1 https://github.com/STMicroelectronics/cmsis_core       third_party/cmsis_core
 	@cd third_party/cmsis_core && git checkout -q $(CMSIS_CORE_PIN) 2>/dev/null || (git fetch -q --depth 1 origin $(CMSIS_CORE_PIN) && git checkout -q $(CMSIS_CORE_PIN))
 	@echo "CMSIS headers ready under third_party/ (bare-metal cross builds)"
+
+# LVGL: the graphics library a [display] node's display thread runs (docs/display.md; today
+# sysnode). OPTIONAL — not part of `deps`; only a display node needs it. Pinned to the v9.6.0 tag's
+# commit and fetched sparse and blob-less: the library's sources and headers, not its hundreds of
+# MB of docs, demos and tests.
+LVGL_PIN ?= 80ca777e37a2b176770726a02e07a6fb79ef0b39
+deps-lvgl:
+	@mkdir -p third_party/lvgl
+	@cd third_party/lvgl && [ -d .git ] || git init -q
+	@cd third_party/lvgl && git sparse-checkout set --cone src include
+	@cd third_party/lvgl && [ "$$(git rev-parse -q --verify HEAD 2>/dev/null)" = "$(LVGL_PIN)" ] || \
+	  { git fetch -q --depth 1 --filter=blob:none https://github.com/lvgl/lvgl $(LVGL_PIN) && git checkout -q FETCH_HEAD; }
+	@echo "LVGL ($(LVGL_PIN)) ready under third_party/lvgl ([display] nodes)"
 
 deps: deps-cmsis
 	@[ -d third_party/threadx/.git ]     || git clone https://github.com/eclipse-threadx/threadx third_party/threadx

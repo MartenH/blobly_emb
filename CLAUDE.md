@@ -97,12 +97,18 @@ derived from the compile, never listed (boot/boot.mk still names `bootmap.h` bes
 for the LINK flags `boot_layout.sh` reads from it, not for a compile); a `-Wl,` group goes in a
 variable (a literal comma splits the call). Each compiled source gets an empty rule in the record,
 as `-MP` gives each header one, so dropping a source from the list remakes rather than stops make. The same script pins that no recipe runs `$(CC)` any
-other way (the pinned ThreadX/NetX archive objects aside), that no such rule names a header, and
+other way (the pinned ThreadX/NetX/LVGL archive objects aside), that no such rule names a header, and
 asks make's what-if (`-W`), with the target's generated C and objects held old (`-o`), that an edit
 to `bootmap.h` (where the image reads it — every `[boot]` node's app and bootloader must),
 `board.h` or `tools.mk` leaves each image stale. Flags are not recorded yet, nor the archive
 objects' headers (#382). Host builds are unaffected: their `build` target is phony and V
 recompiles everything.
+
+**`[display]` needs LVGL: `make deps-lvgl`**, which `make deps` deliberately does not run (a
+sparse, pinned fetch, ~33 MB into the ignored `third_party/lvgl`); CI's cross job runs both. A
+node with `[display]` (today sysnode) gets a display thread below every other thread
+(`tools/loom2v/gen_display.v`, `boards/h735dk/display.c`); docs/display.md has the design and the
+measured cost.
 
 Examples use classic CAN (`[bus] fd = false`) so blobly_net (classic) can drive
 them; the driver picks classic vs CAN-FD from that flag. Integration tests live in

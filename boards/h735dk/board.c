@@ -196,7 +196,17 @@ void board_can_clock_pins_init(void) {
 /* Platform pin-ownership table (board.h, docs/io.md "pins are exclusive"): pads this
  * board already assigned — an io point re-muxing one would silently kill CAN, the
  * debugger, or the PHY. Port index 0=A..10=K (the io_stm32.c parse). */
+/* board_display_pin: 1 for a pad the display owns (display.c: LCD, touch I2C4, HyperRAM) — only in
+ * an image that links the display; this weak default answers for every other image. A separate
+ * symbol from display.c's strong one, as ETH_IRQHandler's is below. */
+__attribute__((weak)) int board_display_pin(int port, int pin) {
+	(void)port;
+	(void)pin;
+	return 0;
+}
+
 int board_io_pin_reserved(int port, int pin) {
+	if (board_display_pin(port, pin)) return 1;                     /* [display]: LCD, touch, HyperRAM */
 	if (port == 7 && (pin == 0 || pin == 1)) return 1;   /* PH0/PH1: HSE pair — the PLL AND FDCAN clock source */
 	if (port == 1 && pin == 3) return 1;                 /* PB3: SWO */
 	if (port == 0 && (pin == 13 || pin == 14)) return 1;            /* PA13/PA14: SWD */
@@ -230,8 +240,9 @@ int board_io_pwm_map(int port, int pin, void **tim_base, int *chan, int *af, uns
 }
 
 /* Bonded pads on the H735G-DK's STM32H735IGK6 (UFBGA176): ports A..I carry
- * application-reachable pads; PJ/PK on this package serve the DK's LCD/octo-SPI
- * fabric and are not offered as io points. BOARD-DECLARED map (not a datasheet
+ * application-reachable pads; PJ/PK are not offered as io points. (The LCD and HyperRAM
+ * themselves are on ports A..H — board_display_pin reserves them in a display image.)
+ * BOARD-DECLARED map (not a datasheet
  * import): a point on a pad the schematic routes elsewhere still fails honestly
  * at the electrical level, and the reserved() table above holds the pads the
  * platform actively owns — extend BOTH from the schematic when a config first

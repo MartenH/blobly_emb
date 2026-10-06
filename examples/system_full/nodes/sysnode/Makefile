@@ -34,7 +34,7 @@ include $(REPO)/tools/tools.mk
 CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
           $(BOARD_DEFS) -DBOARD_ENTRY=main__main $(CAN_DEFS) \
           -DTX_TIMER_TICKS_PER_SECOND=1000 -DNX_IP_PERIODIC_RATE=1000 \
-          -I. -Igen $(BOARD_INCS) -I$(REPO)/driver/can \
+          -I. -Igen $(BOARD_INCS) -I$(REPO)/driver/can -I$(REPO)/driver/eth \
           -I$(PORT)/inc -I$(TX)/common/inc -I$(NX_PORT)/inc -I$(NX)/common/inc $(CMSIS)
 LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
           --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/app.map
@@ -52,7 +52,7 @@ NX_OBJ   = $(patsubst $(NX)/common/src/%.c,$(BUILD)/nx/%.o,$(NX_C))
 LINKLIBS = -Wl,--start-group $(TX_A) $(NX_A) -Wl,--end-group
 # + the network the config asks for (gen/loom_build.mk: ETH MAC, NetX driver, driver/eth seams)
 BSP      = $(BOARD_BSP_THREADX) $(LOOM_GLUE_SRCS) $(REPO)/boards/common/trace_hooks.c \
-           $(LOOM_NET_SRCS) $(LOOM_FAULT_SRCS)
+           $(LOOM_NET_SRCS) $(LOOM_FAULT_SRCS) $(LOOM_DISPLAY_SRCS)
 
 all: $(BUILD)/$(NAME).bin
 
@@ -86,6 +86,7 @@ gen/.stamp: $(SYSDIR)/system.toml $(wildcard $(SYSDIR)/nodes/*/ecu.toml) $(wildc
 ifneq ($(MAKECMDGOALS),clean)
 -include gen/loom_build.mk
 endif
+CFLAGS += $(LOOM_DISPLAY_DEFS) # [display]: LVGL's include path (empty without one)
 CFLAGS += $(LOOM_NET_DEFS) # the network the config sizes (driver/eth/netx_up.c)
 gen/loom_build.mk: gen/.stamp ;
 

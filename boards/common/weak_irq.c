@@ -25,6 +25,10 @@ __attribute__((weak)) void FDCAN3_IT0_IRQHandler(void) { }
  * so the shared vector's symbol resolves. Separate object, same reason as above. */
 __attribute__((weak)) void HSEM1_IRQHandler(void) { }
 
+/* IRQ55 = TIM7 on the H72x/H73x table: the [display] CPU profiler's sampler (boards/h735dk/cpuprof.c).
+ * Never enabled in an image without it, so the default is never entered. */
+__attribute__((weak)) void TIM7_IRQHandler(void) { }
+
 /* Cross-core CpuLoad (xcore.h XCORE_LOAD_ADDR): a satellite image publishes its per-mille load and the
  * owner reads it, so the CpuLoad frame reports every core. Weak no-op/zero defaults so an image
  * that does neither — a single-core node, or the retiring standalone dual-core examples — links

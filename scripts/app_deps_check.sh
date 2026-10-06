@@ -14,8 +14,8 @@
 #     stamp, its record's v_unrecorded, nothing hand-listed — and the Makefile includes tools.mk
 #     before it (a macro used before its definition expands to nothing, silently);
 #   - every rule whose recipe runs $(CC) runs it through c_build, with its c_unrecorded, its record
-#     included and no header named by hand — the ThreadX/NetX archive objects ($(BUILD)/tx/,
-#     $(BUILD)/nx/) aside: pinned third-party sources, tracked by Makefile only (#382);
+#     included and no header named by hand — the ThreadX/NetX/LVGL archive objects ($(BUILD)/tx/,
+#     $(BUILD)/nx/, $(BUILD)/lvgl/) aside: pinned third-party sources, tracked by Makefile only (#382);
 #   - per image built, the target has its record; without the record it is out of date; touching
 #     a repo module it compiles in (driver/doipnet where it imports it), a header it includes
 #     (the board's bootmap.h where it reads one, and the forced board.h), or the rule that records
@@ -93,10 +93,10 @@ done
 
 # --- C: what the compiler read -----------------------------------------------------------------
 cmks=$(grep -l arm-none-eabi examples/*/Makefile examples/*/nodes/*/Makefile)
-for mk in $cmks boot/boot.mk; do
+for mk in $cmks boot/boot.mk boards/*/display.mk; do
 	# Every rule, its logical line (continuations joined), where it starts, and its recipe lines.
-	# A recipe that runs $(CC) runs it through c_build — except the pinned third-party kernel and
-	# network archive objects ($(BUILD)/tx/, $(BUILD)/nx/). A rule that does (an image's ELF, an
+	# A recipe that runs $(CC) runs it through c_build — except the pinned third-party kernel,
+	# network and graphics archive objects ($(BUILD)/tx/, $(BUILD)/nx/, $(BUILD)/lvgl/). A rule that does (an image's ELF, an
 	# app.o, a boot.elf, or any other) carries its c_unrecorded, includes its record, and names no
 	# header: the record carries those. A rule with no recipe only adds a prerequisite to one
 	# defined elsewhere (boot/boot.mk relinks the application when the layout its LINK flags are
@@ -104,7 +104,7 @@ for mk in $cmks boot/boot.mk; do
 	awk -v mk="$mk" '
 		function done_rule() {
 			if (tgt == "" || !cc) return
-			if (tgt ~ /^\$\(BUILD\)\/(tx|nx)\//) return
+			if (tgt ~ /^\$\(BUILD\)\/(tx|nx|lvgl)\//) return
 			if (bare) { print mk ":" start ": " tgt " runs the C compiler without tools/tools.mk c_build — its headers go untracked"; return }
 			if (index(rule, "$(call c_unrecorded," tgt ")") == 0) print mk ":" start ": " tgt " has no $(call c_unrecorded," tgt ")"
 			need[mk SUBSEP tgt] = 1
