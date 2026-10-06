@@ -19,11 +19,23 @@ void ui_update(void);
 /* what the display thread reports about itself (read from any thread, written by it alone) */
 enum { DISPLAY_STARTING = 0, DISPLAY_RUNNING = 1, DISPLAY_NO_RAM = -1 };
 extern volatile int display_state;      /* DISPLAY_NO_RAM: the HyperRAM failed its test, panel off */
-extern volatile uint32_t display_load_pm; /* the thread's CPU, per mille of the last second */
+extern volatile uint32_t display_load_pm; /* the thread's passes, per mille of the last second: wall
+                                           * time, preemption by higher threads included, the swap
+                                           * wait (a sleep) not — an upper bound on its own CPU */
 extern volatile uint32_t display_fps;     /* frames shown in the last second */
 extern volatile uint32_t display_cpu_pm;  /* the whole core's load, per mille of the last second
-                                           * (every thread and ISR: measured by an idle thread at
-                                           * priority 31, display.c) */
+                                           * (every thread and interrupt: cpuprof.c's samples) */
 extern volatile int display_touch_chip;   /* TOUCH_* (touch.h) */
+
+/* display_loads: the last second's CPU of every ThreadX thread (in creation order) and then of
+ * interrupts (prio DISPLAY_NO_PRIO), per mille; *generation moves on each refresh. For the display
+ * thread (ui_update) only: it is refreshed there. */
+#define DISPLAY_NO_PRIO 0xFFFFFFFFu
+typedef struct {
+	const char *name;
+	unsigned int prio;
+	uint32_t pm;
+} display_load_t;
+int display_loads(const display_load_t **out, uint32_t *generation);
 
 #endif

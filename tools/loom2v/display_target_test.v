@@ -80,7 +80,51 @@ fn test_the_display_thread_runs_below_every_other_thread() {
 	for p in others {
 		assert prio > p, 'display at ${prio} is not below a thread at ${p}'
 	}
-	assert prio <= 30 // 31 is the idle thread's (display.c)
+	assert prio <= 31
+}
+
+// a DoIP node (sysnode's shape): its NetX and doip threads are created in C (doip_net_create's two
+// priorities), below the application threads — the display thread must still be below them
+const display_doip = '
+[uds.services]
+"0x10" = {}
+"0x11" = { sessions = ["extended"], security = 1 }
+"0x22" = {}
+"0x27" = {}
+"0x3E" = {}
+
+[isotp]
+bus           = "can0"
+rx_id         = 0x7B0
+tx_id         = 0x7B8
+functional_id = 0x7DF
+
+[[did]]
+id    = 0xF190
+ascii = "BLOBLYH735THREADX"
+
+[doip]
+address         = "192.168.0.50"
+logical_address = 0x07B0
+'
+
+fn test_the_display_thread_runs_below_the_doip_threads() {
+	code, out, glue, _ := gen_display('doip', false, display_doip + display_section)
+	assert code == 0, out
+	net := glue.split_into_lines().filter(it.trim_space().starts_with('C.doip_net_create('))
+	assert net.len == 1, net.str()
+	// C.doip_net_create(c'192.168.0.50', u32(np), u32(np + 1))
+	parts := net[0].split('u32(')
+	assert parts.len == 3, net[0]
+	call := glue.split_into_lines().filter(it.contains('C.display_thread_create(u32('))
+	assert call.len == 1, call.str()
+	prio := call[0].all_after('C.display_thread_create(u32(').all_before(')').int()
+	for p in [parts[1].all_before(')').int(), parts[2].all_before(')').int()] {
+		assert prio > p, 'display at ${prio} is not below a DoIP thread at ${p}'
+	}
+	for p in created_prios(glue) {
+		assert prio > p, 'display at ${prio} is not below a thread at ${p}'
+	}
 }
 
 fn test_the_build_links_the_boards_display_and_the_nodes_screen() {

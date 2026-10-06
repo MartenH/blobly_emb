@@ -134,7 +134,7 @@ int touch_read(int *x, int *y) {
 			(void)i2c_xfer(g_addr, clr, 3, 0, 0);
 		}
 	} else if (g_chip == TOUCH_FT5336) {
-		uint8_t reg = 0x02u, p[5];
+		uint8_t reg = 0x02u, p[5] = { 0 };
 		int ok = i2c_xfer(g_addr, &reg, 1, p, 5);
 		if (ok) {
 			touch_polls_ok++;

@@ -93,7 +93,7 @@ done
 
 # --- C: what the compiler read -----------------------------------------------------------------
 cmks=$(grep -l arm-none-eabi examples/*/Makefile examples/*/nodes/*/Makefile)
-for mk in $cmks boot/boot.mk; do
+for mk in $cmks boot/boot.mk boards/*/display.mk; do
 	# Every rule, its logical line (continuations joined), where it starts, and its recipe lines.
 	# A recipe that runs $(CC) runs it through c_build — except the pinned third-party kernel,
 	# network and graphics archive objects ($(BUILD)/tx/, $(BUILD)/nx/, $(BUILD)/lvgl/). A rule that does (an image's ELF, an

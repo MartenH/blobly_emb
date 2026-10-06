@@ -62,7 +62,7 @@ LVGL_PIN ?= 80ca777e37a2b176770726a02e07a6fb79ef0b39
 deps-lvgl:
 	@mkdir -p third_party/lvgl
 	@cd third_party/lvgl && [ -d .git ] || git init -q
-	@cd third_party/lvgl && git sparse-checkout set src include
+	@cd third_party/lvgl && git sparse-checkout set --cone src include
 	@cd third_party/lvgl && [ "$$(git rev-parse -q --verify HEAD 2>/dev/null)" = "$(LVGL_PIN)" ] || \
 	  { git fetch -q --depth 1 --filter=blob:none https://github.com/lvgl/lvgl $(LVGL_PIN) && git checkout -q FETCH_HEAD; }
 	@echo "LVGL ($(LVGL_PIN)) ready under third_party/lvgl ([display] nodes)"

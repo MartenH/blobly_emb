@@ -8,7 +8,6 @@
  * The thread's own memory — its stack and LVGL's pool (lv_conf.h LV_ATTRIBUTE_LARGE_RAM_ARRAY) —
  * is in the AXI SRAM (.axisram): the DTCM belongs to the node's real-time threads.
  */
-#include <stm32h735xx.h>
 #include "tx_api.h"
 #include "board.h"
 #include "display.h"
@@ -16,6 +15,7 @@
 #include "lcd.h"
 #include "touch.h"
 #include "lvgl.h"
+#include "cpuprof.h"
 
 #define DISPLAY_STACK 16384u
 #define FB_BYTES (LCD_W * LCD_H * 2u)
@@ -29,25 +29,47 @@ static uint8_t g_display_stack[DISPLAY_STACK] __attribute__((section(".axisram")
 static uint32_t g_flushes;
 static uint64_t g_swap_wait;
 
-/* The whole core's load, measured from below: an idle thread at the lowest priority (31) runs only
- * when no thread and no interrupt wants the CPU, and counts the cycles of its own loop steps. A
- * step longer than IDLE_STEP_MAX was preempted — that time was a thread's or an ISR's — and is not
- * counted. ThreadX's own idle loop spins on this port (no WFI), so the thread costs no power, and it
- * needs no kernel options. One writer (the idle thread); a 32-bit word the display thread reads,
- * differenced per second (the counter wraps in 7.8 s at 550 MHz). */
-#define IDLE_STEP_MAX 256u
-static TX_THREAD g_idle;
-static uint8_t g_idle_stack[512] __attribute__((section(".axisram"), aligned(8)));
-static volatile uint32_t g_idle_cycles;
+/* The core's load, the whole and per thread, from the sampling profiler (cpuprof.c), differenced
+ * once a second by this thread: g_loads is what ui code reads (this thread alone writes and reads it). */
+extern TX_THREAD *_tx_thread_created_ptr;
+extern ULONG _tx_thread_created_count;
+static cpuprof_t g_prev;
+static display_load_t g_loads[CPUPROF_THREADS + 2];
+static int g_nloads;
+static uint32_t g_loads_gen;
 
-static void idle_entry(ULONG arg) {
-	(void)arg;
-	uint32_t last = DWT->CYCCNT;
-	for (;;) {
-		uint32_t now = DWT->CYCCNT, d = now - last;
-		last = now;
-		if (d <= IDLE_STEP_MAX) g_idle_cycles += d;
+static void loads_update(void) {
+	cpuprof_t now;
+	cpuprof_read(&now);
+	uint32_t dt = now.total - g_prev.total;
+	if (dt == 0u) return;
+	display_cpu_pm = 1000u - (uint32_t)((uint64_t)(now.idle - g_prev.idle) * 1000u / dt);
+	int n = 0;
+	TX_THREAD *t = _tx_thread_created_ptr;
+	for (ULONG k = 0; k < _tx_thread_created_count && t != TX_NULL && n < CPUPROF_THREADS; k++) {
+		uint32_t cnt = 0;
+		for (uint32_t i = 0; i < now.n; i++) {
+			if (now.thread[i] == t) cnt = now.count[i] - (i < g_prev.n ? g_prev.count[i] : 0u);
+		}
+		g_loads[n].name = t->tx_thread_name ? t->tx_thread_name : "?";
+		g_loads[n].prio = t->tx_thread_priority;
+		g_loads[n].pm = (uint32_t)((uint64_t)cnt * 1000u / dt);
+		n++;
+		t = t->tx_thread_created_next;
 	}
+	g_loads[n].name = "interrupts";
+	g_loads[n].prio = DISPLAY_NO_PRIO;
+	g_loads[n].pm = (uint32_t)((uint64_t)(now.isr - g_prev.isr) * 1000u / dt);
+	n++;
+	g_nloads = n;
+	g_loads_gen++;
+	g_prev = now;
+}
+
+int display_loads(const display_load_t **out, uint32_t *generation) {
+	*out = g_loads;
+	*generation = g_loads_gen;
+	return g_nloads;
 }
 
 static uint32_t tick_ms(void) {
@@ -82,8 +104,10 @@ static void display_entry(ULONG arg) {
 	}
 	uint16_t *fb0 = (uint16_t *)HYPERRAM_BASE, *fb1 = (uint16_t *)(HYPERRAM_BASE + 0x40000u);
 	for (uint32_t i = 0; i < LCD_W * LCD_H; i++) fb0[i] = fb1[i] = 0u;
-	lcd_init(fb0);
+	lcd_init(fb1); /* LVGL draws its first frame into fb0: the one NOT on screen */
 	display_touch_chip = touch_init();
+	cpuprof_start();
+	cpuprof_read(&g_prev);
 
 	lv_init();
 	lv_tick_set_cb(tick_ms);
@@ -97,7 +121,7 @@ static void display_entry(ULONG arg) {
 	display_state = DISPLAY_RUNNING;
 
 	uint64_t win_start = board_now_us(), busy = 0;
-	uint32_t flushes0 = 0, idle0 = g_idle_cycles, cyc0 = DWT->CYCCNT;
+	uint32_t flushes0 = 0;
 	for (;;) {
 		uint64_t t0 = board_now_us();
 		ui_update();
@@ -107,11 +131,7 @@ static void display_entry(ULONG arg) {
 		if (t1 - win_start >= 1000000u) {
 			display_load_pm = (uint32_t)((busy - g_swap_wait) * 1000u / (t1 - win_start));
 			display_fps = g_flushes - flushes0;
-			uint32_t idle = g_idle_cycles, cyc = DWT->CYCCNT;
-			uint32_t span = cyc - cyc0, idle_d = idle - idle0;
-			display_cpu_pm = span ? 1000u - (uint32_t)((uint64_t)(idle_d > span ? span : idle_d) * 1000u / span) : 0u;
-			idle0 = idle;
-			cyc0 = cyc;
+			loads_update();
 			flushes0 = g_flushes;
 			busy = 0;
 			g_swap_wait = 0;
@@ -142,7 +162,4 @@ int board_display_pin(int port, int pin) {
 void display_thread_create(unsigned int priority) {
 	tx_thread_create(&g_display, "display", display_entry, 0, g_display_stack, sizeof g_display_stack, priority,
 	                 priority, TX_NO_TIME_SLICE, TX_AUTO_START);
-	/* priority 31 is the idle thread's: loom2v places the display at 30 at most (gen_display.v) */
-	tx_thread_create(&g_idle, "idle", idle_entry, 0, g_idle_stack, sizeof g_idle_stack, 31u, 31u,
-	                 TX_NO_TIME_SLICE, TX_AUTO_START);
 }

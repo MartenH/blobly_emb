@@ -26,27 +26,46 @@ make flash                   # in the node's directory, as before
 | the screen | the node (`ui = …`) | hand-written C against LVGL's API |
 
 **Only the display thread calls LVGL.** It reads what the node already publishes: single-writer
-words and read-only registers. sysnode's screen shows uptime, the whole core's CPU, both FDCANs'
-state and error counters, and the Ethernet link and DoIP state.
+words and read-only registers. sysnode's screen has three tabs:
+- **Overview:** uptime, the whole core's CPU, and the display's frame rate.
+- **Threads:** every ThreadX thread with its priority and last-second CPU, busiest first, plus the
+  interrupts.
+- **Buses:** both FDCANs' state and error counters, and the Ethernet link and DoIP state.
 
-**The whole core's CPU** (`display_cpu_pm`) is measured from below. `display_thread_create` also
-starts an idle thread at priority 31, which runs only when no thread and no interrupt wants the
-core. It counts the cycles of its own loop steps; a step much longer than usual was preempted, and
-that time is not counted. CPU is 100% minus what it counted.
+Along the bottom of every tab runs an **LED chaser strip**: two rows of dots with a comet hopping
+one dot per tick at 10 Hz, compute → edge on top and edge → compute below. Motion meant to be
+discrete reads well at 10 Hz, where a gliding one stutters.
+
+**Signals are the next step.** The IOC channels are single-reader, so a signal reaches the display
+through a channel of its own, allocated by loom2v.
+
+**CPU is sampled** (`boards/h735dk/cpuprof.c`). TIM7 interrupts ~9973 times a second, at the
+highest priority, and records what the core was doing at that instant:
+- **a thread:** ThreadX's current-thread pointer says which one;
+- **an interrupt:** the interrupted handler's own exception number (in its stacked xPSR) says so;
+- **idle:** ThreadX's idle wait, which on this port spins inside PendSV with no current thread.
+
+The rate is deliberately not a multiple of the 1 kHz tick, so periodic work cannot alias with it.
+Over a second that is ~10 000 samples, which gives each thread's share to about 0.01% at about 0.1%
+CPU overhead. The display thread differences the counters once a second into `display_cpu_pm`
+(the whole core) and `display_loads()` (per thread).
 - **Why not the Loom load cells:** they measure FB handler time only. On a gateway, whose work is
   in its comm, network and display threads, they read about 0%.
-- **Why not ThreadX's idle hooks:** `TX_LOW_POWER` needs the kernel rebuilt with a define, and the
-  `WFI` sleep it is for stops the DWT cycle counter `board_now_us` runs on.
-- **Cost:** none in power. ThreadX's idle loop spins on this port anyway. **Signals**
-are the next step: the IOC channels are single-reader, so a signal reaches the display through a
-channel of its own, allocated by loom2v.
+- **Why not ThreadX's own hooks:** `TX_ENABLE_EXECUTION_CHANGE_NOTIFY` belongs to the trace
+  recorder (`trace_hooks.c`). `TX_LOW_POWER` needs the kernel rebuilt, and its `WFI` sleep stops
+  the DWT counter `board_now_us` runs on.
+- **TIM7** is the profiler's (the io PWM map uses TIM1/TIM2). `weak_irq.c` gives its vector an
+  empty default in every image without a display.
 
 **Which board can drive a display is the board's to say.** loom2v does not know the part. The
 generated build includes `boards/$(BOARD)/display.mk`, and a board without one stops the build with
 `[display]: board … has no display`.
 
-**Refused for now:** `[display]` with `[trace]` (the display thread is not in the trace manifest),
-on a non-ThreadX target, and on a node with a satellite image.
+**Refused for now:**
+- **With `[trace]`:** the display thread is not yet in the trace manifest, which fixes every
+  thread's id and caps their number. Nothing deeper conflicts, since the profiler does not use the
+  trace hooks. Adding a manifest row and a `trace_bind_thread` call is the follow-up.
+- **On a non-ThreadX target**, and **on a node with a satellite image**.
 
 ## Memory
 
@@ -54,7 +73,7 @@ on a non-ThreadX target, and on a node with a satellite image.
 |---|---|---|
 | two framebuffers, 255 KB each | HyperRAM, 0x70000000 / 0x70040000 | double buffering; the AXI SRAM holds one at most |
 | the thread's stack (16 KB) and LVGL's pool (64 KB) | AXI SRAM, `.axisram` (`threadx.ld`) | out of the DTCM the real-time threads use. The pool is a fixed static array LVGL allocates from itself, owned by the one display thread: the bounded-pool exception in docs/no-alloc.md, not a heap |
-| LVGL code and fonts | flash, about 360 KB | sysnode went from 87 KB to 444 KB of its ~894 KB app slot |
+| LVGL code and fonts | flash, about 360 KB | sysnode went from 87 KB to 448 KB of its ~894 KB app slot |
 
 If the HyperRAM fails its self-test at start, the display thread leaves the panel off and reports
 `display_state = DISPLAY_NO_RAM`. The rest of the node runs unaffected.
@@ -69,9 +88,11 @@ visibly tore, because LVGL drew into the buffer being scanned out.
 
 ## What it costs (measured on the bench, 2026-10-06)
 
-All figures are the display thread's own CPU (`display_load_pm`, `display_fps`, read over SWD).
-The measurements were taken with a demonstrator screen, an animated speed gauge redrawn at up to
-50 fps, averaged over a 20 s cycle:
+The figures below are the display thread's share from a demonstrator screen: an animated speed
+gauge redrawn at up to 50 fps, averaged over a 20 s cycle. They were read over SWD as
+`display_load_pm`, the wall time of the thread's passes less the swap wait. That figure includes
+any time the thread spent preempted, so it is an upper bound; on the idle bus it was measured on,
+the two agree.
 
 | configuration | CPU avg / peak |
 |---|---|
@@ -83,12 +104,25 @@ The measurements were taken with a demonstrator screen, an animated speed gauge 
   invalidates most of a gauge, so the gauge is redrawn every frame.
 - **Double buffering's cost:** about 8 points. LVGL draws into uncached external memory, then
   copies each frame's dirty areas into the other buffer.
-- **Untried levers:** a lower frame-rate cap, or LVGL's DMA2D backend (`LV_USE_DRAW_DMA2D`, which is
-  register-level and needs no HAL).
-- **sysnode's status screen:** the display thread takes **4.8%** and the whole core reads **5.9%**,
-  with no bus traffic. Nothing on the screen moves faster than once a second.
+- **Frame rate:** the refresh is capped at **30 fps** (`LV_DEF_REFR_PERIOD` 33 ms).
+- **Untried lever:** LVGL's DMA2D backend (`LV_USE_DRAW_DMA2D`, which is register-level and needs no
+  HAL).
+- **sysnode on the Overview tab, chaser strip running:** the whole core reads **7.6%** at about
+  12 fps, with no bus traffic.
+- **Large animated backgrounds are expensive:** three drifting circles behind the cards cost 51%
+  (71% peak) at 30 fps, because everything they cross is re-blended every frame.
+- **A full-face gauge redrawn continuously** (a needle sweeping at 30 fps, tried on sysnode and
+  removed) cost the whole core 19%, peaking at 21%, at 27.5 fps.
 
 ## Bench notes
+
+- **One animated object, not many:** LVGL tracks at most 32 dirty areas per frame
+  (`LV_INV_BUF_SIZE`); past that it redraws the **whole screen**.
+  - The chaser strip first changed 92 dot objects per tick, and cost 30% of the core.
+  - As one object that draws its own dots (`LV_EVENT_DRAW_MAIN`, one dirty area per tick) it costs
+    a quarter of that.
+  - The profile pointed straight at it: 42% of the display thread's samples were in
+    `lv_draw_sw_blend_color_to_rgb565`, LVGL filling full-screen rectangles in software.
 
 - **Theme:** use a light one (dark text on white). The panel's contrast and viewing angle make
   light text on a dark background hard to read, and LVGL's default theme gives a card's labels

@@ -71,13 +71,12 @@ fn lowest_app_prio(m Model) int {
 }
 
 // display_prio: below every other thread of the image — the application threads and, when the
-// node runs DoIP, the network's two threads under them (doip_net_prio). 31, ThreadX's last level,
-// stays free: display.c puts the idle thread there, which measures the core's load from below.
+// node runs DoIP, the network's two threads under them (doip_net_prio).
 fn display_prio(m Model) int {
 	p := if m.doip.on { doip_net_prio(m) + 2 } else { lowest_app_prio(m) + 1 }
-	if p > 30 {
-		panic('loom2v: [display]: its thread runs below every other thread, at ${p} — past 30 (ThreadX\'s 0..31, ' +
-			'with 31 the idle thread\'s); give the application threads lower numbers')
+	if p > 31 {
+		panic('loom2v: [display]: its thread runs below every other thread, at ${p} — past ThreadX\'s 0..31; ' +
+			'give the application threads lower numbers')
 	}
 	return p
 }

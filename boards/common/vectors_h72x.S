@@ -106,7 +106,9 @@ _vectors:
   .word __tx_BadHandler       // IRQ52
   .word __tx_BadHandler       // IRQ53
   .word __tx_BadHandler       // IRQ54
-  .word __tx_BadHandler       // IRQ55
+  /* IRQ55 = TIM7: the [display] CPU profiler's sampling interrupt (boards/h735dk/cpuprof.c);
+   * weak_irq.c defaults it for every image without one — never weak-aliased here (FDCAN1 note) */
+  .word TIM7_IRQHandler       // IRQ55
   .word __tx_BadHandler       // IRQ56
   .word __tx_BadHandler       // IRQ57
   .word __tx_BadHandler       // IRQ58

@@ -34,7 +34,7 @@ include $(REPO)/tools/tools.mk
 CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
           $(BOARD_DEFS) -DBOARD_ENTRY=main__main $(CAN_DEFS) \
           -DTX_TIMER_TICKS_PER_SECOND=1000 -DNX_IP_PERIODIC_RATE=1000 \
-          -I. -Igen $(BOARD_INCS) -I$(REPO)/driver/can \
+          -I. -Igen $(BOARD_INCS) -I$(REPO)/driver/can -I$(REPO)/driver/eth \
           -I$(PORT)/inc -I$(TX)/common/inc -I$(NX_PORT)/inc -I$(NX)/common/inc $(CMSIS)
 LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
           --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/app.map

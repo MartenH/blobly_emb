@@ -1,6 +1,6 @@
 /* LVGL configuration for the H735-DK display (boards/h735dk/display.c) — the v9.6.0
  * lv_conf_template.h with the changes below (diff it against third_party/lvgl/lv_conf_template.h
- * to see them all): enabled, 50 Hz refresh cap, Montserrat 20 and 48, the DMA2D header = the CMSIS
+ * to see them all): enabled, 30 Hz refresh cap, Montserrat 20, the DMA2D header = the CMSIS
  * device header, and the attribute overrides in lv_attr.h (LVGL's pool in the AXI SRAM). */
 /**
  * @file lv_conf.h
@@ -154,7 +154,7 @@
 #define LV_COLOR_MIX_ROUND_OFS 0
 
 /** Default display refresh, input device read and animation step period. */
-#define LV_DEF_REFR_PERIOD 20
+#define LV_DEF_REFR_PERIOD 33
 
 /** Used to initialize default sizes such as widget sizes and style paddings. */
 #define LV_DPI_DEF 130
@@ -1065,7 +1065,7 @@
 #define LV_FONT_MONTSERRAT_46 0
 
 /** Montserrat 48 */
-#define LV_FONT_MONTSERRAT_48 1
+#define LV_FONT_MONTSERRAT_48 0
 
 /** Montserrat 28 (compressed) */
 #define LV_FONT_MONTSERRAT_28_COMPRESSED 0
