@@ -97,8 +97,9 @@ jobs:
           # dirties the worktree and fails the "Generated outputs are fresh" gate below.
           PYTHONPYCACHEPREFIX="$RUNNER_TEMP/pycache" python3 -m py_compile scripts/codex_review.py
           ./scripts/codex_review_watch_test.sh
-      # The local review refuses an empty or broken codex binary instead of running it: a 0-byte one
-      # left by an interrupted extension update ran, printed nothing, and read as a clean review.
+      # Which codex the local review runs: the first candidate that actually runs, never an empty or
+      # broken one (an interrupted extension update once left a 0-byte copy, which failed the review
+      # as "codex wrote no final message" with no cause named). Through --check-codex: no git, no net.
       - name: codex local review binary tests (scripts/codex_local_review_test.sh)
         run: bash scripts/codex_local_review_test.sh
 
