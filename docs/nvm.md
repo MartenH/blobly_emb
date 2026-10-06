@@ -1,6 +1,10 @@
 # Persistence (non-volatile storage) — design
 
-> Status (2026-10-04, R7): **P4 is built** as the parameters' write path — a `[[param]]` is one
+> Status (2026-10-07, #371): **the wear check covers every journal writer** — the persisted
+> signals, the clean markers, the fault memory and the parameters — in one computation, the
+> vehicle's rates declared in `[nvm.assume]` (see "Wear, proven per configuration" below).
+>
+> Earlier (2026-10-04, R7): **P4 is built** as the parameters' write path — a `[[param]]` is one
 > record in this journal, coded with 0x2E on the `[[did]]` that names it, durable before the answer
 > ([diagnostics.md](diagnostics.md) §3.4 "As built"). The persisted signals still have no DID binding.
 >
@@ -55,9 +59,10 @@ Two policies, declared as intent:
   clean shutdown.
 
 There is no per-signal interval knob: intent + one system floor. The generator
-KNOWS each writing handler's period, so every `now` signal gets a generation-time
-worst-case wear check (records/hour vs the sector budget) — binding `now` to an
-absurd writer fails generation with the math in the error message. Wear is a
+KNOWS each writing handler's period, so every `now` signal enters the generation-time
+worst-case wear check (records/hour vs the sector budget, beside every other journal
+writer — "Wear, proven per configuration" below) — binding `now` to an absurd writer
+fails generation with the math in the error message. Wear is a
 config-review fact, not a field surprise.
 
 There is deliberately NO `nvm_read`/`nvm_write` in application code. An API would
@@ -145,8 +150,66 @@ one comm pass. The escalation ladder when that window must shrink further:
 
 Wear reality check at 5 records/s continuous: ~190 days of NONSTOP writing per
 sector pair (duty-cycled to 2 h/day ≈ 6 years); deadbands and the system floor
-keep real traffic far below that, the generation-time wear check (REQ-NVM-010)
-proves it per config, and rungs 2/3 exist for the outliers.
+keep real traffic far below that, the generation-time wear check (REQ-NVM-010, every
+journal writer — below) proves it per config, and rungs 2/3 exist for the outliers.
+
+## Wear, proven per configuration (REQ-NVM-010)
+
+Every record the journal is ever asked to write comes from a writer the generator wired, so the
+generator bounds them all in ONE computation (`tools/loom2v/gen_wear.v`, after every block is
+derived) and refuses a configuration that cannot last `[nvm] min_years`. The error names each
+writer's share; a configuration that passes prints the same report at generation, so the numbers
+are in every build log and in review.
+
+**The writers, each at what the generated code does:**
+
+| writer | records/hour |
+|---|---|
+| a `now` signal | its floored puts (writer period vs `min_write_ms`) plus a flush by every choreography run below — never more than its writer's activation rate (a write needs a change) |
+| a `shutdown` signal | a flush by every choreography run, capped the same way |
+| the clean markers | one per choreography run: every ECUReset; on an NM node both sleep edges of every cycle and every write that can land in bus sleep (a `now` put, a coding, any fault-memory write — REQ-NVM-014 re-runs the choreography after each) |
+| the fault memory's status image | its writes × its records (2 + 10 B per fault, chained): per operation cycle `comm/fault` `cycle_images` = start + end + per DTC its first test and first failure + per snapshot DTC its claim; per 0x14 `clear_images` (its own write and the requalification it reopens); per 0x85 change one; one more per flush that can carry deferred occurrence counters (the NM sleep edges and the `now` puts inside the cycle-end barrier's grace, every ECUReset, a tester's or the memory's own write in bus sleep) |
+| the fault memory's snapshots | one capture per snapshot DTC per cycle and per 0x14 (`captures_per_cycle`), its block's records, and one tombstone record per capture |
+| the parameters | one record per accepted 0x2E coding |
+
+The **debounce counters are never written**; the aging and failed-cycle counters ride in the status
+image (its cycle-end write). The fault memory's bounds are not the generator's guess: they are
+`comm/fault` functions and constants, and `persist_test.v` drives the memory with random results,
+cycle boundaries, power cycles, clears, 0x85 changes and flushes (displacement included), holds its
+writes to them, and shows a cycle reaching them.
+
+**What only the vehicle knows** is declared, per day, and printed beside the result, marked
+`(default)` where the configuration did not state it:
+
+```toml
+[nvm.assume]
+cycles_per_day          = 144  # operation cycles: NM wake -> sleep, or power-ups (one every 10 min)
+resets_per_day          = 24   # ECUResets (0x11) — each also ends a cycle
+clears_per_day          = 24   # 0x14 (counted only with a persisted fault memory)
+setting_changes_per_day = 24   # 0x85 changes (likewise)
+codings_per_day         = 24   # accepted 0x2E codings (only with [[param]]s)
+```
+
+The defaults are deliberately pessimistic — an operation cycle every ten minutes and a tester
+action every hour, around the clock for `min_years` — so a configuration that does not state its
+vehicle is checked against one harder on the flash than any real one. State the real rates when
+the defaults refuse a sound configuration; the report says which numbers were assumed.
+
+**Lifetime.** Each compaction erases one sector of the pair and the pair alternates, so each
+sector sees half of them. On an NM node the records written between two compactions are at least
+the sector less the live set (which every compaction copies) and less the parts a chain that does
+not fit at the end leaves unused; a node without NM also compacts at every boot that finds less
+than half a sector free (its only erase point), so there it is half the sector less the live set.
+`years = endurance / (records/h ÷ that interval × 8760 / 2)`. A failed program (a burned slot) is
+outside the model: a fault, not traffic.
+
+system_full at the default assumptions (`tools/loom2v/wear_test.v` prints and pins these):
+
+- **domain** — DriveMode floored at 10 s on an NM node: 375 records/h of puts and choreography
+  flushes plus 375 clean markers = 750 records/h, 12.5 years.
+- **zone_a** — power cycles, 4 DTCs (one with a snapshot), one parameter: the status image (42 B =
+  3 records, 89 writes/h) 267 records/h, snapshots 16, the parameter 1, the resets' markers 1 =
+  285 records/h, 16.4 years.
 
 ## Shutdown choreography (and why GC can't collide with it)
 

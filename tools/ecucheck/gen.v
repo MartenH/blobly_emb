@@ -144,6 +144,14 @@ fn specs() map[string]map[string]Key {
 			'sector_records': k(.int)
 			'endurance':      k(.int)
 			'min_years':      k(.int)
+			'assume':         sub(.tbl, false, 'nvm_assume') // the vehicle's rates the wear check takes
+		}
+		'nvm_assume': {
+			'cycles_per_day':          k(.int) // operation cycles: NM wake -> sleep, or power-ups
+			'resets_per_day':          k(.int) // ECUResets (0x11)
+			'clears_per_day':          k(.int) // 0x14
+			'setting_changes_per_day': k(.int) // 0x85 changes
+			'codings_per_day':         k(.int) // accepted 0x2E codings of a [[param]]
 		}
 		'nm':         {
 			'enabled':       k(.boolean)

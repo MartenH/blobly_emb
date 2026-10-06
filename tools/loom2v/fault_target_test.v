@@ -502,6 +502,8 @@ fn test_the_journal_budget_holds_every_snapshot_whole() {
 		extra + '\n[fault_memory]\nentries = 1\n\n[nvm]') + 'sector_records = 40\n'
 	code, out, _, _ := ft_generate('budget', same, cfg)
 	assert code != 0 && out.contains('the journal needs 42 records'), out
-	c2, o2, _, _ := ft_generate('budget_ok', same, cfg.replace('sector_records = 40', 'sector_records = 42'))
+	// a sector this small wears out at the default rates: the capacity alone is under test here
+	c2, o2, _, _ := ft_generate('budget_ok', same, cfg.replace('sector_records = 40', 'sector_records = 42') +
+		'endurance = 10000000\n\n[nvm.assume]\ncycles_per_day = 1\nresets_per_day = 0\nclears_per_day = 0\nsetting_changes_per_day = 0\n')
 	assert c2 == 0, o2
 }

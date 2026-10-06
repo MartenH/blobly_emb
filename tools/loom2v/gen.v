@@ -3894,6 +3894,7 @@ fn main() {
 	derive_param_nvm(mut m)
 	check_journal_capacity(m)
 	m.fault_grace_us = fault_grace_us(m, doc)
+	check_journal_wear(m, doc)
 	validate_doip(m)
 	display_check(m)
 

@@ -489,7 +489,11 @@ sector a `cycle = "power"` node like zone_a writes a few image records per boot 
 hundred boots per sector fill. loom2v checks the capacity at generation: the live set (persisted
 signals, the image and BOTH blocks of every snapshot whole — a tombstone waits for the image that
 releases its block, so a refusal or a power cut can leave any of them waiting) and its full rewrite must fit one sector, and the journal pool must hold a
-row for each block.
+row for each block. And the WEAR: these per-event bounds (`comm/fault` `cycle_images`,
+`clear_images`, `setting_images`, `captures_per_cycle`, held to the code by `persist_test.v`
+`test_traffic_stays_inside_the_write_budget`) times the vehicle's declared rates (`[nvm.assume]`)
+are the fault memory's share of the journal's one wear check — docs/nvm.md "Wear, proven per
+configuration" (REQ-NVM-010, #371).
 
 **The cycle-end barrier.** On the target an NM sleep does not end the cycle at once: a producer's
 dispatch begun before the decision may publish its report after the owner's read, and read after
@@ -669,8 +673,8 @@ param_status = true                         # one byte per parameter: 0 default,
   parameters behind one DID, written whole — is not built (#288's open question; the one-cell
   transport is what bounds a parameter today). Nothing a parameter holds shapes generation: one
   binary serves every variant.
-- **Write budget**: tester-driven only — one record per accepted change, none for a repeat. Not in
-  the wear model (no FB writes it). An NM node that codes in bus sleep re-runs the flush
+- **Write budget**: tester-driven only — one record per accepted change, none for a repeat. In the
+  wear check at `[nvm.assume] codings_per_day` (docs/nvm.md "Wear, proven per configuration"). An NM node that codes in bus sleep re-runs the flush
   choreography after it (REQ-NVM-014).
 - **Proof**: `comm/param/param_test.v` (gates, validation, apply, unchanged writes, refusals, layout
   and range updates, and a power-cut fuzz against a reference model of what was acknowledged),
