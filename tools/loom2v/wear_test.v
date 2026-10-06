@@ -141,6 +141,8 @@ fn test_fault_and_parameter_traffic_past_the_budget_is_refused() {
 	assert code != 0, 'a journal worn out in under a year was generated:\n${out}'
 	assert out.contains('[nvm] wear check failed'), out
 	report := wear_report(out)
+	// every line carries the generator's prefix: syscheck keeps only those, and must keep the shares
+	assert report.len > 4 && report.all(it.contains('loom2v:')), out
 	for what in ['clean markers', 'fault memory status image', 'fault memory snapshots',
 		'parameters (2)'] {
 		s := share(report, what)
@@ -161,13 +163,17 @@ fn test_fault_and_parameter_traffic_past_the_budget_is_refused() {
 	assert o2.contains('debounce counters are never written'), o2
 }
 
-// The assumptions are the vehicle's and stated in [nvm.assume]: an unknown key is refused, and a
-// key out of range too.
+// The assumptions are the vehicle's and stated in [nvm.assume]: an unknown key is refused, a key
+// out of range too, and the table alone switches no journal on.
 fn test_assumptions_are_checked() {
 	c1, o1 := wt_generate('typo', wt_cfg + '\n[nvm.assume]\ncycle_per_day = 10\n')
 	assert c1 != 0 && o1.contains('[nvm.assume] unknown key "cycle_per_day"'), o1
 	c2, o2 := wt_generate('zero', wt_cfg + '\n[nvm.assume]\ncycles_per_day = 0\n')
 	assert c2 != 0 && o2.contains('cycles_per_day') && o2.contains('out of range'), o2
+	// the rates alone declare no storage: the fault memory still asks for [nvm]
+	c3, o3 := wt_generate('alone', wt_cfg.replace('[nvm]\nmin_write_ms = 1000\n', '') +
+		'\n[nvm.assume]\ncycles_per_day = 10\n')
+	assert c3 != 0 && o3.contains('needs [nvm]'), o3
 }
 
 // system_full_reports lowers system_full and runs loom2v on each node with a journal: node -> its

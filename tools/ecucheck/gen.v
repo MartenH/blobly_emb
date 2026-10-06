@@ -426,6 +426,7 @@ fn label(ctx string) string {
 		'bus' { '[bus.*]' }
 		'nm' { '[nm]' }
 		'nm_net' { '[nm.*]' }
+		'nvm_assume' { '[nvm.assume]' }
 		'tx', 'rx', 'e2e', 'secoc' { 'inline ${ctx}' }
 		'route_from' { '[[route]] from' }
 		'route_to' { '[[route]] to' }

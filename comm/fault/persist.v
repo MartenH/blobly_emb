@@ -64,7 +64,8 @@ import comm.uds
 //
 // cycle_images: the status-image writes one operation cycle makes at most with `n` DTCs, `nsnap`
 // of them keeping a snapshot — its start and its end, per DTC its first completed test and its
-// first failure, and per snapshot DTC the claim of the snapshot captured at that failure (the
+// first failure, and per snapshot DTC the claim of the snapshot captured at that failure (it
+// normally rides with the failure; counted apart for one that commits a pass later, and the
 // displaced entry's release rides in the same image). A flush adds at most one more, for deferred
 // occurrence counters; the caller counts its flushes.
 pub fn cycle_images(n int, nsnap int) int {

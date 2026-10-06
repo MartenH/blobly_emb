@@ -80,16 +80,18 @@ fn journal_wear(m Model, doc toml.Doc) Wear {
 	nm := m.nm.on
 	fp := fault_persist_on(m)
 	params := m.target.threadx && m.params.len > 0
+	// ECUReset is served only by a node with a diagnostic connection (diag_target_reset)
+	served := m.isotp_conns.len > 0
 	// the vehicle's rates, per hour; a reset ends an operation cycle as power-off does
-	cycles := f64(a.cycles + a.resets) / 24.0
-	resets := f64(a.resets) / 24.0
+	resets := if served { f64(a.resets) / 24.0 } else { 0.0 }
+	cycles := f64(a.cycles) / 24.0 + resets
 	clears := if fp { f64(a.clears) / 24.0 } else { 0.0 }
 	settings := if fp { f64(a.settings) / 24.0 } else { 0.0 }
 	codings := if params { f64(a.codings) / 24.0 } else { 0.0 }
-	mut assumed := [
-		'${a.cycles} operation cycles/day${wear_default(a, 'cycles_per_day')}',
-		'${a.resets} ECUResets/day${wear_default(a, 'resets_per_day')}',
-	]
+	mut assumed := ['${a.cycles} operation cycles/day${wear_default(a, 'cycles_per_day')}']
+	if served {
+		assumed << '${a.resets} ECUResets/day${wear_default(a, 'resets_per_day')}'
+	}
 	if fp {
 		assumed << '${a.clears} 0x14 clears/day${wear_default(a, 'clears_per_day')}'
 		assumed << '${a.settings} 0x85 changes/day${wear_default(a, 'setting_changes_per_day')}'
@@ -162,10 +164,13 @@ fn journal_wear(m Model, doc toml.Doc) Wear {
 		if si.persist == 'now' {
 			eff := if f64(period) > floor { f64(period) } else { floor }
 			own := 3600_000.0 / eff
-			if !nm {
+			if nm {
+				// every put may land in bus sleep, so the runs count each put already
+				how = 'a write per choreography run (${choreo:.1}/h), its own floored puts among them (every ${eff:.0} ms: writer ${period} ms, floor ${m.nvm.min_write_ms} ms)'
+			} else {
 				writes += own // without NM no put runs the choreography: its own puts come on top
+				how = 'floored put every ${eff:.0} ms (writer ${period} ms, floor ${m.nvm.min_write_ms} ms) + ${how}'
 			}
-			how = 'floored put every ${eff:.0} ms (writer ${period} ms, floor ${m.nvm.min_write_ms} ms) + ${how}'
 		}
 		if changes < writes {
 			writes = changes
@@ -212,7 +217,7 @@ fn journal_wear(m Model, doc toml.Doc) Wear {
 	for s in shares {
 		total += s.per_hour
 	}
-	live := m.nvm_names.len + fault_live_records(m) + m.params.len + 1
+	live := journal_live_records(m)
 	// records written between two compactions, at least: with NM the journal compacts when the
 	// sector is full (a chain that does not fit at the end wastes its parts but one); without NM it
 	// also compacts at every boot that finds less than half a sector free (nvm_boot_lines)
@@ -289,20 +294,20 @@ fn wear_lines(m Model, w Wear) []string {
 }
 
 // check_journal_wear: the wear check, after every block is derived — refused below min_years,
-// printed otherwise.
-fn check_journal_wear(m Model, doc toml.Doc) {
+// otherwise the report, which main prints once generation has succeeded (syscheck reads every
+// "loom2v:" line of a failed run as an error, so a passing report must not precede a later one).
+// Every line of a refusal carries the prefix, so syscheck keeps the shares with it.
+fn check_journal_wear(m Model, doc toml.Doc) []string {
 	if !nvm_on(m) {
-		return
+		return []string{}
 	}
 	w := journal_wear(m, doc)
-	lines := wear_lines(m, w)
+	lines := wear_lines(m, w).map('loom2v: ${it}')
 	if w.usable <= 0 {
 		panic('loom2v: [nvm] the live set (${w.live} records) leaves no room between compactions in a ${m.nvm.sector_records}-record sector — without NM the journal compacts at every boot that finds less than half a sector free; grow the sectors\n' + lines.join('\n'))
 	}
 	if w.years < f64(m.nvm.min_years) {
 		panic('loom2v: [nvm] wear check failed — ${w.years:.1} years < min_years ${m.nvm.min_years}. Raise min_write_ms, grow the sectors, persist fewer "now" signals, or state the vehicle\'s real rates in [nvm.assume]:\n' + lines.join('\n'))
 	}
-	for l in lines {
-		eprintln('loom2v: ${l}')
-	}
+	return lines
 }

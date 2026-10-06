@@ -1252,10 +1252,11 @@ fn test_traffic_stays_inside_the_write_budget() {
 	}
 }
 
-// ... and the bound is the one the code reaches, not a loose one: a cycle that begins and ends in
-// passes of their own (NM's wake and sleep), and tests then fails every DTC, each in a pass of its
-// own, writes exactly the start, the end and two per DTC — the snapshot claims ride with the
-// failures they were captured at.
+// ... and the bound is reached but for its claim term: a cycle that begins and ends in passes of
+// their own (NM's wake and sleep), and tests then fails every DTC, each in a pass of its own,
+// writes exactly the start, the end and two per DTC. The snapshot claims ride with the failures
+// they were captured at; cycle_images keeps one per snapshot DTC as the margin for a claim that
+// commits in a later pass than its failure.
 fn test_the_cycle_budget_is_reached() {
 	mut r := new_rig(3)
 	r.restart(false)

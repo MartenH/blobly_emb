@@ -176,7 +176,8 @@ The **debounce counters are never written**; the aging and failed-cycle counters
 image (its cycle-end write). The fault memory's bounds are not the generator's guess: they are
 `comm/fault` functions and constants, and `persist_test.v` drives the memory with random results,
 cycle boundaries, power cycles, clears, 0x85 changes and flushes (displacement included), holds its
-writes to them, and shows a cycle reaching them.
+writes to them, and shows a cycle reaching them but for the one claim per snapshot DTC, which rides
+with its failure in practice and is kept as the margin for a claim that commits a pass later.
 
 **What only the vehicle knows** is declared, per day, and printed beside the result, marked
 `(default)` where the configuration did not state it:

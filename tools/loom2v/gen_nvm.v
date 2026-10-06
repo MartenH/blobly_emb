@@ -58,12 +58,15 @@ fn parse_nvm(doc toml.Doc) NvmCfg {
 			panic('loom2v: [nvm] unknown key "${k}" (allowed: ${nvm_keys})')
 		}
 	}
+	t.assume = parse_wear_assume(nm)
+	if nm.len == 1 && 'assume' in nm {
+		return t // [nvm.assume] alone states the vehicle's rates; it declares no storage
+	}
 	t.on = (nm['enabled'] or { toml.Any(true) }).bool()
 	t.min_write_ms = nvm_range(nm, 'min_write_ms', 1000, 1, 86_400_000)
 	t.sector_records = nvm_range(nm, 'sector_records', 4096, 8, 1_000_000)
 	t.endurance = nvm_range(nm, 'endurance', 10000, 1, 10_000_000)
 	t.min_years = nvm_range(nm, 'min_years', 10, 1, 100)
-	t.assume = parse_wear_assume(nm)
 	return t
 }
 
@@ -353,10 +356,17 @@ fn check_journal_capacity(m Model) {
 	if m.nvm_names.len + fblocks + m.params.len > 48 {
 		panic('loom2v: ${what} exceed the safe journal pool budget (48 of nvm.max_blocks)')
 	}
-	live := m.nvm_names.len + fault_live_records(m) + m.params.len + 1
+	live := journal_live_records(m)
 	if live + live > int(m.nvm.sector_records) {
 		panic('loom2v: the journal needs ${live + live} records of sector headroom (live set ${live}: ${what}, docs/nvm.md) but [nvm] sector_records = ${m.nvm.sector_records}')
 	}
+}
+
+// journal_live_records: the journal's live set in records — every persisted signal, the fault
+// memory's (fault_live_records), every parameter, and the clean marker. The capacity check and the
+// wear check (a compaction copies it) both read it here.
+fn journal_live_records(m Model) int {
+	return m.nvm_names.len + fault_live_records(m) + m.params.len + 1
 }
 
 // fault_live_records: the journal records the persisted fault memory keeps live — the status image
@@ -367,22 +377,10 @@ fn fault_live_records(m Model) int {
 	if !fault_persist_on(m) {
 		return 0
 	}
-	mut nsnap := 0
-	mut snap_recs := 1
-	for f in m.faults {
-		if f.freeze.len == 0 {
-			continue
-		}
-		nsnap++
-		mut s := fault.Slot{}
-		for n in fault_freeze_lens(m, f) {
-			s.freeze_len[s.nfreeze] = u8(n)
-			s.nfreeze++
-		}
-		r := chain_records(s.block_len())
-		if r > snap_recs {
-			snap_recs = r
-		}
+	nsnap := m.faults.filter(it.freeze.len > 0).len
+	mut snap_recs := fault_widest_snapshot(m)
+	if snap_recs < 1 {
+		snap_recs = 1
 	}
 	return chain_records(2 + m.faults.len * fault.image_rec) + 2 * nsnap * snap_recs
 }
