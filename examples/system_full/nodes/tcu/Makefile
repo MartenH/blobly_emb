@@ -103,20 +103,20 @@ $(BUILD)/app.c: main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) $(call v_s
 -include $(BUILD)/app.c.d
 
 # 2) ThreadX + NetX kernel/stack objects.
-$(BUILD)/tx/%.o: $(TX_PORT)/src/%.S $$(call c_unrecorded,$$@) $$(call c_sign,$(TX_A),$$(TX_CMD))
+$(BUILD)/tx/%.o: $(TX_PORT)/src/%.S $$(call c_unrecorded,$$@) $$(call c_sign,$(BUILD)/tx,$$(TX_CMD))
 	@mkdir -p $(BUILD)/tx
 	$(call c_object,$(TX_CMD))
-$(BUILD)/tx/%.o: $(TX)/common/src/%.c $$(call c_unrecorded,$$@) $$(call c_sign,$(TX_A),$$(TX_CMD))
+$(BUILD)/tx/%.o: $(TX)/common/src/%.c $$(call c_unrecorded,$$@) $$(call c_sign,$(BUILD)/tx,$$(TX_CMD))
 	@mkdir -p $(BUILD)/tx
 	$(call c_object,$(TX_CMD))
-$(TX_A): $(TX_OBJ)
-	$(AR) -rc $@ $^
+$(TX_A): $(TX_OBJ) $$(call c_sign,$$@,$$(AR_CMD))
+	$(call c_archive,$(AR_CMD))
 -include $(call c_records,$(TX_OBJ))
-$(BUILD)/nx/%.o: $(NX)/common/src/%.c $$(call c_unrecorded,$$@) $$(call c_sign,$(NX_A),$$(NX_CMD))
+$(BUILD)/nx/%.o: $(NX)/common/src/%.c $$(call c_unrecorded,$$@) $$(call c_sign,$(BUILD)/nx,$$(NX_CMD))
 	@mkdir -p $(BUILD)/nx
 	$(call c_object,$(NX_CMD))
-$(NX_A): $(NX_OBJ)
-	$(AR) -rc $@ $^
+$(NX_A): $(NX_OBJ) $$(call c_sign,$$@,$$(AR_CMD))
+	$(call c_archive,$(AR_CMD))
 -include $(call c_records,$(NX_OBJ))
 
 # 3) cross-compile + link.

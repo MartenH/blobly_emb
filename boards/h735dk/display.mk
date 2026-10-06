@@ -18,10 +18,10 @@ LVGL_OBJ       = $(patsubst $(LVGL)/src/%.c,$(BUILD)/lvgl/%.o,$(LVGL_C))
 # like the ThreadX objects (tools/tools.mk c_object): each object is remade when a header it reads
 # changes (lv_conf.h, lv_attr.h, the forced board.h) and all of them when the command does.
 LVGL_CMD       = $(CC) $(CFLAGS) $(DISPLAY_CFLAGS) -O2
-$(BUILD)/lvgl/%.o: $(LVGL)/src/%.c $$(call c_unrecorded,$$@) $$(call c_sign,$(LVGL_A),$$(LVGL_CMD))
+$(BUILD)/lvgl/%.o: $(LVGL)/src/%.c $$(call c_unrecorded,$$@) $$(call c_sign,$(BUILD)/lvgl,$$(LVGL_CMD))
 	@mkdir -p $(dir $@)
 	@$(call c_object,$(LVGL_CMD))
-$(LVGL_A): $(LVGL_OBJ)
+$(LVGL_A): $(LVGL_OBJ) $$(call c_sign,$$@,$$(AR_CMD))
 	@[ -n "$(LVGL_C)" ] || { echo "LVGL missing: run make -C $(REPO) deps-lvgl"; exit 1; }
-	@$(AR) -rc $@ $^
+	@$(call c_archive,$(AR_CMD))
 -include $(call c_records,$(LVGL_OBJ))

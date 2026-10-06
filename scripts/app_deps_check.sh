@@ -16,6 +16,7 @@
 #     before it (a macro used before its definition expands to nothing, silently);
 #   - every rule whose recipe runs $(CC) runs it through c_build (an image's ELF, an app.o, a
 #     boot.elf) or c_object (an archive's objects, $(BUILD)/tx/, $(BUILD)/nx/, $(BUILD)/lvgl/),
+#     and every one that runs $(AR) through c_archive, signing $(AR_CMD),
 #     with its c_unrecorded, its c_sign of the very variable the recipe runs, its records included
 #     and no header named by hand;
 #   - per image built, the target has its record; without the record it is out of date; touching
@@ -147,24 +148,30 @@ for mk in $cmks boot/boot.mk boards/*/display.mk; do
 	# boot.elf, or any other target — or, for the objects of a pinned archive ($(BUILD)/tx/,
 	# $(BUILD)/nx/, $(BUILD)/lvgl/ — the kernel, the network stack, the graphics library), as
 	# $(call c_object,$(<VAR>)). Either way the rule signs that same variable
-	# ($$(call c_sign,$$@,$$(<VAR>)), or the archive's $$(call c_sign,$(<ARCH>_A),$$(<VAR>))),
+	# ($$(call c_sign,$$@,$$(<VAR>)), or the objects' $$(call c_sign,$(BUILD)/<dir>,$$(<VAR>))),
 	# carries its c_unrecorded, includes its records, and names no header: the record carries
-	# those. A rule with no recipe only adds a prerequisite to one defined elsewhere (boot/boot.mk
+	# those. A recipe that runs $(AR) runs it as $(call c_archive,$(AR_CMD)), signed by
+	# $$(call c_sign,$$@,$$(AR_CMD)). A rule with no recipe only adds a prerequisite to one defined elsewhere (boot/boot.mk
 	# relinks the application when the layout its LINK flags are read from changes) and is not a
 	# compile.
 	awk -v mk="$mk" '
 		function done_rule() {
 			if (tgt == "" || !cc) return
-			if (bare) { print mk ":" start ": " tgt " runs the C compiler without tools/tools.mk c_build or c_object — its headers and flags go untracked"; return }
+			if (bare) { print mk ":" start ": " tgt " runs the C compiler or ar without tools/tools.mk c_build, c_object or c_archive — what it reads and how it runs go untracked"; return }
 			p = substr(rule, index(rule, ":") + 1)
 			if (p ~ /\.h([[:space:]]|\)|$)/) print mk ":" start ": " tgt " names a header by hand — the record carries it"
 			# an order-only signature is never compared: it sits before the |
 			if (index(p, " | ") && index(p, "c_sign,") > index(p, " | ")) print mk ":" start ": " tgt "'"'"'s c_sign is order-only (after the |) — a changed command would not remake it"
+			if (how == "c_archive") {
+				if (var != "AR_CMD") print mk ":" start ": " tgt " archives with $(" var "), not the one $(AR_CMD)"
+				if (index(rule, "$$(call c_sign,$$@,$$(AR_CMD))") == 0) print mk ":" start ": " tgt " does not sign the command it runs: $$(call c_sign,$$@,$$(AR_CMD))"
+				return
+			}
 			if (match(tgt, /^\$\(BUILD\)\/(tx|nx|lvgl)\/%\.o$/)) {
-				arch = toupper(substr(tgt, 10, index(substr(tgt, 10), "/") - 1))
+				dir = substr(tgt, 10, index(substr(tgt, 10), "/") - 1); arch = toupper(dir)
 				if (how != "c_object") { print mk ":" start ": " tgt " is an archive object built without c_object"; return }
 				if (index(rule, "$$(call c_unrecorded,$$@)") == 0) print mk ":" start ": " tgt " has no $$(call c_unrecorded,$$@)"
-				if (index(rule, "$$(call c_sign,$(" arch "_A),$$(" var "))") == 0) print mk ":" start ": " tgt " does not sign the command it runs: $$(call c_sign,$(" arch "_A),$$(" var "))"
+				if (index(rule, "$$(call c_sign,$(BUILD)/" dir ",$$(" var "))") == 0) print mk ":" start ": " tgt " does not sign the command it runs: $$(call c_sign,$(BUILD)/" dir ",$$(" var "))"
 				recs[mk SUBSEP arch] = 1
 				return
 			}
@@ -178,11 +185,11 @@ for mk in $cmks boot/boot.mk boards/*/display.mk; do
 		# every compiler call in a recipe goes through c_build or c_object, after the recipe
 		# prefixes (@ + -), and runs one variable — the one its rule signs
 		substr(line, 1, 1) == "\t" {
-			if (line ~ /\$\(CC\)/) { cc = 1; bare = 1 }
-			if (match(line, /^\t[@+-]*\$\(call c_(build|object),\$\([A-Za-z_][A-Za-z0-9_]*\)\)$/)) {
-				cc = 1; how = (index(line, "c_build") ? "c_build" : "c_object")
+			if (line ~ /\$\((CC|AR)\)/) { cc = 1; bare = 1 }
+			if (match(line, /^\t[@+-]*\$\(call c_(build|object|archive),\$\([A-Za-z_][A-Za-z0-9_]*\)\)$/)) {
+				cc = 1; how = line; sub(/^\t[@+-]*\$\(call /, "", how); sub(/,.*$/, "", how)
 				var = line; sub(/^.*,\$\(/, "", var); sub(/\)\)$/, "", var)
-			} else if (line ~ /c_(build|object)/) { cc = 1; bare = 1 }
+			} else if (line ~ /c_(build|object|archive)/) { cc = 1; bare = 1 }
 			next
 		}
 		# blank and comment lines may sit among the recipe lines of a rule
@@ -237,7 +244,15 @@ for mk in $cmks; do
 		stale "$d" "$o" c_unpinned=cat || { echo "app_deps_check: $d/$o ignores a change to how its record is written (c_unpinned)"; fail=1; }
 		sigs_back
 		stale "$d" "$o" -W "$bh" || { echo "app_deps_check: an edit to $bh leaves $d/$o up to date"; fail=1; }
-		echo "app_deps_check: $d/$o ok (board.h, the flags, the record filter)"
+		# and the archive is made by a signed command too (tools/tools.mk c_archive)
+		if [ -f "$d/build/$a.a" ]; then
+			make -C "$d" "build/$a.a" >/dev/null 2>&1 || { echo "app_deps_check: $d/build/$a.a does not build"; fail=1; continue; }
+			sigs_keep "$d"
+			stale "$d" "build/$a.a" 'AR_CMD=$(AR) -rcs' || { echo "app_deps_check: $d/build/$a.a ignores a change of its ar command"; fail=1; }
+			sigs_back
+			current "$d" "build/$a.a" || { echo "app_deps_check: $d/build/$a.a is not up to date with its signatures restored"; fail=1; }
+		fi
+		echo "app_deps_check: $d/$o ok (board.h, the flags, the record filter, the archive command)"
 	done
 	for t in "$d"/build/*.elf "$d"/build/app.o "$d"/build/boot/boot.elf; do
 		[ -f "$t" ] || continue

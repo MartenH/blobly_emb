@@ -67,14 +67,14 @@ $(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) 
 # what V compiled into it (tools/tools.mk v_deps)
 -include $(BUILD)/app.c.d
 
-$(BUILD)/tx/%.o: $(PORT)/src/%.S $$(call c_unrecorded,$$@) $$(call c_sign,$(TX_A),$$(TX_CMD))
+$(BUILD)/tx/%.o: $(PORT)/src/%.S $$(call c_unrecorded,$$@) $$(call c_sign,$(BUILD)/tx,$$(TX_CMD))
 	@mkdir -p $(BUILD)/tx
 	$(call c_object,$(TX_CMD))
-$(BUILD)/tx/%.o: $(TX)/common/src/%.c $$(call c_unrecorded,$$@) $$(call c_sign,$(TX_A),$$(TX_CMD))
+$(BUILD)/tx/%.o: $(TX)/common/src/%.c $$(call c_unrecorded,$$@) $$(call c_sign,$(BUILD)/tx,$$(TX_CMD))
 	@mkdir -p $(BUILD)/tx
 	$(call c_object,$(TX_CMD))
-$(TX_A): $(TX_OBJ)
-	$(AR) -rc $@ $^
+$(TX_A): $(TX_OBJ) $$(call c_sign,$$@,$$(AR_CMD))
+	$(call c_archive,$(AR_CMD))
 -include $(call c_records,$(TX_OBJ))
 
 APPO_CMD = $(CC) $(CFLAGS) -w -c $(BUILD)/app.c

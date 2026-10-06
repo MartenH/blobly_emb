@@ -103,15 +103,20 @@ to `bootmap.h` (where the image reads it — every `[boot]` node's app and bootl
 `board.h` or `tools.mk` leaves each image stale. **How** the compiler is run is recorded too
 (#382), as `v_sign` records a transpile: the rule's command is a variable (`ELF_CMD`, `APPO_CMD`,
 `BOOT_CMD`) that the recipe runs as `$(call c_build,$(ELF_CMD))` and the rule signs as
-`$$(call c_sign,$$@,$$(ELF_CMD))` — every flag, define and source, plus the compiler's path and
-`--version`, in `<target>.sig`, rewritten only when it differs — so `DEBUG=1`, a `board.mk` edit
+`$$(call c_sign,$$@,$$(ELF_CMD))` — every flag, define and source, plus the toolchain as it
+describes itself (`$(CC) -v`, the `cc1` it resolves, `$(AR) --version`, each run as written, so a
+wrapper or a `VAR=val` prefix is no special case), in `<target>.sig`, rewritten only when it differs — so `DEBUG=1`, a `board.mk` edit
 to `CAN_DEFS` or `SYSTEM_CLOCK`, or a link address remakes the image (h755_threadx's old
 `LINKSTAMP` is gone), and `c_build` refuses a command its signature does not record. `tools.mk`
 turns on `.SECONDEXPANSION` for the `$$`: the signature is taken once the whole Makefile is read,
 `CFLAGS +=` lines after an include included. The ThreadX/NetX/LVGL archive objects get the same
 two records per object: `$(call c_object,$(TX_CMD))` compiles with `-MMD -MP`, the archive's
-objects share one signature (`$$(call c_sign,$(TX_A),$$(TX_CMD))`), `$$(call c_unrecorded,$$@)`
-asks for each object's record and `-include $(call c_records,$(TX_OBJ))` reads them. An object's
+objects share one signature (`$$(call c_sign,$(BUILD)/tx,$$(TX_CMD))`), `$$(call c_unrecorded,$$@)`
+asks for each object's record and `-include $(call c_records,$(TX_OBJ))` reads them; the archive
+itself is made by the one `$(AR_CMD)`, as `$(call c_archive,$(AR_CMD))` signed by
+`$$(call c_sign,$$@,$$(AR_CMD))`. A `[boot]` node's app-slot link flags are asked of the whole
+`$(CC)` as it runs, and its link refuses to run without them (`c_check_<target>` in `boot/boot.mk`)
+rather than link at 0x08000000. An object's
 record leaves out the pinned trees' own headers (`third_party/`, which move only with a pin — run
 `make clean` after moving one): naming them made a no-op make in sysnode 2.5 s instead of 0.5 s. The same
 script pins that shape, and asks make that another flag (`MCU`, and `DEBUG=1` where a Makefile

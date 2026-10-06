@@ -129,20 +129,20 @@ v-unrecorded: ;
 # variable. As with v_deps, a failed compile or record removes the target, and a target with no
 # record is remade. scripts/app_deps_check.sh pins the shape and asks make that a header's edit,
 # and another flag, remakes each image, the bootloaders included.
-c_build = $(call c_signed,$(1))$(1) -o $@ && $(filter-out %.o %.a,$(1)) -MM -MP -MT $@ >$@.d.tmp && printf '%s\n' $(foreach s,$(filter %.c %.S,$(1)),'$(s):') '$@: $(TOOL_REPO)/tools/tools.mk' >>$@.d.tmp && mv -f $@.d.tmp $@.d || { rm -f $@ $@.d.tmp; exit 1; }
+c_build = $(call c_signed,$(1))$(c_check_$@)$(1) -o $@ && $(filter-out %.o %.a,$(1)) -MM -MP -MT $@ >$@.d.tmp && printf '%s\n' $(foreach s,$(filter %.c %.S,$(1)),'$(s):') '$@: $(TOOL_REPO)/tools/tools.mk' >>$@.d.tmp && mv -f $@.d.tmp $@.d || { rm -f $@ $@.d.tmp; exit 1; }
 c_unrecorded = $(if $(wildcard $(1).d),,c-unrecorded)
 .PHONY: c-unrecorded
 c-unrecorded: ;
-# the compiler a command runs — its words before the first option, so a wrapper (ccache gcc) is
-# all of it: each word's path and the first line of the whole compiler's --version (a wrapper
-# passes it through to the compiler behind it), asked once per make
-c_compiler = $(if $(filter-out -%,$(firstword $(1))),$(firstword $(1)) $(call c_compiler,$(wordlist 2,$(words $(1)),$(1))))
-c_ccid = $(or $(C_CCID_$(subst $(c_space),+,$(1))),$(eval C_CCID_$(subst $(c_space),+,$(1)) := $(shell for w in $(1); do command -v $$w; done 2>/dev/null; $(1) --version 2>/dev/null | head -n 1))$(C_CCID_$(subst $(c_space),+,$(1))))
-c_space := $() $()
-# the command, the compiler, and how c_object compiles and records an archive object, EXPANDED
+# the toolchain, as it describes itself — no command is parsed for it: what $(CC) -v reports
+# (its version, target, configuration and driver), the cc1 it resolves to, and $(AR)'s version,
+# each through the whole command as written, so a wrapper (ccache, env -i, VAR=val) is run as it
+# would be and reports the compiler behind it. Asked once per make (once per value of CC and AR).
+# A C rule's command runs $(CC) — or, for an archive, $(AR).
+c_toolid = $(if $(call tool_same,x$(CC) | $(AR),$(C_TOOLID_FOR)),,$(eval C_TOOLID_FOR := x$$(CC) | $$(AR))$(eval C_TOOLID := $$(shell $$(CC) -v 2>&1; $$(CC) -print-prog-name=cc1 2>&1; $$(AR) --version 2>&1 | head -n 1)))$(C_TOOLID)
+# the command, the toolchain, and how c_object compiles and records an archive object, EXPANDED
 # (its own text and the record filter's): the arguments it adds and the record it writes are part
 # of how that object is built, and its record does not name this file (below)
-c_sigtext = $(strip $(1) | $(call c_ccid,$(strip $(call c_compiler,$(1)))) | $(value c_object) | $(c_unpinned))
+c_sigtext = $(strip $(1) | $(c_toolid) | $(value c_object) | $(c_unpinned))
 # once per signature per make: an archive's objects (about 1,200 in sysnode) all name one
 c_sign = $(if $(C_SIGNED_$(1)),$(1).sig,$(eval C_SIGNED_$(1) := 1)$(call tool_signed,$(1),$(call c_sigtext,$(2))))
 # at recipe time: the rule names exactly one signature, and it records the command about to run
@@ -152,11 +152,11 @@ c_signed = $(if $(filter-out 1,$(words $(filter %.sig,$^))),$(error $@: a C rule
 # source by a pattern rule, with the image's CFLAGS — the forced board.h among them — so they get
 # the same two records, per object: $(call c_object,<command>) compiles $< with -MMD -MP (one
 # source, so the compile writes its own record), and the archive's objects share ONE signature,
-# keyed by the archive, since they are compiled the same way. A pattern target's record is asked
+# keyed by their directory, since they are compiled the same way. A pattern target's record is asked
 # for by name through secondary expansion, and the records are included by the object list:
 #
 #     TX_CMD = $(CC) $(CFLAGS)
-#     $(BUILD)/tx/%.o: $(TX)/common/src/%.c $$(call c_unrecorded,$$@) $$(call c_sign,$(TX_A),$$(TX_CMD))
+#     $(BUILD)/tx/%.o: $(TX)/common/src/%.c $$(call c_unrecorded,$$@) $$(call c_sign,$(BUILD)/tx,$$(TX_CMD))
 #     	@mkdir -p $(BUILD)/tx
 #     	$(call c_object,$(TX_CMD))
 #     -include $(call c_records,$(TX_OBJ))
@@ -178,6 +178,18 @@ c_object = $(call c_signed,$(1))$(1) -c $< -o $@ -MMD -MP -MT $@ -MF $@.d.tmp &&
 # those headers dropped from each, and a line left with nothing (their -MP rules) dropped
 c_unpinned = awk '{ l = l $$0 } /\\$$/ { sub(/\\$$/, "", l); next } { n = split(l, w, " "); o = ""; for (i = 1; i <= n; i++) if (w[i] !~ /(^|\/)third_party\/.*\.h:?$$/) o = o " " w[i]; if (o != "") print substr(o, 2); l = "" }'
 c_records = $(wildcard $(addsuffix .d,$(1)))
+#
+# An archive is made by ONE command, signed as a compile is — another ar, other flags, remake it:
+#
+#     $(TX_A): $(TX_OBJ) $$(call c_sign,$$@,$$(AR_CMD))
+#     	$(call c_archive,$(AR_CMD))
+#
+# so the objects' own signature is keyed by their directory ($(BUILD)/tx), not by the archive.
+AR_CMD = $(AR) -rc
+c_archive = $(call c_signed,$(1))$(1) $@ $(filter-out %.sig,$^)
+#
+# A last check before a c_build target is linked, where its Makefile needs one: $(c_check_<target>),
+# expanded in the recipe (boot/boot.mk refuses an application with no app-slot layout).
 .SECONDEXPANSION:
 
 TOOL_REPO := $(abspath $(REPO))

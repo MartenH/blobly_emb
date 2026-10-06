@@ -6,10 +6,11 @@
 #   app-base    where the image container goes (APP_BASE)
 #   app-ld      the application's link flags: its vectors at APP_VECTORS, its length the slot less
 #               the vector pad and the 64-byte signature mkimage --sign appends
+# <cc> is a shell command, run as written: a wrapper (ccache) or a VAR=val prefix works.
 set -euo pipefail
 cc=$1 board=$2 what=$3
 vals=$(printf 'BOOT_BASE BOOT_SIZE APP_BASE APP_SIZE APP_VECTORS\n' |
-	$cc -E -P -x c -include "$board/bootmap.h" - | tr -d 'u()' | tail -1)
+	eval "$cc"' -E -P -x c -include "$board/bootmap.h" -' | tr -d 'u()' | tail -1)
 read -r boot_base boot_size app_base app_size app_vectors <<<"$vals"
 hex() { printf '0x%X' "$(($1))"; }
 case $what in

@@ -26,16 +26,19 @@ endif
 BOOT_DIR     := $(BUILD)/boot
 BOOT_LAYOUT   = $(REPO)/scripts/boot_layout.sh '$(CC)' $(BOARD_DIR)
 # one layout value; a failure stops the build ($(shell) alone ignores the exit status, and an empty
-# app link flag would link the application at 0x08000000) — where there is a compiler to ask: the
+# app link flag would link the application at 0x08000000) — wherever the cross compiler RUNS: the
 # link's signature (tools/tools.mk c_sign) is taken whenever make reads this file, and a host-only
-# `make gen` has none, nor anything to link
-boot_layout   = $(if $(shell command -v $(firstword $(CC))),$(or $(shell $(BOOT_LAYOUT) $(1)),$(error boot/boot.mk: scripts/boot_layout.sh could not read $(1) from $(BOARD_DIR)/bootmap.h)))
+# `make gen` has no compiler to ask, nor anything to link. Whether it runs is asked of the whole
+# $(CC), as written (a wrapper, VAR=val), never of a word parsed out of it.
+BOOT_CC_RUNS := $(shell $(CC) --version >/dev/null 2>&1 && echo yes)
+boot_layout   = $(if $(BOOT_CC_RUNS),$(or $(shell $(BOOT_LAYOUT) $(1)),$(error boot/boot.mk: scripts/boot_layout.sh could not read $(1) from $(BOARD_DIR)/bootmap.h)))
 SW_VERSION   ?= 1
 IMAGE_SEED   ?= $(REPO)/examples/keys/mkimage.seed
 
 # the application at the board's app slot: evaluated when the link and its signature are, never
-# while this line is read
+# while this line is read — and the link refuses to run without it, whatever the reason
 LDFLAGS += $(call boot_layout,app-ld)
+c_check_$(BUILD)/$(NAME).elf = $(if $(call boot_layout,app-ld),,$(error boot/boot.mk: $@ has no app-slot layout — the cross compiler $(CC) does not run, so it would link at 0x08000000))
 # and relinked when the layout is
 $(BUILD)/$(NAME).elf: $(BOARD_DIR)/bootmap.h $(REPO)/scripts/boot_layout.sh
 

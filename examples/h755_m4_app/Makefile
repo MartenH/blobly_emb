@@ -60,14 +60,14 @@ $(BUILD)/app.c: main.v gen/loom_gen.v $(call v_unrecorded,$(BUILD)/app.c) $(call
 # what V compiled into it (tools/tools.mk v_deps)
 -include $(BUILD)/app.c.d
 
-$(BUILD)/tx/%.o: $(PORT)/src/%.S $$(call c_unrecorded,$$@) $$(call c_sign,$(TX_A),$$(TX_CMD))
+$(BUILD)/tx/%.o: $(PORT)/src/%.S $$(call c_unrecorded,$$@) $$(call c_sign,$(BUILD)/tx,$$(TX_CMD))
 	@mkdir -p $(BUILD)/tx
 	$(call c_object,$(TX_CMD))
-$(BUILD)/tx/%.o: $(TX)/common/src/%.c $$(call c_unrecorded,$$@) $$(call c_sign,$(TX_A),$$(TX_CMD))
+$(BUILD)/tx/%.o: $(TX)/common/src/%.c $$(call c_unrecorded,$$@) $$(call c_sign,$(BUILD)/tx,$$(TX_CMD))
 	@mkdir -p $(BUILD)/tx
 	$(call c_object,$(TX_CMD))
-$(TX_A): $(TX_OBJ)
-	$(AR) -rc $@ $^
+$(TX_A): $(TX_OBJ) $$(call c_sign,$$@,$$(AR_CMD))
+	$(call c_archive,$(AR_CMD))
 -include $(call c_records,$(TX_OBJ))
 
 ELF_CMD = $(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(TX_A)
