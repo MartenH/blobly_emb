@@ -133,11 +133,16 @@ c_build = $(call c_signed,$(1))$(1) -o $@ && $(filter-out %.o %.a,$(1)) -MM -MP 
 c_unrecorded = $(if $(wildcard $(1).d),,c-unrecorded)
 .PHONY: c-unrecorded
 c-unrecorded: ;
-# the compiler a command runs: its path and the first line of its --version, asked once per make
-c_ccid = $(or $(C_CCID_$(1)),$(eval C_CCID_$(1) := $(shell command -v $(1) 2>/dev/null; $(1) --version 2>/dev/null | head -n 1))$(C_CCID_$(1)))
-# the command, the compiler, and c_object's own text: the arguments it adds to an archive object's
-# compile are part of how that object is built, and its record does not name this file (below)
-c_sigtext = $(strip $(1) | $(call c_ccid,$(firstword $(1))) | $(value c_object))
+# the compiler a command runs — its words before the first option, so a wrapper (ccache gcc) is
+# all of it: each word's path and the first line of the whole compiler's --version (a wrapper
+# passes it through to the compiler behind it), asked once per make
+c_compiler = $(if $(filter-out -%,$(firstword $(1))),$(firstword $(1)) $(call c_compiler,$(wordlist 2,$(words $(1)),$(1))))
+c_ccid = $(or $(C_CCID_$(subst $(c_space),+,$(1))),$(eval C_CCID_$(subst $(c_space),+,$(1)) := $(shell for w in $(1); do command -v $$w; done 2>/dev/null; $(1) --version 2>/dev/null | head -n 1))$(C_CCID_$(subst $(c_space),+,$(1))))
+c_space := $() $()
+# the command, the compiler, and how c_object compiles and records an archive object, EXPANDED
+# (its own text and the record filter's): the arguments it adds and the record it writes are part
+# of how that object is built, and its record does not name this file (below)
+c_sigtext = $(strip $(1) | $(call c_ccid,$(strip $(call c_compiler,$(1)))) | $(value c_object) | $(c_unpinned))
 # once per signature per make: an archive's objects (about 1,200 in sysnode) all name one
 c_sign = $(if $(C_SIGNED_$(1)),$(1).sig,$(eval C_SIGNED_$(1) := 1)$(call tool_signed,$(1),$(call c_sigtext,$(2))))
 # at recipe time: the rule names exactly one signature, and it records the command about to run

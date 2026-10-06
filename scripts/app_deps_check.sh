@@ -23,7 +23,8 @@
 #     (the board's bootmap.h where it reads one, and the forced board.h), or the rule that records
 #     it, leaves it out of date; so does another flag (MCU, and DEBUG=1 where the Makefile has
 #     one), while the unchanged command leaves it up to date — each asked of make, apps and
-#     bootloaders alike, and of one object of each archive.
+#     bootloaders alike, and of one object of each archive, which another record filter
+#     (tools/tools.mk c_unpinned) leaves stale too.
 # Run after the cross builds (the CI cross job does); exits 1 on a stale dependency.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -231,8 +232,12 @@ for mk in $cmks; do
 		bh=$(grep -m1 -E '(^|/)board\.h:$' "$d/$o.d" | sed 's/:$//')
 		[ -n "$bh" ] || { echo "app_deps_check: $d/$o's record does not name the forced board.h"; fail=1; continue; }
 		flags_check "$d" "$o"
+		# how c_object records it is part of its signature: another record filter leaves it stale
+		sigs_keep "$d"
+		stale "$d" "$o" c_unpinned=cat || { echo "app_deps_check: $d/$o ignores a change to how its record is written (c_unpinned)"; fail=1; }
+		sigs_back
 		stale "$d" "$o" -W "$bh" || { echo "app_deps_check: an edit to $bh leaves $d/$o up to date"; fail=1; }
-		echo "app_deps_check: $d/$o ok (board.h, the flags)"
+		echo "app_deps_check: $d/$o ok (board.h, the flags, the record filter)"
 	done
 	for t in "$d"/build/*.elf "$d"/build/app.o "$d"/build/boot/boot.elf; do
 		[ -f "$t" ] || continue
