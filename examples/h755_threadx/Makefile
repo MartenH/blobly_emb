@@ -65,7 +65,7 @@ TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
 # board bring-up (asm + board.c) + the exec-change trace recorder, the shared recorder from
 # boards/common (trace_hooks.c is driver-independent — pure recorder).
 BSP = $(BOARD_BSP_THREADX) $(LOOM_GLUE_SRCS) target_ext.c $(REPO)/boards/common/trace_hooks.c \
-      $(LOOM_FAULT_SRCS) $(LOOM_DISPLAY_SRCS)
+      $(LOOM_FAULT_SRCS)
 
 all: $(BUILD)/$(NAME).bin
 
@@ -86,7 +86,6 @@ gen/.stamp: ecu.toml bus.dbc $(wildcard app/*.v) $(TOOL_ecucheck) $(TOOL_loom2v)
 ifneq ($(MAKECMDGOALS),clean)
 -include gen/loom_build.mk
 endif
-CFLAGS += $(LOOM_DISPLAY_DEFS) # [display]: LVGL's include path (empty without one)
 # remade by gen: make restarts and rereads it, so a first build sees LOOM_VDEFS / LOOM_FAULT_SRCS
 gen/loom_build.mk: gen/.stamp ;
 

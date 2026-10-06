@@ -27,7 +27,7 @@ TX_ASM   = $(wildcard $(PORT)/src/*.S)
 TX_C     = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
            $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
-BSP      = $(BOARD_BSP_THREADX) $(LOOM_GLUE_SRCS) target_ext.c $(REPO)/boards/common/trace_hooks.c $(LOOM_FAULT_SRCS) $(LOOM_DISPLAY_SRCS)
+BSP      = $(BOARD_BSP_THREADX) $(LOOM_GLUE_SRCS) target_ext.c $(REPO)/boards/common/trace_hooks.c $(LOOM_FAULT_SRCS)
 
 all: $(BUILD)/$(NAME).bin
 
@@ -54,7 +54,6 @@ gen/.stamp: $(SYSDIR)/system.toml ecu.toml $(SYSDIR)/compute.dbc $(wildcard app/
 ifneq ($(MAKECMDGOALS),clean)
 -include gen/loom_build.mk
 endif
-CFLAGS += $(LOOM_DISPLAY_DEFS) # [display]: LVGL's include path (empty without one)
 gen/loom_build.mk: gen/.stamp ;
 
 # how V is run for it — also its signature (tools/tools.mk v_sign)

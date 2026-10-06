@@ -96,15 +96,13 @@ fn display_target_create(m Model) []string {
 	return ['\tC.display_thread_create(u32(${display_prio(m)})) // [display]: below every other thread']
 }
 
-// display_build_lines: what the image links for its display, for gen/loom_build.mk. Defined on
-// every ThreadX image, empty without [display], and every ThreadX Makefile lists both variables
-// (pinned by threadx_makefiles_test.v), so adding a display to a node needs no Makefile edit.
+// display_build_lines: what the image links for its display, for gen/loom_build.mk — only with
+// [display]; an image without one is generated exactly as before. The Makefiles of a board that
+// can drive a display (one with a boards/<board>/display.mk) list both variables, pinned by
+// threadx_makefiles_test.v; any other board's build stops at that missing file by name.
 fn display_build_lines(m Model) string {
-	if !m.target.threadx {
+	if !m.target.threadx || !m.display.on {
 		return ''
-	}
-	if !m.display.on {
-		return 'LOOM_DISPLAY_SRCS :=\nLOOM_DISPLAY_DEFS :=\n'
 	}
 	return '# [display]: the board\'s display thread, LVGL, and this node\'s screen\n' +
 		r'$(if $(wildcard $(REPO)/boards/$(BOARD)/display.mk),,$(error [display]: board $(BOARD) has no display (boards/$(BOARD)/display.mk)))' +

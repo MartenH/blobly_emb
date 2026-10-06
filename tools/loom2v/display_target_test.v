@@ -141,8 +141,8 @@ fn test_a_node_without_a_display_links_none() {
 	code, out, glue, mk := gen_display('none', false, '')
 	assert code == 0, out
 	assert !glue.contains('display_thread_create')
-	// defined empty: every ThreadX Makefile lists them (threadx_makefiles_test.v)
-	assert mk.contains('LOOM_DISPLAY_SRCS :=\nLOOM_DISPLAY_DEFS :=\n'), mk
+	// generated exactly as before: nothing of the display reaches an image without one
+	assert !mk.contains('DISPLAY'), mk
 	assert !mk.contains('display.mk'), mk
 }
 

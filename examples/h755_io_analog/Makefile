@@ -45,7 +45,7 @@ TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
            $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
 
 # board bring-up (asm + board.c) + the IOC-pool glue (no comm thread in this example).
-BSP = $(BOARD_BSP_THREADX) $(LOOM_GLUE_SRCS) $(LOOM_FAULT_SRCS) $(LOOM_DISPLAY_SRCS)
+BSP = $(BOARD_BSP_THREADX) $(LOOM_GLUE_SRCS) $(LOOM_FAULT_SRCS)
 
 all: $(BUILD)/$(NAME).bin
 
@@ -72,7 +72,6 @@ gen/loom_build.mk: gen/.stamp
 ifneq ($(MAKECMDGOALS),clean)
 -include gen/loom_build.mk
 endif
-CFLAGS += $(LOOM_DISPLAY_DEFS) # [display]: LVGL's include path (empty without one)
 
 # 1) transpile the V stack to freestanding C (-enable-globals for the ThreadX TCB/stack statics).
 # how V is run for it — also its signature (tools/tools.mk v_sign)

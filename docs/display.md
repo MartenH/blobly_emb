@@ -22,7 +22,7 @@ make flash                   # in the node's directory, as before
 | the thread | generated (`tools/loom2v/gen_display.v`) | `display_thread_create(prio)` in `tx_application_define`, at a priority **below every other thread** of the image, the DoIP threads included |
 | the platform | `boards/h735dk/display.c` | LVGL, the double buffering, touch polling; calls the node's `ui_create` once and `ui_update` every pass (at most 20 ms apart) |
 | the drivers | `boards/h735dk/lcd.c`, `touch.c`, `hyperram.c` | the LTDC, the FT5336/GT911 touch controller over I2C4, the 16 MB HyperRAM on OCTOSPI2: register-level, no HAL, pins and timings from ST's `stm32h735g-dk-bsp` |
-| the build | `boards/h735dk/display.mk`, included by `gen/loom_build.mk` | LVGL as a pinned archive (`-O2`), the sources above, the node's `ui` file, as `LOOM_DISPLAY_SRCS` and `LOOM_DISPLAY_DEFS`. Both are defined empty on every other ThreadX image, and every ThreadX Makefile lists them |
+| the build | `boards/h735dk/display.mk`, included by `gen/loom_build.mk` | LVGL as a pinned archive (`-O2`), the sources above, the node's `ui` file, as `LOOM_DISPLAY_SRCS` and `LOOM_DISPLAY_DEFS`. Only an image with `[display]` gets them, and only the Makefiles of a board with a `display.mk` (today the H735-DK's) list them |
 | the screen | the node (`ui = …`) | hand-written C against LVGL's API |
 
 **Only the display thread calls LVGL.** It reads what the node already publishes: single-writer
