@@ -47,16 +47,23 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
-# The codex CLI: $CODEX, then PATH, then the newest copy the VS Code extension bundles.
+# The codex CLI: $CODEX, then PATH, then the newest non-empty copy the VS Code extension bundles
+# (an interrupted extension update has left a 0-byte one behind, which ran, printed nothing and
+# exited 0 — read as a review that found nothing).
 codex=${CODEX:-}
 if [ -z "$codex" ]; then
 	codex=$(command -v codex || true)
 fi
 if [ -z "$codex" ]; then
-	codex=$(find "$HOME"/.vscode-server/extensions -path '*/openai.chatgpt-*/bin/*/codex' -type f 2>/dev/null | sort -V | tail -1 || true)
+	codex=$(find "$HOME"/.vscode-server/extensions -path '*/openai.chatgpt-*/bin/*/codex' -type f -size +0 2>/dev/null | sort -V | tail -1 || true)
 fi
 if [ -z "$codex" ] || [ ! -x "$codex" ]; then
 	echo "codex-local-review: no codex CLI found (set CODEX=/path/to/codex)" >&2
+	exit 3
+fi
+# ...and it must run: a binary that answers --version with nothing is no reviewer
+if ! codex_version=$("$codex" --version 2>/dev/null) || [ -z "$codex_version" ]; then
+	echo "codex-local-review: $codex does not run (empty or broken: reload the Codex extension, or set CODEX=)" >&2
 	exit 3
 fi
 
