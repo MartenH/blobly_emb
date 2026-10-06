@@ -32,6 +32,21 @@ local function implausible(ms)
   end
 end
 
+-- inject the implausible speed in BURST_MS bursts, reading the status after each, until DTC's status
+-- bit `bit` is set or MAX_BURSTS have gone: the bursts it took, or nil. Not one fixed window,
+-- because the gateway's plausible copy of 0x130 competes: a dispatch that reads it moves the
+-- accumulating counter down, so qualifying takes a varying number of dispatches.
+local BURST_MS, MAX_BURSTS = 300, 10
+local function fail_until(d, bit)
+  for n = 1, MAX_BURSTS do
+    implausible(BURST_MS)
+    for _, e in ipairs(d:supported_dtcs()) do
+      if e.name == DTC and e[bit] then return n end
+    end
+  end
+  return nil
+end
+
 -- an ECUReset: answered, then the MCU restarts — the flush first (the journal written whole)
 local function reset(d)
   d:reset(0x01)
@@ -46,7 +61,7 @@ end
 
 -- confirmed in this power cycle, then the gateway's plausible speeds pass it again
 local function confirm(d)
-  implausible(600)
+  fail_until(d, "confirmedDTC")
   check.dtc(d, DTC, { confirmedDTC = true, pendingDTC = true, testFailedThisOperationCycle = true })
   sleep_ms(600)
 end
@@ -69,7 +84,8 @@ test("zone_a: the first failure takes a snapshot (0x19 03 / 04) and counts (0x19
   log(string.format("%s snapshot: SteeringAngle %s", DTC, tohex(s.records[1].dids[1].data)))
   check.extended(d, DTC, { occurrence = 1, aging = 0, failed_cycles = 1 })
   -- a later occurrence counts, and keeps the FIRST failure's snapshot
-  implausible(600)
+  check.dtc(d, DTC, { testFailed = false })
+  check.truthy(fail_until(d, "testFailed"), "the second failure did not qualify")
   sleep_ms(600)
   local e = d:extended(DTC)
   check.truthy(e.occurrence >= 2, "a second occurrence was not counted")
@@ -134,7 +150,7 @@ test("zone_a: a power cut with no warning keeps what the journal already holds",
   end
   local d = diag()
   clean(d)
-  implausible(600) -- the first failure: written in the pass that saw it
+  fail_until(d, "confirmedDTC") -- the first failure: written in the pass that saw it
   local snap = d:snapshot(DTC).records[1].dids[1].data
   sleep_ms(200)
   check.truthy(os.execute(cmd), "the power-cut command failed: " .. cmd)

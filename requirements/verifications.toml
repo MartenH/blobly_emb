@@ -667,6 +667,21 @@ verifies = []
 approved_by = "Claude (coding agent) on Marten Hildell's bench — zone_a fault suite 5/5"
 date = "2026-10-02"
 
+# The zone_a fault suite looped on silicon (#385): test/faults_zone_a.lua 200/200 and the persist
+# suite 20/20 with a power cut, on origin/main's image. Before, the fixed 600 ms injection failed 1 run
+# in 100 (the "cleared while failing" re-failure read 0x00): the gateway's plausible copy of 0x130
+# competes with the injected one, and in 221 instrumented windows qualifying took 250 to 780 ms
+# (median 290), over 600 in 5. The DTC always confirmed, only later, so the fault memory was not at
+# fault; the scripts now inject in 300 ms bursts, reading the status after each, up to 3 s. Run by
+# the coding agent on the maintainer's bench. EVIDENCE, NOT A VERIFICATION: no new requirement ran.
+[[review]]
+id = "faults-on-target-zone-a-loop"
+method = "review"
+context = "h723/ThreadX"
+verifies = []
+approved_by = "Claude (coding agent) on Marten Hildell's bench — zone_a fault suite 200/200, persist 20/20"
+date = "2026-10-07"
+
 # [display] on silicon (#387, docs/display.md): sysnode on the STM32H735G-DK behind its bootloader, the
 # display thread created below every other thread, LVGL double buffered in the HyperRAM (its self-test
 # passing; swaps at vertical blanking, no visible tearing), FT5336 touch (tabs and controls by hand), and
