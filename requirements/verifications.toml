@@ -666,3 +666,31 @@ context = "h723/ThreadX"
 verifies = []
 approved_by = "Claude (coding agent) on Marten Hildell's bench — zone_a fault suite 5/5"
 date = "2026-10-02"
+
+# [display] on silicon (#387, docs/display.md): sysnode on the STM32H735G-DK behind its bootloader, the
+# display thread created below every other thread, LVGL double buffered in the HyperRAM (its self-test
+# passing; swaps at vertical blanking, no visible tearing), FT5336 touch (tabs and controls by hand), and
+# the TIM7 sampling profiler's figures agreeing with the display thread's own wall-clock timing: the
+# whole core 7.5% (Overview, the chaser strip at ~11 fps, no bus traffic), the display thread 7-8%, the
+# gateway's own threads 0.1-0.2% each; read over SWD. Run by the coding agent on the maintainer's bench.
+# EVIDENCE, NOT A VERIFICATION: no display requirement exists yet; load under bus traffic, and a GT911
+# board revision, did not run.
+[[review]]
+id = "display-on-target-sysnode"
+method = "review"
+context = "h735/ThreadX"
+verifies = []
+approved_by = "Claude (coding agent) on Marten Hildell's bench — STM32H735G-DK (system_full sysnode), display by eye and SWD"
+date = "2026-10-06"
+
+# LVGL's DMA2D draw backend measured on the same board and left off (docs/display.md "DMA2D: measured,
+# not used"): a forced full-screen redraw 14.9 ms with it against 14.8 ms without, the steady load 7.5%
+# both; 64 KiB fills/reads, D-cache off — DMA2D write to HyperRAM 174 MB/s (AXI SRAM 549), CPU write
+# 159 (1080), CPU 16-bit read 81 (84, CPU-bound). The benchmark code was temporary and is not in the tree.
+[[review]]
+id = "display-dma2d-measured"
+method = "review"
+context = "h735/ThreadX"
+verifies = []
+approved_by = "Claude (coding agent) on Marten Hildell's bench — STM32H735G-DK (system_full sysnode), SWD timing"
+date = "2026-10-06"
