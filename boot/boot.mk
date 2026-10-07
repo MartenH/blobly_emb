@@ -26,14 +26,19 @@ endif
 BOOT_DIR     := $(BUILD)/boot
 BOOT_LAYOUT   = $(REPO)/scripts/boot_layout.sh '$(CC)' $(BOARD_DIR)
 # one layout value; a failure stops the build ($(shell) alone ignores the exit status, and an empty
-# app link flag would link the application at 0x08000000)
-boot_layout   = $(or $(shell $(BOOT_LAYOUT) $(1)),$(error boot/boot.mk: scripts/boot_layout.sh could not read $(1) from $(BOARD_DIR)/bootmap.h))
+# app link flag would link the application at 0x08000000) — wherever the cross compiler RUNS: the
+# link's signature (tools/tools.mk c_sign) is taken whenever make reads this file, and a host-only
+# `make gen` has no compiler to ask, nor anything to link. Whether it runs is asked of the whole
+# $(CC), as written (a wrapper, VAR=val), never of a word parsed out of it.
+BOOT_CC_RUNS := $(shell $(CC) --version >/dev/null 2>&1 && echo yes)
+boot_layout   = $(if $(BOOT_CC_RUNS),$(or $(shell $(BOOT_LAYOUT) $(1)),$(error boot/boot.mk: scripts/boot_layout.sh could not read $(1) from $(BOARD_DIR)/bootmap.h)))
 SW_VERSION   ?= 1
 IMAGE_SEED   ?= $(REPO)/examples/keys/mkimage.seed
 
-# the application at the board's app slot: evaluated when the link runs, never at parse time (a
-# host-only `make gen` has no cross compiler to ask)
+# the application at the board's app slot: evaluated when the link and its signature are, never
+# while this line is read — and the link refuses to run without it, whatever the reason
 LDFLAGS += $(call boot_layout,app-ld)
+c_check_$(BUILD)/$(NAME).elf = $(if $(call boot_layout,app-ld),,$(error boot/boot.mk: $@ has no app-slot layout — the cross compiler $(CC) does not run, so it would link at 0x08000000))
 # and relinked when the layout is
 $(BUILD)/$(NAME).elf: $(BOARD_DIR)/bootmap.h $(REPO)/scripts/boot_layout.sh
 
@@ -89,8 +94,9 @@ $(BOOT_DIR)/boot.c: $(call v_unrecorded,$(BOOT_DIR)/boot.c) $(call v_sign,$(BOOT
 # every header (bootmap.h, the generated boot_gen.h) and textually included backend (can_backend.c
 # includes can_fdcan.c) comes from the compiler's own dependency output, written as the image links
 # (tools/tools.mk c_build, the rule every image's link shares) — no hand list to miss the next one
-$(BOOT_DIR)/boot.elf: $(BOOT_DIR)/boot.c $(BOOT_SRCS) $(BOOT_LD) $(BOOT_LIBS) $(REPO)/scripts/boot_layout.sh $(call c_unrecorded,$(BOOT_DIR)/boot.elf)
-	$(call c_build,$(CC) $(BOOT_CFLAGS) $(BOOT_LDFLAGS) $(BOOT_DIR)/boot.c $(BOOT_SRCS) $(BOOT_LINKLIBS))
+BOOT_CMD = $(CC) $(BOOT_CFLAGS) $(BOOT_LDFLAGS) $(BOOT_DIR)/boot.c $(BOOT_SRCS) $(BOOT_LINKLIBS)
+$(BOOT_DIR)/boot.elf: $(BOOT_DIR)/boot.c $(BOOT_SRCS) $(BOOT_LD) $(BOOT_LIBS) $(REPO)/scripts/boot_layout.sh $(call c_unrecorded,$(BOOT_DIR)/boot.elf) $$(call c_sign,$$@,$$(BOOT_CMD))
+	$(call c_build,$(BOOT_CMD))
 	$(SIZE) $@
 -include $(BOOT_DIR)/boot.elf.d
 

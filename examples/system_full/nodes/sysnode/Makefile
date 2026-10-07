@@ -41,11 +41,13 @@ LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
 
 BUILD    = build
 TX_A     = $(BUILD)/tx.a
+TX_CMD   = $(CC) $(CFLAGS)
 TX_ASM   = $(wildcard $(PORT)/src/*.S)
 TX_C     = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
            $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
 NX_A     = $(BUILD)/nx.a
+NX_CMD   = $(CC) $(CFLAGS)
 NX_C     = $(wildcard $(NX)/common/src/*.c)
 NX_OBJ   = $(patsubst $(NX)/common/src/%.c,$(BUILD)/nx/%.o,$(NX_C))
 # the kernel and the network stack resolve each other: one archive group
@@ -98,26 +100,30 @@ $(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) 
 # what V compiled into it (tools/tools.mk v_deps)
 -include $(BUILD)/app.c.d
 
-$(BUILD)/tx/%.o: $(PORT)/src/%.S Makefile
+$(BUILD)/tx/%.o: $(PORT)/src/%.S $$(call c_unrecorded,$$@) $$(call c_sign,$(BUILD)/tx,$$(TX_CMD))
 	@mkdir -p $(BUILD)/tx
-	$(CC) $(CFLAGS) -c $< -o $@
-$(BUILD)/tx/%.o: $(TX)/common/src/%.c Makefile
+	$(call c_object,$(TX_CMD))
+$(BUILD)/tx/%.o: $(TX)/common/src/%.c $$(call c_unrecorded,$$@) $$(call c_sign,$(BUILD)/tx,$$(TX_CMD))
 	@mkdir -p $(BUILD)/tx
-	$(CC) $(CFLAGS) -c $< -o $@
-$(TX_A): $(TX_OBJ)
-	$(AR) -rc $@ $^
-$(BUILD)/nx/%.o: $(NX)/common/src/%.c Makefile
+	$(call c_object,$(TX_CMD))
+$(TX_A): $(TX_OBJ) $$(call c_sign,$$@,$$(AR_CMD))
+	$(call c_archive,$(AR_CMD))
+-include $(call c_records,$(TX_OBJ))
+$(BUILD)/nx/%.o: $(NX)/common/src/%.c $$(call c_unrecorded,$$@) $$(call c_sign,$(BUILD)/nx,$$(NX_CMD))
 	@mkdir -p $(BUILD)/nx
-	$(CC) $(CFLAGS) -c $< -o $@
-$(NX_A): $(NX_OBJ)
-	$(AR) -rc $@ $^
+	$(call c_object,$(NX_CMD))
+$(NX_A): $(NX_OBJ) $$(call c_sign,$$@,$$(AR_CMD))
+	$(call c_archive,$(AR_CMD))
+-include $(call c_records,$(NX_OBJ))
 
-$(BUILD)/app.o: $(BUILD)/app.c Makefile $(call c_unrecorded,$(BUILD)/app.o)
-	$(call c_build,$(CC) $(CFLAGS) -w -c $<)
+APPO_CMD = $(CC) $(CFLAGS) -w -c $(BUILD)/app.c
+$(BUILD)/app.o: $(BUILD)/app.c $(call c_unrecorded,$(BUILD)/app.o) $$(call c_sign,$$@,$$(APPO_CMD))
+	$(call c_build,$(APPO_CMD))
 -include $(BUILD)/app.o.d
 
-$(BUILD)/$(NAME).elf: $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) $(NX_A) $(BOARD_LD_THREADX) $(call c_unrecorded,$(BUILD)/$(NAME).elf)
-	$(call c_build,$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(LINKLIBS))
+ELF_CMD = $(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(LINKLIBS)
+$(BUILD)/$(NAME).elf: $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) $(NX_A) $(BOARD_LD_THREADX) $(call c_unrecorded,$(BUILD)/$(NAME).elf) $$(call c_sign,$$@,$$(ELF_CMD))
+	$(call c_build,$(ELF_CMD))
 	$(SIZE) $@
 	@$(REPO)/scripts/lint_vinit.sh $@   # the _vinit-trap gate (host CI can't cross-compile; run it here)
 -include $(BUILD)/$(NAME).elf.d

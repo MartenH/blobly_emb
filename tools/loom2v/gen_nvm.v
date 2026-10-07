@@ -7,18 +7,18 @@
 //   sector_records = 4096   # journal geometry, for the generation-time checks
 //   endurance      = 10000  # flash erase cycles (wear math)
 //   min_years      = 10     # required wear lifetime at worst-case write rates
+//   [nvm.assume]            # the VEHICLE's rates, per day (gen_wear.v; conservative defaults)
+//   cycles_per_day = 144    # operation cycles; resets/clears/setting changes/codings per day too
 //
 // What the generator owns (nothing of this exists at runtime as config):
 //   - SCHEMA IDENTITY: each persistent signal's block id = a 16-bit FNV hash of
 //     name + field names + types (insert/reorder/rename safe; any layout change
 //     = new identity = declared default). Collisions fail generation with an
 //     `nvm_id = N` pin suggestion.
-//   - the WEAR CHECK (REQ-NVM-010): worst-case records/hour from each writer's
-//     period vs the floor, against sector geometry + endurance — a config that
-//     cannot survive `min_years` fails generation with the math. Model notes:
-//     sleep-edge flush records (per sleep cycle) are unmodeled (unknowable at
-//     generation), while the erase formula is ~2x conservative (fills
-//     alternate the pair's sectors) — the safe direction partly offsets.
+//   - the WEAR CHECK (REQ-NVM-010, gen_wear.v): every journal writer — these
+//     signals, the clean markers, the fault memory, the parameters — in one
+//     worst-case records/hour against sector geometry + endurance; a config
+//     that cannot survive `min_years` fails generation naming each share.
 //   - the emitted wiring: journal mount + prune + restore staging BEFORE the
 //     kernel starts (single-threaded window), per-thread cell restore, wrapper
 //     staging through intra-core IOC cells (single-writer, wait-free, proven),
@@ -44,9 +44,10 @@ mut:
 	sector_records u32 = 4096
 	endurance      u32 = 10000
 	min_years      u32 = 10
+	assume         WearAssume // [nvm.assume]: the vehicle's rates the wear check takes
 }
 
-const nvm_keys = ['enabled', 'min_write_ms', 'sector_records', 'endurance', 'min_years']
+const nvm_keys = ['enabled', 'min_write_ms', 'sector_records', 'endurance', 'min_years', 'assume']
 
 fn parse_nvm(doc toml.Doc) NvmCfg {
 	mut t := NvmCfg{}
@@ -56,6 +57,10 @@ fn parse_nvm(doc toml.Doc) NvmCfg {
 		if k !in nvm_keys {
 			panic('loom2v: [nvm] unknown key "${k}" (allowed: ${nvm_keys})')
 		}
+	}
+	t.assume = parse_wear_assume(nm)
+	if nm.len == 1 && 'assume' in nm {
+		return t // [nvm.assume] alone states the vehicle's rates; it declares no storage
 	}
 	t.on = (nm['enabled'] or { toml.Any(true) }).bool()
 	t.min_write_ms = nvm_range(nm, 'min_write_ms', 1000, 1, 86_400_000)
@@ -221,40 +226,17 @@ fn derive_nvm(mut m Model, doc toml.Doc) ([]string, map[string]u16) {
 			'sector headroom (live set + a full sleep-edge flush, docs/nvm.md) but ' +
 			'[nvm] sector_records = ${m.nvm.sector_records} — grow the sectors or persist less')
 	}
-	// WEAR (REQ-NVM-010): worst case, every "now" signal writes at its writer's
-	// activation rate, floored by min_write_ms. Records/hour fill sectors;
-	// each fill costs one erase of the pair's cycle budget.
-	mut recs_per_hour := f64(0)
+	// every persistent signal has exactly one writer that reads it (the staging cell is SPSC
+	// regardless of policy); its period is the wear check's input (check_journal_wear)
 	for sname in names {
-		si := m.sig_of[sname] or { continue }
-		// the one-writer validation applies to EVERY persistent signal (the
-		// staging cell is SPSC regardless of policy); the rate feeds wear
-		// only for "now"
-		mut eff := writer_period_ms(doc, sname)
-		if si.persist != 'now' {
-			continue
-		}
-		if eff < m.nvm.min_write_ms {
-			eff = m.nvm.min_write_ms
-		}
-		recs_per_hour += 3600_000.0 / f64(eff)
-	}
-	if recs_per_hour > 0 {
-		fills_per_hour := recs_per_hour / f64(m.nvm.sector_records)
-		years := f64(m.nvm.endurance) / (fills_per_hour * 24.0 * 365.0)
-		if years < f64(m.nvm.min_years) {
-			panic('loom2v: [nvm] wear check failed — worst case ${recs_per_hour:.0} records/h ' +
-				'fills a ${m.nvm.sector_records}-record sector ${fills_per_hour:.2}x/h; at ' +
-				'${m.nvm.endurance} cycles that is ${years:.1} years < min_years ${m.nvm.min_years}. ' +
-				'Raise min_write_ms, grow the sectors, or persist fewer "now" signals.')
-		}
+		writer_period_ms(doc, sname)
 	}
 	return names, ids
 }
 
 // writer_period_ms: the activation period of THE handler that writes a
 // persistent signal. Exactly one writer is required — the staging cell is
-// single-writer (SPSC) and the wear math needs one honest rate.
+// single-writer (SPSC) and the wear check needs one honest rate.
 fn writer_period_ms(doc toml.Doc, sname string) u32 {
 	mut period := u32(0)
 	mut writers := 0
@@ -277,7 +259,7 @@ fn writer_period_ms(doc toml.Doc, sname string) u32 {
 	}
 	if writers > 1 {
 		panic('loom2v: persistent signal "${sname}" has ${writers} writers — the staging ' +
-			'cell is single-writer and the wear math needs one rate; keep one writing handler')
+			'cell is single-writer and the wear check needs one rate; keep one writing handler')
 	}
 	if writers == 1 && !writer_reads {
 		panic('loom2v: persistent signal "${sname}"\'s writing handler does not READ it — ' +
@@ -374,10 +356,17 @@ fn check_journal_capacity(m Model) {
 	if m.nvm_names.len + fblocks + m.params.len > 48 {
 		panic('loom2v: ${what} exceed the safe journal pool budget (48 of nvm.max_blocks)')
 	}
-	live := m.nvm_names.len + fault_live_records(m) + m.params.len + 1
+	live := journal_live_records(m)
 	if live + live > int(m.nvm.sector_records) {
 		panic('loom2v: the journal needs ${live + live} records of sector headroom (live set ${live}: ${what}, docs/nvm.md) but [nvm] sector_records = ${m.nvm.sector_records}')
 	}
+}
+
+// journal_live_records: the journal's live set in records — every persisted signal, the fault
+// memory's (fault_live_records), every parameter, and the clean marker. The capacity check and the
+// wear check (a compaction copies it) both read it here.
+fn journal_live_records(m Model) int {
+	return m.nvm_names.len + fault_live_records(m) + m.params.len + 1
 }
 
 // fault_live_records: the journal records the persisted fault memory keeps live — the status image
@@ -388,22 +377,10 @@ fn fault_live_records(m Model) int {
 	if !fault_persist_on(m) {
 		return 0
 	}
-	mut nsnap := 0
-	mut snap_recs := 1
-	for f in m.faults {
-		if f.freeze.len == 0 {
-			continue
-		}
-		nsnap++
-		mut s := fault.Slot{}
-		for n in fault_freeze_lens(m, f) {
-			s.freeze_len[s.nfreeze] = u8(n)
-			s.nfreeze++
-		}
-		r := chain_records(s.block_len())
-		if r > snap_recs {
-			snap_recs = r
-		}
+	nsnap := m.faults.filter(it.freeze.len > 0).len
+	mut snap_recs := fault_widest_snapshot(m)
+	if snap_recs < 1 {
+		snap_recs = 1
 	}
 	return chain_records(2 + m.faults.len * fault.image_rec) + 2 * nsnap * snap_recs
 }

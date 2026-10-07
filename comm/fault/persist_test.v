@@ -111,7 +111,15 @@ fn pf_put(ctx voidptr, id u16, data &u8, len u16) bool {
 	if id == r.m.store.id {
 		r.image_puts++
 	}
-	return r.j.put(id, data, len)
+	if !r.j.put(id, data, len) {
+		return false
+	}
+	if len == 1 {
+		r.tomb_puts++
+	} else {
+		r.snap_puts++
+	}
+	return true
 }
 
 fn pf_get(ctx voidptr, id u16, out &u8, cap u16) u16 {
@@ -165,6 +173,8 @@ mut:
 	d          [4]Debounce
 	puts       int
 	image_puts int
+	snap_puts  int // snapshot blocks written (accepted)
+	tomb_puts  int // tombstones written (accepted)
 	cap        int
 	aging      u8 // every fault's aging threshold
 	committed  map[u32][]u8 // per DTC, the snapshot block the last COMMITTED image claims, as it was then
@@ -1169,4 +1179,106 @@ fn test_an_ended_cycle_is_stored_closed_before_the_next_wake() {
 		assert r.slot(0).aging_count == stored + 1, 'restart ${k}: aging ${r.slot(0).aging_count}'
 		r.m.persist(u64(1000 * k + 10000), true)
 	}
+}
+
+// @verifies REQ-NVM-010 (the fault memory's share of the wear check: the bound it multiplies)
+// The write budget (cycle_images, clear_images, setting_images, captures_per_cycle) is what
+// loom2v's wear check multiplies by the declared rates (REQ-NVM-010), so the memory is held to it:
+// a random life of results, cycle boundaries, power cycles, clears, 0x85 changes and flushes —
+// displacement included — writes no more images, snapshots or tombstones than the budget allows
+// for what happened.
+fn test_traffic_stays_inside_the_write_budget() {
+	mut rng := u32(0x2468ACE)
+	nsnap := 3 // new_rig: DTCs 0..2 keep a snapshot
+	for run in 0 .. 40 {
+		mut r := new_rig(if run % 2 == 0 { 2 } else { 3 })
+		r.image_puts = 0
+		r.snap_puts = 0
+		r.tomb_puts = 0
+		mut cycles := 1 // the power cycle new_rig began
+		mut clears := 0
+		mut settings := 0
+		mut flushes := 0
+		mut now := u64(10)
+		for step in 0 .. 400 {
+			rng ^= rng << 13
+			rng ^= rng >> 17
+			rng ^= rng << 5
+			now += 7
+			op := rng % 100
+			if op < 85 {
+				k := int((rng >> 8) % 4)
+				res := match (rng >> 11) % 3 {
+					0 { TestResult.failed }
+					1 { TestResult.passed }
+					else { TestResult.not_tested }
+				}
+				r.srv.dids[1].data[0] = u8(step)
+				r.pass(k, res, u32(rng >> 14), now)
+			} else if op < 88 {
+				group := if (rng >> 8) & 1 == 0 { u32(0xFFFFFF) } else { rig_dtcs[(rng >> 9) % 4] }
+				if r.m.clear(group) == 0 {
+					clears++
+				}
+			} else if op < 91 {
+				on := (rng >> 8) & 1 == 0
+				if on == r.m.setting_off {
+					settings++
+				}
+				r.m.set_setting(on)
+				r.m.persist(now, false)
+			} else if op < 94 {
+				r.m.persist(now, true)
+				flushes++
+			} else if op < 98 {
+				r.m.cycle_end()
+				r.m.persist(now, false)
+				r.m.cycle_start()
+				r.m.persist(now, false)
+				cycles++
+			} else {
+				r.reboot() // the restore ends the interrupted cycle; the power cycle begins the next
+				cycles++
+			}
+			r.j.erase_pending() // a quiet point after every step: the tiny test sector seldom refuses
+		}
+		bound := cycles * cycle_images(r.n, nsnap) + clears * clear_images(r.n, nsnap) +
+			settings * setting_images + flushes
+		assert r.image_puts <= bound, 'run ${run}: ${r.image_puts} images > ${bound} (${cycles} cycles, ${clears} clears, ${settings} 0x85, ${flushes} flushes)'
+		snaps := (cycles + clears) * nsnap * captures_per_cycle
+		assert r.snap_puts <= snaps, 'run ${run}: ${r.snap_puts} snapshot blocks > ${snaps}'
+		assert r.tomb_puts <= r.snap_puts, 'run ${run}: ${r.tomb_puts} tombstones for ${r.snap_puts} snapshot blocks'
+		assert r.image_puts > 0 && r.snap_puts > 0, 'run ${run}: the traffic wrote nothing'
+	}
+}
+
+// ... and the bound is reached but for its claim term: a cycle that begins and ends in passes of
+// their own (NM's wake and sleep), and tests then fails every DTC, each in a pass of its own,
+// writes exactly the start, the end and two per DTC. The snapshot claims ride with the failures
+// they were captured at; cycle_images keeps one per snapshot DTC as the margin for a claim that
+// commits in a later pass than its failure.
+fn test_the_cycle_budget_is_reached() {
+	mut r := new_rig(3)
+	r.restart(false)
+	r.image_puts = 0
+	mut now := u64(10)
+	for _ in 0 .. 5 {
+		r.m.cycle_start()
+		now++
+		r.m.persist(now, false)
+		for res in [TestResult.passed, .failed] {
+			for k in 0 .. r.n {
+				now++
+				r.pass(k, res, 1, now)
+				r.j.erase_pending() // a quiet point after every pass: the tiny test sector never refuses
+			}
+		}
+		r.m.cycle_end()
+		now++
+		r.m.persist(now, false)
+		assert !r.m.refused
+		r.j.erase_pending() // the sleep edge's quiet point: the tiny test sector stays writable
+	}
+	assert r.image_puts == 5 * (2 + 2 * r.n), '${r.image_puts} images in 5 cycles'
+	assert r.image_puts <= 5 * cycle_images(r.n, 3)
 }

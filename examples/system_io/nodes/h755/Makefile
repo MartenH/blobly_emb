@@ -32,6 +32,7 @@ LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
 
 BUILD    = build
 TX_A     = $(BUILD)/tx.a
+TX_CMD   = $(CC) $(CFLAGS)
 TX_ASM   = $(wildcard $(PORT)/src/*.S)
 TX_C     = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
@@ -69,14 +70,15 @@ $(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) 
 -include $(BUILD)/app.c.d
 
 # 3) ThreadX kernel objects.
-$(BUILD)/tx/%.o: $(PORT)/src/%.S Makefile
+$(BUILD)/tx/%.o: $(PORT)/src/%.S $$(call c_unrecorded,$$@) $$(call c_sign,$(BUILD)/tx,$$(TX_CMD))
 	@mkdir -p $(BUILD)/tx
-	$(CC) $(CFLAGS) -c $< -o $@
-$(BUILD)/tx/%.o: $(TX)/common/src/%.c Makefile
+	$(call c_object,$(TX_CMD))
+$(BUILD)/tx/%.o: $(TX)/common/src/%.c $$(call c_unrecorded,$$@) $$(call c_sign,$(BUILD)/tx,$$(TX_CMD))
 	@mkdir -p $(BUILD)/tx
-	$(CC) $(CFLAGS) -c $< -o $@
-$(TX_A): $(TX_OBJ)
-	$(AR) -rc $@ $^
+	$(call c_object,$(TX_CMD))
+$(TX_A): $(TX_OBJ) $$(call c_sign,$$@,$$(AR_CMD))
+	$(call c_archive,$(AR_CMD))
+-include $(call c_records,$(TX_OBJ))
 
 # app.c is GENERATED V code, and its warnings are all V-codegen artifacts of a
 # freestanding build on a 32-bit target: calls to the C glue via `fn C.*` with no
@@ -85,12 +87,14 @@ $(TX_A): $(TX_OBJ)
 # 32-bit pointers as u64 (never called no-alloc; --gc-sections drops it). None are our
 # code and none are fixable in a regenerated file, so compile THIS unit quiet (-w) — the
 # hand-written glue (comm_glue.c, board.c, drivers) keeps full warnings.
-$(BUILD)/app.o: $(BUILD)/app.c Makefile $(call c_unrecorded,$(BUILD)/app.o)
-	$(call c_build,$(CC) $(CFLAGS) -w -c $<)
+APPO_CMD = $(CC) $(CFLAGS) -w -c $(BUILD)/app.c
+$(BUILD)/app.o: $(BUILD)/app.c $(call c_unrecorded,$(BUILD)/app.o) $$(call c_sign,$$@,$$(APPO_CMD))
+	$(call c_build,$(APPO_CMD))
 -include $(BUILD)/app.o.d
 
-$(BUILD)/$(NAME).elf: $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(TX_A) $(BOARD_LD_THREADX) $(call c_unrecorded,$(BUILD)/$(NAME).elf)
-	$(call c_build,$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(TX_A))
+ELF_CMD = $(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(TX_A)
+$(BUILD)/$(NAME).elf: $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(TX_A) $(BOARD_LD_THREADX) $(call c_unrecorded,$(BUILD)/$(NAME).elf) $$(call c_sign,$$@,$$(ELF_CMD))
+	$(call c_build,$(ELF_CMD))
 	$(SIZE) $@
 -include $(BUILD)/$(NAME).elf.d
 

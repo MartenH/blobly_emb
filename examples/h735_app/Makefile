@@ -70,8 +70,9 @@ $(BUILD)/app.c: main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) $(call v_s
 -include $(BUILD)/app.c.d
 
 # 2) cross-compile + link: V output + startup + board shim + CAN backend
-$(BUILD)/app.elf: $(CSRC) $(BOARD_LD_BARE) $(call c_unrecorded,$(BUILD)/app.elf) | $(BUILD)
-	$(call c_build,$(CC) $(CFLAGS) $(LDFLAGS) $(CSRC))
+ELF_CMD = $(CC) $(CFLAGS) $(LDFLAGS) $(CSRC)
+$(BUILD)/app.elf: $(CSRC) $(BOARD_LD_BARE) $(call c_unrecorded,$(BUILD)/app.elf) $$(call c_sign,$$@,$$(ELF_CMD)) | $(BUILD)
+	$(call c_build,$(ELF_CMD))
 	$(SIZE) $@
 -include $(BUILD)/app.elf.d
 
