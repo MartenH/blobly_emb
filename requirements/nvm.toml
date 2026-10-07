@@ -86,7 +86,7 @@ derives = "SYS-REQ-NVM-001"
 [[req]]
 id = "REQ-NVM-010"
 title = "Wear provable at configuration time"
-text = "For every immediately-persisted signal, the worst-case write rate (from its writer's activation period and the system write floor) shall be checked against the storage wear budget when the configuration is generated, failing generation if exceeded."
+text = "Every writer of the persistence storage — immediately-persisted signals (from each writer's activation period and the system write floor), the shutdown flushes and clean-shutdown markers, the fault memory's status and snapshot writes, and parameter codings — shall be bounded at its worst-case rate in one computation when the configuration is generated, the rates that depend on the vehicle (operation cycles, tester resets, clears, DTC-setting changes, codings) taken from declared assumptions; generation shall fail, naming each writer's share, if the resulting storage wear exceeds the budget."
 status = "draft"
 method = "analysis"
 asil = "QM"

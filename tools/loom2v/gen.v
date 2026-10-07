@@ -3894,6 +3894,7 @@ fn main() {
 	derive_param_nvm(mut m)
 	check_journal_capacity(m)
 	m.fault_grace_us = fault_grace_us(m, doc)
+	wear_report := check_journal_wear(m, doc)
 	validate_doip(m)
 	display_check(m)
 
@@ -4727,6 +4728,9 @@ fn main() {
 		os.write_file(args[6], man.join('\n') + '\n') or { panic('write ${args[6]}: ${err}') }
 	}
 
+	for l in wear_report {
+		eprintln(l)
+	}
 	eprintln('loom2v: ${m.sig_names.len} signals (${bus_names.len} bus bridge), ${m.isotp_conns.len} isotp, ${m.part.by_part.len} partition(s)')
 }
 
