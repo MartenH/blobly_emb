@@ -174,3 +174,10 @@ fn test_check_refuses_a_value_outside_its_row() {
 	// an own_check row is ecumodel.validate's to judge (ecucheck runs both): said once, there
 	assert errs_of('[trace]\npre_pct = 150\n') == []
 }
+
+// the structure's required keys are stated (reference, editors) but reported by ecumodel.validate
+fn test_a_required_by_model_row_is_stated_but_not_reported_twice() {
+	assert ecu.key('partition', 'core').required
+	assert errs_of('[[partition]]\nname = "p"\n') == []
+	assert ecu.json_schema().contains('"required": ["name", "core", "thread"]')
+}

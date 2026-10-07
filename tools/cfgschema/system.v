@@ -79,8 +79,8 @@ fn system_schema() Schema {
 			]),
 			tbl('sys_frame_e2e', '[[frame]] e2e', '', [
 				k('data_id', .int).range(0, 0xFFFF).hex().doc('the E2E Data ID (required)'),
-				k('counter_pos', .int).d('0').range(0, 0xFFFF).doc("the counter's byte offset in the payload"),
-				k('crc_pos', .int).d('0').range(0, 0xFFFF).doc("the CRC's byte offset in the payload"),
+				k('counter_pos', .int).range(0, 0xFFFF).doc("the counter's byte: the appended trailer starts at the derived payload size"),
+				k('crc_pos', .int).range(0, 0xFFFF).doc("the CRC's byte, right after the counter"),
 				k('timeout_ms', .int).range(1, 2147483).doc('the receiver\'s sender-loss timeout (ms), longer than the cycle; required unless mode = "event"'),
 			]),
 			tbl('sys_route', '[[route]]', 'A gateway route between two buses (dissolution only): set exactly one of `frame` / `signal`.', [

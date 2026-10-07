@@ -217,6 +217,7 @@
         "image": {"type": "string", "description": "emit this partition's image into this directory (docs/multi-image.md; ThreadX)"},
         "thread": {"type": "array", "items": {"$ref": "#/definitions/thread"}, "description": "its threads, 1..4 (required)"}
       },
+      "required": ["name", "core", "thread"],
       "additionalProperties": false
     },
     "thread": {
@@ -227,6 +228,7 @@
         "name": {"type": "string", "description": "identifier, unique across the node (required)"},
         "priority": {"type": "integer", "default": 10, "description": "scheduling priority, lower = higher (ThreadX: 0..31) Default: 10."}
       },
+      "required": ["name"],
       "additionalProperties": false
     },
     "fb": {
@@ -238,6 +240,7 @@
         "thread": {"type": "string", "description": "the [[partition.thread]] it runs on (required)"},
         "handler": {"type": "array", "items": {"$ref": "#/definitions/handler"}, "description": "its handlers, at least one"}
       },
+      "required": ["name", "thread", "handler"],
       "additionalProperties": false
     },
     "handler": {
@@ -251,6 +254,7 @@
         "reads": {"type": "array", "items": {"type": "string"}, "description": "the signals (and params) it reads Default: []."},
         "writes": {"type": "array", "items": {"type": "string"}, "description": "the signals it writes Default: []."}
       },
+      "required": ["name", "period_ms"],
       "additionalProperties": false
     },
     "signal": {

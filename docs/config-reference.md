@@ -251,12 +251,12 @@ A memory-protection partition, pinned to a core, with its threads.
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
-| `name` | string |  | — |  | identifier, unique (required; "io" is reserved) |
-| `core` | integer |  | — |  | the core index it is pinned to (required) |
+| `name` | string | yes | — |  | identifier, unique (required; "io" is reserved) |
+| `core` | integer | yes | — |  | the core index it is pinned to (required) |
 | `trusted` | boolean |  | `false` |  | privileged: the MPU domain with peripheral / IO access |
 | `external` | boolean |  | `false` |  | declared but hand-written: a satellite core's image built elsewhere |
 | `image` | string |  | — |  | emit this partition's image into this directory (docs/multi-image.md; ThreadX) |
-| `thread` | array of tables → [`[[partition.thread]]`](#ecu-thread) |  | — |  | its threads, 1..4 (required) |
+| `thread` | array of tables → [`[[partition.thread]]`](#ecu-thread) | yes | — |  | its threads, 1..4 (required) |
 
 <a id="ecu-thread"></a>
 
@@ -266,7 +266,7 @@ A thread; an fb names it to run there.
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
-| `name` | string |  | — |  | identifier, unique across the node (required) |
+| `name` | string | yes | — |  | identifier, unique across the node (required) |
 | `priority` | integer |  | `10` |  | scheduling priority, lower = higher (ThreadX: 0..31) |
 
 <a id="ecu-fb"></a>
@@ -277,9 +277,9 @@ A Function Block: the application unit, scheduled on one thread.
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
-| `name` | string |  | — |  | PascalCase, unique (required) |
-| `thread` | string |  | — |  | the [[partition.thread]] it runs on (required) |
-| `handler` | array of tables → [`[[fb.handler]]`](#ecu-handler) |  | — |  | its handlers, at least one |
+| `name` | string | yes | — |  | PascalCase, unique (required) |
+| `thread` | string | yes | — |  | the [[partition.thread]] it runs on (required) |
+| `handler` | array of tables → [`[[fb.handler]]`](#ecu-handler) | yes | — |  | its handlers, at least one |
 
 <a id="ecu-handler"></a>
 
@@ -289,8 +289,8 @@ A handler: an FB entry point the Loom dispatches.
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
-| `name` | string |  | — |  | identifier (required) |
-| `period_ms` | integer |  | — |  | the period it runs at (ms; the trigger, required) |
+| `name` | string | yes | — |  | identifier (required) |
+| `period_ms` | integer | yes | — |  | the period it runs at (ms; the trigger, required) |
 | `irq` | string |  | — |  | reserved: an interrupt trigger, refused until it is generated |
 | `reads` | array of strings |  | `[]` |  | the signals (and params) it reads |
 | `writes` | array of strings |  | `[]` |  | the signals it writes |
@@ -813,8 +813,8 @@ A SOME/IP event on a someip bus: its id, its signals and how it is sent. Lowerin
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
 | `data_id` | integer |  | — | 0x0..0xFFFF | the E2E Data ID (required) |
-| `counter_pos` | integer |  | `0` | 0..65535 | the counter's byte offset in the payload |
-| `crc_pos` | integer |  | `0` | 0..65535 | the CRC's byte offset in the payload |
+| `counter_pos` | integer |  | — | 0..65535 | the counter's byte: the appended trailer starts at the derived payload size |
+| `crc_pos` | integer |  | — | 0..65535 | the CRC's byte, right after the counter |
 | `timeout_ms` | integer |  | — | 1..2147483 | the receiver's sender-loss timeout (ms), longer than the cycle; required unless mode = "event" |
 
 <a id="system-sys-route"></a>

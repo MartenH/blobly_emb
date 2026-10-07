@@ -136,8 +136,8 @@
       "type": "object",
       "properties": {
         "data_id": {"type": "integer", "minimum": 0, "maximum": 65535, "description": "the E2E Data ID (required)"},
-        "counter_pos": {"type": "integer", "minimum": 0, "maximum": 65535, "default": 0, "description": "the counter's byte offset in the payload Default: 0."},
-        "crc_pos": {"type": "integer", "minimum": 0, "maximum": 65535, "default": 0, "description": "the CRC's byte offset in the payload Default: 0."},
+        "counter_pos": {"type": "integer", "minimum": 0, "maximum": 65535, "description": "the counter's byte: the appended trailer starts at the derived payload size"},
+        "crc_pos": {"type": "integer", "minimum": 0, "maximum": 65535, "description": "the CRC's byte, right after the counter"},
         "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 2147483, "description": "the receiver's sender-loss timeout (ms), longer than the cycle; required unless mode = \"event\""}
       },
       "additionalProperties": false

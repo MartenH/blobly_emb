@@ -49,7 +49,10 @@ pub:
 	// own_check: the value is judged by a leaf check that ecucheck also runs (ecumodel.validate),
 	// with the context its message needs; the walk leaves it alone so it is said once
 	own_check bool
-	desc      string
+	// by_model: a required row whose ABSENCE ecumodel.validate reports (the partition / thread /
+	// fb / handler structure, shared with loom2v); the walk does not say it a second time
+	by_model bool
+	desc     string
 }
 
 // Table is one context: a section of the file, or a sub-table inside one.
@@ -153,6 +156,15 @@ fn (k Key) hex() Key {
 	return Key{
 		...k
 		hex: true
+	}
+}
+
+// required_by_model: required, and ecumodel.validate reports its absence (see Key.by_model)
+fn (k Key) required_by_model() Key {
+	return Key{
+		...k
+		required: true
+		by_model: true
 	}
 }
 
@@ -298,7 +310,7 @@ fn (s Schema) check_table(m map[string]toml.Any, ctx string, mut errs []string) 
 		}
 	}
 	for key in t.keys {
-		if key.required && key.name !in m {
+		if key.required && !key.by_model && key.name !in m {
 			errs << '${t.label}: missing required key "${key.name}"'
 		}
 	}
