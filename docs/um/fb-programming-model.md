@@ -143,16 +143,21 @@ at the bus, in the generated codec, both ways. Two things are yours to get right
   resolution declare `kph = "f32"`. A signal whose physical range goes negative (°C, a signed
   torque) needs a signed type (`i16`, `f32`) — a negative value cast into an unsigned field is
   meaningless.
-- **Sending: rounded, not range-checked.** Your value is rounded to the nearest raw step
-  (`(phys - offset) / factor`). The DBC's declared min/max are **not enforced**: a value outside
-  them is encoded as is while it fits the signal's bit width (150 on an 8-bit `[0|100]` signal goes
-  out as 150), and one that does not fit **wraps** into those bits. Clamp in the FB if your output
-  can leave the declared range. Values pass through `f64` both ways, so an integer is exact only up
-  to 2^53 — a 64-bit counter or identifier on the wire needs care.
+- **Sending: rounded, then saturated to the signal's range.** Your value is rounded to the nearest
+  raw step (`(phys - offset) / factor`) and held to the DBC's declared min/max and to the signal's
+  bit width: 150 on an 8-bit `[0|100]` signal goes out as 100, -1 on an unsigned one as 0 — never
+  wrapped into the bits. NaN goes out as raw 0 brought into the range; a value the DBC's VAL_ table
+  names (`255 "SNA"`) goes out as itself. Each value that had to be moved is counted, readable
+  with a `tx_saturations` `[[did]]` (communication.md, "Sent values outside the signal range"); a
+  count above zero means an FB sends what its bus contract forbids, so clamp in the FB if your
+  output can leave the range on purpose. Values pass through `f64` both
+  ways, so an integer is exact only up to 2^53 — a 64-bit counter or identifier on the wire needs
+  care.
 
 Any other conversion — unit changes, clamping, filtering, rate limits — is ordinary FB code today;
 declared transforms on a connection are planned, not built. On the ThreadX target the lean codec
-does no scaling at all (plain u32 layouts, factor 1, offset 0 — see the table).
+does no scaling at all (plain u32 layouts, factor 1, offset 0 — see the table); it saturates like
+every other sender.
 
 ### Send a value on CAN
 

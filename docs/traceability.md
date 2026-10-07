@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 207 | 114 | 33 | 60 | 0 |
+| 208 | 115 | 33 | 60 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -55,6 +55,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-007 | QM | test | uncovered | — |
 | REQ-COM-008 | QM | test | covered | rx_faults_zone_a.lua (pending), rx_target_test.v (pass), rxmon_test.v (pass), rxstatus.lua (pending) |
 | REQ-COM-009 | QM | test | verified | pass_model_test.v (pass), rxmon_test.v (pass) |
+| REQ-COM-010 | QM | test | verified | encode_test.v (pass), gen_test.v (pass), raw_range_test.v (pass), rx_target_test.v (pass), tx_saturation_test.v (pass) |
 | REQ-DIAG-001 | QM | test | verified | diag_test.v (pass), uds-on-target-domain (approved), uds-on-target-sysnode (approved), uds-on-target-zone-a (approved), uds_test.v (pass) |
 | REQ-DIAG-002 | QM | test | covered | diag.lua (pending), diag_test.v (pass), uds-on-target-live-did (approved), uds-on-target-zone-a (approved) |
 | REQ-DIAG-003 | QM | test | covered | diag.lua (pending), diag_test.v (pass), uds_test.v (pass) |
@@ -267,6 +268,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-007 | | | | | | | | | | | | | | | | | | | | | |
 | REQ-COM-008 | | | | | | | | | | | | | | | | | · | ✓ | | | |
 | REQ-COM-009 | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-COM-010 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-001 | ✓ | | | | | | | ✓ | | | | | | | | ✓ | | ✓ | | | |
 | REQ-DIAG-002 | ✓ | | | | | | | | | | | | | | | ✓ | · | ✓ | | | |
 | REQ-DIAG-003 | | | | | | | | | | | | | | | | | · | ✓ | | | |

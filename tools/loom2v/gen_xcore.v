@@ -161,6 +161,11 @@ fn xcore_comm_locals(m Model) []string {
 	return g
 }
 
+// xcore_encodes: the comm thread encodes a remote signal onto its bus (a satellite's TX).
+fn xcore_encodes(m Model) bool {
+	return xcore_on(m) && m.xcore_names.any((m.sig_of[it] or { SigInfo{} }).external)
+}
+
 // xcore_produce_drain: poll each slot and transmit frame-bound signals on their period,
 // fresh-gated — a stale satellite (or a dead core) simply goes quiet on the bus.
 fn xcore_produce_drain(m Model) []string {
@@ -184,22 +189,18 @@ fn xcore_produce_drain(m Model) []string {
 		// arrived off-cycle or under backpressure, and with no later publish it
 		// never transmitted. Short-circuit keeps it unconsumed until eligible.
 		if si.wide {
-			// wide (xioc_n): the poll commits the lanes as a unit; the lean encode packs
-			// each u32 lane LE at byte 4*lane — same contract the pair path had, generalized
+			// wide (xioc_n): the poll commits the lanes as a unit; each u32 lane is encoded
+			// into the DBC signal at byte 4*lane — same contract the pair path has, generalized
 			// (DLC == 4 * lanes is validated in the comm-thread walk; > 8 needs FD and the
 			// classic comm thread rejects it there, loudly).
 			off := m.xcore_xw_off[sname] or { 0 }
 			g << '\t\tif ${nm_gate(m)}${diag_tx_gate(m)}C.xcore_layout_ok() != 0 && t1 - xcore_${n}_last >= u64(${cyc}) && ch.tx_ready()'
 			g << '\t\t\t&& C.xcore_poll_n(u32(${off}), ${si.fields.len}, &xcore_${n}_seq, &xcore_${n}_lanes[0]) != 0 {' // REQ-COM-007
-			g << '\t\t\txcore_txf.id = u32(0x${si.dbc_id.hex()})'
-			g << '\t\t\txcore_txf.len = ${si.dbc_dlc}'
+			mut lanes := []string{}
 			for j in 0 .. si.fields.len {
-				g << '\t\t\txcore_txf.data[${j * 4}] = u8(xcore_${n}_lanes[${j}])'
-				g << '\t\t\txcore_txf.data[${j * 4 + 1}] = u8(xcore_${n}_lanes[${j}] >> 8)'
-				g << '\t\t\txcore_txf.data[${j * 4 + 2}] = u8(xcore_${n}_lanes[${j}] >> 16)'
-				g << '\t\t\txcore_txf.data[${j * 4 + 3}] = u8(xcore_${n}_lanes[${j}] >> 24)'
+				lanes << 'xcore_${n}_lanes[${j}]'
 			}
-			g << '\t\t\tch.send(xcore_txf)'
+			g << lane_send_lines(si, lanes, '\t\t\t')
 			g << '\t\t\txcore_${n}_last = t1'
 			g << '\t\t}'
 			continue
@@ -207,19 +208,11 @@ fn xcore_produce_drain(m Model) []string {
 		slot := m.xcore_idx[sname] or { 0 }
 		g << '\t\tif ${nm_gate(m)}${diag_tx_gate(m)}C.xcore_layout_ok() != 0 && t1 - xcore_${n}_last >= u64(${cyc}) && ch.tx_ready()'
 		g << '\t\t\t&& C.xcore_poll(${slot}, &xcore_${n}_a, &xcore_${n}_b) != 0 {' // REQ-COM-007
-		g << '\t\t\txcore_txf.id = u32(0x${si.dbc_id.hex()})'
-		g << '\t\t\txcore_txf.len = ${si.dbc_dlc}'
-		g << '\t\t\txcore_txf.data[0] = u8(xcore_${n}_a)'
-		g << '\t\t\txcore_txf.data[1] = u8(xcore_${n}_a >> 8)'
-		g << '\t\t\txcore_txf.data[2] = u8(xcore_${n}_a >> 16)'
-		g << '\t\t\txcore_txf.data[3] = u8(xcore_${n}_a >> 24)'
-		if si.dbc_dlc == 8 {
-			g << '\t\t\txcore_txf.data[4] = u8(xcore_${n}_b)'
-			g << '\t\t\txcore_txf.data[5] = u8(xcore_${n}_b >> 8)'
-			g << '\t\t\txcore_txf.data[6] = u8(xcore_${n}_b >> 16)'
-			g << '\t\t\txcore_txf.data[7] = u8(xcore_${n}_b >> 24)'
+		mut pair := ['xcore_${n}_a']
+		if si.fields.len > 1 {
+			pair << 'xcore_${n}_b'
 		}
-		g << '\t\t\tch.send(xcore_txf)'
+		g << lane_send_lines(si, pair, '\t\t\t')
 		g << '\t\t\txcore_${n}_last = t1'
 		g << '\t\t}'
 	}
@@ -330,4 +323,34 @@ fn xcore_manifest(m Model) []string {
 		g << '${sname},${slot},${fr}'
 	}
 	return g
+}
+
+// lane_send_lines: a remote signal's frame from its polled u32 lanes — lane j is field j, encoded
+// into bytes 4j..4j+3 (lane_encode_lines: the one send encode) — sent, and its saturations counted
+// once the channel accepts it.
+fn lane_send_lines(si SigInfo, lanes []string, ind string) []string {
+	mut g := ['${ind}xcore_txf.id = u32(0x${si.dbc_id.hex()})', '${ind}xcore_txf.len = ${si.dbc_dlc}',
+		'${ind}mut xcore_sat := u32(0)']
+	for j, lane in lanes {
+		g << lane_encode_lines(si, j, si.fields[j].typ, lane, 'xcore_txf', 'xcore_sat', ind)
+	}
+	g << '${ind}if ch.send(xcore_txf) {'
+	g << '${ind}\ttx_sat.add(xcore_sat)'
+	g << '${ind}}'
+	return g
+}
+
+// target_encodes: the ThreadX comm thread encodes a sent value — a local FB's external TX signal,
+// or a satellite's (xcore_encodes). Mirrors the producers comm_thread_entry emits.
+fn target_encodes(m Model) bool {
+	for sn in m.sig_names {
+		s := m.sig_of[sn] or { continue }
+		if m.eth != '' && s.bus == m.eth {
+			continue
+		}
+		if s.external && !s.rx && !s.remote {
+			return true
+		}
+	}
+	return xcore_encodes(m)
 }

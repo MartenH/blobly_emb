@@ -375,6 +375,7 @@ fn specs() map[string]map[string]Key {
 			'signal':   k(.str)
 			'param':    k(.str) // the [[param]] this DID codes (0x2E) and reads back (0x22)
 			'param_status': k(.boolean) // one byte per [[param]]: default / coded / reverted
+			'tx_saturations': k(.boolean) // the count of sent values saturated to their range (u32 BE)
 			'read':     sub(.tbl, false, 'did_access') // { session = [...], security = N }
 			'write':    sub(.tbl, false, 'did_access')
 		}

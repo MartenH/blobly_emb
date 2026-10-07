@@ -2,6 +2,8 @@
 // Runtime layer: no heap, operates on fixed [64]u8 frame payloads.
 module gen
 
+import comm.com
+
 // ===== SrcFrame  id=0x100  dlc=8 =====
 pub const src_frame_id = u32(0x100)
 pub const src_frame_dlc = u8(8)
@@ -37,13 +39,11 @@ pub fn src_frame_speed_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn src_frame_speed_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 0.1
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 16)
-	}
-	src_frame_speed_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
+pub fn src_frame_speed_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 0.1
+	raw, saturated := com.encode_raw(raw_x, 0.0, 65535.0, u64(0), u64(65535), u64(0), u64(0xffff))
+	src_frame_speed_set_raw(mut data, raw)
+	return saturated
 }
 
 // Rpm: 16|16 @1 (Intel) unsigned (1.0,0.0) "rpm"
@@ -77,13 +77,11 @@ pub fn src_frame_rpm_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn src_frame_rpm_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 1.0
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 16)
-	}
-	src_frame_rpm_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
+pub fn src_frame_rpm_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 1.0
+	raw, saturated := com.encode_raw(raw_x, 0.0, 65535.0, u64(0), u64(65535), u64(0), u64(0xffff))
+	src_frame_rpm_set_raw(mut data, raw)
+	return saturated
 }
 
 // ===== DstFrame  id=0x200  dlc=8 =====
@@ -121,13 +119,11 @@ pub fn dst_frame_speed_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn dst_frame_speed_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 1.0
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 16)
-	}
-	dst_frame_speed_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
+pub fn dst_frame_speed_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 1.0
+	raw, saturated := com.encode_raw(raw_x, 0.0, 65535.0, u64(0), u64(65535), u64(0), u64(0xffff))
+	dst_frame_speed_set_raw(mut data, raw)
+	return saturated
 }
 
 // ===== ExtDst  id=0x18ff0200  dlc=8 =====
@@ -165,11 +161,9 @@ pub fn ext_dst_rpm_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn ext_dst_rpm_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 1.0
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 16)
-	}
-	ext_dst_rpm_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
+pub fn ext_dst_rpm_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 1.0
+	raw, saturated := com.encode_raw(raw_x, 0.0, 65535.0, u64(0), u64(65535), u64(0), u64(0xffff))
+	ext_dst_rpm_set_raw(mut data, raw)
+	return saturated
 }

@@ -14,13 +14,15 @@
 -- The power-cut test runs only when BLOB_ZONE_A_POWER_CUT names a command that cuts zone_a's power
 -- (or resets it with no warning to the firmware, e.g. `st-flash --serial $BLOB_H723_SERIAL reset`)
 -- and returns once it is back; without it that test logs that it was skipped. The suite leaves
--- zone_a coded to 360, the no-limit value.
+-- zone_a coded to 360, the no-limit value. Throughout, SteerLimiter holds SteeringAngle inside its
+-- DBC range [0|360] itself, so the comm thread never has to: DID 0x0120 (tx_saturations) reads 0.
 
 local LIMIT_DID = 0x0110
 local STATUS_DID = 0x0111
 local STEER_ID = 0x132 -- SteeringFrame (edge.dbc): SteeringAngle, u32 LE at bit 0, every 50 ms
 local BOOT_MS = 3000 -- the bootloader's check, the application's start, the journal's mount
 local NO_LIMIT = 360
+local SATURATIONS_DID = 0x0120 -- sent values held to their DBC range, u32 big-endian
 
 local function diag() return uds.open("edge", { tx = 0x7C0, rx = 0x7C8 }) end
 
@@ -128,4 +130,6 @@ test("zone_a: coded back to the no-limit value, the sweep is whole again", funct
   local d = coded(NO_LIMIT)
   check.equal(tohex(d:read_did(LIMIT_DID)), tohex(u16(NO_LIMIT)))
   check.truthy(max_angle(80) > 100)
+  -- every angle the limiter sent was inside SteeringFrame's range: nothing was saturated
+  check.equal(tohex(d:read_did(SATURATIONS_DID)), tohex("\0\0\0\0"), "a sent value was saturated")
 end)

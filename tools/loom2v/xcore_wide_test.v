@@ -1,11 +1,27 @@
 module main
 
+import tools.candb
+
 // @verifies REQ-INV-006
 // The wide-remote-signal emitters on a hand-built model (the bench demo deliberately
 // carries no wide signal until the H755 tear re-run signs the mechanism off, so this
 // is what executes the wide paths in CI). The MECHANISM (xioc_n) is tear-tested in
 // tools/xioc; here we pin the generator contract: the xcore_gen.h defines + budget guard,
 // the satellite lane order, and the owner drain's poll/encode shape.
+
+// a lane's DBC signal: `bits` wide at bit 32 * lane, unsigned, no declared range
+fn lane_sg(name string, lane int, bits int) candb.Signal {
+	return candb.Signal{
+		name:      name
+		start_bit: 32 * lane
+		length:    bits
+	}
+}
+
+// com.encode_raw's bound arguments for a 32-, a 16- and a 1-bit lane with no declared range
+const u32_lane = '0.0, 4294967295.0, u64(0), u64(4294967295), u64(0), u64(0xffffffff)'
+const u16_lane = '0.0, 65535.0, u64(0), u64(65535), u64(0), u64(0xffff)'
+const u1_lane = '0.0, 1.0, u64(0), u64(1), u64(0), u64(0x1)'
 
 fn wide_model() Model {
 	mut sig_of := map[string]SigInfo{}
@@ -33,6 +49,7 @@ fn wide_model() Model {
 		dbc_msg:  'm4_wide_frame'
 		dbc_id:   0x300
 		dbc_dlc:  12
+		dbc_lanes: [lane_sg('WideN', 0, 32), lane_sg('WideLo', 1, 16), lane_sg('WideOk', 2, 1)]
 	}
 	sig_of['M4Pair'] = SigInfo{
 		name:     'M4Pair'
@@ -53,6 +70,7 @@ fn wide_model() Model {
 		dbc_msg:  'm4_pair_frame'
 		dbc_id:   0x301
 		dbc_dlc:  8
+		dbc_lanes: [lane_sg('PairA', 0, 32), lane_sg('PairB', 1, 32)]
 	}
 	return Model{
 		sig_of:       sig_of
@@ -82,17 +100,25 @@ fn test_xcore_gen_h_wide_defines_and_budget_guard() {
 	assert h.contains('#error')
 }
 
-fn test_wide_drain_polls_and_lean_encodes_every_lane() {
+fn test_wide_drain_polls_and_encodes_every_lane_through_its_signal() {
 	g := xcore_produce_drain(wide_model()).join('\n')
 	// wide: stateless C reader, caller-owned seq + lane buffer, one u32 lane per 4 bytes
 	assert g.contains('C.xcore_poll_n(u32(0), 3, &xcore_m4_wide_seq, &xcore_m4_wide_lanes[0])')
 	// freshness is consumed LAST: pacing + readiness precede the poll, else an
 	// off-cycle fresh value is eaten and never transmitted (codex #211 r3)
 	assert g.contains("C.xcore_layout_ok() != 0 && t1 - xcore_m4_wide_last >= u64(100000) && ch.tx_ready()")
+	// each lane through com.encode_raw (the one send encode: rounded, saturated to its signal's
+	// range) and written LE at byte 4 * lane; the saturations counted once the frame is sent
 	assert g.contains('xcore_txf.len = 12')
-	assert g.contains('xcore_txf.data[0] = u8(xcore_m4_wide_lanes[0])')
-	assert g.contains('xcore_txf.data[7] = u8(xcore_m4_wide_lanes[1] >> 24)')
-	assert g.contains('xcore_txf.data[11] = u8(xcore_m4_wide_lanes[2] >> 24)')
+	assert g.contains('xcore_txf_raw0_x := (f64(xcore_m4_wide_lanes[0]) - 0.0) / 1.0')
+	assert g.contains('xcore_txf_raw0, xcore_txf_raw0_sat := com.encode_raw(xcore_txf_raw0_x, ${u32_lane})')
+	assert g.contains('xcore_txf_raw1, xcore_txf_raw1_sat := com.encode_raw(xcore_txf_raw1_x, ${u16_lane})')
+	assert g.contains('xcore_txf_raw2, xcore_txf_raw2_sat := com.encode_raw(xcore_txf_raw2_x, ${u1_lane})')
+	assert g.contains('xcore_txf.data[0] = u8(xcore_txf_raw0)')
+	assert g.contains('xcore_txf.data[7] = u8(xcore_txf_raw1 >> 24)')
+	assert g.contains('xcore_txf.data[11] = u8(xcore_txf_raw2 >> 24)')
+	assert g.contains('if xcore_txf_raw2_sat {\n\t\t\t\txcore_sat++')
+	assert g.count('if ch.send(xcore_txf) {\n\t\t\t\ttx_sat.add(xcore_sat)\n\t\t\t}') == 2, g
 	// pair emission rides along unchanged in the same drain
 	assert g.contains('C.xcore_poll(0, &xcore_m4_pair_a, &xcore_m4_pair_b)')
 	assert g.contains("C.xcore_layout_ok() != 0 && t1 - xcore_m4_pair_last >= u64(100000) && ch.tx_ready()")

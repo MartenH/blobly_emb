@@ -139,6 +139,7 @@ mut:
 	tx_secure_frame_st com.TxState
 	secoc_key_secure_frame secoc.Key
 	secoc_tx_secure_frame secoc.TxState
+	tx_sat com.TxSaturations // sent values com.encode_raw saturated (docs/communication.md)
 	rxm_powertrain com.RxMonitor // its deadlines, E2E receive state and silences (comm/com)
 	rxm_ignition com.RxMonitor // its deadlines, E2E receive state and silences (comm/com)
 	rxm_brake_status com.RxMonitor // its deadlines, E2E receive state and silences (comm/com)
@@ -352,9 +353,12 @@ fn io_can0_10ms(ctx voidptr) {
 		len: lamp_frame_dlc
 	}
 	mut tx_lamp_frame_any := false
+	mut tx_lamp_frame_sat := u32(0) // values com.encode_raw saturated
 	mut warn_lamp := sig.WarnLamp{}
 	if osal.ioc_acquire2(warn_lamp_ch, &warn_lamp, u8(sizeof(warn_lamp))) {
-		lamp_frame_warn_lamp_set(mut tx_lamp_frame.data, if warn_lamp.on { f64(1) } else { f64(0) })
+		if lamp_frame_warn_lamp_set(mut tx_lamp_frame.data, if warn_lamp.on { f64(1) } else { f64(0) }) {
+			tx_lamp_frame_sat++
+		}
 		tx_lamp_frame_any = true
 	}
 	if tx_lamp_frame_any && diag_tx_ok && st.chan.tx_ready() && st.tx_lamp_frame_st.should_send(now, tx_lamp_frame.data, lamp_frame_dlc) {
@@ -363,6 +367,7 @@ fn io_can0_10ms(ctx voidptr) {
 		st.e2e_tx_lamp_frame.protect(&tx_lamp_frame.data[0], int(lamp_frame_dlc), u16(0x10), 1, 2)
 		if st.chan.send(tx_lamp_frame) {
 			st.tx_lamp_frame_st.mark_sent(now, tx_lamp_frame_pre, lamp_frame_dlc)
+			st.tx_sat.add(tx_lamp_frame_sat)
 		} else {
 			st.e2e_tx_lamp_frame = e2e_save_lamp_frame
 		}
@@ -372,19 +377,25 @@ fn io_can0_10ms(ctx voidptr) {
 		len: brake_report_dlc
 	}
 	mut tx_brake_report_any := false
+	mut tx_brake_report_sat := u32(0) // values com.encode_raw saturated
 	mut brake_rx_status := sig.BrakeRxStatus{}
 	if osal.ioc_acquire2(brake_rx_status_ch, &brake_rx_status, u8(sizeof(brake_rx_status))) {
-		brake_report_brake_rx_status_set(mut tx_brake_report.data, f64(brake_rx_status.code))
+		if brake_report_brake_rx_status_set(mut tx_brake_report.data, f64(brake_rx_status.code)) {
+			tx_brake_report_sat++
+		}
 		tx_brake_report_any = true
 	}
 	mut brake_lost := sig.BrakeLost{}
 	if osal.ioc_acquire2(brake_lost_ch, &brake_lost, u8(sizeof(brake_lost))) {
-		brake_report_brake_lost_set(mut tx_brake_report.data, f64(brake_lost.count))
+		if brake_report_brake_lost_set(mut tx_brake_report.data, f64(brake_lost.count)) {
+			tx_brake_report_sat++
+		}
 		tx_brake_report_any = true
 	}
 	if tx_brake_report_any && diag_tx_ok && st.chan.tx_ready() && st.tx_brake_report_st.should_send(now, tx_brake_report.data, brake_report_dlc) {
 		if st.chan.send(tx_brake_report) {
 			st.tx_brake_report_st.mark_sent(now, tx_brake_report.data, brake_report_dlc)
+			st.tx_sat.add(tx_brake_report_sat)
 		}
 	}
 	mut tx_secure_frame := can.Frame{
@@ -392,9 +403,12 @@ fn io_can0_10ms(ctx voidptr) {
 		len: secure_frame_dlc
 	}
 	mut tx_secure_frame_any := false
+	mut tx_secure_frame_sat := u32(0) // values com.encode_raw saturated
 	mut secure_status := sig.SecureStatus{}
 	if osal.ioc_acquire2(secure_status_ch, &secure_status, u8(sizeof(secure_status))) {
-		secure_frame_secure_status_set(mut tx_secure_frame.data, f64(secure_status.level))
+		if secure_frame_secure_status_set(mut tx_secure_frame.data, f64(secure_status.level)) {
+			tx_secure_frame_sat++
+		}
 		tx_secure_frame_any = true
 	}
 	if tx_secure_frame_any && diag_tx_ok && st.chan.tx_ready() && st.tx_secure_frame_st.should_send(now, tx_secure_frame.data, secure_frame_dlc) {
@@ -403,6 +417,7 @@ fn io_can0_10ms(ctx voidptr) {
 		st.secoc_tx_secure_frame.protect(&st.secoc_key_secure_frame, &tx_secure_frame.data[0], int(secure_frame_dlc), u16(0x20), 1, 2, 4)
 		if st.chan.send(tx_secure_frame) {
 			st.tx_secure_frame_st.mark_sent(now, tx_secure_frame_pre, secure_frame_dlc)
+			st.tx_sat.add(tx_secure_frame_sat)
 		} else {
 			st.secoc_tx_secure_frame = secoc_save_secure_frame
 		}

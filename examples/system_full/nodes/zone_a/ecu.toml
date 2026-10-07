@@ -238,6 +238,13 @@ write = { session = ["extended"], security = 1 }
 id           = 0x0111
 param_status = true
 
+# the count of sent values the comm thread had to hold to their DBC range (docs/communication.md,
+# "Sent values outside the signal range"): 4 bytes, big-endian. SteerLimiter clamps SteeringAngle to
+# [0|360] itself, so it reads 0 (test/param_zone_a.lua)
+[[did]]
+id             = 0x0120
+tx_saturations = true
+
 # writable only in extended AND with security level 1 unlocked (0x27, the board's key seam)
 [[did]]
 id    = 0x0102

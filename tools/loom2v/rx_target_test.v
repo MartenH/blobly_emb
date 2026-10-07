@@ -3,6 +3,7 @@ module main
 // @verifies REQ-COM-008 REQ-E2E-002 REQ-DIAG-011
 import os
 import time
+import tools.candb
 
 // The ThreadX comm thread's receive path (docs/diagnostics.md R5): a frame with a deadline, E2E or a
 // signal status is checked on the comm thread by the host bridge's own templates (gen_rx.v) and
@@ -365,6 +366,7 @@ fn test_a_satellites_tx_waits_on_0x28() {
 		external: true
 		dbc_dlc: 4
 		fields: [SigField{'a', 'u32'}]
+		dbc_lanes: [candb.Signal{ name: 'PairA', length: 32 }]
 	}
 	m.sig_of['Wide'] = SigInfo{
 		name: 'Wide'
@@ -372,6 +374,7 @@ fn test_a_satellites_tx_waits_on_0x28() {
 		wide: true
 		dbc_dlc: 12
 		fields: [SigField{'a', 'u32'}, SigField{'b', 'u32'}, SigField{'c', 'u32'}]
+		dbc_lanes: [candb.Signal{ name: 'PairA', length: 32 }].repeat(3)
 	}
 	out := xcore_produce_drain(m).join('\n')
 	assert out.count('if g_diag.server.tx_enabled() && C.xcore_layout_ok() != 0') == 2, out
@@ -497,4 +500,42 @@ fn test_every_frame_fits_its_bus() {
 	rdbc := 'VERSION ""\nBU_: A B\nBO_ 300 BigFrame: 12 A\n SG_ V : 0|32@1+ (1,0) [0|0] "" B\n'
 	c4, o4 := rt_generate_raw('len_route', route, rdbc)
 	assert c4 != 0 && o4.contains('forwarded onto bus "can1" is 12 bytes on a classic bus'), o4
+}
+
+// @verifies REQ-COM-010
+// The ThreadX comm thread: its producer encodes the IOC cell through com.encode_raw with the bounds
+// candb derives for dbc2cfg's `_set` too (a signed field read back through its sign), and serves the
+// DID from the count it keeps.
+fn test_the_target_comm_thread_counts_and_serves_it() {
+	code, out, glue := rt_generate('tx_sat', fn (src string) string {
+		return src
+	}, rt_conn + '\n[[did]]\nid             = 0x0120\ntx_saturations = true\n', false)
+	assert code == 0, out
+	assert glue.contains('mut tx_sat := com.TxSaturations{}'), glue
+	assert glue.contains('tf_raw0_x := (f64(tv_a) - 0.0) / 1.0'), glue
+	assert glue.contains('tf_raw0, tf_raw0_sat := com.encode_raw(tf_raw0_x, 0.0, 4294967295.0, u64(0), u64(4294967295), u64(0), u64(0xffffffff))'), glue
+	assert glue.contains('tf.data[3] = u8(tf_raw0 >> 24)')
+	assert glue.contains('if ch.send(tf) {\n\t\t\t\ttx_sat.add(tf_sat)'), glue
+	assert glue.contains('g_diag.server.dids[0].data[0] = u8(tx_sat.count >> 24)'), glue
+	assert !glue.contains('u8(tv_a')
+	assert cell_phys('i16', 'tv_a') == 'f64(i32(tv_a))'
+	assert cell_phys('u32', 'tv_a') == 'f64(tv_a)'
+	assert cell_phys('bool', 'tv_a') == 'f64(tv_a)'
+}
+
+// A comm-thread producer carries a field as `u32(field)`: a field it cannot carry whole (a float, a
+// 64-bit integer) would reach the range check already truncated, so it is refused. And a value a
+// node sends is held to its signal's range, so that range must be one a value can be sent in.
+fn test_the_target_refuses_what_it_cannot_hold_to_a_range() {
+	code, out, _ := rt_generate('tx_f32', fn (src string) string {
+		return src.replace('fields = { v = "u32" }', 'fields = { v = "f32" }')
+	}, '', false)
+	assert code != 0
+	assert out.contains('TX signal "Workload" field 0 is a f32, but a comm-thread producer carries a field as a u32'), out
+	src := rt_one_thread(os.read_file(os.join_path(rt_fixture, 'ecu.toml')) or { panic(err) })
+	dbc := (os.read_file(os.join_path(rt_fixture, 'bus.dbc')) or { panic(err) }).replace('SG_ Workload : 0|32@1+ (1,0) [0|4294967295]',
+		'SG_ Workload : 0|32@1+ (1,0) [10|5]')
+	c2, o2 := rt_generate_raw('tx_badrange', src, dbc)
+	assert c2 != 0
+	assert o2.contains('sent signal "Workload": range [10.0|5.0] has its minimum above its maximum'), o2
 }

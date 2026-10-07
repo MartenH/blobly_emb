@@ -10,6 +10,7 @@ import comm.e2e
 struct Bridge_can0_state {
 mut:
 	chan can.Channel
+	tx_sat com.TxSaturations // sent values com.encode_raw saturated (docs/communication.md)
 	route_can1 can.Channel // gateway: forward to can1
 	rt_can1_dst_frame_speed_v f64 // routed physical value
 	rt_can1_dst_frame_speed_fresh u64 // rx timestamp (0 = never received)
@@ -35,13 +36,17 @@ fn io_can0_10ms(ctx voidptr) {
 		ext: false
 	}
 	mut rf_can1_dst_frame_ok := true
-	dst_frame_speed_set(mut rf_can1_dst_frame.data, st.rt_can1_dst_frame_speed_v)
+	mut rf_can1_dst_frame_sat := u32(0) // values com.encode_raw saturated
+	if dst_frame_speed_set(mut rf_can1_dst_frame.data, st.rt_can1_dst_frame_speed_v) {
+		rf_can1_dst_frame_sat++
+	}
 	if st.rt_can1_dst_frame_speed_fresh == 0 || now - st.rt_can1_dst_frame_speed_fresh > u64(60000) {
 		rf_can1_dst_frame_ok = false
 	}
 	if rf_can1_dst_frame_ok && st.route_can1.tx_ready() && st.rt_tx_can1_dst_frame.should_send(now, rf_can1_dst_frame.data, 8) {
 		if st.route_can1.send(rf_can1_dst_frame) {
 			st.rt_tx_can1_dst_frame.mark_sent(now, rf_can1_dst_frame.data, 8)
+			st.tx_sat.add(rf_can1_dst_frame_sat)
 		}
 	}
 }

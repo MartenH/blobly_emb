@@ -13,6 +13,7 @@ import comm.nm_can
 import nvm
 import boot as bootfl
 import driver.can
+import comm.com
 
 struct Thread_load_fast_state {
 mut:
@@ -366,6 +367,7 @@ fn comm_thread_entry(input u32) {
 	mut xcore_trc_off := i32(0) // satellite clock - ours, µs (measured by the ack round trip)
 	mut xcore_trc_bound := u32(0) // half round-trip: that measurement's uncertainty
 	mut last_tx_workload := u64(0)
+	mut tx_sat := com.TxSaturations{} // sent values com.encode_raw saturated (docs/communication.md)
 	mut rx := can.Frame{}
 	for {
 		wait_ticks := if g_tm.is_dumping() { u32(1) } else { u32(10) }
@@ -459,11 +461,19 @@ fn comm_thread_entry(input u32) {
 				id:  u32(0x200)
 				len: 4
 			}
-			tf.data[0] = u8(tv_a & 0xff)
-			tf.data[1] = u8((tv_a >> 8) & 0xff)
-			tf.data[2] = u8((tv_a >> 16) & 0xff)
-			tf.data[3] = u8((tv_a >> 24) & 0xff)
-			ch.send(tf)
+			mut tf_sat := u32(0)
+			tf_raw0_x := (f64(tv_a) - 0.0) / 1.0
+			tf_raw0, tf_raw0_sat := com.encode_raw(tf_raw0_x, 0.0, 4294967295.0, u64(0), u64(4294967295), u64(0), u64(0xffffffff))
+			tf.data[0] = u8(tf_raw0)
+			tf.data[1] = u8(tf_raw0 >> 8)
+			tf.data[2] = u8(tf_raw0 >> 16)
+			tf.data[3] = u8(tf_raw0 >> 24)
+			if tf_raw0_sat {
+				tf_sat++
+			}
+			if ch.send(tf) {
+				tx_sat.add(tf_sat)
+			}
 		}
 		for nm_up && ch.tx_ready() && g_tm.produce(t1, mut trace_txf) {
 			ch.send(trace_txf)
@@ -494,15 +504,28 @@ fn comm_thread_entry(input u32) {
 			&& C.xcore_poll(0, &xcore_m4_count_a, &xcore_m4_count_b) != 0 {
 			xcore_txf.id = u32(0x201)
 			xcore_txf.len = 8
-			xcore_txf.data[0] = u8(xcore_m4_count_a)
-			xcore_txf.data[1] = u8(xcore_m4_count_a >> 8)
-			xcore_txf.data[2] = u8(xcore_m4_count_a >> 16)
-			xcore_txf.data[3] = u8(xcore_m4_count_a >> 24)
-			xcore_txf.data[4] = u8(xcore_m4_count_b)
-			xcore_txf.data[5] = u8(xcore_m4_count_b >> 8)
-			xcore_txf.data[6] = u8(xcore_m4_count_b >> 16)
-			xcore_txf.data[7] = u8(xcore_m4_count_b >> 24)
-			ch.send(xcore_txf)
+			mut xcore_sat := u32(0)
+			xcore_txf_raw0_x := (f64(xcore_m4_count_a) - 0.0) / 1.0
+			xcore_txf_raw0, xcore_txf_raw0_sat := com.encode_raw(xcore_txf_raw0_x, 0.0, 4294967295.0, u64(0), u64(4294967295), u64(0), u64(0xffffffff))
+			xcore_txf.data[0] = u8(xcore_txf_raw0)
+			xcore_txf.data[1] = u8(xcore_txf_raw0 >> 8)
+			xcore_txf.data[2] = u8(xcore_txf_raw0 >> 16)
+			xcore_txf.data[3] = u8(xcore_txf_raw0 >> 24)
+			if xcore_txf_raw0_sat {
+				xcore_sat++
+			}
+			xcore_txf_raw1_x := (f64(xcore_m4_count_b) - 0.0) / 1.0
+			xcore_txf_raw1, xcore_txf_raw1_sat := com.encode_raw(xcore_txf_raw1_x, 0.0, 4294967295.0, u64(0), u64(4294967295), u64(0), u64(0xffffffff))
+			xcore_txf.data[4] = u8(xcore_txf_raw1)
+			xcore_txf.data[5] = u8(xcore_txf_raw1 >> 8)
+			xcore_txf.data[6] = u8(xcore_txf_raw1 >> 16)
+			xcore_txf.data[7] = u8(xcore_txf_raw1 >> 24)
+			if xcore_txf_raw1_sat {
+				xcore_sat++
+			}
+			if ch.send(xcore_txf) {
+				tx_sat.add(xcore_sat)
+			}
 			xcore_m4_count_last = t1
 		}
 		C.xcore_bulk_consume() // cross-core bulk consumer (platform-owned pool)

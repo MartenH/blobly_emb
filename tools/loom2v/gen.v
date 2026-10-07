@@ -48,6 +48,8 @@ mut:
 	// (every SG must sit alone in a 32-bit lane: start%32==0, <=32 bits, unsigned LE,
 	// factor 1/offset 0) — the lane writer fills WHOLE 4-byte lanes, so any other layout
 	// means an unrelated SG gets overwritten silently (codex #211 r5)
+	dbc_lanes []candb.Signal // per 32-bit lane of the message, the DBC signal that owns it (lane 0 is
+	// the signal itself; a name of '' = none there) — the target producers encode through its range
 	fields    []SigField // the signal's fields in declaration order (for the `sig` struct emit)
 	persist   string // '' | 'now' | 'shutdown' — restored + journaled by the platform
 	nvm_id    u16 // explicit schema-identity pin (0 = derive by hash); see gen_nvm.v
@@ -91,6 +93,7 @@ struct DidCfg {
 	write_security u8
 	param          string // the [[param]] this DID codes (0x2E) and reads back (0x22); '' = none
 	param_status   bool   // the parameters' status: one byte per [[param]] (comm/param status_*)
+	tx_saturations bool   // the count of sent values com.encode_raw saturated: a u32, big-endian
 }
 
 // Route is one [[route]] on a gateway. A RAW (frame) route forwards a PDU unchanged
@@ -337,6 +340,15 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool, eth string) (m
 				}
 			}
 			si.dbc_lane_issue = dbc_msg_lane_issue(db, sname, si.fields.len, fwidths)
+			si.dbc_lanes = dbc_lanes(db, sname, si.fields.len)
+			if !si.rx {
+				// a value this node sends is held to its range (REQ-COM-010): the range must hold one
+				sg := si.dbc_lanes[0] or { candb.Signal{} }
+				rr := sg.raw_range() or { panic('loom2v: sent signal "${sname}": ${err}') }
+				if rr.note != '' {
+					panic('loom2v: sent signal "${sname}": ${rr.note} in ${os.file_name(dbc)} — a sent value is held to its signal\'s range, so the range must be one a value can be sent in (docs/communication.md)')
+				}
+			}
 			sig_of[sname] = si
 		}
 	}
@@ -622,6 +634,11 @@ fn parse_routes(doc toml.Doc, dbc string, frames FrameCfg) []Route {
 				}
 				dst_sg := dbc_sig_in_frame(db, snake(r.to_frame), r.signal) or {
 					panic('route: signal "${r.signal}" is not in destination frame "${r.to_frame}" in ${os.file_name(dbc)}')
+				}
+				// the re-encode holds the value to the destination signal's range (REQ-COM-010)
+				dst_rr := dst_sg.raw_range() or { panic('route: signal "${r.signal}" in "${r.to_frame}": ${err}') }
+				if dst_rr.note != '' {
+					panic('route: signal "${r.signal}" in destination frame "${r.to_frame}": ${dst_rr.note} — a sent value is held to its signal\'s range, so the range must be one a value can be sent in')
 				}
 				// GUARDS — a STANDALONE ecu.toml route is gated only by ecucheck, NOT
 				// sysmodel's check_route_dbc, so loom2v must reject the shapes the
@@ -1006,6 +1023,15 @@ fn parse_dids(doc toml.Doc) []DidCfg {
 				panic('loom2v: [[did]] 0x${id.hex()} is the parameter status, which a tester reads and never writes — drop `write`')
 			}
 		}
+		tx_sat := (m['tx_saturations'] or { toml.Any(false) }).bool()
+		if tx_sat {
+			for k in ['ascii', 'bytes', 'signal', 'writable', 'param', 'param_status', 'write'] {
+				if k in m {
+					panic('loom2v: [[did]] 0x${id.hex()} is the count of saturated sent values, which the node keeps and a tester only reads — `${k}` has no place there')
+				}
+			}
+			bytes = [u8(0), 0, 0, 0] // the record's shape; the encoding context writes the count
+		}
 		rd_s, rd_sec := parse_did_access(m, 'read', id)
 		wr_s, wr_sec := parse_did_access(m, 'write', id)
 		if 'write' in m && 'writable' in m && !(m['writable'] or { toml.Any(false) }).bool() {
@@ -1020,6 +1046,7 @@ fn parse_dids(doc toml.Doc) []DidCfg {
 			signal:         (m['signal'] or { toml.Any('') }).string()
 			param:          pname
 			param_status:   pstatus
+			tx_saturations: tx_sat
 			read_sessions:  rd_s
 			write_sessions: wr_s
 			read_security:  rd_sec
@@ -1034,6 +1061,9 @@ fn parse_dids(doc toml.Doc) []DidCfg {
 				panic('loom2v: [[did]] 0x${d.id.hex()} is declared twice — one DID, one row (the server answers the first)')
 			}
 		}
+	}
+	if dids.filter(it.tx_saturations).len > 1 {
+		panic('loom2v: ${dids.filter(it.tx_saturations).len} [[did]]s are the count of saturated sent values — one says it')
 	}
 	if dids.len > uds.max_dids {
 		panic('loom2v: ${dids.len} [[did]]s — a diagnostic server holds at most ${uds.max_dids} (comm/uds max_dids)')
@@ -2882,6 +2912,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				for si in tx_sigs {
 					glue << '\tmut last_tx_${snake(si.name)} := u64(0)'
 				}
+				if target_encodes(m) {
+					glue << '\tmut tx_sat := com.TxSaturations{} // sent values com.encode_raw saturated (docs/communication.md)'
+				}
 				glue << '\tmut rx := can.Frame{}'
 				glue << '\tfor {'
 				// While a stream is in flight — a trace dump, a diagnostic answer — wake every tick:
@@ -3033,17 +3066,20 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\t\t\tid:  u32(0x${si.dbc_id.hex()})'
 					glue << '\t\t\t\tlen: ${si.dbc_dlc}'
 					glue << '\t\t\t}'
-					glue << '\t\t\ttf.data[0] = u8(tv_a & 0xff)'
-					glue << '\t\t\ttf.data[1] = u8((tv_a >> 8) & 0xff)'
-					glue << '\t\t\ttf.data[2] = u8((tv_a >> 16) & 0xff)'
-					glue << '\t\t\ttf.data[3] = u8((tv_a >> 24) & 0xff)'
-					glue << '\t\t\tch.send(tf)'
+					glue << '\t\t\tmut tf_sat := u32(0)'
+					glue << lane_encode_lines(si, 0, si.val_type, 'tv_a', 'tf', 'tf_sat', '\t\t\t')
+					glue << '\t\t\tif ch.send(tf) {'
+					glue << '\t\t\t\ttx_sat.add(tf_sat)'
+					glue << '\t\t\t}'
 					glue << '\t\t}'
 				}
 				glue << trace_produce_drain(m)
 				glue << shell_produce_drain(m)
 				glue << xcore_trace_poll(m)
 				glue << xcore_produce_drain(m)
+				if target_encodes(m) {
+					glue << tx_sat_did_lines(m, if m.isotp_conns.len > 0 { ['g_diag.server'] } else { []string{} }, 'tx_sat.count', '\t\t')
+				}
 				glue << emit_bulk_service_arm(m.bulk, m.part, '', '\t\t') // owner cross-core bulk service (poll)
 				glue << nvm_service(m, ioc_idx)
 				glue << '\t}'
@@ -3819,7 +3855,7 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 		}
 	}
 	if (m.has_can_ext && !comm_thread_on) || has_eth_tx || m.routes.any(it.signal != '')
-		|| (comm_thread_on && rx_target_on(m)) {
+		|| (comm_thread_on && (rx_target_on(m) || target_encodes(m))) {
 		glue << 'import comm.com' // per-PDU TX modes + RX deadline; eth codec PDU bound (max_pdu); signal-route producer TxState
 	}
 	// the eth comm thread's codec: pure V, both sides of the silicon line; the
@@ -4940,6 +4976,73 @@ fn dbc_msg_lane_issue(db candb.Database, signame string, nlanes int, widths []in
 		}
 	}
 	return ''
+}
+
+// dbc_lanes: for lane 0..n-1 of the message carrying `signame`, the DBC signal that owns it — lane 0
+// the signal itself, by name; lane j > 0 the one starting at bit 32 * j (dbc_msg_lane_issue refuses a
+// lane-encoded message where that is not exactly one signal). A name of '' where none does.
+fn dbc_lanes(db candb.Database, signame string, n int) []candb.Signal {
+	mut out := []candb.Signal{len: n}
+	for m in db.messages {
+		if !m.signals.any(it.name == signame) {
+			continue
+		}
+		for sg in m.signals {
+			if sg.name == signame {
+				out[0] = sg
+			} else if sg.start_bit % 32 == 0 && sg.start_bit > 0 && sg.start_bit / 32 < n {
+				out[sg.start_bit / 32] = sg
+			}
+		}
+		break
+	}
+	return out
+}
+
+// lane_encode_lines: lane `j` of signal `si` — `cell`, a u32 an FB published (`u32(field)`) — through
+// the one send encode (candb encode_lines: comm/com encode_raw, rounded and held to its DBC signal's
+// range, a VAL_ entry let through), its raw bits written little-endian into `frame`.data at byte 4j, a
+// saturation added to `sat`. A lane signal is unsigned, LE, at most 32 bits at bit 32j (the lean and
+// lane contracts: dbc_signal_trivial, dbc_msg_lane_issue), so those bytes are exactly its bits.
+fn lane_encode_lines(si SigInfo, j int, typ string, cell string, frame string, sat string, ind string) []string {
+	sg := si.dbc_lanes[j] or { candb.Signal{} }
+	if sg.name == '' {
+		panic('loom2v: TX signal "${si.name}": lane ${j} of DBC message "${si.dbc_msg}" has no signal')
+	}
+	if typ !in lane_field_types {
+		panic('loom2v: [target] kind="threadx": TX signal "${si.name}" field ${j} is a ${typ}, but a comm-thread producer carries a field as a u32 (`u32(field)`), which keeps neither a wider integer nor a fraction — use ${lane_field_types.join(' / ')}')
+	}
+	rr := sg.raw_range() or { panic('loom2v: TX signal "${si.name}": ${err}') }
+	if rr.note != '' {
+		panic('loom2v: TX signal "${si.name}": DBC signal "${sg.name}" ${rr.note} — a sent value is held to its signal\'s range, so the range must be one a value can be sent in')
+	}
+	v := '${frame.replace('.', '_')}_raw${j}'
+	mut g := sg.encode_lines(cell_phys(typ, cell), v, '${v}_sat', ind) or {
+		panic('loom2v: TX signal "${si.name}": ${err}')
+	}
+	for b in 0 .. 4 {
+		g << if b == 0 {
+			'${ind}${frame}.data[${4 * j}] = u8(${v})'
+		} else {
+			'${ind}${frame}.data[${4 * j + b}] = u8(${v} >> ${8 * b})'
+		}
+	}
+	g << '${ind}if ${v}_sat {'
+	g << '${ind}\t${sat}++'
+	g << '${ind}}'
+	return g
+}
+
+// lane_field_types: what a u32 IOC cell or lane carries whole (`u32(field)` and back).
+const lane_field_types = ['bool', 'u8', 'u16', 'u32', 'i8', 'i16', 'i32']
+
+// cell_phys: the physical value an FB published into a u32 IOC cell or lane (`u32(field)`, a bool
+// as 0 / 1), as the f64 com.encode_raw takes — a signed field read back through its sign.
+fn cell_phys(typ string, expr string) string {
+	return match typ {
+		'i8', 'i16', 'i32' { 'f64(i32(${expr}))' }
+		else { 'f64(${expr})' }
+	}
 }
 
 // dbc_message_of returns snake(message name) of the DBC message carrying `sig`.
