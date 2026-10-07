@@ -122,15 +122,62 @@ VAL_ 256 S -200 "Far" ;
 	assert db.messages[0].signals[0].raw_range()!.named.len == 0
 }
 
-// An exact integral boundary is never widened, however large (past 2^50 four ULPs are a step).
-fn test_a_large_exact_boundary_stays_exact() {
-	for q in [f64(u64(1) << 51), f64(u64(1) << 52)] {
-		r := sig(0, 60, false, 1, 0, 0, q).raw_range()!
-		assert r.hi == q, '${q}: ${r.hi}'
-		l := sig(0, 60, false, 1, 0, q, q + 2).raw_range()!
-		assert l.lo == q, '${q}: ${l.lo}'
+// A boundary is converted exactly, on the decimals the DBC wrote: an exact integer never moves, a
+// fraction f64 holds (2^48 + 0.25 / 0.5 / 0.75) is a real one and is never rounded away, and the
+// binary noise of a decimal step (0.3 / 0.1 is 2.9999999999999996 in f64) is no fraction at all.
+fn test_boundaries_convert_exactly() {
+	b := f64(u64(1) << 48)
+	for frac in [0.25, 0.5, 0.75] {
+		q := b + frac
+		mx := sig(0, 60, false, 1, 0, 0, q).raw_range()!
+		assert mx.hi == b, 'max 2^48 + ${frac}: ${mx.hi}'
+		mn := sig(0, 60, false, 1, 0, q, q + 8).raw_range()!
+		assert mn.lo == b + 1, 'min 2^48 + ${frac}: ${mn.lo}'
 	}
-	// off the grid at 2^51 (a half step there): still floored, not rounded up
-	h := sig(0, 60, false, 1, 0, 0, f64(u64(1) << 51) + 0.5).raw_range()!
-	assert h.hi == f64(u64(1) << 51)
+	for q in [b, f64(u64(1) << 51), f64(u64(1) << 52)] {
+		assert sig(0, 60, false, 1, 0, 0, q).raw_range()!.hi == q
+		assert sig(0, 60, false, 1, 0, q, q + 8).raw_range()!.lo == q
+	}
+	// decimal steps: the author's 3, 65535, 37315 and 1000 — not their binary neighbours
+	assert sig(0, 8, false, 0.1, 0, 0, 0.3).raw_range()!.hi == 3.0
+	assert sig(0, 8, false, 0.1, 0, 0.3, 1).raw_range()!.lo == 3.0
+	assert sig(0, 16, false, 0.01, 0, 0, 655.35).raw_range()!.hi == 65535.0
+	assert sig(0, 16, false, 0.01, -273.15, -273.15, 100).raw_range()!.hi == 37315.0
+	assert sig(0, 16, false, 0.01, -273.15, -273.15, 100).raw_range()!.lo == 0.0
+	assert sig(0, 8, false, 0.1, 0, 0.05, 10.03).raw_range()!.hi == 100.0
+	assert sig(0, 16, true, -0.1, 0, -10, 5).raw_range()!.lo == -50.0
+	// an exhaustive sweep: k steps of a decimal factor are k, at every offset
+	for f in ['0.1', '0.01', '0.001', '0.05', '0.3', '0.0001', '0.6'] {
+		for off in ['0', '-40', '-273.15', '100'] {
+			for k in [1, 7, 99, 1000, 12345, 65535] {
+				fv := f.f64()
+				ov := off.f64()
+				r := Signal{
+					name:    'S'
+					length:  32
+					factor:  fv
+					offset:  ov
+					minimum: dec_mul_add(f, k, off)
+					maximum: dec_mul_add(f, k, off)
+				}.raw_range()!
+				assert r.lo == f64(k) && r.hi == f64(k), '${f} x ${k} + ${off}: [${r.lo}, ${r.hi}]'
+			}
+		}
+	}
+}
+
+// dec_mul_add: f * k + off computed in decimal and parsed, as a DBC writer's number would be.
+fn dec_mul_add(f string, k int, off string) f64 {
+	ff := if f.contains('.') { f.all_after('.') } else { '' }
+	of := if off.contains('.') { off.all_after('.') } else { '' }
+	scale := if ff.len > of.len { ff.len } else { of.len }
+	fi := (f.all_before('.') + ff + '0'.repeat(scale - ff.len)).i64()
+	oi := (off.all_before('.') + of + '0'.repeat(scale - of.len)).i64()
+	tot := fi * k + oi
+	neg := tot < 0
+	a := if neg { -tot } else { tot }
+	digits := '${a}'
+	padded := if digits.len <= scale { '0'.repeat(scale - digits.len + 1) + digits } else { digits }
+	t := padded[..padded.len - scale] + '.' + padded[padded.len - scale..]
+	return (if neg { '-' } else { '' } + t).f64()
 }

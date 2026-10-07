@@ -5,6 +5,7 @@
 module candb
 
 import math
+import math.big
 
 pub enum ByteOrder {
 	little_endian // Intel:    start_bit = LSB, bits ascend in the LSB-0 numbering
@@ -297,8 +298,10 @@ fn int_f64lit(x f64) string {
 // raw_range: a signal's sendable raw values — what comm/com `encode_raw` holds a sent value to
 // (docs/communication.md "Sent values outside the signal range"). A DBC range of [0|0] declares none
 // (the width is the range); a declared range is converted to raw steps — ceil of the minimum, floor of
-// the maximum, so an end that is not on the raw grid is never passed — with a few ULPs of tolerance
-// for the division's own rounding (0.3 / 0.1 is 2.9999999999999996, and must be 3). A declared
+// the maximum, so an end that is not on the raw grid is never passed. The conversion is EXACT, on the
+// decimals the DBC wrote (raw_steps): in f64, 0.3 / 0.1 is 2.9999999999999996 where the author meant
+// 3, while 2^48 + 0.75 is a fraction f64 holds exactly and is meant — no tolerance can tell those apart,
+// a decimal can (a no-tolerance rule: nothing is snapped, nothing is rounded away). A declared
 // range that cannot be used — factor 0, minimum above maximum, no raw value inside the width — leaves
 // the width, said in `note` (loom2v refuses it on a signal a node sends; dbc2cfg warns).
 pub fn (s Signal) raw_range() !RawRange {
@@ -320,26 +323,43 @@ pub fn (s Signal) raw_range() !RawRange {
 	mut lo := wlo
 	mut hi := whi
 	mut note := ''
+	mut lo_set, mut hi_set := false, false
+	mut lo_raw_b, mut hi_raw_b := u64(0), u64(0)
 	if s.factor == 0.0 {
 		note = 'factor 0: no physical value maps back to a raw one'
 	} else if s.minimum > s.maximum {
 		note = 'range [${s.minimum}|${s.maximum}] has its minimum above its maximum'
 	} else if s.minimum != 0.0 || s.maximum != 0.0 {
-		mut a := (s.minimum - s.offset) / s.factor
-		mut z := (s.maximum - s.offset) / s.factor
-		if s.factor < 0 {
-			a, z = z, a
+		// a negative factor turns the range over: the minimum becomes the top
+		a := raw_steps(if s.factor < 0 { s.maximum } else { s.minimum }, s.offset, s.factor)
+		z := raw_steps(if s.factor < 0 { s.minimum } else { s.maximum }, s.offset, s.factor)
+		wlo_b := if s.is_signed { big.integer_from_i64(i64(wlo)) } else { big.zero_int }
+		whi_b := big.integer_from_u64(whi_raw)
+		mut rl := a.ceil()
+		mut rh := z.floor()
+		if rl < wlo_b {
+			rl = wlo_b
 		}
-		rl := math.max(grid_ceil(a), wlo)
-		rh := math.min(grid_floor(z), whi)
-		if rl > rh {
+		if whi_b < rh {
+			rh = whi_b
+		}
+		if rh < rl {
 			note = 'range [${s.minimum}|${s.maximum}] holds no raw value the ${n}-bit width carries'
 		} else {
-			lo, hi = rl, rh
+			if rl != wlo_b {
+				lo_raw_b = big_raw(rl, mask)
+				lo = big_f64(rl)
+				lo_set = true
+			}
+			if rh != whi_b {
+				hi_raw_b = big_raw(rh, mask)
+				hi = big_f64(rh)
+				hi_set = true
+			}
 		}
 	}
-	lo_raw := if lo == wlo { wlo_raw } else { exact_raw(lo, mask) }
-	hi_raw := if hi == whi { whi_raw } else { exact_raw(hi, mask) }
+	lo_raw := if lo_set { lo_raw_b } else { wlo_raw }
+	hi_raw := if hi_set { hi_raw_b } else { whi_raw }
 	nan_raw := if lo > 0 {
 		lo_raw
 	} else if hi < 0 {
@@ -391,26 +411,81 @@ pub fn (s Signal) raw_range() !RawRange {
 	}
 }
 
-// grid_floor / grid_ceil: the last raw step at or below / the first at or above a quotient, taking
-// one that misses a step by the division's own rounding alone (0.3 / 0.1 is 2.9999999999999996, and is
-// 3) as that step. The miss is measured on the fraction, which is exact, so an exact boundary is never
-// moved and the tolerance — a few ULPs, never a quarter step — cannot round a sum across a step.
-fn grid_floor(q f64) f64 {
-	f := math.floor(q)
-	return if q - f >= 1.0 - grid_tol(q) { f + 1.0 } else { f }
+// Ratio is an exact rational num / den (den > 0).
+struct Ratio {
+	num big.Integer
+	den big.Integer
 }
 
-fn grid_ceil(q f64) f64 {
-	c := math.ceil(q)
-	return if c - q >= 1.0 - grid_tol(q) { c - 1.0 } else { c }
+fn (r Ratio) floor() big.Integer {
+	if !(r.num < big.zero_int) {
+		return r.num / r.den
+	}
+	return ((r.num.neg() + r.den - big.one_int) / r.den).neg()
 }
 
-// grid_tol: how far a quotient may sit off the raw grid by the division's rounding alone.
-fn grid_tol(q f64) f64 {
-	return math.min(4.0 * 2.220446049250313e-16 * math.max(1.0, math.abs(q)), 0.25)
+fn (r Ratio) ceil() big.Integer {
+	return Ratio{r.num.neg(), r.den}.floor().neg()
 }
 
-// exact_raw: a whole-number f64 inside the width as its raw bits (two's complement when negative).
-fn exact_raw(x f64, mask u64) u64 {
-	return if x < 0 { u64(i64(x)) & mask } else { u64(x) & mask }
+// raw_steps: (phys - offset) / factor EXACTLY, each operand taken as the shortest decimal that is
+// that f64 — the number the DBC wrote (655.35, 0.01), not its binary neighbour.
+fn raw_steps(phys f64, offset f64, factor f64) Ratio {
+	mv, ev := dec_of(phys)
+	mo, eo := dec_of(offset)
+	mf, ef := dec_of(factor)
+	e := if ev < eo { ev } else { eo }
+	num := mv * pow10(ev - e) - mo * pow10(eo - e) // (phys - offset) = num * 10^e
+	mut n := num
+	mut d := mf
+	if e >= ef {
+		n = num * pow10(e - ef)
+	} else {
+		d = mf * pow10(ef - e)
+	}
+	if d < big.zero_int {
+		return Ratio{n.neg(), d.neg()}
+	}
+	return Ratio{n, d}
+}
+
+fn pow10(k int) big.Integer {
+	return big.integer_from_int(10).pow(u32(k))
+}
+
+// dec_of: x as m * 10^e, from its shortest round-trip spelling (V's f64 str: "655.35", "1e+300").
+fn dec_of(x f64) (big.Integer, int) {
+	t := x.str()
+	mut mant := t
+	mut e := 0
+	if i := t.index('e') {
+		mant = t[..i]
+		e = t[i + 1..].int()
+	}
+	neg := mant.starts_with('-')
+	if neg {
+		mant = mant[1..]
+	}
+	mut digits := mant
+	if dot := mant.index('.') {
+		digits = mant[..dot] + mant[dot + 1..]
+		e -= mant.len - dot - 1
+	}
+	mut m := big.integer_from_string(digits) or { big.zero_int }
+	if neg {
+		m = m.neg()
+	}
+	return m, e
+}
+
+// big_raw / big_f64: a raw step inside the width as its bits (two's complement when negative) and
+// as the nearest f64 (exact below 2^53; encode_raw answers a rounded end with its exact bits).
+fn big_raw(v big.Integer, mask u64) u64 {
+	t := v.str()
+	return if t.starts_with('-') { u64(t.i64()) & mask } else { t.u64() & mask }
+}
+
+fn big_f64(v big.Integer) f64 {
+	t := v.str()
+	return if t.starts_with('-') { f64(t.i64()) } else { f64(t.u64()) }
 }

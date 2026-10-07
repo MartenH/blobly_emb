@@ -95,9 +95,9 @@ same raw bits into its lane contract's bytes — and so is a ThreadX gateway's s
 decodes the forwarded value and re-encodes it (a frame route forwards its payload as it is: those
 bytes are not the gateway's values). So the host bus bridge, a gateway's signal route and the target
 put the same bits on the wire for the same value. The value is rounded half away from
-zero to a raw step first, then held to the range in raw steps (the declared ends converted with ceil
-and floor, so an end off the raw grid is never passed); `[0|0]` declares no range and leaves the
-width. ±inf go to the nearest end, and NaN, which carries no value, goes out as raw 0 brought into
+zero to a raw step first, then held to the range in raw steps (the declared ends converted
+exactly, on the decimals the DBC wrote, with ceil and floor, so an end off the raw grid is never
+passed); `[0|0]` declares no range and leaves the width. ±inf go to the nearest end, and NaN, which carries no value, goes out as raw 0 brought into
 the range. A value the signal's **VAL_ table names** outside the range — `255 "SNA"` on a `[0|250]`
 signal — is sent as itself and not counted: it is the database's own way to say "no value", and a
 gateway forwarding it must not turn it into a plausible one. A range no value fits (minimum above
