@@ -175,9 +175,7 @@ fn copy_dbcs(sys sysmodel.System, dst string) ! {
 }
 
 // generate_node emits the complete ecu.toml text for one node: the derived
-// system-facing preamble + the node's authored internals verbatim (last, so its
-// [[fb.handler]] nested tables never precede another section — the V TOML
-// nested-parse trap, vlang/v#27684).
+// system-facing preamble, then the node's authored internals verbatim.
 fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 	node_path := if os.is_abs_path(node.ecu) { node.ecu } else { os.join_path(sys.dir, node.ecu) }
 	authored := os.read_file(node_path) or { return error('read ${node_path}: ${err}') }
