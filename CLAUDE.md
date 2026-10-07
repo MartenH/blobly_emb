@@ -105,7 +105,9 @@ to `bootmap.h` (where the image reads it — every `[boot]` node's app and bootl
 `BOOT_CMD`) that the recipe runs as `$(call c_build,$(ELF_CMD))` and the rule signs as
 `$$(call c_sign,$$@,$$(ELF_CMD))` — every flag, define and source, plus the toolchain as it
 describes itself (`$(CC) -v`, the `cc1` it resolves, `$(AR) --version`, each run as written, so a
-wrapper or a `VAR=val` prefix is no special case), in `<target>.sig`, rewritten only when it differs — so `DEBUG=1`, a `board.mk` edit
+wrapper or a `VAR=val` prefix is no special case), in `<target>.sig`, rewritten only when it differs and
+compared as written, never `strip`ped (whitespace inside a quoted define is part of the program, #395;
+`tool_holds` allows only the trailing newline GNU make 4.3's `$(file <)` sometimes keeps) — so `DEBUG=1`, a `board.mk` edit
 to `CAN_DEFS` or `SYSTEM_CLOCK`, or a link address remakes the image (h755_threadx's old
 `LINKSTAMP` is gone), and `c_build` refuses a command its signature does not record. `tools.mk`
 turns on `.SECONDEXPANSION` for the `$$`: the signature is taken once the whole Makefile is read,
@@ -114,13 +116,15 @@ two records per object: `$(call c_object,$(TX_CMD))` compiles with `-MMD -MP`, t
 objects share one signature (`$$(call c_sign,$(BUILD)/tx,$$(TX_CMD))`), `$$(call c_unrecorded,$$@)`
 asks for each object's record and `-include $(call c_records,$(TX_OBJ))` reads them; the archive
 itself is made by the one `$(AR_CMD)`, as `$(call c_archive,$(AR_CMD))` signed by
-`$$(call c_sign,$$@,$$(AR_CMD))`. A `[boot]` node's app-slot link flags are asked of the whole
+`$$(call c_sign,$$@,$$(AR_CMD))`; every signature carries `c_object`'s own text, an archive's `c_archive`'s too. A `[boot]` node's app-slot link flags are asked of the whole
 `$(CC)` as it runs, and its link refuses to run without them (`c_check_<target>` in `boot/boot.mk`)
 rather than link at 0x08000000. An object's
 record leaves out the pinned trees' own headers (`third_party/`, which move only with a pin — run
 `make clean` after moving one): naming them made a no-op make in sysnode 2.5 s instead of 0.5 s. The same
 script pins that shape, and asks make that another flag (`MCU`, and `DEBUG=1` where a Makefile
-has one) leaves each image and one object of each archive stale, the unchanged command current.
+has one) leaves each image and one object of each archive stale, the unchanged command current —
+and so does a string-literal define differing only in its whitespace (each generated C too), and
+another `AR_CMD` or `c_archive` each archive, its objects held old.
 Host builds are unaffected: their `build` target is phony and V recompiles everything.
 
 **`[display]` needs LVGL: `make deps-lvgl`**, which `make deps` deliberately does not run (a
