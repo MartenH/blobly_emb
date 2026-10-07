@@ -30,7 +30,9 @@ examples/<name>/   a FREESTANDING app (own Makefile, `make all`):
    gen/ (module gen)   codec/tables/glue +   │  (incl. the COM bus bridge:
                        COM bus bridge + run() ┘   bus endpoints -> rx/tx codec)
 loom/   the Loom: scheduler (the de-AUTOSAR'd "RTE")
-comm/   comms stack: com (tx modes; the receive rule — RxMonitor / RxGate in rxmon.v, ONE rule the host
+comm/   comms stack: com (tx modes; encode_raw, the ONE send encode — emitted for the host `_set`
+        and the target producers alike by tools/candb encode_lines, saturated to the DBC range and
+        counted, a `tx_saturations` DID reads it (#306); the receive rule — RxMonitor / RxGate in rxmon.v, ONE rule the host
         bridge and the ThreadX comm thread both run, emitted by tools/loom2v/gen_rx.v), e2e (AUTOSAR E2E
         Profile 1), secoc (AES-CMAC), isotp (15765-2), uds (14229), nm,
         fault (debounce + fault memory behind 0x19/0x14/0x85; snapshots, extended data, displacement

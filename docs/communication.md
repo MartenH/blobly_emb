@@ -84,6 +84,57 @@ The bridge owns `status` and `lost` on a received signal (a `valid` field there 
 generation); on an internal signal they are ordinary fields an FB may forward. See
 [diagnostics.md](diagnostics.md) §3.2.
 
+### Sent values outside the signal range
+
+A value an FB sends is **saturated** to its DBC signal's declared `[min|max]` and to what the
+signal's bit width holds, never wrapped into the bits (#306). `comm/com` `encode_raw` is the one
+rule, and `tools/candb` `encode_lines` the one place that emits the call to it with the signal's
+bounds (`raw_range`): every generated `<frame>_<signal>_set` (`tools/dbc2cfg`) is built from it, and
+so is the ThreadX comm thread's producer — local and a satellite's lanes alike — which writes the
+same raw bits into its lane contract's bytes — and so is a ThreadX gateway's signal route, which
+decodes the forwarded value and re-encodes it (a frame route forwards its payload as it is: those
+bytes are not the gateway's values). So the host bus bridge, a gateway's signal route and the target
+put the same bits on the wire for the same value. The value is rounded half away from
+zero to a raw step first, then held to the range in raw steps (the declared ends converted
+exactly, on the decimals the DBC wrote, with ceil and floor, so an end off the raw grid is never
+passed); `[0|0]` declares no range and leaves the width. ±inf go to the nearest end, and NaN, which carries no value, goes out as raw 0 brought into
+the range. A value the signal's **VAL_ table names** outside the range — `255 "SNA"` on a `[0|250]`
+signal — is sent as itself and not counted: it is the database's own way to say "no value", and a
+gateway forwarding it must not turn it into a plausible one. A range no value fits (minimum above
+maximum, factor 0, nothing inside the width) is refused by loom2v on a signal a node sends or a
+route re-encodes, and only warned about by dbc2cfg, which cannot tell a sent signal from a received
+one. At 64 bits the top, 2^64 - 1, is the f64 2^64, so a value rounding there is that end; past
+2^53 an f64 holds every other integer only to its precision. Ethernet events need none of this: a
+SOME/IP field is written at its declared type's own width, with no scaling and no DBC range.
+
+Each value that had to be moved is **counted**, once the frame carrying it is accepted by the
+channel (a value rounded onto an end is not: 100.4 on a `[0|100]` signal of factor 1 goes out as
+100, which the rounding gives anyway). The count is a saturating u32 per encoding context, and the
+node exposes it through a `[[did]]`:
+
+```toml
+[[did]]
+id             = 0x0120
+tx_saturations = true   # 4 bytes, big-endian: sent values saturated since start
+```
+
+A DID, because that is where a node's state is read from outside it today — by a tester, on the
+bench, from the fault memory's snapshots (a `freeze` may name it) — on both owners, with no FB code
+and no extra bus traffic; a saturation is the FB sending a value its own bus contract forbids, which
+the FB cannot be told about usefully at the moment it writes. The host bridge that serves the
+node's diagnostic connection counts the values it encodes; a host node whose sent signals ride
+another bus's bridge is refused with the DID (each bridge counts its own, and the DID reads one).
+On a target the comm thread encodes everything and serves the DID; a field it sends is carried as a
+u32 (`u32(field)` into the IOC cell), so a float or a 64-bit field on a sent signal is refused there
+rather than truncated before its range is checked.
+
+blobly_net's encoder (`modules/candb` `raw_from_phys`) agrees with this bit for bit on every value
+this sends unchanged — inside the declared range, the rounding at both ends included — and at the
+width's ends of a signed signal and the top of an unsigned one. It does **not** hold a value to the
+DBC range, deliberately: a tester has to be able to send an out-of-range value to test the receiver
+of one. One difference is a defect there: a negative value for an unsigned signal wraps to its
+maximum (blobly_net#415).
+
 This replaces the bridge's unconditional 10 ms send: each PDU runs its own little
 TX state machine (last-sent timestamp, change detection, repeat counter), all
 generated as a static per-PDU table + a shared stepping routine (no-alloc).

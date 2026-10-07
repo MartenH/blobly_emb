@@ -1,8 +1,10 @@
 module main
 
+import tools.candb
+
 // The ThreadX multi-bus GATEWAY comm owner: sysnode (examples/system_full) opens one channel
-// per FDCAN bus and forwards LAYOUT-IDENTICAL routes as a raw payload copy + id remap (no
-// on-target decode/re-encode). These guard the pure emit helpers that build that comm thread —
+// per FDCAN bus and forwards LAYOUT-IDENTICAL routes under the destination id: the payload copied,
+// a signal route's value re-encoded through the one send encode (held to its range, #306). These guard the pure emit helpers that build that comm thread —
 // the target cross-build is not gated in CI, so the codegen is checked here.
 
 fn test_fdcan_index_and_channel_var() {
@@ -52,6 +54,7 @@ fn test_gateway_forward_arms_raw_copy_and_id_remap() {
 				to_id:      0x130
 				signal:     'VehicleSpeed'
 				raw_ident:  true
+				dst_sg:    candb.Signal{ name: 'VehicleSpeed', length: 32 }
 			},
 			Route{
 				from_bus:   'can1'
@@ -61,6 +64,7 @@ fn test_gateway_forward_arms_raw_copy_and_id_remap() {
 				to_id:      0x125
 				signal:     'SteeringAngle'
 				raw_ident:  true
+				dst_sg:    candb.Signal{ name: 'SteeringAngle', length: 32 }
 			},
 		]
 	}
@@ -68,7 +72,8 @@ fn test_gateway_forward_arms_raw_copy_and_id_remap() {
 	a := gateway_forward_arms(m, 'can0').join('\n')
 	assert a.contains('rx.id == u32(0x120) && rx.len == 8')
 	assert a.contains('id:  u32(0x130)')
-	assert a.contains('ff.data = rx.data') // raw copy — no decode/re-encode
+	assert a.contains('ff.data = rx.data') // the payload copied, the signal's value re-encoded into it
+	assert a.contains('com.encode_raw(rt_raw_x')
 	assert a.contains('ch_can1.tx_ready()')
 	assert a.contains('ch_can1.send(ff)')
 	assert a.contains('g_fwd_count++') // counted inside the tx_ready gate (only frames actually sent)
@@ -106,6 +111,7 @@ fn test_gateway_forward_arms_nm_gated_only_on_the_telem_bus() {
 				to_id:     0x125
 				signal:    'SteeringAngle'
 				raw_ident: true
+				dst_sg:    candb.Signal{ name: 'SteeringAngle', length: 32 }
 			},
 			Route{
 				from_bus:  'can1'
@@ -115,6 +121,7 @@ fn test_gateway_forward_arms_nm_gated_only_on_the_telem_bus() {
 				to_id:     0x140
 				signal:    'Other'
 				raw_ident: true
+				dst_sg:    candb.Signal{ name: 'Other', length: 32 }
 			},
 		]
 	}

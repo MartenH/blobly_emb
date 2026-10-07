@@ -669,6 +669,13 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\tsecoc_tx_${msg} secoc.TxState'
 			}
 		}
+		encodes := tx_by_msg.len > 0 || dst_frames.len > 0
+		if encodes {
+			glue << '\ttx_sat com.TxSaturations // sent values com.encode_raw saturated (docs/communication.md)'
+			if conns.len == 0 && m.dids.any(it.tx_saturations) {
+				panic('loom2v: [[did]] tx_saturations: bus "${bname}" encodes sent values, but its bridge serves no diagnostic connection — on the host each bus bridge counts its own, and the DID reads the one bridge that serves it (put the node\'s sent signals on its [isotp] bus, or drop the DID)')
+			}
+		}
 		glue << rx_state_fields(m, rx_msgs, bname, owner)
 		for c in conns {
 			tp := snake(c.name)
@@ -919,6 +926,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			glue << '\t\tlen: ${msg}_dlc'
 			glue << '\t}'
 			glue << '\tmut tx_${msg}_any := false'
+			glue << '\tmut tx_${msg}_sat := u32(0) // values com.encode_raw saturated'
 			for sname in list {
 				si := m.sig_of[sname] or { continue }
 				fld := snake(sname)
@@ -929,7 +937,9 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				}
 				glue << '\tmut ${fld} := sig.${sname}{}'
 				glue << '\tif osal.${acquire_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld}))) {'
-				glue << '\t\t${si.dbc_msg}_${snake(sname)}_set(mut tx_${msg}.data, ${phys})'
+				glue << '\t\tif ${si.dbc_msg}_${snake(sname)}_set(mut tx_${msg}.data, ${phys}) {'
+				glue << '\t\t\ttx_${msg}_sat++'
+				glue << '\t\t}'
 				glue << '\t\ttx_${msg}_any = true'
 				glue << '\t}'
 			}
@@ -975,6 +985,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			mark_arg := if needs_pre { 'tx_${msg}_pre' } else { 'tx_${msg}.data' }
 			glue << '\t\tif st.chan.send(tx_${msg}) {'
 			glue << '\t\t\tst.tx_${msg}_st.mark_sent(now, ${mark_arg}, ${msg}_dlc)'
+			glue << '\t\t\tst.tx_sat.add(tx_${msg}_sat)'
 			if e2e_here || secoc_here {
 				// send rejected after tx_ready() (e.g. a multi-writer bus race, or a
 				// nonblocking write losing queue space): rewind the protection counter so the
@@ -1020,12 +1031,15 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			glue << '\t\text: ${r.to_ext}' // re-encode into a 29-bit dest frame keeps its id width
 			glue << '\t}'
 			glue << '\tmut rf_${dk}_ok := true'
+			glue << '\tmut rf_${dk}_sat := u32(0) // values com.encode_raw saturated'
 			for r2 in sig_routes {
 				if r2.to_bus != r.to_bus || r2.to_frame != r.to_frame {
 					continue
 				}
 				rk := route_field(r2)
-				glue << '\t${snake(r2.to_frame)}_${snake(r2.signal)}_set(mut rf_${dk}.data, st.${rk}_v)'
+				glue << '\tif ${snake(r2.to_frame)}_${snake(r2.signal)}_set(mut rf_${dk}.data, st.${rk}_v) {'
+				glue << '\t\trf_${dk}_sat++'
+				glue << '\t}'
 				// freshness: suppress the frame if the source was never received, or is stale
 				// beyond its deadline — the source frame's authored [[frame]].rx.timeout_ms if
 				// present, else 3x its DBC cadence (0 = no deadline, so only never-received).
@@ -1099,6 +1113,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			mark_arg := if r_pre { 'rf_${dk}_pre' } else { 'rf_${dk}.data' }
 			glue << '\t\tif ${dch}.send(rf_${dk}) {'
 			glue << '\t\t\tst.rt_tx_${dk}.mark_sent(now, ${mark_arg}, ${r.to_dlc})'
+			glue << '\t\t\tst.tx_sat.add(rf_${dk}_sat)'
 			if r_pre {
 				glue << '\t\t} else {'
 				if r_e2e {
@@ -1112,6 +1127,9 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\t\t}'
 			}
 			glue << '\t}'
+		}
+		if encodes {
+			glue << tx_sat_did_lines(m, conns.map('st.conn_${snake(it.name)}.server'), 'st.tx_sat.count', '\t')
 		}
 		glue << '}'
 		glue << ''
@@ -1902,4 +1920,19 @@ fn eth_src_is_fn(m Model) []string {
 		'\treturn ip[0] == want[0] && ip[1] == want[1] && ip[2] == want[2] && ip[3] == want[3] && port == want_port',
 		'}',
 	]
+}
+
+// tx_sat_did_lines: the node's `tx_saturations` DID set from `count` in each of `servers` — the
+// encoding context writes it once a pass, after its sends, so a 0x22 answers the count current then.
+fn tx_sat_did_lines(m Model, servers []string, count string, ind string) []string {
+	mut out := []string{}
+	for idx, d in m.dids {
+		if !d.tx_saturations {
+			continue
+		}
+		for srv in servers {
+			out << did_signal_encode(srv, idx, count, 'u32').split('\n').map(ind + it.trim_left('\t'))
+		}
+	}
+	return out
 }

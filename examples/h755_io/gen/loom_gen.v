@@ -7,6 +7,7 @@ import loom
 import driver.io
 import comm.telem
 import driver.can
+import comm.com
 
 struct Partition_app_state {
 mut:
@@ -180,6 +181,7 @@ fn comm_thread_entry(input u32) {
 	mut last_telem := u64(0)
 	telem_period_us := u64(1000000)
 	mut last_tx_btn_pressed := u64(0)
+	mut tx_sat := com.TxSaturations{} // sent values com.encode_raw saturated (docs/communication.md)
 	mut rx := can.Frame{}
 	for {
 		C.comm_rx_wait(10) // block up to 10 ticks; the FDCAN Rx ISR wakes us on a new frame
@@ -215,11 +217,19 @@ fn comm_thread_entry(input u32) {
 				id:  u32(0x310)
 				len: 4
 			}
-			tf.data[0] = u8(tv_a & 0xff)
-			tf.data[1] = u8((tv_a >> 8) & 0xff)
-			tf.data[2] = u8((tv_a >> 16) & 0xff)
-			tf.data[3] = u8((tv_a >> 24) & 0xff)
-			ch.send(tf)
+			mut tf_sat := u32(0)
+			tf_raw0_x := (f64(tv_a) - 0.0) / 1.0
+			tf_raw0, tf_raw0_sat := com.encode_raw(tf_raw0_x, 0.0, 1.0, u64(0), u64(1), u64(0), u64(0xffffffff))
+			tf.data[0] = u8(tf_raw0)
+			tf.data[1] = u8(tf_raw0 >> 8)
+			tf.data[2] = u8(tf_raw0 >> 16)
+			tf.data[3] = u8(tf_raw0 >> 24)
+			if tf_raw0_sat {
+				tf_sat++
+			}
+			if ch.send(tf) {
+				tx_sat.add(tf_sat)
+			}
 		}
 	}
 }

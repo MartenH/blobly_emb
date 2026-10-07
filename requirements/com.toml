@@ -101,3 +101,13 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-COMMS-003"
+
+# #306: AUTOSAR's handleOutOfRange, as "saturate" — one rule for every sender (comm/com encode_raw).
+[[req]]
+id = "REQ-COM-010"
+title = "Transmitted values held to the signal range"
+text = "COM shall transmit a signal value that lies outside the range declared for the signal in the bus database, or outside what the signal's bit width holds, as the nearest end of that range — never as any other value — and a value that carries no number as the in-range value nearest zero. It shall count each value so held, in a count a tester can read from the node."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-COMMS-001"

@@ -11,6 +11,7 @@ import comm.secoc
 struct Bridge_can0_state {
 mut:
 	chan can.Channel
+	tx_sat com.TxSaturations // sent values com.encode_raw saturated (docs/communication.md)
 	route_can1 can.Channel // gateway: forward to can1
 	rt_can1_dst_frame_speed_v f64 // routed physical value
 	rt_can1_dst_frame_speed_fresh u64 // rx timestamp (0 = never received)
@@ -43,7 +44,10 @@ fn io_can0_10ms(ctx voidptr) {
 		ext: false
 	}
 	mut rf_can1_dst_frame_ok := true
-	dst_frame_speed_set(mut rf_can1_dst_frame.data, st.rt_can1_dst_frame_speed_v)
+	mut rf_can1_dst_frame_sat := u32(0) // values com.encode_raw saturated
+	if dst_frame_speed_set(mut rf_can1_dst_frame.data, st.rt_can1_dst_frame_speed_v) {
+		rf_can1_dst_frame_sat++
+	}
 	if st.rt_can1_dst_frame_speed_fresh == 0 || now - st.rt_can1_dst_frame_speed_fresh > u64(60000) {
 		rf_can1_dst_frame_ok = false
 	}
@@ -53,6 +57,7 @@ fn io_can0_10ms(ctx voidptr) {
 		st.e2e_tx_can1_dst_frame.protect(&rf_can1_dst_frame.data[0], int(8), u16(0x2a), 6, 7)
 		if st.route_can1.send(rf_can1_dst_frame) {
 			st.rt_tx_can1_dst_frame.mark_sent(now, rf_can1_dst_frame_pre, 8)
+			st.tx_sat.add(rf_can1_dst_frame_sat)
 		} else {
 			st.e2e_tx_can1_dst_frame = e2e_save_can1_dst_frame
 		}
@@ -63,7 +68,10 @@ fn io_can0_10ms(ctx voidptr) {
 		ext: false
 	}
 	mut rf_can1_dst_frame2_ok := true
-	dst_frame2_rpm_set(mut rf_can1_dst_frame2.data, st.rt_can1_dst_frame2_rpm_v)
+	mut rf_can1_dst_frame2_sat := u32(0) // values com.encode_raw saturated
+	if dst_frame2_rpm_set(mut rf_can1_dst_frame2.data, st.rt_can1_dst_frame2_rpm_v) {
+		rf_can1_dst_frame2_sat++
+	}
 	if st.rt_can1_dst_frame2_rpm_fresh == 0 || now - st.rt_can1_dst_frame2_rpm_fresh > u64(60000) {
 		rf_can1_dst_frame2_ok = false
 	}
@@ -73,6 +81,7 @@ fn io_can0_10ms(ctx voidptr) {
 		st.secoc_tx_can1_dst_frame2.protect(&st.secoc_key_can1_dst_frame2, &rf_can1_dst_frame2.data[0], int(8), u16(0x2b), 1, 2, 4)
 		if st.route_can1.send(rf_can1_dst_frame2) {
 			st.rt_tx_can1_dst_frame2.mark_sent(now, rf_can1_dst_frame2_pre, 8)
+			st.tx_sat.add(rf_can1_dst_frame2_sat)
 		} else {
 			st.secoc_tx_can1_dst_frame2 = secoc_save_can1_dst_frame2
 		}

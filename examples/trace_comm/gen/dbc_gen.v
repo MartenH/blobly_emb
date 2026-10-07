@@ -2,6 +2,8 @@
 // Runtime layer: no heap, operates on fixed [64]u8 frame payloads.
 module gen
 
+import comm.com
+
 // ===== Powertrain  id=0x100  dlc=8 =====
 pub const powertrain_id = u32(0x100)
 pub const powertrain_dlc = u8(8)
@@ -37,13 +39,11 @@ pub fn powertrain_engine_speed_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn powertrain_engine_speed_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 0.25
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 16)
-	}
-	powertrain_engine_speed_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
+pub fn powertrain_engine_speed_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 0.25
+	raw, saturated := com.encode_raw(raw_x, 0.0, 65535.0, u64(0), u64(65535), u64(0), u64(0xffff))
+	powertrain_engine_speed_set_raw(mut data, raw)
+	return saturated
 }
 
 // VehicleSpeed: 16|12 @1 (Intel) unsigned (0.1,0.0) "km/h"
@@ -77,13 +77,11 @@ pub fn powertrain_vehicle_speed_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn powertrain_vehicle_speed_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 0.1
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 12)
-	}
-	powertrain_vehicle_speed_set_raw(mut data, u64(raw) & ((u64(1) << 12) - 1))
+pub fn powertrain_vehicle_speed_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 0.1
+	raw, saturated := com.encode_raw(raw_x, 0.0, 4095.0, u64(0), u64(4095), u64(0), u64(0xfff))
+	powertrain_vehicle_speed_set_raw(mut data, raw)
+	return saturated
 }
 
 // CoolantTemp: 28|8 @1 (Intel) unsigned (1.0,-40.0) "degC"
@@ -117,13 +115,11 @@ pub fn powertrain_coolant_temp_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn powertrain_coolant_temp_set(mut data [64]u8, phys f64) {
-	x := (phys - -40.0) / 1.0
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 8)
-	}
-	powertrain_coolant_temp_set_raw(mut data, u64(raw) & ((u64(1) << 8) - 1))
+pub fn powertrain_coolant_temp_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - -40.0) / 1.0
+	raw, saturated := com.encode_raw(raw_x, 0.0, 255.0, u64(0), u64(255), u64(0), u64(0xff))
+	powertrain_coolant_temp_set_raw(mut data, raw)
+	return saturated
 }
 
 // ThrottlePos: 36|7 @1 (Intel) unsigned (1.0,0.0) "%"
@@ -157,13 +153,11 @@ pub fn powertrain_throttle_pos_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn powertrain_throttle_pos_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 1.0
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 7)
-	}
-	powertrain_throttle_pos_set_raw(mut data, u64(raw) & ((u64(1) << 7) - 1))
+pub fn powertrain_throttle_pos_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 1.0
+	raw, saturated := com.encode_raw(raw_x, 0.0, 127.0, u64(0), u64(127), u64(0), u64(0x7f))
+	powertrain_throttle_pos_set_raw(mut data, raw)
+	return saturated
 }
 
 // Gear: 43|4 @1 (Intel) unsigned (1.0,0.0) ""
@@ -197,13 +191,11 @@ pub fn powertrain_gear_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn powertrain_gear_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 1.0
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 4)
-	}
-	powertrain_gear_set_raw(mut data, u64(raw) & ((u64(1) << 4) - 1))
+pub fn powertrain_gear_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 1.0
+	raw, saturated := com.encode_raw(raw_x, 0.0, 15.0, u64(0), u64(15), u64(0), u64(0xf))
+	powertrain_gear_set_raw(mut data, raw)
+	return saturated
 }
 
 // CruiseOn: 47|1 @1 (Intel) unsigned (1.0,0.0) ""
@@ -237,13 +229,11 @@ pub fn powertrain_cruise_on_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn powertrain_cruise_on_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 1.0
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 1)
-	}
-	powertrain_cruise_on_set_raw(mut data, u64(raw) & ((u64(1) << 1) - 1))
+pub fn powertrain_cruise_on_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 1.0
+	raw, saturated := com.encode_raw(raw_x, 0.0, 1.0, u64(0), u64(1), u64(0), u64(0x1))
+	powertrain_cruise_on_set_raw(mut data, raw)
+	return saturated
 }
 
 // ===== LampFrame  id=0x110  dlc=1 =====
@@ -281,13 +271,11 @@ pub fn lamp_frame_warn_lamp_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn lamp_frame_warn_lamp_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 1.0
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 1)
-	}
-	lamp_frame_warn_lamp_set_raw(mut data, u64(raw) & ((u64(1) << 1) - 1))
+pub fn lamp_frame_warn_lamp_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 1.0
+	raw, saturated := com.encode_raw(raw_x, 0.0, 1.0, u64(0), u64(1), u64(0), u64(0x1))
+	lamp_frame_warn_lamp_set_raw(mut data, raw)
+	return saturated
 }
 
 // ===== Heartbeat  id=0x700  dlc=1 =====
@@ -325,13 +313,11 @@ pub fn heartbeat_counter_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn heartbeat_counter_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 1.0
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 8)
-	}
-	heartbeat_counter_set_raw(mut data, u64(raw) & ((u64(1) << 8) - 1))
+pub fn heartbeat_counter_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 1.0
+	raw, saturated := com.encode_raw(raw_x, 0.0, 255.0, u64(0), u64(255), u64(0), u64(0xff))
+	heartbeat_counter_set_raw(mut data, raw)
+	return saturated
 }
 
 // ===== Request  id=0x101  dlc=8 =====
@@ -369,13 +355,11 @@ pub fn request_req_code_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn request_req_code_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 1.0
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 8)
-	}
-	request_req_code_set_raw(mut data, u64(raw) & ((u64(1) << 8) - 1))
+pub fn request_req_code_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 1.0
+	raw, saturated := com.encode_raw(raw_x, 0.0, 255.0, u64(0), u64(255), u64(0), u64(0xff))
+	request_req_code_set_raw(mut data, raw)
+	return saturated
 }
 
 // ===== Response  id=0x102  dlc=8 =====
@@ -413,13 +397,11 @@ pub fn response_resp_code_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn response_resp_code_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 1.0
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 8)
-	}
-	response_resp_code_set_raw(mut data, u64(raw) & ((u64(1) << 8) - 1))
+pub fn response_resp_code_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 1.0
+	raw, saturated := com.encode_raw(raw_x, 0.0, 255.0, u64(0), u64(255), u64(0), u64(0xff))
+	response_resp_code_set_raw(mut data, raw)
+	return saturated
 }
 
 // ===== BodyStatus  id=0x200  dlc=8 =====
@@ -457,13 +439,11 @@ pub fn body_status_door_fl_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn body_status_door_fl_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 1.0
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 1)
-	}
-	body_status_door_fl_set_raw(mut data, u64(raw) & ((u64(1) << 1) - 1))
+pub fn body_status_door_fl_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 1.0
+	raw, saturated := com.encode_raw(raw_x, 0.0, 1.0, u64(0), u64(1), u64(0), u64(0x1))
+	body_status_door_fl_set_raw(mut data, raw)
+	return saturated
 }
 
 // DoorFR: 1|1 @1 (Intel) unsigned (1.0,0.0) ""
@@ -497,13 +477,11 @@ pub fn body_status_door_fr_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn body_status_door_fr_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 1.0
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 1)
-	}
-	body_status_door_fr_set_raw(mut data, u64(raw) & ((u64(1) << 1) - 1))
+pub fn body_status_door_fr_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 1.0
+	raw, saturated := com.encode_raw(raw_x, 0.0, 1.0, u64(0), u64(1), u64(0), u64(0x1))
+	body_status_door_fr_set_raw(mut data, raw)
+	return saturated
 }
 
 // DoorRL: 2|1 @1 (Intel) unsigned (1.0,0.0) ""
@@ -537,13 +515,11 @@ pub fn body_status_door_rl_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn body_status_door_rl_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 1.0
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 1)
-	}
-	body_status_door_rl_set_raw(mut data, u64(raw) & ((u64(1) << 1) - 1))
+pub fn body_status_door_rl_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 1.0
+	raw, saturated := com.encode_raw(raw_x, 0.0, 1.0, u64(0), u64(1), u64(0), u64(0x1))
+	body_status_door_rl_set_raw(mut data, raw)
+	return saturated
 }
 
 // DoorRR: 3|1 @1 (Intel) unsigned (1.0,0.0) ""
@@ -577,13 +553,11 @@ pub fn body_status_door_rr_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn body_status_door_rr_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 1.0
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 1)
-	}
-	body_status_door_rr_set_raw(mut data, u64(raw) & ((u64(1) << 1) - 1))
+pub fn body_status_door_rr_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 1.0
+	raw, saturated := com.encode_raw(raw_x, 0.0, 1.0, u64(0), u64(1), u64(0), u64(0x1))
+	body_status_door_rr_set_raw(mut data, raw)
+	return saturated
 }
 
 // Locked: 4|1 @1 (Intel) unsigned (1.0,0.0) ""
@@ -617,13 +591,11 @@ pub fn body_status_locked_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn body_status_locked_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 1.0
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 1)
-	}
-	body_status_locked_set_raw(mut data, u64(raw) & ((u64(1) << 1) - 1))
+pub fn body_status_locked_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 1.0
+	raw, saturated := com.encode_raw(raw_x, 0.0, 1.0, u64(0), u64(1), u64(0), u64(0x1))
+	body_status_locked_set_raw(mut data, raw)
+	return saturated
 }
 
 // Headlights: 5|2 @1 (Intel) unsigned (1.0,0.0) ""
@@ -657,13 +629,11 @@ pub fn body_status_headlights_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn body_status_headlights_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 1.0
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 2)
-	}
-	body_status_headlights_set_raw(mut data, u64(raw) & ((u64(1) << 2) - 1))
+pub fn body_status_headlights_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 1.0
+	raw, saturated := com.encode_raw(raw_x, 0.0, 3.0, u64(0), u64(3), u64(0), u64(0x3))
+	body_status_headlights_set_raw(mut data, raw)
+	return saturated
 }
 
 // Indicators: 7|2 @1 (Intel) unsigned (1.0,0.0) ""
@@ -697,13 +667,11 @@ pub fn body_status_indicators_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn body_status_indicators_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 1.0
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 2)
-	}
-	body_status_indicators_set_raw(mut data, u64(raw) & ((u64(1) << 2) - 1))
+pub fn body_status_indicators_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 1.0
+	raw, saturated := com.encode_raw(raw_x, 0.0, 3.0, u64(0), u64(3), u64(0), u64(0x3))
+	body_status_indicators_set_raw(mut data, raw)
+	return saturated
 }
 
 // InteriorTemp: 16|8 @1 (Intel) unsigned (0.5,-40.0) "degC"
@@ -737,13 +705,11 @@ pub fn body_status_interior_temp_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn body_status_interior_temp_set(mut data [64]u8, phys f64) {
-	x := (phys - -40.0) / 0.5
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 8)
-	}
-	body_status_interior_temp_set_raw(mut data, u64(raw) & ((u64(1) << 8) - 1))
+pub fn body_status_interior_temp_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - -40.0) / 0.5
+	raw, saturated := com.encode_raw(raw_x, 0.0, 255.0, u64(0), u64(255), u64(0), u64(0xff))
+	body_status_interior_temp_set_raw(mut data, raw)
+	return saturated
 }
 
 // ===== WheelSpeeds  id=0x300  dlc=8 =====
@@ -781,13 +747,11 @@ pub fn wheel_speeds_wheel_fl_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn wheel_speeds_wheel_fl_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 0.01
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 16)
-	}
-	wheel_speeds_wheel_fl_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
+pub fn wheel_speeds_wheel_fl_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 0.01
+	raw, saturated := com.encode_raw(raw_x, 0.0, 65535.0, u64(0), u64(65535), u64(0), u64(0xffff))
+	wheel_speeds_wheel_fl_set_raw(mut data, raw)
+	return saturated
 }
 
 // WheelFR: 16|16 @1 (Intel) unsigned (0.01,0.0) "km/h"
@@ -821,13 +785,11 @@ pub fn wheel_speeds_wheel_fr_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn wheel_speeds_wheel_fr_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 0.01
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 16)
-	}
-	wheel_speeds_wheel_fr_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
+pub fn wheel_speeds_wheel_fr_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 0.01
+	raw, saturated := com.encode_raw(raw_x, 0.0, 65535.0, u64(0), u64(65535), u64(0), u64(0xffff))
+	wheel_speeds_wheel_fr_set_raw(mut data, raw)
+	return saturated
 }
 
 // WheelRL: 32|16 @1 (Intel) unsigned (0.01,0.0) "km/h"
@@ -861,13 +823,11 @@ pub fn wheel_speeds_wheel_rl_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn wheel_speeds_wheel_rl_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 0.01
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 16)
-	}
-	wheel_speeds_wheel_rl_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
+pub fn wheel_speeds_wheel_rl_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 0.01
+	raw, saturated := com.encode_raw(raw_x, 0.0, 65535.0, u64(0), u64(65535), u64(0), u64(0xffff))
+	wheel_speeds_wheel_rl_set_raw(mut data, raw)
+	return saturated
 }
 
 // WheelRR: 48|16 @1 (Intel) unsigned (0.01,0.0) "km/h"
@@ -901,13 +861,11 @@ pub fn wheel_speeds_wheel_rr_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn wheel_speeds_wheel_rr_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 0.01
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 16)
-	}
-	wheel_speeds_wheel_rr_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
+pub fn wheel_speeds_wheel_rr_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 0.01
+	raw, saturated := com.encode_raw(raw_x, 0.0, 65535.0, u64(0), u64(65535), u64(0), u64(0xffff))
+	wheel_speeds_wheel_rr_set_raw(mut data, raw)
+	return saturated
 }
 
 // ===== BrakeStatus  id=0x301  dlc=4 =====
@@ -945,13 +903,11 @@ pub fn brake_status_brake_pressure_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn brake_status_brake_pressure_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 0.1
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 16)
-	}
-	brake_status_brake_pressure_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
+pub fn brake_status_brake_pressure_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 0.1
+	raw, saturated := com.encode_raw(raw_x, 0.0, 65535.0, u64(0), u64(65535), u64(0), u64(0xffff))
+	brake_status_brake_pressure_set_raw(mut data, raw)
+	return saturated
 }
 
 // ABSActive: 16|1 @1 (Intel) unsigned (1.0,0.0) ""
@@ -985,13 +941,11 @@ pub fn brake_status_abs_active_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn brake_status_abs_active_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 1.0
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 1)
-	}
-	brake_status_abs_active_set_raw(mut data, u64(raw) & ((u64(1) << 1) - 1))
+pub fn brake_status_abs_active_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 1.0
+	raw, saturated := com.encode_raw(raw_x, 0.0, 1.0, u64(0), u64(1), u64(0), u64(0x1))
+	brake_status_abs_active_set_raw(mut data, raw)
+	return saturated
 }
 
 // BrakePedal: 17|7 @1 (Intel) unsigned (1.0,0.0) "%"
@@ -1025,13 +979,11 @@ pub fn brake_status_brake_pedal_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn brake_status_brake_pedal_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 1.0
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 7)
-	}
-	brake_status_brake_pedal_set_raw(mut data, u64(raw) & ((u64(1) << 7) - 1))
+pub fn brake_status_brake_pedal_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 1.0
+	raw, saturated := com.encode_raw(raw_x, 0.0, 100.0, u64(0), u64(100), u64(0), u64(0x7f))
+	brake_status_brake_pedal_set_raw(mut data, raw)
+	return saturated
 }
 
 // ===== BatteryStatus  id=0x400  dlc=8 =====
@@ -1069,13 +1021,11 @@ pub fn battery_status_pack_voltage_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn battery_status_pack_voltage_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 0.01
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 16)
-	}
-	battery_status_pack_voltage_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
+pub fn battery_status_pack_voltage_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 0.01
+	raw, saturated := com.encode_raw(raw_x, 0.0, 65535.0, u64(0), u64(65535), u64(0), u64(0xffff))
+	battery_status_pack_voltage_set_raw(mut data, raw)
+	return saturated
 }
 
 // PackCurrent: 16|16 @1 (Intel) signed (0.1,0.0) "A"
@@ -1113,13 +1063,11 @@ pub fn battery_status_pack_current_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn battery_status_pack_current_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 0.1
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 16)
-	}
-	battery_status_pack_current_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
+pub fn battery_status_pack_current_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 0.1
+	raw, saturated := com.encode_raw(raw_x, -32768.0, 32767.0, u64(32768), u64(32767), u64(0), u64(0xffff))
+	battery_status_pack_current_set_raw(mut data, raw)
+	return saturated
 }
 
 // SoC: 32|8 @1 (Intel) unsigned (0.5,0.0) "%"
@@ -1153,13 +1101,11 @@ pub fn battery_status_so_c_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn battery_status_so_c_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 0.5
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 8)
-	}
-	battery_status_so_c_set_raw(mut data, u64(raw) & ((u64(1) << 8) - 1))
+pub fn battery_status_so_c_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 0.5
+	raw, saturated := com.encode_raw(raw_x, 0.0, 200.0, u64(0), u64(200), u64(0), u64(0xff))
+	battery_status_so_c_set_raw(mut data, raw)
+	return saturated
 }
 
 // PackTemp: 40|8 @1 (Intel) unsigned (1.0,-40.0) "degC"
@@ -1193,11 +1139,9 @@ pub fn battery_status_pack_temp_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn battery_status_pack_temp_set(mut data [64]u8, phys f64) {
-	x := (phys - -40.0) / 1.0
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 8)
-	}
-	battery_status_pack_temp_set_raw(mut data, u64(raw) & ((u64(1) << 8) - 1))
+pub fn battery_status_pack_temp_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - -40.0) / 1.0
+	raw, saturated := com.encode_raw(raw_x, 0.0, 255.0, u64(0), u64(255), u64(0), u64(0xff))
+	battery_status_pack_temp_set_raw(mut data, raw)
+	return saturated
 }

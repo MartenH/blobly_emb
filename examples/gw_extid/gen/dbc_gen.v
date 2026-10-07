@@ -2,6 +2,8 @@
 // Runtime layer: no heap, operates on fixed [64]u8 frame payloads.
 module gen
 
+import comm.com
+
 // ===== ExtDiag  id=0x10fd0500  dlc=8 =====
 pub const ext_diag_id = u32(0x10fd0500)
 pub const ext_diag_dlc = u8(8)
@@ -37,11 +39,9 @@ pub fn ext_diag_code_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn ext_diag_code_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 1.0
-	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
-	if raw < 0 {
-		raw += i64(u64(1) << 32)
-	}
-	ext_diag_code_set_raw(mut data, u64(raw) & ((u64(1) << 32) - 1))
+pub fn ext_diag_code_set(mut data [64]u8, phys f64) bool {
+	raw_x := (phys - 0.0) / 1.0
+	raw, saturated := com.encode_raw(raw_x, 0.0, 4294967295.0, u64(0), u64(4294967295), u64(0), u64(0xffffffff))
+	ext_diag_code_set_raw(mut data, raw)
+	return saturated
 }

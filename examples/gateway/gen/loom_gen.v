@@ -105,6 +105,7 @@ struct Bridge_can1_state {
 mut:
 	chan can.Channel
 	tx_lamp_frame_st com.TxState
+	tx_sat com.TxSaturations // sent values com.encode_raw saturated (docs/communication.md)
 }
 
 fn io_can1_10ms(ctx voidptr) {
@@ -115,14 +116,18 @@ fn io_can1_10ms(ctx voidptr) {
 		len: lamp_frame_dlc
 	}
 	mut tx_lamp_frame_any := false
+	mut tx_lamp_frame_sat := u32(0) // values com.encode_raw saturated
 	mut warn_lamp := sig.WarnLamp{}
 	if osal.ioc_acquire2(warn_lamp_ch, &warn_lamp, u8(sizeof(warn_lamp))) {
-		lamp_frame_warn_lamp_set(mut tx_lamp_frame.data, if warn_lamp.on { f64(1) } else { f64(0) })
+		if lamp_frame_warn_lamp_set(mut tx_lamp_frame.data, if warn_lamp.on { f64(1) } else { f64(0) }) {
+			tx_lamp_frame_sat++
+		}
 		tx_lamp_frame_any = true
 	}
 	if tx_lamp_frame_any && st.chan.tx_ready() && st.tx_lamp_frame_st.should_send(now, tx_lamp_frame.data, lamp_frame_dlc) {
 		if st.chan.send(tx_lamp_frame) {
 			st.tx_lamp_frame_st.mark_sent(now, tx_lamp_frame.data, lamp_frame_dlc)
+			st.tx_sat.add(tx_lamp_frame_sat)
 		}
 	}
 }
