@@ -22,17 +22,24 @@ run-example:
 list:
 	@for d in examples/*/; do if [ -f "$$d/Makefile" ]; then basename "$$d"; fi; done
 
-# Validate every example's ecu.toml (and the loom2v test fixtures') against the schema (allowed/required/typed keys, the
-# cross-field rules, and the nested-comment TOML-parser trap). Each example's `make gen` also
-# runs this first, so a bad config fails before codegen; this checks them all at once.
 # which V does CI use, and is it the one you are building with? advisory, never fails.
 v-pin:
 	@./scripts/v_pin.sh "$(V)"
 
-check: $(TOOL_ecucheck)
+# Validate every example's ecu.toml (and the loom2v test fixtures') against the schema (allowed/required/typed keys, the
+# cross-field rules, and the nested-comment TOML-parser trap). Each example's `make gen` also
+# runs this first, so a bad config fails before codegen; this checks them all at once. And the
+# configuration reference and the editors' JSON Schemas must be what tools/cfgschema generates
+# now (`make config-docs` rewrites them).
+check: $(TOOL_ecucheck) $(TOOL_cfgdoc)
 	@rc=0; for d in examples/*/ tools/loom2v/testdata/*/; do \
 	  if [ -f "$$d/ecu.toml" ]; then $(TOOL_ecucheck) "$$d/ecu.toml" || rc=1; fi; \
-	done; exit $$rc
+	done; $(TOOL_cfgdoc) --check || rc=1; exit $$rc
+
+# docs/config-reference.md and schema/*.schema.json, from the ONE schema (tools/cfgschema)
+.PHONY: config-docs
+config-docs: $(TOOL_cfgdoc)
+	$(TOOL_cfgdoc)
 
 # ---- Device (cross-compile) deps --------------------------------------------
 # CMSIS register-map headers for the bare-metal STM32H7 examples (no HAL, no Cube).

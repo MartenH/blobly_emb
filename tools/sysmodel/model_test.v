@@ -4577,3 +4577,43 @@ fn test_the_handoff_row_is_read_apart_from_the_services() {
 	off := toml.parse_text('boot = false\n') or { panic(err) }
 	assert !parse_node_view(off).boot
 }
+
+// REQ-TOPO-001: a typo inside a table is refused, not read as the key's absence — the key sets
+// are the schema's (tools/cfgschema), the same rows the reference doc and the editors use.
+fn test_unknown_keys_inside_system_tables_are_rejected() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_unknown_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	path := os.join_path(dir, 'system.toml')
+	os.write_file(path, '
+[bus.compute]
+interface = "can0"
+bitrat    = 500000
+[bus.compute.nm]
+peers = [0x500, 0x53F]
+timout_ms = 300
+[[signal]]
+name = "S"
+producr = "a"
+[[node]]
+name = "a"
+ecu  = "a.toml"
+endpoint = { address = "192.168.0.2", prot = 1 }
+diag = { req = 1, rps = 2 }
+[[route]]
+gateway = "a"
+form = "compute"
+') or {
+		panic(err)
+	}
+	s := parse_system(path) or { panic(err) }
+	e := errs(check_topology_wellformed(s))
+	for want in ['bus "compute": unknown key "bitrat"', 'bus "compute" nm: unknown key "timout_ms"',
+		'signal "S": unknown key "producr"', 'node "a" endpoint: unknown key "prot"',
+		'node "a" diag: unknown key "rps"', 'route: unknown key "form"'] {
+		assert e.any(it.starts_with(want)), '${want} not in ${e}'
+	}
+	assert s.unknown_keys == []
+}

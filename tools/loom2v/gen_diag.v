@@ -187,10 +187,11 @@ fn parse_uds(doc toml.Doc) UdsCfg {
 	if c.s3_ms < 0 {
 		panic('loom2v: [uds] s3_ms ${c.s3_ms} is negative (0 = the default ${uds.default_s3_us / 1000} ms)')
 	}
-	if c.security_attempts < 0 || c.security_attempts > 255 {
-		panic('loom2v: [uds] security_attempts ${c.security_attempts} is out of range (1..255; 0 = the default ${uds.default_sa_attempts})')
+	ak := schema_key('uds', 'security_attempts')
+	if !ak.in_range(c.security_attempts) {
+		panic('loom2v: [uds] security_attempts ${c.security_attempts} is out of range (1..${ak.max}; 0 = the default ${uds.default_sa_attempts})')
 	}
-	if c.security_key !in ['', 'reference'] {
+	if c.security_key != '' && c.security_key !in schema_key('uds', 'security_key').choices {
 		panic('loom2v: [uds] security_key "${c.security_key}" — the one named key is "reference" (blobly_net\'s bench key); leave it out for the OEM\'s diag_sa_key_ok')
 	}
 	if c.security_delay_ms < 0 {
@@ -254,8 +255,9 @@ fn row_gates(rm map[string]toml.Any, what string) (u8, u8) {
 		panic('loom2v: [uds] services ${what} sessions is empty — omit it for the default sessions')
 	}
 	sec := (rm['security'] or { toml.Any(0) }).int()
-	if sec < 0 || sec > uds.max_security_level {
-		panic('loom2v: [uds] services ${what} security ${sec} is not a 0x27 level (1..${uds.max_security_level})')
+	if !schema_key('uds_service', 'security').in_range(sec) {
+		panic('loom2v: [uds] services ${what} security ${sec} is not a 0x27 level (1..${schema_key('uds_service',
+			'security').max})')
 	}
 	return mask, u8(sec)
 }

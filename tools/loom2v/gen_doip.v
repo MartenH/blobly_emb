@@ -98,8 +98,9 @@ fn validate_doip(m Model) {
 	if !((d.logical >= 0x0001 && d.logical <= 0x0DFF) || (d.logical >= 0x1000 && d.logical <= 0x7FFF)) {
 		panic('loom2v: [doip] logical_address 0x${d.logical.hex()} is not an entity address (0x0001..0x0DFF or 0x1000..0x7FFF)')
 	}
-	if d.functional != 0 && (d.functional < 0xE400 || d.functional > 0xEFFF) {
-		panic('loom2v: [doip] functional_address 0x${d.functional.hex()} is outside the functional range 0xE400..0xEFFF')
+	fk := schema_key('doip', 'functional_address')
+	if d.functional != 0 && !fk.in_range(d.functional) {
+		panic('loom2v: [doip] functional_address 0x${d.functional.hex()} is outside the functional range 0x${fk.min:X}..0x${fk.max:X}')
 	}
 	for k in d.not_int {
 		panic('loom2v: [doip] `${k}` must be an integer (a list: of integers) — narrowed it would be a different value')

@@ -1,6 +1,7 @@
 module main
 
 import toml
+import tools.cfgschema
 
 // @verifies REQ-DIAG-017
 // ecucheck's schema walk: an entry of a named-table map ([[param]] range, [bus.*], [uds] services)
@@ -8,9 +9,7 @@ import toml
 
 fn errors_of(src string) []string {
 	doc := toml.parse_text(src) or { panic(err) }
-	mut errs := []string{}
-	check_table(doc.to_any().as_map(), 'top', specs(), mut errs)
-	return errs
+	return cfgschema.ecu.check(doc.to_any().as_map())
 }
 
 const param_src = '

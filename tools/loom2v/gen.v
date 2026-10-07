@@ -19,6 +19,7 @@ import os
 import toml
 import tools.candb
 import tools.ecumodel
+import tools.cfgschema
 import comm.uds
 import comm.fault
 
@@ -203,9 +204,22 @@ fn toml_int(m map[string]toml.Any, key string, def i64, lo i64, hi i64, what str
 	return int(n)
 }
 
+// schema_key: an ecu.toml key's row in THE schema (tools/cfgschema) — where a leaf check reads its
+// bound or its values, so a limit is stated once
+fn schema_key(ctx string, name string) cfgschema.Key {
+	return cfgschema.ecu.key(ctx, name)
+}
+
+// schema_int: toml_int bounded by the key's schema range
+fn schema_int(m map[string]toml.Any, ctx string, key string, def i64, what string) int {
+	k := schema_key(ctx, key)
+	return toml_int(m, key, def, k.min, k.max, what)
+}
+
 fn parse_nvm_id(name string, v int) u16 {
-	if v < 0 || v > 65534 {
-		panic('ecu.toml: signal "${name}" nvm_id = ${v} is out of range (0 = auto, 1..65534 = pin)')
+	k := schema_key('signal', 'nvm_id')
+	if !k.in_range(v) {
+		panic('ecu.toml: signal "${name}" nvm_id = ${v} is out of range (0 = auto, 1..${k.max} = pin)')
 	}
 	return u16(v)
 }
@@ -287,7 +301,7 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool, eth string) (m
 			name:      name
 			transport: transport
 			persist:   (m['persist'] or { toml.Any('') }).string()
-			nvm_id:    parse_nvm_id(name, toml_int(m, 'nvm_id', 0, 0, 65534, 'signal "${name}"'))
+			nvm_id:    parse_nvm_id(name, schema_int(m, 'signal', 'nvm_id', 0, 'signal "${name}"'))
 			from:      from
 			to:        to
 			local:     from == to
@@ -651,7 +665,7 @@ fn parse_routes(doc toml.Doc, dbc string, frames FrameCfg) []Route {
 			from_bus:   fb
 			from_frame: (fm['frame'] or { toml.Any('') }).string()
 			to_bus:     (tm['bus'] or { toml.Any('') }).string()
-			to_id:      toml_int(tm, 'id', 0, 0, 0x1FFFFFFF, 'route to')
+			to_id:      schema_int(tm, 'route_to', 'id', 0, 'route to')
 			signal:     sig
 			to_frame:   (tm['frame'] or { toml.Any('') }).string()
 		}
@@ -1020,14 +1034,15 @@ fn parse_isotp(doc toml.Doc) []IsotpConn {
 		'rx_id': c.rx_id
 		'tx_id': c.tx_id
 	} {
-		if v < 0 || v > 0x7FF {
-			panic('loom2v: [isotp] ${field} 0x${v.hex()} must be a standard 11-bit id (<= 0x7FF)')
+		if !schema_key('isotp', field).in_range(v) {
+			panic('loom2v: [isotp] ${field} 0x${v.hex()} must be a standard 11-bit id (<= 0x${schema_key('isotp', field).max:X})')
 		}
 	}
 	if c.functional_id != 0 {
 		// the bridge matches it as a standard frame, and it must not be the physical id
-		if c.functional_id < 0 || c.functional_id > 0x7FF {
-			panic('loom2v: [isotp] functional_id 0x${c.functional_id.hex()} must be a standard 11-bit id (<= 0x7FF)')
+		fk := schema_key('isotp', 'functional_id')
+		if !fk.in_range(c.functional_id) {
+			panic('loom2v: [isotp] functional_id 0x${c.functional_id.hex()} must be a standard 11-bit id (<= 0x${fk.max:X})')
 		}
 		if c.functional_id == c.rx_id || c.functional_id == c.tx_id {
 			panic('loom2v: [isotp] functional_id 0x${c.functional_id.hex()} is also the connection\'s physical rx/tx id')
@@ -1043,7 +1058,7 @@ fn parse_dids(doc toml.Doc) []DidCfg {
 		m := d.as_map()
 		// 1..0xFFFF, refused here — the one place every DID consumer reads it from — before the
 		// server's u16 narrows it
-		id := toml_int(m, 'id', 0, 0, 0xFFFF, '[[did]] (a 16-bit data identifier)')
+		id := schema_int(m, 'did', 'id', 0, '[[did]] (a 16-bit data identifier)')
 		if id == 0 {
 			continue
 		}
@@ -1139,8 +1154,9 @@ fn parse_did_access(m map[string]toml.Any, key string, id int) (u8, u8) {
 		panic('loom2v: [[did]] 0x${id.hex()} ${key}.session is empty — omit it for "every session"')
 	}
 	sec := (am['security'] or { toml.Any(0) }).int()
-	if sec < 0 || sec > uds.max_security_level {
-		panic('loom2v: [[did]] 0x${id.hex()} ${key}.security ${sec} is not a 0x27 level the server serves (1..${uds.max_security_level})')
+	if !schema_key('did_access', 'security').in_range(sec) {
+		panic('loom2v: [[did]] 0x${id.hex()} ${key}.security ${sec} is not a 0x27 level the server serves (1..${schema_key('did_access',
+			'security').max})')
 	}
 	// 0x27 unlocks in extended (programming too, but an application server refuses that session
 	// until the bootloader handoff, R2), and every session change relocks: a gate whose sessions
@@ -1159,7 +1175,7 @@ fn session_bit(name string) !u8 {
 		'programming' { uds.in_programming }
 		'extended' { uds.in_extended }
 		'safety' { uds.in_safety }
-		else { error('"${name}" is not a session (default / extended / programming / safety)') }
+		else { error('"${name}" is not a session (${cfgschema.session_names().join(' / ')})') }
 	}
 }
 
@@ -1340,7 +1356,7 @@ fn parse_frames(doc toml.Doc, eth string, buses map[string]bool, bus_kind map[st
 		if 'secoc' in fm {
 			sm := (fm['secoc'] or { toml.Any('') }).as_map()
 			f.secoc_on[fk] = true
-			f.secoc_id[fk] = toml_int(sm, 'data_id', 0, 0, 0xFFFF, 'frame "${fk}" secoc')
+			f.secoc_id[fk] = schema_int(sm, 'secoc', 'data_id', 0, 'frame "${fk}" secoc')
 			if f.secoc_id[fk] < 0 || f.secoc_id[fk] > 0xffff {
 				panic('frame "${fk}": secoc data_id 0x${f.secoc_id[fk].hex()} is out of range (0..0xFFFF)')
 			}
@@ -5265,16 +5281,18 @@ fn parse_faults(doc toml.Doc) []FaultCfg {
 		}
 		if 'snapshot_ids' in m {
 			if snapshot_ids.len != 2 || snapshot_ids[0] == snapshot_ids[1]
-				|| snapshot_ids.any(it < 1 || it > 0xFFFE) {
-				panic('loom2v: [[fault]] "${name}": snapshot_ids must be two distinct ids in 1..65534 — blocks A and B')
+				|| snapshot_ids.any(!schema_key('fault', 'snapshot_ids').in_range(it)) {
+				panic('loom2v: [[fault]] "${name}": snapshot_ids must be two distinct ids in ${schema_key('fault',
+					'snapshot_ids').min}..${schema_key('fault', 'snapshot_ids').max} — blocks A and B')
 			}
 			if freeze.len == 0 {
 				panic('loom2v: [[fault]] "${name}": snapshot_ids pins snapshot blocks, but the fault declares no `freeze`')
 			}
 		}
 		priority := (m['priority'] or { toml.Any(default_fault_priority) }).i64()
-		if priority < 1 || priority > 255 {
-			panic('loom2v: [[fault]] "${name}": priority ${priority} must be 1 (the most important) .. 255')
+		pk := schema_key('fault', 'priority')
+		if !pk.in_range(priority) {
+			panic('loom2v: [[fault]] "${name}": priority ${priority} must be ${pk.min} (the most important) .. ${pk.max}')
 		}
 		signal := (m['signal'] or { toml.Any('') }).string()
 		on := (m['on'] or { toml.Any('') }).string()
@@ -5285,8 +5303,9 @@ fn parse_faults(doc toml.Doc) []FaultCfg {
 			if from != '' || 'enable' in m {
 				panic('loom2v: [[fault]] "${name}": a signal-status fault (signal / on) is tested by the bridge — it takes no `from` or `enable`')
 			}
-			if signal == '' || on !in ['timeout', 'integrity', 'lost'] {
-				panic('loom2v: [[fault]] "${name}": a signal-status fault needs signal = "<received signal>" and on = "timeout" | "integrity" | "lost"')
+			ons := schema_key('fault', 'on').choices
+			if signal == '' || on !in ons {
+				panic('loom2v: [[fault]] "${name}": a signal-status fault needs signal = "<received signal>" and on = ${ons.map('"${it}"').join(' | ')}')
 			}
 		} else {
 			parts = from.split('.')
@@ -5296,8 +5315,9 @@ fn parse_faults(doc toml.Doc) []FaultCfg {
 		}
 		db := (m['debounce'] or { toml.Any(map[string]toml.Any{}) }).as_map()
 		kind := (db['kind'] or { toml.Any('counter') }).string()
-		if kind != 'counter' && kind != 'time' {
-			panic('loom2v: [[fault]] "${name}": debounce kind "${kind}" is not counter / time')
+		kinds := schema_key('fault_debounce', 'kind').choices
+		if kind !in kinds {
+			panic('loom2v: [[fault]] "${name}": debounce kind "${kind}" is not ${kinds.join(' / ')}')
 		}
 		time_based := kind == 'time'
 		// each kind has its own keys, and a time threshold has no sane default: a missing fail_ms
@@ -5338,11 +5358,14 @@ fn parse_faults(doc toml.Doc) []FaultCfg {
 		confirm := (m['confirm'] or { toml.Any(1) }).i64()
 		aging := (m['aging'] or { toml.Any(0) }).i64()
 		dtc := (m['dtc'] or { toml.Any(0) }).i64()
-		if dtc < 1 || dtc > 0xFFFFFF {
-			panic('loom2v: [[fault]] "${name}": dtc 0x${dtc.hex()} is not a 3-byte DTC (1..0xFFFFFF)')
+		dk := schema_key('fault', 'dtc')
+		if !dk.in_range(dtc) {
+			panic('loom2v: [[fault]] "${name}": dtc 0x${dtc.hex()} is not a 3-byte DTC (${dk.min}..0x${dk.max:X})')
 		}
-		if confirm < 1 || confirm > 255 || aging < 0 || aging > 255 {
-			panic('loom2v: [[fault]] "${name}": confirm must be 1..255 and aging 0..255 (0 = never ages)')
+		ck := schema_key('fault', 'confirm')
+		ak := schema_key('fault', 'aging')
+		if !ck.in_range(confirm) || !ak.in_range(aging) {
+			panic('loom2v: [[fault]] "${name}": confirm must be ${ck.min}..${ck.max} and aging ${ak.min}..${ak.max} (0 = never ages)')
 		}
 		out << FaultCfg{
 			name:       name
@@ -5556,7 +5579,7 @@ fn validate_fault_snapshots(m Model) {
 		if snaps == 0 {
 			panic('loom2v: [fault_memory] entries: no [[fault]] declares a snapshot (`freeze`) to keep in them')
 		}
-		if m.fault_entries < 1 || m.fault_entries > fault.max_entries {
+		if !schema_key('fault_memory', 'entries').in_range(m.fault_entries) {
 			panic('loom2v: [fault_memory] entries = ${m.fault_entries} must be 1 .. ${fault.max_entries} (comm/fault max_entries)')
 		}
 	}
@@ -5864,8 +5887,9 @@ fn fault_build_lines(m Model) string {
 // counter_thr reads a counter-debounce threshold wide and range-checks it BEFORE narrowing, so a
 // huge value can never wrap into a valid (tiny) one.
 fn counter_thr(v i64, name string, key string) int {
-	if v < 1 || v > 0xFFFF {
-		panic('loom2v: [[fault]] "${name}": debounce.${key} ${v} must be 1..65535')
+	k := schema_key('fault_debounce', key)
+	if !k.in_range(v) {
+		panic('loom2v: [[fault]] "${name}": debounce.${key} ${v} must be ${k.min}..${k.max}')
 	}
 	return int(v)
 }

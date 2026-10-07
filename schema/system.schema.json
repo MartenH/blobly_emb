@@ -1,0 +1,159 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "GENERATED from tools/cfgschema by tools/cfgdoc - do not edit; make config-docs regenerates it",
+  "title": "system.toml",
+  "description": "blobly_emb system configuration: the buses, cross-node signals and events, routes and node identities of a system of ECUs (docs/multi-node.md)",
+  "type": "object",
+  "properties": {
+    "bus": {"type": "object", "additionalProperties": {"$ref": "#/definitions/sys_bus"}, "description": "the system buses, one [bus.<name>] each; the name is how signals, frames, routes and nodes refer to it"},
+    "node": {"type": "array", "items": {"$ref": "#/definitions/sys_node"}, "description": "the member ECUs"},
+    "signal": {"type": "array", "items": {"$ref": "#/definitions/sys_signal"}, "description": "cross-node signals, declared once at system scope (dissolution)"},
+    "frame": {"type": "array", "items": {"$ref": "#/definitions/sys_frame"}, "description": "SOME/IP events: id, signal set, tx mode and E2E trailer — a someip bus has no DBC to carry them"},
+    "route": {"type": "array", "items": {"$ref": "#/definitions/sys_route"}, "description": "gateway routes between buses (dissolution only)"}
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "sys_bus": {
+      "title": "[bus.*]",
+      "description": "One system bus: a CAN bus with its DBC, or a SOME/IP segment with its service.",
+      "type": "object",
+      "properties": {
+        "interface": {"type": "string", "description": "the physical channel (SocketCAN name, driver channel); unique across buses — one system bus per wire"},
+        "kind": {"type": "string", "enum": ["can", "someip"], "default": "can", "description": "the carrier: \"can\" (DBC frames) or \"someip\" (a service over Ethernet) Default: \"can\"."},
+        "fd": {"type": "boolean", "default": false, "description": "CAN-FD; in a composed system it must equal each member's own [bus] fd Default: false."},
+        "bitrate": {"type": "integer", "description": "nominal bitrate in bit/s — informational: syscheck prints it, nothing is generated from it"},
+        "dbc": {"type": "string", "description": "the bus's frame contract, relative to system.toml; required on a CAN bus carrying a [[signal]], refused on someip"},
+        "service": {"type": "integer", "minimum": 0, "maximum": 65535, "description": "someip: the SOME/IP service id (required on a someip bus, refused on CAN)"},
+        "version": {"type": "integer", "minimum": 0, "maximum": 255, "description": "someip: the interface version byte (required on a someip bus of a dissolved system, refused on CAN)"},
+        "nm": {"$ref": "#/definitions/sys_bus_nm", "description": "the bus's NM cluster (CAN only); without it a node's nm id generates a disabled [nm]"}
+      },
+      "additionalProperties": false
+    },
+    "sys_bus_nm": {
+      "title": "[bus.*.nm]",
+      "description": "An NM cluster: the alive-id range and the timings every member shares. A timing absent (or <= 0) is not lowered, so the node takes loom2v's default.",
+      "type": "object",
+      "properties": {
+        "peers": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2, "description": "[lo, hi] — the cluster's alive CAN ids; a member's alive id is lo + its nm; both at most 0x7FF"},
+        "msg_cycle_ms": {"type": "integer", "default": 100, "description": "NM message cycle (ms) Default: 100."},
+        "timeout_ms": {"type": "integer", "default": 300, "description": "NM timeout (ms) Default: 300."},
+        "repeat_ms": {"type": "integer", "default": 200, "description": "NM repeat-message time (ms) Default: 200."},
+        "wait_sleep_ms": {"type": "integer", "default": 150, "description": "NM wait-bus-sleep time (ms) Default: 150."}
+      },
+      "additionalProperties": false
+    },
+    "sys_node": {
+      "title": "[[node]]",
+      "description": "A member ECU and its system-owned identities.",
+      "type": "object",
+      "properties": {
+        "name": {"type": "string", "description": "identifier, unique; the node's generated config is gen-<name>.toml"},
+        "ecu": {"type": "string", "description": "the node's ecu.toml, relative to system.toml (internals only in a dissolved system)"},
+        "buses": {"type": "array", "items": {"type": "string"}, "description": "the system buses it sits on; more than one CAN bus makes it a [[route]] gateway Default: []."},
+        "nm": {"type": "integer", "minimum": 0, "maximum": 255, "description": "its NM node id (alive = peers lo + nm); absent = not an NM node"},
+        "trace": {"type": "integer", "description": "its trace node id, unique across the system (checked only, not generated)"},
+        "diag": {"$ref": "#/definitions/sys_diag", "description": "its ISO-TP diagnostic ids, unique across the system (checked only, not generated)"},
+        "endpoint": {"$ref": "#/definitions/sys_endpoint", "description": "its network identity: the address SOME/IP and DoIP answer at"},
+        "doip": {"$ref": "#/definitions/sys_doip", "description": "the node is a DoIP entity at its endpoint address (lowered into [doip]; dissolved systems only)"}
+      },
+      "additionalProperties": false
+    },
+    "sys_diag": {
+      "title": "[[node]] diag",
+      "type": "object",
+      "properties": {
+        "req": {"type": "integer", "description": "the diagnostic request CAN id"},
+        "rsp": {"type": "integer", "description": "the diagnostic response CAN id"}
+      },
+      "additionalProperties": false
+    },
+    "sys_endpoint": {
+      "title": "[[node]] endpoint",
+      "type": "object",
+      "properties": {
+        "address": {"type": "string", "description": "IPv4 dotted quad; unique per segment; a DoIP node needs a host address (not .0, .1 or .255)"},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535, "description": "the SOME/IP listen port (required on a someip bus; not 13400 on a DoIP node)"}
+      },
+      "additionalProperties": false
+    },
+    "sys_doip": {
+      "title": "[[node]] doip",
+      "description": "The DoIP entity and its ISO 13400-2 transport policy (one parser for both files: tools/doipcfg; bounds: comm/doip policy.v).",
+      "type": "object",
+      "properties": {
+        "logical": {"type": "integer", "description": "the entity's logical address (0x0001..0x0DFF or 0x1000..0x7FFF); unique"},
+        "functional": {"type": "integer", "minimum": 58368, "maximum": 61439, "default": 58368, "description": "the functional address it also answers Default: 0xE400."},
+        "testers": {"type": "array", "items": {"type": "integer", "minimum": 3584, "maximum": 4095}, "description": "tester addresses allowed to activate routing (at most 8); absent = any 0x0E00..0x0FFF"},
+        "activation_types": {"type": "array", "items": {"type": "integer"}, "description": "routing activation types served: 0x00, 0x01, 0xE1..0xFF (at most 4) Default: [0x00]."},
+        "initial_inactivity_ms": {"type": "integer", "minimum": 100, "maximum": 60000, "default": 2000, "description": "T_TCP_Initial_Inactivity: time to activate after the TCP connect (ms); <= general_inactivity_ms Default: 2000."},
+        "general_inactivity_ms": {"type": "integer", "minimum": 1000, "maximum": 3600000, "default": 300000, "description": "T_TCP_General_Inactivity: idle timeout once activated (ms) Default: 300000."},
+        "announce_count": {"type": "integer", "minimum": 0, "maximum": 10, "default": 3, "description": "A_DoIP_Announce_Num: vehicle announcements at start-up Default: 3."},
+        "announce_interval_ms": {"type": "integer", "minimum": 10, "maximum": 10000, "default": 500, "description": "A_DoIP_Announce_Interval (ms); count x interval at most 10000 ms Default: 500."},
+        "allow_bench_key": {"type": "boolean", "default": false, "description": "answer 0x27 with blobly_net's PUBLIC reference key over the network — a bench posture, opted into by name Default: false."}
+      },
+      "additionalProperties": false
+    },
+    "sys_signal": {
+      "title": "[[signal]]",
+      "description": "A cross-node signal, declared exactly once: who produces it, on which bus and in which frame.",
+      "type": "object",
+      "properties": {
+        "name": {"type": "string", "description": "the signal name; FBs read and write it by this name"},
+        "fields": {"type": "object", "additionalProperties": {"type": "string"}, "description": "payload fields, name -> scalar type (bool, u8/i8, u16/i16, u32/i32, f32, f64; u64/i64 not on CAN); one value field on CAN"},
+        "producer": {"type": "string", "description": "the node that transmits it; must be on `bus` and have an FB that writes it"},
+        "bus": {"type": "string", "description": "the system bus it rides"},
+        "frame": {"type": "string", "description": "CAN: the DBC message carrying it (sent by the producer); someip: the [[frame]] event carrying it"},
+        "cycle_ms": {"type": "integer", "default": 100, "description": "CAN tx cadence (ms); signals sharing a frame must agree; refused on someip (the [[frame]] tx says it) Default: 100."}
+      },
+      "additionalProperties": false
+    },
+    "sys_frame": {
+      "title": "[[frame]]",
+      "description": "A SOME/IP event on a someip bus: its id, its signals and how it is sent. Lowering copies only what it recognises, so an unknown key is refused.",
+      "type": "object",
+      "properties": {
+        "name": {"type": "string", "description": "the event name; unique per bus"},
+        "bus": {"type": "string", "description": "the someip bus it is on"},
+        "id": {"type": "integer", "minimum": 32768, "maximum": 65535, "description": "the SOME/IP event id (bit 15 set; methods own 0x0001..0x7FFF); unique per bus"},
+        "signals": {"type": "array", "items": {"type": "string"}, "description": "its payload signals, in packing order; non-empty, all on the same bus"},
+        "tx": {"$ref": "#/definitions/sys_frame_tx", "description": "how the producer sends it; absent = cyclic every 100 ms"},
+        "e2e": {"$ref": "#/definitions/sys_frame_e2e", "description": "AUTOSAR E2E Profile 1 trailer"}
+      },
+      "additionalProperties": false
+    },
+    "sys_frame_tx": {
+      "title": "[[frame]] tx",
+      "type": "object",
+      "properties": {
+        "mode": {"type": "string", "enum": ["cyclic", "event", "mixed"], "default": "cyclic", "description": "how the producer sends it: periodically, on a change, or both (the event modes SOME/IP generates) Default: \"cyclic\"."},
+        "cycle_ms": {"type": "integer", "minimum": 1, "maximum": 1000000, "default": 100, "description": "the cadence (ms) of a cyclic or mixed event Default: 100."},
+        "min_delay_ms": {"type": "integer", "minimum": 0, "maximum": 1000000, "default": 0, "description": "the least gap between two event sends (ms) Default: 0."}
+      },
+      "additionalProperties": false
+    },
+    "sys_frame_e2e": {
+      "title": "[[frame]] e2e",
+      "type": "object",
+      "properties": {
+        "data_id": {"type": "integer", "minimum": 0, "maximum": 65535, "description": "the E2E Data ID (required)"},
+        "counter_pos": {"type": "integer", "minimum": 0, "maximum": 65535, "default": 0, "description": "the counter's byte offset in the payload Default: 0."},
+        "crc_pos": {"type": "integer", "minimum": 0, "maximum": 65535, "default": 0, "description": "the CRC's byte offset in the payload Default: 0."},
+        "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 2147483, "description": "the receiver's sender-loss timeout (ms), longer than the cycle; required unless mode = \"event\""}
+      },
+      "additionalProperties": false
+    },
+    "sys_route": {
+      "title": "[[route]]",
+      "description": "A gateway route between two buses (dissolution only): set exactly one of `frame` / `signal`.",
+      "type": "object",
+      "properties": {
+        "gateway": {"type": "string", "description": "the node that forwards; it must sit on both buses"},
+        "frame": {"type": "string", "description": "a raw frame route: the DBC message forwarded as it is (in both DBCs; not on an FD bus)"},
+        "signal": {"type": "string", "description": "a signal route: the [[signal]] decoded on `from` and re-encoded on `to`"},
+        "from": {"type": "string", "description": "the source bus"},
+        "to": {"type": "string", "description": "the destination bus"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

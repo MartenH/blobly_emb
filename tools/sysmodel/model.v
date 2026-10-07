@@ -19,6 +19,7 @@ import toml
 import tools.candb
 import tools.ecumodel
 import tools.doipcfg
+import tools.cfgschema
 
 // Bus — one CAN segment with its own contract. `name` is the system-scope key
 // ([bus.compute]); `interface` is the SocketCAN/driver name a node's ecu.toml
@@ -391,6 +392,10 @@ pub mut:
 	frames       []SysFrame  // system-owned PDUs — someip events, whose layout has no DBC
 	routes       []Route
 	unknown_keys []string // top-level sections that aren't part of the schema (typos)
+	// keys of a [bus.*], [bus.*.nm], [[signal]], [[node]] (endpoint, diag) or [[route]] that the
+	// schema does not name, each as `<where>: unknown key "<k>" (allowed: …)` — a typo there was
+	// read as the key's absence (a `producr` meant no producer, an `interfce` no channel)
+	unknown_nested []string
 	dir          string   // directory of system.toml (node/dbc paths resolve against it)
 }
 
@@ -485,16 +490,12 @@ pub fn parse_system(path string) !System {
 	// system-scope signal section (forward-compatible with the composed model).
 	// 'frame' is the system-owned PDU section: a someip event's id, signal set, tx mode and
 	// E2E trailer, which have no DBC to come from (#245).
-	allowed := ['bus', 'node', 'route', 'signal', 'frame']
-	for key, _ in doc.to_any().as_map() {
-		if key !in allowed {
-			sys.unknown_keys << key
-		}
-	}
+	sys.unknown_keys = cfgschema.system.unknown(doc.to_any().as_map(), 'sys_top')
 	// [bus.<name>] — a table of tables keyed by name
 	if bv := doc.value_opt('bus') {
 		for name, cfg in bv.as_map() {
 			m := cfg.as_map()
+			sys.note_unknown(m, 'sys_bus', 'bus "${name}"')
 			kind := if k := m['kind'] { k.string() } else { 'can' }
 			svc_raw := if v := m['service'] { v.i64() } else { i64(0) }
 			ver_raw := if v := m['version'] { v.i64() } else { i64(0) }
@@ -507,16 +508,17 @@ pub fn parse_system(path string) !System {
 				dbc:       m_str(m, 'dbc')
 				service:     u32(m_int(m, 'service'))
 				has_service: 'service' in m
-				service_ok:  svc_raw >= 0 && svc_raw <= 0xFFFF
+				service_ok:  cfgschema.system.key('sys_bus', 'service').in_range(svc_raw)
 				service_int: m_is_int(m, 'service')
 				version:     u32(m_int(m, 'version'))
 				has_version: 'version' in m
-				version_ok:  ver_raw >= 0 && ver_raw <= 0xFF
+				version_ok:  cfgschema.system.key('sys_bus', 'version').in_range(ver_raw)
 				version_int: m_is_int(m, 'version')
 			}
 			// [bus.<name>.nm] — the dissolution NM cluster (peers range + timings)
 			if nmv := m['nm'] {
 				nm := nmv.as_map()
+				sys.note_unknown(nm, 'sys_bus_nm', 'bus "${name}" nm')
 				bus.has_nm_cluster = true
 				bus.nm_msg_cycle_ms = m_int(nm, 'msg_cycle_ms')
 				bus.nm_timeout_ms = m_int(nm, 'timeout_ms')
@@ -535,6 +537,7 @@ pub fn parse_system(path string) !System {
 	if sv := doc.value_opt('signal') {
 		for sg in as_top_array(sv, 'signal')! {
 			m := sg.as_map()
+			sys.note_unknown(m, 'sys_signal', 'signal "${m_str(m, 'name')}"')
 			mut sig := SysSignal{
 				name:     m_str(m, 'name')
 				producer: m_str(m, 'producer')
@@ -555,6 +558,8 @@ pub fn parse_system(path string) !System {
 	if nv := doc.value_opt('node') {
 		for n in as_top_array(nv, 'node')! {
 			m := n.as_map()
+			where := 'node "${m_str(m, 'name')}"'
+			sys.note_unknown(m, 'sys_node', where)
 			nm_raw := (m['nm'] or { toml.Any(0) }).int() // signed, to range-check
 			mut node := Node{
 				name:         m_str(m, 'name')
@@ -562,11 +567,12 @@ pub fn parse_system(path string) !System {
 				nm:           u32(nm_raw)
 				has_nm_alloc: 'nm' in m
 				has_trace:    'trace' in m
-				nm_alloc_ok:  nm_raw >= 0 && nm_raw <= 255
+				nm_alloc_ok:  cfgschema.system.key('sys_node', 'nm').in_range(nm_raw)
 				trace:        m_int(m, 'trace')
 			}
 			if ev := m['endpoint'] {
 				em := ev.as_map()
+				sys.note_unknown(em, 'sys_endpoint', '${where} endpoint')
 				node.endpoint = m_str(em, 'address')
 				node.port = m_u32(em, 'port')
 				node.port_raw = (em['port'] or { toml.Any(0) }).i64()
@@ -586,17 +592,14 @@ pub fn parse_system(path string) !System {
 				node.doip_functional_raw = (dm['functional'] or { toml.Any(0) }).i64()
 				node.doip_functional_int = m_is_int(dm, 'functional')
 				node.doip_policy, node.doip_not_int = doipcfg.parse(dm)
-				for k, _ in dm {
-					if k !in ['logical', 'functional'] && k !in doipcfg.keys() {
-						node.doip_unknown << k
-					}
-				}
+				node.doip_unknown = cfgschema.system.unknown(dm, 'sys_doip')
 			}
 			for b in (m['buses'] or { toml.Any([]toml.Any{}) }).array() {
 				node.buses << b.string()
 			}
 			if dm := m['diag'] {
 				d := dm.as_map()
+				sys.note_unknown(d, 'sys_diag', '${where} diag')
 				node.diag = Diag{
 					req: m_u32(d, 'req')
 					rsp: m_u32(d, 'rsp')
@@ -620,24 +623,12 @@ pub fn parse_system(path string) !System {
 			// A typo is DISCARDED by a parser that copies only what it recognises — `e2ee`
 			// would silently mean "no E2E", and the generated file no longer carries the
 			// misspelling for ecucheck to reject. Record them instead.
-			for k, _ in m {
-				if k !in ['name', 'bus', 'id', 'signals', 'tx', 'e2e'] {
-					fr.unknown_keys << k
-				}
-			}
+			fr.unknown_keys << cfgschema.system.unknown(m, 'sys_frame')
 			if tv := m['tx'] {
-				for k, _ in tv.as_map() {
-					if k !in ['mode', 'cycle_ms', 'min_delay_ms'] {
-						fr.unknown_keys << 'tx.${k}'
-					}
-				}
+				fr.unknown_keys << cfgschema.system.unknown(tv.as_map(), 'sys_frame_tx').map('tx.${it}')
 			}
 			if ev := m['e2e'] {
-				for k, _ in ev.as_map() {
-					if k !in ['data_id', 'counter_pos', 'crc_pos', 'timeout_ms'] {
-						fr.unknown_keys << 'e2e.${k}'
-					}
-				}
+				fr.unknown_keys << cfgschema.system.unknown(ev.as_map(), 'sys_frame_e2e').map('e2e.${it}')
 			}
 			for sg in (m['signals'] or { toml.Any([]toml.Any{}) }).array() {
 				fr.signals << sg.string()
@@ -679,6 +670,7 @@ pub fn parse_system(path string) !System {
 	if rv := doc.value_opt('route') {
 		for r in as_top_array(rv, 'route')! {
 			m := r.as_map()
+			sys.note_unknown(m, 'sys_route', 'route')
 			sys.routes << Route{
 				gateway: m_str(m, 'gateway')
 				frame:   m_str(m, 'frame')
@@ -689,6 +681,14 @@ pub fn parse_system(path string) !System {
 		}
 	}
 	return sys
+}
+
+// note_unknown records every key of `m` that the schema's table `ctx` does not name
+fn (mut s System) note_unknown(m map[string]toml.Any, ctx string, where string) {
+	names := cfgschema.system.table(ctx).names()
+	for k in cfgschema.system.unknown(m, ctx) {
+		s.unknown_nested << '${where}: unknown key "${k}" (allowed: ${names.join(', ')})'
+	}
 }
 
 // bus_by_name returns the Bus with the given system name, or none.

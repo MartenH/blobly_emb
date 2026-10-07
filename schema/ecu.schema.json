@@ -1,0 +1,618 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "GENERATED from tools/cfgschema by tools/cfgdoc - do not edit; make config-docs regenerates it",
+  "title": "ecu.toml",
+  "description": "blobly_emb ECU configuration: partitions, threads, Function Blocks, signals, buses and services of one node",
+  "type": "object",
+  "properties": {
+    "import": {"$ref": "#/definitions/import", "description": "the DBC the node's CAN signals come from"},
+    "telemetry": {"$ref": "#/definitions/telemetry", "description": "the CPU-load transmitter"},
+    "trace": {"$ref": "#/definitions/trace", "description": "the trace ring and its dump protocol (docs/telemetry.md)"},
+    "shell": {"$ref": "#/definitions/shell", "description": "the command shell over CAN or SOME/IP"},
+    "nm": {"$ref": "#/definitions/nm", "description": "network management: the module's endpoint bindings and timings"},
+    "nvm": {"$ref": "#/definitions/nvm", "description": "the NvM journal: persisted signals and its wear check (docs/nvm.md)"},
+    "target": {"$ref": "#/definitions/target", "description": "what the node is built for: host (absent), bare metal or ThreadX"},
+    "someip": {"$ref": "#/definitions/someip", "description": "the SOME/IP service identity and static endpoints (docs/someip.md)"},
+    "bus": {"type": "object", "additionalProperties": {"$ref": "#/definitions/bus"}, "description": "the node's buses, one [bus.<name>] each; signals and frames name them"},
+    "partition": {"type": "array", "items": {"$ref": "#/definitions/partition"}, "description": "memory-protection partitions, each pinned to a core with its threads"},
+    "fb": {"type": "array", "items": {"$ref": "#/definitions/fb"}, "description": "Function Blocks: the application, scheduled on a thread"},
+    "signal": {"type": "array", "items": {"$ref": "#/definitions/signal"}, "description": "typed signals between partitions and to/from buses"},
+    "frame": {"type": "array", "items": {"$ref": "#/definitions/frame"}, "description": "per-frame COM settings: tx mode, rx deadline, E2E, SecOC (CAN), or a SOME/IP event (eth)"},
+    "isotp": {"$ref": "#/definitions/isotp", "description": "ISO 15765-2: the diagnostic server on CAN"},
+    "uds": {"$ref": "#/definitions/uds", "description": "ISO 14229: the node's one diagnostic server"},
+    "doip": {"$ref": "#/definitions/doip", "description": "the diagnostic server over DoIP too (ThreadX target)"},
+    "boot": {"$ref": "#/definitions/boot", "description": "the node runs behind the bootloader: 0x10 02 hands over to it (docs/bootloader.md)"},
+    "display": {"$ref": "#/definitions/display", "description": "a local screen: one more ThreadX thread (docs/display.md)"},
+    "did": {"type": "array", "items": {"$ref": "#/definitions/did"}, "description": "the server's data identifiers"},
+    "fault": {"type": "array", "items": {"$ref": "#/definitions/fault"}, "description": "diagnostic faults and their DTCs (docs/diagnostics.md §3.3)"},
+    "param": {"type": "array", "items": {"$ref": "#/definitions/param"}, "description": "coded parameters (docs/diagnostics.md §3.4)"},
+    "fault_memory": {"$ref": "#/definitions/fault_memory", "description": "the fault memory's operation cycle and snapshot entries"},
+    "route": {"type": "array", "items": {"$ref": "#/definitions/route"}, "description": "gateway routes: raw frames or decoded signals between buses"},
+    "io": {"$ref": "#/definitions/io", "description": "physical IO points (docs/io.md)"},
+    "bulk": {"type": "array", "items": {"$ref": "#/definitions/bulk"}, "description": "bulk transport pools (docs/bulk-transport.md)"}
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "import": {
+      "title": "[import]",
+      "type": "object",
+      "properties": {
+        "dbc": {"type": "string", "description": "the DBC comm matrix, relative to the node (read for provenance; generation takes the DBC on its command line)"}
+      },
+      "additionalProperties": false
+    },
+    "telemetry": {
+      "title": "[telemetry]",
+      "description": "The CPU-load transmitter (CpuLoad, LoadDetail); [trace] and [shell] take its bus when they name none.",
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean", "default": false, "description": "transmit load telemetry (a ThreadX target needs it on, with a bus) Default: false."},
+        "bus": {"type": "string", "description": "the CAN bus the load frames ride"},
+        "id": {"type": "integer", "description": "the CpuLoad frame's CAN id"},
+        "detail_id": {"type": "integer", "description": "the LoadDetail frame's CAN id; absent = not sent"},
+        "period_ms": {"type": "integer", "default": 1000, "description": "the transmit period (ms) Default: 1000."}
+      },
+      "additionalProperties": false
+    },
+    "trace": {
+      "title": "[trace]",
+      "description": "The trace ring and its dump protocol (docs/telemetry.md). A present block is on unless enabled = false.",
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean", "default": true, "description": "generate the trace (present = on) Default: true."},
+        "bus": {"type": "string", "description": "the CAN bus for its command / response / dump frames; absent = [telemetry].bus"},
+        "level": {"type": "string", "enum": ["fb", "thread", "thread+isr", "thread+fb", "all"], "default": "thread+fb", "description": "which records are captured: FB, thread and ISR switches Default: \"thread+fb\"."},
+        "buffer_records": {"type": "integer", "minimum": 1, "maximum": 4096, "default": 64, "description": "the ring depth in 8-byte records (the dump is multi-block) Default: 64."},
+        "mode": {"type": "string", "enum": ["ring", "oneshot"], "default": "ring", "description": "ring = a flight recorder frozen by a trigger or stop; oneshot = fill once Default: \"ring\"."},
+        "pre_pct": {"type": "integer", "minimum": 0, "maximum": 100, "default": 50, "description": "the percentage of the ring kept from before the trigger Default: 50."},
+        "push_ms": {"type": "integer", "minimum": 0, "default": 1000, "description": "the HandlerStat heartbeat period (ms; 0 = off) Default: 1000."},
+        "cmd": {"type": ["integer", "string"], "default": 2018, "description": "the TraceCmd frame: arm / stop / reset / dump / status Default: 0x7E2."},
+        "rsp": {"type": ["integer", "string"], "default": 2019, "description": "the command response frame Default: 0x7E3."},
+        "record": {"type": ["integer", "string"], "default": 2021, "description": "the dump stream frame (raw records, or ISO-TP blocks) Default: 0x7E5."},
+        "dump_fc": {"type": ["integer", "string"], "default": 2022, "description": "the dump's ISO-TP flow control; binding it selects the block dump Default: 0x7E6."},
+        "trigger": {"$ref": "#/definitions/trigger", "description": "what freezes the ring; absent = no trigger"}
+      },
+      "additionalProperties": false
+    },
+    "trigger": {
+      "title": "[trace.trigger]",
+      "description": "What freezes the ring. Only source = \"overrun\" is generated today; the other keys are the design's (docs/telemetry.md).",
+      "type": "object",
+      "properties": {
+        "source": {"type": "string", "enum": ["overrun"], "description": "the trigger kind (required when the table is present)"},
+        "signal": {"type": "string", "description": "design only: the signal to watch"},
+        "address": {"type": "string", "description": "design only: the partition-local address to poll"},
+        "when": {"type": "string", "description": "design only: the condition on the watched value"},
+        "pre": {"type": "integer", "description": "design only (the implemented split is [trace] pre_pct)"},
+        "budget_us": {"type": "integer", "minimum": 1, "description": "source = \"overrun\": freeze when a handler runs longer than this (µs)"}
+      },
+      "additionalProperties": false
+    },
+    "shell": {
+      "title": "[shell]",
+      "description": "The command shell: a command line in, its response out, over CAN or as a SOME/IP method.",
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean", "default": true, "description": "generate the shell (present = on) Default: true."},
+        "bus": {"type": "string", "description": "the bus its frames ride; absent = [telemetry].bus"},
+        "in": {"type": ["integer", "string"], "default": 2032, "description": "the frame a command line arrives on (1..8 bytes) Default: 0x7F0."},
+        "out": {"type": ["integer", "string"], "default": 2033, "description": "the frame the response leaves on (one ISO-TP block) Default: 0x7F1."},
+        "fc": {"type": ["integer", "string"], "default": 2034, "description": "the ISO-TP flow control for the response Default: 0x7F2."},
+        "commands": {"type": "array", "items": {"type": "string"}, "description": "example-provided target commands (shell_<name> in target_ext.c), each 1..8 of [a-z0-9_] Default: []."},
+        "method": {"type": ["integer", "string"], "minimum": 1, "maximum": 32767, "description": "eth: the SOME/IP method id the command line rides (required there)"},
+        "allow_mutate": {"type": "boolean", "default": false, "description": "the REQ-NET-018 access gate: false exposes only read-class commands over eth Default: false."}
+      },
+      "additionalProperties": false
+    },
+    "nm": {
+      "title": "[nm]",
+      "description": "Network management (comm/nm_can). The scalar keys are the module's endpoint bindings and timings.",
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean", "description": "generate the NM module; default true when [nm] has scalar keys"},
+        "bus": {"type": "string", "description": "the CAN bus NM runs on; absent = [telemetry].bus"},
+        "node": {"type": "integer", "minimum": 0, "maximum": 255, "description": "this ECU's NM source node id (required when NM is generated)"},
+        "pn": {"type": "integer", "default": 0, "description": "the partial networks this node requests (bitmask) Default: 0."},
+        "request": {"type": "boolean", "default": true, "description": "request the bus from boot Default: true."},
+        "msg_cycle_ms": {"type": "integer", "default": 100, "description": "the NM message period while awake (ms) Default: 100."},
+        "timeout_ms": {"type": "integer", "default": 300, "description": "the NM timeout (ms) Default: 300."},
+        "repeat_ms": {"type": "integer", "default": 200, "description": "the repeat-message phase after a wake (ms) Default: 200."},
+        "wait_sleep_ms": {"type": "integer", "default": 150, "description": "the prepare-bus-sleep wait (ms) Default: 150."},
+        "alive": {"type": ["integer", "string"], "description": "this node's NM frame (DBC name or id); default peers lo + node"},
+        "peers": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2, "description": "[lo, hi] — the cluster's NM frame ids Default: [0x500, 0x53F]."}
+      },
+      "additionalProperties": {"$ref": "#/definitions/nm_net"}
+    },
+    "nm_net": {
+      "title": "[nm.*]",
+      "description": "The LEGACY per-network NM block (cfg2v's gen.nm_<bus>_* constants), beside the module bindings of [nm].",
+      "type": "object",
+      "properties": {
+        "node_id": {"type": "integer", "default": 0, "description": "the source node id Default: 0."},
+        "tx_id": {"type": "integer", "default": 0, "description": "this node's NM tx id Default: 0."},
+        "rx_lo": {"type": "integer", "description": "the NM rx id range's low bound (required by cfg2v)"},
+        "rx_hi": {"type": "integer", "description": "the NM rx id range's high bound (required by cfg2v)"},
+        "pn_local": {"type": "integer", "default": 0, "description": "the partial networks requested statically (48-bit mask) Default: 0."},
+        "msg_cycle_ms": {"type": "integer", "default": 0, "description": "the NM message period (ms) Default: 0."},
+        "timeout_ms": {"type": "integer", "default": 0, "description": "the NM timeout (ms) Default: 0."},
+        "repeat_ms": {"type": "integer", "default": 0, "description": "the repeat-message phase (ms) Default: 0."},
+        "wait_sleep_ms": {"type": "integer", "default": 0, "description": "the prepare-bus-sleep wait (ms) Default: 0."}
+      },
+      "additionalProperties": false
+    },
+    "nvm": {
+      "title": "[nvm]",
+      "description": "The NvM journal: persisted signals, and the wear check that proves it outlives the vehicle (docs/nvm.md).",
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean", "description": "declare the journal; default true when [nvm] has a key besides `assume`"},
+        "min_write_ms": {"type": "integer", "minimum": 1, "maximum": 86400000, "default": 1000, "description": "the system-wide write floor pacing persist = \"now\" writes (ms) Default: 1000."},
+        "sector_records": {"type": "integer", "minimum": 8, "maximum": 1000000, "default": 4096, "description": "a journal sector in records (the wear check's geometry) Default: 4096."},
+        "endurance": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 10000, "description": "flash erase cycles per sector Default: 10000."},
+        "min_years": {"type": "integer", "minimum": 1, "maximum": 100, "default": 10, "description": "the lifetime the journal must reach at the assumed rates Default: 10."},
+        "assume": {"$ref": "#/definitions/nvm_assume", "description": "the vehicle's rates the wear check takes"}
+      },
+      "additionalProperties": false
+    },
+    "nvm_assume": {
+      "title": "[nvm.assume]",
+      "description": "Vehicle usage rates the wear check assumes, per day.",
+      "type": "object",
+      "properties": {
+        "cycles_per_day": {"type": "integer", "minimum": 1, "maximum": 1000000, "default": 144, "description": "operation cycles: NM wake -> sleep, or power-ups Default: 144."},
+        "resets_per_day": {"type": "integer", "minimum": 0, "maximum": 1000000, "default": 24, "description": "ECUResets (0x11) Default: 24."},
+        "clears_per_day": {"type": "integer", "minimum": 0, "maximum": 1000000, "default": 24, "description": "ClearDiagnosticInformation (0x14) Default: 24."},
+        "setting_changes_per_day": {"type": "integer", "minimum": 0, "maximum": 1000000, "default": 24, "description": "ControlDTCSetting (0x85) changes Default: 24."},
+        "codings_per_day": {"type": "integer", "minimum": 0, "maximum": 1000000, "default": 24, "description": "accepted 0x2E codings of a [[param]] Default: 24."}
+      },
+      "additionalProperties": false
+    },
+    "target": {
+      "title": "[target]",
+      "description": "What the node is built for; absent = the host (POSIX) build.",
+      "type": "object",
+      "properties": {
+        "kind": {"type": "string", "enum": ["baremetal", "threadx"], "description": "\"baremetal\" (superloop) or \"threadx\" (RTOS); absent = host"},
+        "tick_ms": {"type": "integer", "default": 1, "description": "the scheduler tick (ms) Default: 1."}
+      },
+      "additionalProperties": false
+    },
+    "someip": {
+      "title": "[someip]",
+      "description": "The SOME/IP service identity and static endpoints (docs/someip.md). Deliberately no `instance`: without SD nothing on the wire carries it.",
+      "type": "object",
+      "properties": {
+        "bus": {"type": "string", "description": "the eth bus it binds to"},
+        "service": {"type": "integer", "minimum": 0, "maximum": 65535, "description": "the SOME/IP service id"},
+        "version": {"type": "integer", "minimum": 0, "maximum": 255, "description": "the interface version byte, explicitly managed"},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535, "description": "the local UDP port"},
+        "peer": {"type": "string", "description": "address:port — the tx destination AND the rx source filter"}
+      },
+      "required": ["bus", "service", "version", "port", "peer"],
+      "additionalProperties": false
+    },
+    "bus": {
+      "title": "[bus.*]",
+      "description": "One of the node's buses: a CAN channel or the eth interface.",
+      "type": "object",
+      "properties": {
+        "interface": {"type": "string", "description": "the platform interface (e.g. \"vcan0\"), or on eth the node's static IPv4 address"},
+        "fd": {"type": "boolean", "default": false, "description": "open the channel as CAN-FD Default: false."},
+        "core": {"type": "integer", "default": 0, "description": "the core the bus bridge runs on Default: 0."},
+        "kind": {"type": "string", "enum": ["can", "eth"], "default": "can", "description": "\"can\", or \"eth\" (SOME/IP, docs/someip.md; at most one) Default: \"can\"."},
+        "dbc": {"type": "string", "description": "a per-bus DBC (a multi-bus GATEWAY speaks more than one contract)"}
+      },
+      "required": ["interface"],
+      "additionalProperties": false
+    },
+    "partition": {
+      "title": "[[partition]]",
+      "description": "A memory-protection partition, pinned to a core, with its threads.",
+      "type": "object",
+      "properties": {
+        "name": {"type": "string", "description": "identifier, unique (required; \"io\" is reserved)"},
+        "core": {"type": "integer", "description": "the core index it is pinned to (required)"},
+        "trusted": {"type": "boolean", "default": false, "description": "privileged: the MPU domain with peripheral / IO access Default: false."},
+        "external": {"type": "boolean", "default": false, "description": "declared but hand-written: a satellite core's image built elsewhere Default: false."},
+        "image": {"type": "string", "description": "emit this partition's image into this directory (docs/multi-image.md; ThreadX)"},
+        "thread": {"type": "array", "items": {"$ref": "#/definitions/thread"}, "description": "its threads, 1..4 (required)"}
+      },
+      "additionalProperties": false
+    },
+    "thread": {
+      "title": "[[partition.thread]]",
+      "description": "A thread; an fb names it to run there.",
+      "type": "object",
+      "properties": {
+        "name": {"type": "string", "description": "identifier, unique across the node (required)"},
+        "priority": {"type": "integer", "default": 10, "description": "scheduling priority, lower = higher (ThreadX: 0..31) Default: 10."}
+      },
+      "additionalProperties": false
+    },
+    "fb": {
+      "title": "[[fb]]",
+      "description": "A Function Block: the application unit, scheduled on one thread.",
+      "type": "object",
+      "properties": {
+        "name": {"type": "string", "description": "PascalCase, unique (required)"},
+        "thread": {"type": "string", "description": "the [[partition.thread]] it runs on (required)"},
+        "handler": {"type": "array", "items": {"$ref": "#/definitions/handler"}, "description": "its handlers, at least one"}
+      },
+      "additionalProperties": false
+    },
+    "handler": {
+      "title": "[[fb.handler]]",
+      "description": "A handler: an FB entry point the Loom dispatches.",
+      "type": "object",
+      "properties": {
+        "name": {"type": "string", "description": "identifier (required)"},
+        "period_ms": {"type": "integer", "description": "the period it runs at (ms; the trigger, required)"},
+        "irq": {"type": "string", "description": "reserved: an interrupt trigger, refused until it is generated"},
+        "reads": {"type": "array", "items": {"type": "string"}, "description": "the signals (and params) it reads Default: []."},
+        "writes": {"type": "array", "items": {"type": "string"}, "description": "the signals it writes Default: []."}
+      },
+      "additionalProperties": false
+    },
+    "signal": {
+      "title": "[[signal]]",
+      "description": "A typed signal from one endpoint to another: a partition, a thread, a bus, or \"io\".",
+      "type": "object",
+      "properties": {
+        "name": {"type": "string", "description": "PascalCase; a signal a bus carries takes its DBC name"},
+        "fields": {"type": "object", "additionalProperties": {"type": "string"}, "description": "field name -> type, the signal's struct"},
+        "from": {"type": "string", "description": "the producer: a partition, thread, bus or \"io\""},
+        "to": {"type": "string", "description": "the consumer: a partition, thread, bus or \"io\""},
+        "transport": {"type": "string", "enum": ["double", "triple", "seqlock", "dma", "hw_sem", "mailbox"], "default": "double", "description": "the IOC buffer between partitions (derived for io signals); the hardware ones are target backends, double on host Default: \"double\"."},
+        "persist": {"type": "string", "enum": ["now", "shutdown"], "description": "keep it in NvM: write-through, or flush at sleep — intent, not tuning (docs/nvm.md)"},
+        "nvm_id": {"type": "integer", "minimum": 0, "maximum": 65534, "default": 0, "description": "pins the NvM record id (0 = derived; only to resolve a reported collision) Default: 0."}
+      },
+      "required": ["name", "fields", "from", "to"],
+      "additionalProperties": false
+    },
+    "frame": {
+      "title": "[[frame]]",
+      "description": "Per-frame COM settings. CAN: the DBC message `name` and its tx / rx / E2E / SecOC. eth: a SOME/IP event, its id and signals.",
+      "type": "object",
+      "properties": {
+        "name": {"type": "string", "description": "CAN: the DBC message; eth: the event (PascalCase)"},
+        "bus": {"type": "string", "description": "the [bus.*] it travels on"},
+        "id": {"type": "integer", "minimum": 32768, "maximum": 65535, "description": "eth: the SOME/IP event id (required there; CAN ids come from the DBC)"},
+        "signals": {"type": "array", "items": {"type": "string"}, "description": "eth: its member signals; the payload layout is derived from them"},
+        "peer": {"type": "string", "description": "eth: this event's own address:port, when not [someip].peer"},
+        "tx": {"$ref": "#/definitions/tx", "description": "how it is sent"},
+        "rx": {"$ref": "#/definitions/rx", "description": "the receive deadline"},
+        "e2e": {"$ref": "#/definitions/e2e", "description": "AUTOSAR E2E Profile 1 (the DBC's E2E attributes otherwise)"},
+        "secoc": {"$ref": "#/definitions/secoc", "description": "SecOC: AES-CMAC (CAN only)"}
+      },
+      "required": ["name", "bus"],
+      "additionalProperties": false
+    },
+    "tx": {
+      "title": "inline tx",
+      "description": "How a frame is sent (comm/com).",
+      "type": "object",
+      "properties": {
+        "mode": {"type": "string", "enum": ["cyclic", "event", "mixed", "triggered"], "default": "cyclic", "description": "periodic, on a change, both, or on an explicit trigger (eth: not triggered) Default: \"cyclic\"."},
+        "cycle_ms": {"type": "integer", "default": 100, "description": "the period of a cyclic or mixed frame (ms; CAN: a multiple of 10) Default: 100."},
+        "min_delay_ms": {"type": "integer", "default": 0, "description": "the least gap between two event sends (ms) Default: 0."}
+      },
+      "additionalProperties": false
+    },
+    "rx": {
+      "title": "inline rx",
+      "type": "object",
+      "properties": {
+        "timeout_ms": {"type": "integer", "minimum": 0, "maximum": 2147483, "default": 0, "description": "the reception deadline (ms; 0 = none); past it the signal status is timeout Default: 0."}
+      },
+      "additionalProperties": false
+    },
+    "e2e": {
+      "title": "inline e2e",
+      "description": "AUTOSAR E2E Profile 1. Each key defaults to the DBC's E2E attribute; a differing value needs deviates_from_dbc.",
+      "type": "object",
+      "properties": {
+        "data_id": {"type": "integer", "minimum": 0, "maximum": 65535, "description": "the Data ID mixed into the CRC"},
+        "crc_pos": {"type": "integer", "description": "the CRC's byte"},
+        "counter_pos": {"type": "integer", "description": "the byte whose low nibble holds the counter"},
+        "timeout_ms": {"type": "integer", "minimum": 0, "maximum": 2147483, "description": "rx: the E2E-owned sender-loss timeout (ms; REQ-E2E-002)"},
+        "deviates_from_dbc": {"type": "boolean", "default": false, "description": "a field above that differs from the DBC's E2E attributes is deliberate Default: false."}
+      },
+      "additionalProperties": false
+    },
+    "secoc": {
+      "title": "inline secoc",
+      "description": "SecOC: a truncated AES-128 CMAC and a freshness value in the frame.",
+      "type": "object",
+      "properties": {
+        "key": {"type": "string", "description": "the AES-128 key, 16 space-separated hex bytes (required)"},
+        "data_id": {"type": "integer", "minimum": 0, "maximum": 65535, "default": 0, "description": "the Data ID bound into the MAC Default: 0."},
+        "fresh_pos": {"type": "integer", "default": 0, "description": "the freshness value's byte Default: 0."},
+        "mac_pos": {"type": "integer", "default": 0, "description": "the MAC's first byte Default: 0."},
+        "mac_len": {"type": "integer", "minimum": 1, "maximum": 16, "default": 4, "description": "the truncated MAC's length (bytes) Default: 4."}
+      },
+      "additionalProperties": false
+    },
+    "isotp": {
+      "title": "[isotp]",
+      "description": "The diagnostic server's ISO 15765-2 connection on CAN (docs/diagnostics.md).",
+      "type": "object",
+      "properties": {
+        "bus": {"type": "string", "description": "the CAN bus ([bus.*] name) the connection runs on"},
+        "rx_id": {"type": "integer", "minimum": 0, "maximum": 2047, "description": "the CAN id physical requests arrive on (11-bit)"},
+        "tx_id": {"type": "integer", "minimum": 0, "maximum": 2047, "description": "the CAN id responses are sent on (11-bit)"},
+        "bs": {"type": "integer", "default": 0, "description": "the block size granted in our Flow Control (0 = the whole message at once) Default: 0."},
+        "stmin_ms": {"type": "integer", "default": 0, "description": "the STmin (ms) we ask a sender to keep between consecutive frames Default: 0."},
+        "functional_id": {"type": "integer", "minimum": 0, "maximum": 2047, "description": "the functional (broadcast) request id, e.g. 0x7DF, single frames only; absent = none"}
+      },
+      "required": ["bus", "rx_id", "tx_id"],
+      "additionalProperties": false
+    },
+    "uds": {
+      "title": "[uds]",
+      "description": "The node's one ISO 14229 diagnostic server: session and security timing, the 0x27 key, the service table.",
+      "type": "object",
+      "properties": {
+        "s3_ms": {"type": "integer", "default": 5000, "description": "the session timeout back to the default session (ms; 0 = the default) Default: 5000."},
+        "security_attempts": {"type": "integer", "minimum": 0, "maximum": 255, "default": 3, "description": "wrong 0x27 keys before the lockout (0 = the default) Default: 3."},
+        "security_delay_ms": {"type": "integer", "default": 10000, "description": "the 0x27 lockout delay after too many wrong keys (ms; 0 = the default) Default: 10000."},
+        "security_key": {"type": "string", "enum": ["reference"], "description": "\"reference\" = blobly_net's PUBLIC bench key (a target); absent = the OEM's diag_sa_key_ok"},
+        "services": {"type": "object", "additionalProperties": {"$ref": "#/definitions/uds_service"}, "description": "the service table, \"0xSID\" = { ... } (\"0x10 02\": the [boot] handoff); absent = every service the build performs"}
+      },
+      "additionalProperties": false
+    },
+    "uds_service": {
+      "title": "[uds] services row",
+      "description": "One served service: the sessions it is accepted in and the 0x27 level it needs.",
+      "type": "object",
+      "properties": {
+        "sessions": {"type": "array", "items": {"type": "string", "enum": ["default", "extended", "programming", "safety"]}, "description": "the sessions it is accepted in; absent = the service's default sessions"},
+        "security": {"type": "integer", "minimum": 0, "maximum": 8, "default": 0, "description": "the 0x27 level that must be unlocked first (0 = none) Default: 0."}
+      },
+      "additionalProperties": false
+    },
+    "doip": {
+      "title": "[doip]",
+      "description": "The diagnostic server over DoIP (ISO 13400) too — ThreadX target; one parser for this and a system node's `doip` (tools/doipcfg).",
+      "type": "object",
+      "properties": {
+        "address": {"type": "string", "description": "the node's static IPv4 address — a host on its /24 (not .0, .1 or .255)"},
+        "logical_address": {"type": "integer", "description": "the entity's logical address (0x0001..0x0DFF or 0x1000..0x7FFF); unique"},
+        "functional_address": {"type": "integer", "minimum": 58368, "maximum": 61439, "default": 58368, "description": "the functional address it also answers Default: 0xE400."},
+        "testers": {"type": "array", "items": {"type": "integer", "minimum": 3584, "maximum": 4095}, "description": "tester addresses allowed to activate routing (at most 8); absent = any 0x0E00..0x0FFF"},
+        "activation_types": {"type": "array", "items": {"type": "integer"}, "description": "routing activation types served: 0x00, 0x01, 0xE1..0xFF (at most 4) Default: [0x00]."},
+        "initial_inactivity_ms": {"type": "integer", "minimum": 100, "maximum": 60000, "default": 2000, "description": "T_TCP_Initial_Inactivity: time to activate after the TCP connect (ms); <= general_inactivity_ms Default: 2000."},
+        "general_inactivity_ms": {"type": "integer", "minimum": 1000, "maximum": 3600000, "default": 300000, "description": "T_TCP_General_Inactivity: idle timeout once activated (ms) Default: 300000."},
+        "announce_count": {"type": "integer", "minimum": 0, "maximum": 10, "default": 3, "description": "A_DoIP_Announce_Num: vehicle announcements at start-up Default: 3."},
+        "announce_interval_ms": {"type": "integer", "minimum": 10, "maximum": 10000, "default": 500, "description": "A_DoIP_Announce_Interval (ms); count x interval at most 10000 ms Default: 500."},
+        "allow_bench_key": {"type": "boolean", "default": false, "description": "answer 0x27 with blobly_net's PUBLIC reference key over the network — a bench posture, opted into by name Default: false."}
+      },
+      "required": ["address", "logical_address"],
+      "additionalProperties": false
+    },
+    "boot": {
+      "title": "[boot]",
+      "description": "The node runs behind the bootloader (docs/bootloader.md).",
+      "type": "object",
+      "properties": {
+        "image_key": {"type": "string", "description": "the image-signing PUBLIC key, 64 hex (Ed25519)"},
+        "session_key": {"type": "string", "description": "the 0x29 session PUBLIC key, 64 hex; not the image key"}
+      },
+      "required": ["image_key", "session_key"],
+      "additionalProperties": false
+    },
+    "display": {
+      "title": "[display]",
+      "description": "A local screen: one more ThreadX thread (boards/<board>/display.c, docs/display.md).",
+      "type": "object",
+      "properties": {
+        "ui": {"type": "string", "description": "the node's screen (ui_create, ui_update): a C file relative to the node"}
+      },
+      "required": ["ui"],
+      "additionalProperties": false
+    },
+    "did": {
+      "title": "[[did]]",
+      "description": "A data identifier the server reads (0x22) and may write (0x2E). Its value is ONE of: `ascii` / `bytes` (a constant), `signal` (live), `param` (a coded [[param]]), `param_status`, `tx_saturations`.",
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer", "minimum": 0, "maximum": 65535, "description": "the 16-bit data identifier (0 is skipped)"},
+        "ascii": {"type": "string", "description": "a constant value as an ASCII string (at most 32 bytes)"},
+        "bytes": {"type": "string", "description": "a constant value as space-separated hex bytes (at most 32)"},
+        "writable": {"type": "boolean", "default": false, "description": "0x2E may overwrite the constant's RAM copy (implied by `write`) Default: false."},
+        "signal": {"type": "string", "description": "a live value: the signal's, refreshed every pass, big-endian at its width; read-only"},
+        "param": {"type": "string", "description": "the [[param]] this DID codes (0x2E) and reads back (0x22)"},
+        "param_status": {"type": "boolean", "default": false, "description": "one byte per [[param]]: 0 default / 1 coded / 2 reverted Default: false."},
+        "tx_saturations": {"type": "boolean", "default": false, "description": "the count of sent values saturated to their DBC range since start (u32 BE) Default: false."},
+        "read": {"$ref": "#/definitions/did_access", "description": "the 0x22 gate; absent = every session, no security"},
+        "write": {"$ref": "#/definitions/did_access", "description": "the 0x2E gate (makes the DID writable); absent = every session, no security"}
+      },
+      "required": ["id"],
+      "additionalProperties": false
+    },
+    "did_access": {
+      "title": "[[did]] read/write",
+      "description": "The sessions and the 0x27 level an access needs.",
+      "type": "object",
+      "properties": {
+        "session": {"type": "array", "items": {"type": "string", "enum": ["default", "extended", "programming", "safety"]}, "description": "the sessions it is allowed in; absent = every session"},
+        "security": {"type": "integer", "minimum": 0, "maximum": 8, "default": 0, "description": "the 0x27 level that must be unlocked (0 = none) Default: 0."}
+      },
+      "additionalProperties": false
+    },
+    "fault": {
+      "title": "[[fault]]",
+      "description": "A diagnostic fault: a DTC, the test that sets it and how its results are debounced, confirmed and aged (docs/diagnostics.md §3.3).",
+      "type": "object",
+      "properties": {
+        "name": {"type": "string", "description": "PascalCase, unique; a field of the testing FB's Faults struct"},
+        "dtc": {"type": "integer", "minimum": 1, "maximum": 16777215, "description": "the 3-byte DTC 0x19 reports; unique per server"},
+        "from": {"type": "string", "description": "\"Fb.handler\" — the handler that tests it (or `signal` + `on` for a signal-status fault)"},
+        "signal": {"type": "string", "description": "a signal-status fault: the received signal whose rx status the bridge watches"},
+        "on": {"type": "string", "enum": ["timeout", "integrity", "lost"], "description": "a signal-status fault: the rx status that counts as failed"},
+        "debounce": {"$ref": "#/definitions/fault_debounce", "description": "how test results become failed / passed; absent = counter, fail 1, pass 1"},
+        "enable": {"type": "array", "items": {"type": "string"}, "description": "\"Signal.field\" bool conditions (read by the handler) that must hold for a result to count Default: []."},
+        "confirm": {"type": "integer", "minimum": 1, "maximum": 255, "default": 1, "description": "failed operation cycles to confirm the DTC Default: 1."},
+        "aging": {"type": "integer", "minimum": 0, "maximum": 255, "default": 0, "description": "passing cycles before a confirmed DTC ages out (0 = never) Default: 0."},
+        "freeze": {"type": "array", "items": {"type": "integer"}, "description": "the snapshot: [[did]] ids captured at the failure, 0x19 04 (at most 4) Default: []."},
+        "priority": {"type": "integer", "minimum": 1, "maximum": 255, "default": 128, "description": "displacement when the snapshot entries are full: 1 (most important) .. 255 Default: 128."},
+        "snapshot_id": {"type": "integer", "description": "retired: refused, with the move to `snapshot_ids`"},
+        "snapshot_ids": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 65534}, "description": "pins the snapshot's two journal blocks [A, B] (only to resolve a reported collision)"}
+      },
+      "required": ["name", "dtc"],
+      "additionalProperties": false
+    },
+    "fault_debounce": {
+      "title": "[[fault]] debounce",
+      "description": "A counter debounce counts results; a time debounce times them. Each kind takes only its own keys.",
+      "type": "object",
+      "properties": {
+        "kind": {"type": "string", "enum": ["counter", "time"], "default": "counter", "description": "count results, or time them Default: \"counter\"."},
+        "fail": {"type": "integer", "minimum": 1, "maximum": 65535, "default": 1, "description": "counter: the failed-result threshold Default: 1."},
+        "pass": {"type": "integer", "minimum": 1, "maximum": 65535, "default": 1, "description": "counter: the passed-result threshold Default: 1."},
+        "fail_ms": {"type": "integer", "minimum": 1, "maximum": 2147483, "description": "time: how long it keeps failing before it is failed (ms; required)"},
+        "pass_ms": {"type": "integer", "minimum": 1, "maximum": 2147483, "description": "time: how long it keeps passing before it is passed (ms; required)"},
+        "inc": {"type": "integer", "minimum": 1, "maximum": 65535, "default": 1, "description": "counter: the step per failed result Default: 1."},
+        "dec": {"type": "integer", "minimum": 1, "maximum": 65535, "default": 1, "description": "counter: the step per passed result Default: 1."},
+        "jump": {"type": "boolean", "description": "counter: reset on a reversal (\"N in a row\"); default true when fail = 1, else it accumulates"}
+      },
+      "additionalProperties": false
+    },
+    "param": {
+      "title": "[[param]]",
+      "description": "A coded parameter (variant coding): a read-only FB input, coded with 0x2E on its [[did]] and kept in the NvM journal (docs/diagnostics.md §3.4).",
+      "type": "object",
+      "properties": {
+        "name": {"type": "string", "description": "PascalCase; the value type the FBs read"},
+        "fields": {"type": "object", "additionalProperties": {"type": "string"}, "description": "1..2 fields, name -> bool / u8 / u16 / u32 / i8 / i16 / i32"},
+        "default": {"type": "object", "additionalProperties": {"type": ["integer", "boolean"]}, "description": "every field's compiled default, within its range — what an uncoded vehicle runs"},
+        "range": {"type": "object", "additionalProperties": {"$ref": "#/definitions/param_range"}, "description": "per field, the values it may be coded to; absent = the type's"},
+        "apply": {"type": "string", "enum": ["next_dispatch", "reset"], "default": "next_dispatch", "description": "when a coded value takes effect: the FB's next dispatch, or the next start Default: \"next_dispatch\"."},
+        "version": {"type": "integer", "minimum": 0, "maximum": 255, "default": 0, "description": "bump when a field's meaning changes but its type does not (stored values revert) Default: 0."},
+        "nvm_id": {"type": "integer", "minimum": 0, "maximum": 65534, "default": 0, "description": "pins the journal block (0 = derived; only to resolve a reported collision) Default: 0."}
+      },
+      "required": ["name", "fields", "default"],
+      "additionalProperties": false
+    },
+    "param_range": {
+      "title": "[[param]] range",
+      "description": "The coded values one field may take (0x2E answers 0x31 outside it).",
+      "type": "object",
+      "properties": {
+        "min": {"type": "integer", "description": "the lowest value (default: the type's minimum)"},
+        "max": {"type": "integer", "description": "the highest value (default: the type's maximum)"}
+      },
+      "additionalProperties": false
+    },
+    "fault_memory": {
+      "title": "[fault_memory]",
+      "description": "The fault memory as a whole.",
+      "type": "object",
+      "properties": {
+        "cycle": {"type": "string", "description": "the operation cycle: a bool \"Signal.field\", or \"power\"; absent on a target = NM"},
+        "entries": {"type": "integer", "minimum": 1, "maximum": 8, "description": "snapshot entries (default one per fault with `freeze`); fewer = displacement"}
+      },
+      "additionalProperties": false
+    },
+    "route": {
+      "title": "[[route]]",
+      "description": "A gateway route: forward a raw frame, or decode a signal and re-encode it (CAN only).",
+      "type": "object",
+      "properties": {
+        "signal": {"type": "string", "description": "a SIGNAL route: decode it on `from`, re-encode it into `to`; absent = a raw frame route"},
+        "from": {"$ref": "#/definitions/route_from", "description": "the source"},
+        "to": {"$ref": "#/definitions/route_to", "description": "the destination"}
+      },
+      "required": ["from", "to"],
+      "additionalProperties": false
+    },
+    "route_from": {
+      "title": "[[route]] from",
+      "type": "object",
+      "properties": {
+        "bus": {"type": "string", "description": "the source bus"},
+        "frame": {"type": "string", "description": "the DBC frame to forward / decode"}
+      },
+      "required": ["bus", "frame"],
+      "additionalProperties": false
+    },
+    "route_to": {
+      "title": "[[route]] to",
+      "type": "object",
+      "properties": {
+        "bus": {"type": "string", "description": "the destination bus"},
+        "frame": {"type": "string", "description": "SIGNAL route: the destination DBC frame to re-encode into (required there)"},
+        "id": {"type": "integer", "minimum": 0, "maximum": 536870911, "default": 0, "description": "FRAME route: the id on the destination bus (0 = keep the source id) Default: 0."}
+      },
+      "required": ["bus"],
+      "additionalProperties": false
+    },
+    "io": {
+      "title": "[io]",
+      "description": "Physical IO points (docs/io.md), each bound to the [[signal]] of the same name; at most 32.",
+      "type": "object",
+      "properties": {
+        "core": {"type": "integer", "default": 0, "description": "the io thread's home core; every io signal's partition must be on it Default: 0."},
+        "gpio": {"type": "array", "items": {"$ref": "#/definitions/io_gpio"}, "description": "digital pins"},
+        "adc": {"type": "array", "items": {"$ref": "#/definitions/io_adc"}, "description": "analog inputs (at most 16, one scan sequence)"},
+        "pwm": {"type": "array", "items": {"$ref": "#/definitions/io_pwm"}, "description": "PWM outputs"}
+      },
+      "additionalProperties": false
+    },
+    "io_gpio": {
+      "title": "[[io.gpio]]",
+      "description": "A digital pin: an input (the signal is from \"io\") or an output (to \"io\"), one bool field.",
+      "type": "object",
+      "properties": {
+        "name": {"type": "string", "description": "binds the [[signal]] of the same name"},
+        "pin": {"type": "string", "description": "the pad, backend-opaque (e.g. \"PB0\"); one point per pad"},
+        "period_ms": {"type": "integer", "description": "sample (input) or apply (output) period, ms >= 1, a multiple of the fastest io period"},
+        "init": {"type": "boolean", "description": "outputs, REQUIRED there: the level held until the FB first publishes"},
+        "active_low": {"type": "boolean", "default": false, "description": "pad polarity: logical true drives the pad LOW Default: false."},
+        "default": {"type": "boolean", "default": false, "description": "inputs only: the port value before the first real sample Default: false."}
+      },
+      "required": ["name", "pin", "period_ms"],
+      "additionalProperties": false
+    },
+    "io_adc": {
+      "title": "[[io.adc]]",
+      "description": "An analog input bound to a u16/u32 [[signal]] from \"io\".",
+      "type": "object",
+      "properties": {
+        "name": {"type": "string", "description": "binds a u16/u32 [[signal]] (input only)"},
+        "pin": {"type": "string", "description": "the ADC pad / channel"},
+        "period_ms": {"type": "integer", "description": "the PUBLISH cadence (ms >= 1); the conversion free-runs"},
+        "default": {"type": "integer", "default": 0, "description": "the count held until the first real sample (within the field type) Default: 0."}
+      },
+      "required": ["name", "pin", "period_ms"],
+      "additionalProperties": false
+    },
+    "io_pwm": {
+      "title": "[[io.pwm]]",
+      "description": "A PWM output bound to a u16/u32 [[signal]] to \"io\" carrying duty in permille.",
+      "type": "object",
+      "properties": {
+        "name": {"type": "string", "description": "binds a u16/u32 [[signal]] carrying permille (output only)"},
+        "pin": {"type": "string", "description": "the PWM pad"},
+        "period_ms": {"type": "integer", "description": "the APPLY cadence (ms >= 1)"},
+        "freq_hz": {"type": "integer", "minimum": 1, "maximum": 10000000, "description": "the carrier frequency"},
+        "init": {"type": "integer", "minimum": 0, "maximum": 1000, "description": "the duty (permille) before the first publish; required on an output"}
+      },
+      "required": ["name", "pin", "period_ms", "freq_hz"],
+      "additionalProperties": false
+    },
+    "bulk": {
+      "title": "[[bulk]]",
+      "description": "A bulk transport pool (docs/bulk-transport.md): a producer/consumer SPSC ring of buffers. Same partition = a per-image arena; different cores = the H755 shared window.",
+      "type": "object",
+      "properties": {
+        "name": {"type": "string", "description": "identifier, unique"},
+        "producer": {"type": "string", "description": "a partition or thread name"},
+        "consumer": {"type": "string", "description": "a partition or thread name"},
+        "bufsz": {"type": "integer", "minimum": 1, "maximum": 1048576, "description": "bytes per buffer, a multiple of 32"},
+        "nbuf": {"type": "integer", "minimum": 1, "maximum": 1024, "description": "the ring depth"}
+      },
+      "required": ["name", "producer", "consumer", "bufsz", "nbuf"],
+      "additionalProperties": false
+    }
+  }
+}

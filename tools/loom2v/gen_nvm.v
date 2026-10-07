@@ -63,17 +63,18 @@ fn parse_nvm(doc toml.Doc) NvmCfg {
 		return t // [nvm.assume] alone states the vehicle's rates; it declares no storage
 	}
 	t.on = (nm['enabled'] or { toml.Any(true) }).bool()
-	t.min_write_ms = nvm_range(nm, 'min_write_ms', 1000, 1, 86_400_000)
-	t.sector_records = nvm_range(nm, 'sector_records', 4096, 8, 1_000_000)
-	t.endurance = nvm_range(nm, 'endurance', 10000, 1, 10_000_000)
-	t.min_years = nvm_range(nm, 'min_years', 10, 1, 100)
+	t.min_write_ms = nvm_range(nm, 'min_write_ms', 1000)
+	t.sector_records = nvm_range(nm, 'sector_records', 4096)
+	t.endurance = nvm_range(nm, 'endurance', 10000)
+	t.min_years = nvm_range(nm, 'min_years', 10)
 	return t
 }
 
 // nvm_range: a bounded positive [nvm] integer — a negative typo must fail
 // generation, not wrap through a u32 cast into "never writes for 49 days".
-fn nvm_range(nm map[string]toml.Any, key string, def int, lo int, hi int) u32 {
-	return u32(toml_int(nm, key, def, lo, hi, '[nvm]'))
+// (its bounds are the schema's: tools/cfgschema)
+fn nvm_range(nm map[string]toml.Any, key string, def int) u32 {
+	return u32(schema_int(nm, 'nvm', key, def, '[nvm]'))
 }
 
 // field_width: packed bytes of one signal field (persist supports unsigned scalars).

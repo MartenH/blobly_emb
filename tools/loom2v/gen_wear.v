@@ -45,11 +45,11 @@ fn parse_wear_assume(nm map[string]toml.Any) WearAssume {
 		}
 		a.declared << k
 	}
-	a.cycles = u32(toml_int(am, 'cycles_per_day', a.cycles, 1, 1_000_000, '[nvm.assume]'))
-	a.resets = u32(toml_int(am, 'resets_per_day', a.resets, 0, 1_000_000, '[nvm.assume]'))
-	a.clears = u32(toml_int(am, 'clears_per_day', a.clears, 0, 1_000_000, '[nvm.assume]'))
-	a.settings = u32(toml_int(am, 'setting_changes_per_day', a.settings, 0, 1_000_000, '[nvm.assume]'))
-	a.codings = u32(toml_int(am, 'codings_per_day', a.codings, 0, 1_000_000, '[nvm.assume]'))
+	a.cycles = u32(schema_int(am, 'nvm_assume', 'cycles_per_day', a.cycles, '[nvm.assume]'))
+	a.resets = u32(schema_int(am, 'nvm_assume', 'resets_per_day', a.resets, '[nvm.assume]'))
+	a.clears = u32(schema_int(am, 'nvm_assume', 'clears_per_day', a.clears, '[nvm.assume]'))
+	a.settings = u32(schema_int(am, 'nvm_assume', 'setting_changes_per_day', a.settings, '[nvm.assume]'))
+	a.codings = u32(schema_int(am, 'nvm_assume', 'codings_per_day', a.codings, '[nvm.assume]'))
 	return a
 }
 

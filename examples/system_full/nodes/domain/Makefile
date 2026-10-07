@@ -38,7 +38,7 @@ gen: gen/.stamp
 # image verification path). Generators are built from source into bin/ (tools/tools.mk).
 GENSRC = $(wildcard $(REPO)/tools/ecucheck/*.v) $(wildcard $(REPO)/tools/sysgen/*.v) $(wildcard $(REPO)/tools/dbcmerge/*.v) \
          $(wildcard $(REPO)/tools/dbc2cfg/*.v) $(wildcard $(REPO)/tools/loom2v/*.v) \
-         $(wildcard $(REPO)/tools/ecumodel/*.v) \
+         $(wildcard $(REPO)/tools/ecumodel/*.v) $(wildcard $(REPO)/tools/cfgschema/*.v) \
          $(wildcard $(REPO)/tools/candb/*.v) $(wildcard $(REPO)/tools/sysmodel/*.v)
 gen/.stamp: $(SYSDIR)/system.toml ecu.toml $(SYSDIR)/compute.dbc $(wildcard app/*.v) $(GENSRC) $(TOOL_dbc2cfg) $(TOOL_loom2v)
 	@mkdir -p gen ports sig
