@@ -5,27 +5,76 @@
 #     source compiled into it — V's own -dump-files (tools/tools.mk v_deps, scripts/vdeps.sh), never
 #     a hand list of module directories, one that went stale the day a generated image started
 #     importing driver/doipnet;
-#   - C: what an image compiles C into (its ELF, an app.o, a bootloader's boot.elf) depends on
-#     every header and textually included file its sources read — the compiler's own -MM -MP
-#     (tools/tools.mk c_build), never a hand list of headers, one that missed bootmap.h's flash
-#     addresses (#375).
+#   - C: what an image compiles C into (its ELF, an app.o, a bootloader's boot.elf, the objects of
+#     its ThreadX/NetX/LVGL archives) depends on every header and textually included file its
+#     sources read — the compiler's own -MM -MP (tools/tools.mk c_build, c_object), never a hand
+#     list of headers, one that missed bootmap.h's flash addresses (#375) — and on how the compiler
+#     is run, every flag and source (tools/tools.mk c_sign, #382).
 # The checks:
 #   - every transpile rule is the shape tools/tools.mk documents: its entry point and generation
 #     stamp, its record's v_unrecorded, nothing hand-listed — and the Makefile includes tools.mk
 #     before it (a macro used before its definition expands to nothing, silently);
-#   - every rule whose recipe runs $(CC) runs it through c_build, with its c_unrecorded, its record
-#     included and no header named by hand — the ThreadX/NetX/LVGL archive objects ($(BUILD)/tx/,
-#     $(BUILD)/nx/, $(BUILD)/lvgl/) aside: pinned third-party sources, tracked by Makefile only (#382);
+#   - every rule whose recipe runs $(CC) runs it through c_build (an image's ELF, an app.o, a
+#     boot.elf) or c_object (an archive's objects, $(BUILD)/tx/, $(BUILD)/nx/, $(BUILD)/lvgl/),
+#     and every one that runs $(AR) through c_archive, signing $(AR_CMD),
+#     with its c_unrecorded, its c_sign of the very variable the recipe runs, its records included
+#     and no header named by hand;
 #   - per image built, the target has its record; without the record it is out of date; touching
 #     a repo module it compiles in (driver/doipnet where it imports it), a header it includes
 #     (the board's bootmap.h where it reads one, and the forced board.h), or the rule that records
-#     it, leaves it out of date — each asked of make, apps and bootloaders alike.
+#     it, leaves it out of date; so does another flag (MCU, and DEBUG=1 where the Makefile has
+#     one), while the unchanged command leaves it up to date — each asked of make, apps and
+#     bootloaders alike, and of one object of each archive, which another record filter
+#     (tools/tools.mk c_unpinned) leaves stale too.
 # Run after the cross builds (the CI cross job does); exits 1 on a stale dependency.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 fail=0
 tmpf=$(mktemp) || exit 1
-trap 'rm -f "$tmpf"' EXIT
+# A what-if with another flag rewrites the signatures make reads (tools/tools.mk c_sign writes one
+# whenever it differs), and writing the old text back would make it NEWER than what it signs: keep
+# them, with their times, and put them back after asking — on any exit too, so an interrupted run
+# leaves no signature of a command nobody built.
+kept=
+sigs_keep() {
+	kept=$1
+	find "$1/build" -name '*.sig' -exec cp -p {} {}.keep \;
+}
+sigs_back() {
+	[ -n "$kept" ] || return 0
+	# a signature the what-if created has nothing to go back to
+	find "$kept/build" -name '*.sig' | while read -r f; do [ -f "$f.keep" ] || rm -f "$f"; done
+	find "$kept/build" -name '*.sig.keep' | while read -r k; do mv -f "$k" "${k%.keep}"; done
+	kept=
+}
+trap 'sigs_back; rm -f "$tmpf"' EXIT
+# make's answer for <dir> <target> with the extra make arguments: stale, current, or (reported) none
+ask() {
+	local d=$1 t=$2; shift 2
+	make -C "$d" -q "$@" "$t" >/dev/null 2>&1
+	case $? in
+		1) echo stale ;;
+		0) echo current ;;
+		*) echo none; echo "app_deps_check: make could not answer for $d/$t ($*)" >&2 ;;
+	esac
+}
+# out of date / up to date, each false when make could not answer (ask reports that, and fails)
+stale() { local a; a=$(ask "$@"); [ "$a" = none ] && fail=1; [ "$a" = stale ]; }
+current() { local a; a=$(ask "$@"); [ "$a" = none ] && fail=1; [ "$a" = current ]; }
+# another flag leaves <dir> <target> out of date: MCU (MCU_CM4 on a CM4 image; on every compile
+# line), DEBUG=1 where the Makefile reads one; the signatures are restored after, and the target
+# is current again. Asked of a target just built, before any -W what-if: one of tools.mk remakes
+# the generators, and with them the generated headers the target reads.
+flags_check() {
+	local d=$1 t=$2; shift 2
+	sigs_keep "$d"
+	stale "$d" "$t" "$@" MCU=-DAPP_DEPS_CHECK MCU_CM4=-DAPP_DEPS_CHECK || { echo "app_deps_check: $d/$t ignores a change of compile flags (MCU), or make could not say"; fail=1; }
+	if grep -qF 'ifeq ($(DEBUG),1)' "$d/Makefile"; then
+		stale "$d" "$t" "$@" DEBUG=1 || { echo "app_deps_check: $d/$t ignores DEBUG=1, or make could not say"; fail=1; }
+	fi
+	sigs_back
+	current "$d" "$t" "$@" || { echo "app_deps_check: $d/$t is not up to date with its signatures restored"; fail=1; }
+}
 # a transpile rule — the C file V writes — not in the documented shape
 if grep -nE '^\$\((BUILD|BOOT_DIR)\)/[a-z_]+\.c:' examples/*/Makefile examples/*/nodes/*/Makefile boot/boot.mk \
 	| grep -vE ':\$\(BUILD\)/([a-z_]+)\.c: (\$\(SYSDIR\)/)?main\.v( gen/(\.stamp|loom_gen\.v))? \$\(call v_unrecorded,\$\(BUILD\)/\1\.c\) \$\(call v_sign,\$\(BUILD\)/\1\.c,\$\(TRANSPILE_FLAGS\)\) \| \$\(BUILD\)$' \
@@ -95,33 +144,59 @@ done
 cmks=$(grep -l arm-none-eabi examples/*/Makefile examples/*/nodes/*/Makefile)
 for mk in $cmks boot/boot.mk boards/*/display.mk; do
 	# Every rule, its logical line (continuations joined), where it starts, and its recipe lines.
-	# A recipe that runs $(CC) runs it through c_build — except the pinned third-party kernel,
-	# network and graphics archive objects ($(BUILD)/tx/, $(BUILD)/nx/, $(BUILD)/lvgl/). A rule that does (an image's ELF, an
-	# app.o, a boot.elf, or any other) carries its c_unrecorded, includes its record, and names no
-	# header: the record carries those. A rule with no recipe only adds a prerequisite to one
-	# defined elsewhere (boot/boot.mk relinks the application when the layout its LINK flags are
-	# read from changes) and is not a compile.
+	# A recipe that runs $(CC) runs it as $(call c_build,$(<VAR>)) — an image's ELF, an app.o, a
+	# boot.elf, or any other target — or, for the objects of a pinned archive ($(BUILD)/tx/,
+	# $(BUILD)/nx/, $(BUILD)/lvgl/ — the kernel, the network stack, the graphics library), as
+	# $(call c_object,$(<VAR>)). Either way the rule signs that same variable
+	# ($$(call c_sign,$$@,$$(<VAR>)), or the objects' $$(call c_sign,$(BUILD)/<dir>,$$(<VAR>))),
+	# carries its c_unrecorded, includes its records, and names no header: the record carries
+	# those. A recipe that runs $(AR) runs it as $(call c_archive,$(AR_CMD)), signed by
+	# $$(call c_sign,$$@,$$(AR_CMD)). A rule with no recipe only adds a prerequisite to one defined elsewhere (boot/boot.mk
+	# relinks the application when the layout its LINK flags are read from changes) and is not a
+	# compile.
 	awk -v mk="$mk" '
 		function done_rule() {
 			if (tgt == "" || !cc) return
-			if (tgt ~ /^\$\(BUILD\)\/(tx|nx|lvgl)\//) return
-			if (bare) { print mk ":" start ": " tgt " runs the C compiler without tools/tools.mk c_build — its headers go untracked"; return }
-			if (index(rule, "$(call c_unrecorded," tgt ")") == 0) print mk ":" start ": " tgt " has no $(call c_unrecorded," tgt ")"
-			need[mk SUBSEP tgt] = 1
+			if (bare) { print mk ":" start ": " tgt " runs the C compiler or ar without tools/tools.mk c_build, c_object or c_archive — what it reads and how it runs go untracked"; return }
 			p = substr(rule, index(rule, ":") + 1)
 			if (p ~ /\.h([[:space:]]|\)|$)/) print mk ":" start ": " tgt " names a header by hand — the record carries it"
+			# an order-only signature is never compared: it sits before the |
+			if (index(p, " | ") && index(p, "c_sign,") > index(p, " | ")) print mk ":" start ": " tgt "'"'"'s c_sign is order-only (after the |) — a changed command would not remake it"
+			if (how == "c_archive") {
+				if (var != "AR_CMD") print mk ":" start ": " tgt " archives with $(" var "), not the one $(AR_CMD)"
+				if (index(rule, "$$(call c_sign,$$@,$$(AR_CMD))") == 0) print mk ":" start ": " tgt " does not sign the command it runs: $$(call c_sign,$$@,$$(AR_CMD))"
+				return
+			}
+			if (match(tgt, /^\$\(BUILD\)\/(tx|nx|lvgl)\/%\.o$/)) {
+				dir = substr(tgt, 10, index(substr(tgt, 10), "/") - 1); arch = toupper(dir)
+				if (how != "c_object") { print mk ":" start ": " tgt " is an archive object built without c_object"; return }
+				if (index(rule, "$$(call c_unrecorded,$$@)") == 0) print mk ":" start ": " tgt " has no $$(call c_unrecorded,$$@)"
+				if (index(rule, "$$(call c_sign,$(BUILD)/" dir ",$$(" var "))") == 0) print mk ":" start ": " tgt " does not sign the command it runs: $$(call c_sign,$(BUILD)/" dir ",$$(" var "))"
+				recs[mk SUBSEP arch] = 1
+				return
+			}
+			if (how != "c_build") { print mk ":" start ": " tgt " runs c_object, which compiles one archive object — an image is c_build"; return }
+			if (index(rule, "$(call c_unrecorded," tgt ")") == 0) print mk ":" start ": " tgt " has no $(call c_unrecorded," tgt ")"
+			if (index(rule, "$$(call c_sign,$$@,$$(" var "))") == 0) print mk ":" start ": " tgt " does not sign the command it runs: $$(call c_sign,$$@,$$(" var "))"
+			need[mk SUBSEP tgt] = 1
 		}
 		{ if (cont) { line = line " " $0 } else { line = $0; start_l = NR } }
 		{ cont = sub(/\\$/, "", line); if (cont) next }
-		# every compiler call in a recipe goes through c_build, after the recipe prefixes (@ + -)
+		# every compiler call in a recipe goes through c_build or c_object, after the recipe
+		# prefixes (@ + -), and runs one variable — the one its rule signs
 		substr(line, 1, 1) == "\t" {
-			if (line ~ /\$\(CC\)/) { cc = 1; if (line !~ /^\t[@+-]*\$\(call c_build,/) bare = 1 }
+			if (line ~ /\$\((CC|AR)\)/) { cc = 1; bare = 1 }
+			if (match(line, /^\t[@+-]*\$\(call c_(build|object|archive),\$\([A-Za-z_][A-Za-z0-9_]*\)\)$/)) {
+				cc = 1; how = line; sub(/^\t[@+-]*\$\(call /, "", how); sub(/,.*$/, "", how)
+				var = line; sub(/^.*,\$\(/, "", var); sub(/\)\)$/, "", var)
+			} else if (line ~ /c_(build|object|archive)/) { cc = 1; bare = 1 }
 			next
 		}
 		# blank and comment lines may sit among the recipe lines of a rule
 		line ~ /^[[:space:]]*(#.*)?$/ { next }
-		{ done_rule(); tgt = ""; cc = 0; bare = 0 }
+		{ done_rule(); tgt = ""; cc = 0; bare = 0; how = ""; var = "" }
 		line ~ /^-include / { f = substr(line, 10); sub(/\.d$/, "", f); inc[mk SUBSEP f] = 1 }
+		line ~ /^-include \$\(call c_records,\$\([A-Z]+_OBJ\)\)$/ { an = line; sub(/^.*\$\(call c_records,\$\(/, "", an); sub(/_OBJ\)\)$/, "", an); recinc[mk SUBSEP an] = 1 }
 		line ~ /^[^#=:[:space:]][^=:]*:([^=]|$)/ {
 			tgt = line; sub(/:.*/, "", tgt); rule = line; start = start_l
 			# a recipe on the rule line itself, after a semicolon
@@ -130,11 +205,13 @@ for mk in $cmks boot/boot.mk boards/*/display.mk; do
 		END {
 			done_rule()
 			for (k in need) { split(k, a, SUBSEP); if (!(k in inc)) print mk ": " a[2] "'"'"'s record (" a[2] ".d) is never included" }
+			for (k in recs) { split(k, a, SUBSEP); if (!(k in recinc)) print mk ": the " tolower(a[2]) " objects'"'"' records are never included: -include $(call c_records,$(" a[2] "_OBJ))" }
 		}' "$mk"
 	r=$(grep -nE '^[^#]*c_unrecorded' "$mk" | head -1 | cut -d: -f1)
 	[ -n "$r" ] || continue
 	i=$(grep -nE '^include \$\(REPO\)/tools/tools.mk' "$mk" | head -1 | cut -d: -f1)
-	if [ "$mk" != boot/boot.mk ] && { [ -z "$i" ] || [ "$i" -gt "$r" ]; }; then
+	# boot/boot.mk and a board's display.mk are included by a Makefile that included tools.mk
+	if [ "$mk" != boot/boot.mk ] && [[ $mk != boards/*/display.mk ]] && { [ -z "$i" ] || [ "$i" -gt "$r" ]; }; then
 		echo "$mk uses c_unrecorded without including tools/tools.mk first"
 	fi
 done >"$tmpf"
@@ -146,6 +223,37 @@ for mk in $cmks; do
 	d=$(dirname "$mk")
 	boot=0
 	grep -qE '^[[:space:]]*\[boot\][[:space:]]*(#.*)?$' "$d/ecu.toml" 2>/dev/null && boot=1
+	# One object of each archive the image links (tools/tools.mk c_object), before the targets
+	# below rebuild the archive it lands in: recorded, current, stale without its record, and
+	# stale on an edit to the forced board.h or on another flag.
+	for a in tx nx lvgl; do
+		[ -d "$d/build/$a" ] || continue
+		o=$(cd "$d" && find "build/$a" -name '*.o' | sort | head -1)
+		[ -n "$o" ] || continue
+		make -C "$d" "$o" >/dev/null 2>&1 || { echo "app_deps_check: $d/$o does not build"; fail=1; continue; }
+		[ -f "$d/$o.d" ] || { echo "app_deps_check: $d/$o built without its record"; fail=1; continue; }
+		current "$d" "$o" || { echo "app_deps_check: $d/$o out of date after a build"; fail=1; continue; }
+		rm -f "$d/$o.d"
+		stale "$d" "$o" || { echo "app_deps_check: $d/$o without its record reads as up to date"; fail=1; }
+		make -C "$d" "$o" >/dev/null 2>&1 && [ -f "$d/$o.d" ] || { echo "app_deps_check: $d/$o did not rebuild its record"; fail=1; continue; }
+		bh=$(grep -m1 -E '(^|/)board\.h:$' "$d/$o.d" | sed 's/:$//')
+		[ -n "$bh" ] || { echo "app_deps_check: $d/$o's record does not name the forced board.h"; fail=1; continue; }
+		flags_check "$d" "$o"
+		# how c_object records it is part of its signature: another record filter leaves it stale
+		sigs_keep "$d"
+		stale "$d" "$o" c_unpinned=cat || { echo "app_deps_check: $d/$o ignores a change to how its record is written (c_unpinned)"; fail=1; }
+		sigs_back
+		stale "$d" "$o" -W "$bh" || { echo "app_deps_check: an edit to $bh leaves $d/$o up to date"; fail=1; }
+		# and the archive is made by a signed command too (tools/tools.mk c_archive)
+		if [ -f "$d/build/$a.a" ]; then
+			make -C "$d" "build/$a.a" >/dev/null 2>&1 || { echo "app_deps_check: $d/build/$a.a does not build"; fail=1; continue; }
+			sigs_keep "$d"
+			stale "$d" "build/$a.a" 'AR_CMD=$(AR) -rcs' || { echo "app_deps_check: $d/build/$a.a ignores a change of its ar command"; fail=1; }
+			sigs_back
+			current "$d" "build/$a.a" || { echo "app_deps_check: $d/build/$a.a is not up to date with its signatures restored"; fail=1; }
+		fi
+		echo "app_deps_check: $d/$o ok (board.h, the flags, the record filter, the archive command)"
+	done
 	for t in "$d"/build/*.elf "$d"/build/app.o "$d"/build/boot/boot.elf; do
 		[ -f "$t" ] || continue
 		rel=${t#"$d"/}
@@ -177,6 +285,13 @@ for mk in $cmks; do
 		for o in build/app.o build/app.c build/canfd.c build/boot/boot.c; do
 			[ "$o" != "$rel" ] && [ -f "$d/$o" ] && old+=(-o "$o")
 		done
+		# how the compiler is run (tools/tools.mk c_sign): another flag leaves it stale, the
+		# same command current — with what it links held old, so only its OWN signature answers
+		held=("${old[@]}")
+		for a in build/tx.a build/nx.a build/lvgl.a; do
+			[ -f "$d/$a" ] && held+=(-o "$a")
+		done
+		flags_check "$d" "$rel" "${held[@]}"
 		for h in $bm $bh $rule; do
 			make -C "$d" -q "${old[@]}" -W "$h" "$rel" >/dev/null 2>&1
 			case $? in
@@ -185,7 +300,7 @@ for mk in $cmks; do
 				*) echo "app_deps_check: make could not answer for $t with $h edited"; fail=1 ;;
 			esac
 		done
-		echo "app_deps_check: $t ok (${bm:+$(basename "$bm"), }$(basename "$bh"), the rule)"
+		echo "app_deps_check: $t ok (${bm:+$(basename "$bm"), }$(basename "$bh"), the rule, the flags)"
 	done
 done
 exit $fail

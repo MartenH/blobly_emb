@@ -40,8 +40,8 @@ LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
           --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/app.map
 # APP_LINK=boot: link at APP_VECTORS (bootmap.h APP_BASE 0x08020000 + 0x400) for the
 # bootloader chain; wrap the .bin with tools/mkimage --pad-vectors before flashing.
-# The link mode is PART OF THE ARTIFACT: the stamp below forces a relink when it
-# changes, so `make APP_LINK=boot` can never reuse a stale standalone .elf whose
+# The link mode is PART OF THE ARTIFACT: the link's signature (tools/tools.mk c_sign) carries
+# these flags, so `make APP_LINK=boot` can never reuse a stale standalone .elf whose
 # vectors still point at 0x08000000 (codex on emb#130).
 ifeq ($(APP_LINK),boot)
 # __flash_len__ = APP_SIZE(0xE0000) - vector pad(0x400) - signature(0x40): the
@@ -49,14 +49,11 @@ ifeq ($(APP_LINK),boot)
 # at the top of the slot or a max-size signed image overflows the boot's region
 # check (codex on emb#137).
 LDFLAGS += -Wl,--defsym,__flash_base__=0x08020400 -Wl,--defsym,__flash_len__=0xDFBC0
-LINKMODE = boot
-else
-LINKMODE = std
 endif
-LINKSTAMP = $(BUILD)/link.$(LINKMODE).stamp
 
 BUILD    = build
 TX_A     = $(BUILD)/tx.a
+TX_CMD   = $(CC) $(CFLAGS)
 TX_ASM   = $(wildcard $(PORT)/src/*.S)
 TX_C     = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
@@ -100,22 +97,20 @@ $(BUILD)/app.c: main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) $(call v_s
 -include $(BUILD)/app.c.d
 
 # 2) ThreadX kernel objects (the shared ThreadX recipe).
-$(BUILD)/tx/%.o: $(PORT)/src/%.S Makefile
+$(BUILD)/tx/%.o: $(PORT)/src/%.S $$(call c_unrecorded,$$@) $$(call c_sign,$(BUILD)/tx,$$(TX_CMD))
 	@mkdir -p $(BUILD)/tx
-	$(CC) $(CFLAGS) -c $< -o $@
-$(BUILD)/tx/%.o: $(TX)/common/src/%.c Makefile
+	$(call c_object,$(TX_CMD))
+$(BUILD)/tx/%.o: $(TX)/common/src/%.c $$(call c_unrecorded,$$@) $$(call c_sign,$(BUILD)/tx,$$(TX_CMD))
 	@mkdir -p $(BUILD)/tx
-	$(CC) $(CFLAGS) -c $< -o $@
-$(TX_A): $(TX_OBJ)
-	$(AR) -rc $@ $^
+	$(call c_object,$(TX_CMD))
+$(TX_A): $(TX_OBJ) $$(call c_sign,$$@,$$(AR_CMD))
+	$(call c_archive,$(AR_CMD))
+-include $(call c_records,$(TX_OBJ))
 
 # 3) cross-compile + link: generated app.c + board bring-up + CAN backend + ThreadX kernel.
-$(LINKSTAMP): | $(BUILD)
-	@rm -f $(BUILD)/link.*.stamp
-	@touch $@
-
-$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) $(BOARD_LD_THREADX) $(LINKSTAMP) $(call c_unrecorded,$(BUILD)/$(NAME).elf)
-	$(call c_build,$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A))
+ELF_CMD = $(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A)
+$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) $(BOARD_LD_THREADX) $(call c_unrecorded,$(BUILD)/$(NAME).elf) $$(call c_sign,$$@,$$(ELF_CMD))
+	$(call c_build,$(ELF_CMD))
 	$(SIZE) $@
 -include $(BUILD)/$(NAME).elf.d
 

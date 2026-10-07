@@ -83,11 +83,15 @@ v_unrecorded = $(if $(wildcard $(1).d),,v-unrecorded)
 # a prerequisite: a changed define or compiler remakes the C. The rule's recipe runs V with the
 # same <flags>, so the signature is what was actually run.
 v_sigtext = $(strip $(V) | $(TOOL_V_PATH) | $(TOOL_V_VERSION) | $(1) | $(VFLAGS))
-v_sign = $(if $(call tool_same,$(call v_sigtext,$(2)),$(strip $(if $(wildcard $(1).sig),$(file <$(1).sig)))),,$(shell mkdir -p $(dir $(1)))$(file >$(1).sig,$(call v_sigtext,$(2))))$(1).sig
+v_sign = $(call tool_signed,$(1),$(call v_sigtext,$(2)))
+# <stem>.sig holding <text>: rewritten only when it differs, so an unchanged signature keeps its age
+tool_signed = $(if $(call tool_same,$(2),$(strip $(if $(wildcard $(1).sig),$(file <$(1).sig)))),,$(shell mkdir -p $(dir $(1)))$(file >$(1).sig,$(2)))$(1).sig
 .PHONY: v-unrecorded
 v-unrecorded: ;
-# the signature is written while make reads the Makefile; never made on its own
-%.c.sig: ;
+# a signature is written while make reads the Makefile; never made on its own, and never deleted
+# as an intermediate (an archive's is named by its objects' pattern rule alone)
+%.sig: ;
+.PRECIOUS: %.sig
 
 # The same for what the C COMPILER reads: every target an image compiles C into — its ELF, an
 # app.o, a bootloader's boot.elf — depends on every header its sources include (bootmap.h's flash
@@ -98,10 +102,22 @@ v-unrecorded: ;
 # objects dropped — they are link inputs, and an object has its own record), so the record is taken
 # with exactly the sources and flags that were compiled and no second list can drift from the
 # first. A separate pass, because one gcc call that compiles several sources and links writes a
-# -MMD record for the LAST source only. In the rule:
+# -MMD record for the LAST source only.
 #
-#     $(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(LD) $(call c_unrecorded,$(BUILD)/$(NAME).elf)
-#     	$(call c_build,$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(TX_A))
+# And HOW the compiler is run is an input, as it is for a transpile (v_sign) — a DEBUG=1 build, a
+# board.mk edit to CAN_DEFS' bit timing or SYSTEM_CLOCK, a link address (#382):
+# $$(call c_sign,<target>,$$(<command>)) keeps the command — every flag, define and source — and
+# the compiler it names (its path and `--version`) in <target>.sig, rewritten only when it differs,
+# and names it as a prerequisite. The command is a VARIABLE that the recipe passes to c_build too,
+# and c_build refuses to run one its signature does not record, so the two cannot drift. Signed
+# with $$: tools.mk turns on secondary expansion, so the signature is taken once the whole Makefile
+# is read — a CFLAGS += after an include (sysnode's display and network defines) is in it. In the
+# rule:
+#
+#     ELF_CMD = $(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(TX_A)
+#     $(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(LD) $(call c_unrecorded,$(BUILD)/$(NAME).elf) \
+#                           $$(call c_sign,$$@,$$(ELF_CMD))
+#     	$(call c_build,$(ELF_CMD))
 #     -include $(BUILD)/$(NAME).elf.d
 #
 # The record is the pass's stdout: -MF names ONE file, which each source's rule overwrites in
@@ -111,12 +127,70 @@ v-unrecorded: ;
 # "No rule to make target". The record names this file too, as a V record names the rule that
 # wrote it: a changed rule re-records. A literal comma in <command> splits the call's argument: name -Wl,... groups by a
 # variable. As with v_deps, a failed compile or record removes the target, and a target with no
-# record is remade. What it does NOT carry is the command's flags (no c_sign beside v_sign yet). scripts/app_deps_check.sh pins the shape and asks make that a header's edit remakes each
-# image, the bootloaders included.
-c_build = $(1) -o $@ && $(filter-out %.o %.a,$(1)) -MM -MP -MT $@ >$@.d.tmp && printf '%s\n' $(foreach s,$(filter %.c %.S,$(1)),'$(s):') '$@: $(TOOL_REPO)/tools/tools.mk' >>$@.d.tmp && mv -f $@.d.tmp $@.d || { rm -f $@ $@.d.tmp; exit 1; }
+# record is remade. scripts/app_deps_check.sh pins the shape and asks make that a header's edit,
+# and another flag, remakes each image, the bootloaders included.
+c_build = $(call c_signed,$(1))$(c_check_$@)$(1) -o $@ && $(filter-out %.o %.a,$(1)) -MM -MP -MT $@ >$@.d.tmp && printf '%s\n' $(foreach s,$(filter %.c %.S,$(1)),'$(s):') '$@: $(TOOL_REPO)/tools/tools.mk' >>$@.d.tmp && mv -f $@.d.tmp $@.d || { rm -f $@ $@.d.tmp; exit 1; }
 c_unrecorded = $(if $(wildcard $(1).d),,c-unrecorded)
 .PHONY: c-unrecorded
 c-unrecorded: ;
+# the toolchain, as it describes itself — no command is parsed for it: what $(CC) -v reports
+# (its version, target, configuration and driver), the cc1 it resolves to, and $(AR)'s version,
+# each through the whole command as written, so a wrapper (ccache, env -i, VAR=val) is run as it
+# would be and reports the compiler behind it. Asked once per make (once per value of CC and AR).
+# A C rule's command runs $(CC) — or, for an archive, $(AR).
+c_toolid = $(if $(call tool_same,x$(CC) | $(AR),$(C_TOOLID_FOR)),,$(eval C_TOOLID_FOR := x$$(CC) | $$(AR))$(eval C_TOOLID := $$(shell $$(CC) -v 2>&1; $$(CC) -print-prog-name=cc1 2>&1; $$(AR) --version 2>&1 | head -n 1)))$(C_TOOLID)
+# the command, the toolchain, and how c_object compiles and records an archive object, EXPANDED
+# (its own text and the record filter's): the arguments it adds and the record it writes are part
+# of how that object is built, and its record does not name this file (below)
+c_sigtext = $(strip $(1) | $(c_toolid) | $(value c_object) | $(c_unpinned))
+# once per signature per make: an archive's objects (about 1,200 in sysnode) all name one
+c_sign = $(if $(C_SIGNED_$(1)),$(1).sig,$(eval C_SIGNED_$(1) := 1)$(call tool_signed,$(1),$(call c_sigtext,$(2))))
+# at recipe time: the rule names exactly one signature, and it records the command about to run
+c_signed = $(if $(filter-out 1,$(words $(filter %.sig,$^))),$(error $@: a C rule names exactly one $$$$(call c_sign,...) among its prerequisites (tools/tools.mk)),$(if $(call tool_same,$(call c_sigtext,$(1)),$(strip $(file <$(filter %.sig,$^)))),,$(error $@: the command does not match its signature $(filter %.sig,$^) — the rule signs one variable and runs another (tools/tools.mk c_sign))))
+#
+# The pinned third-party archives (the ThreadX kernel, NetX Duo, LVGL) are compiled one object per
+# source by a pattern rule, with the image's CFLAGS — the forced board.h among them — so they get
+# the same two records, per object: $(call c_object,<command>) compiles $< with -MMD -MP (one
+# source, so the compile writes its own record), and the archive's objects share ONE signature,
+# keyed by their directory, since they are compiled the same way. A pattern target's record is asked
+# for by name through secondary expansion, and the records are included by the object list:
+#
+#     TX_CMD = $(CC) $(CFLAGS)
+#     $(BUILD)/tx/%.o: $(TX)/common/src/%.c $$(call c_unrecorded,$$@) $$(call c_sign,$(BUILD)/tx,$$(TX_CMD))
+#     	@mkdir -p $(BUILD)/tx
+#     	$(call c_object,$(TX_CMD))
+#     -include $(call c_records,$(TX_OBJ))
+#
+# An object's record does not name this file: an edit here would recompile every kernel, network
+# and graphics object (about 1,200 in sysnode) for a rule that does not change what they read.
+# Nor the headers of the pinned trees themselves (third_party/): they move only when a pin does,
+# with the sources beside them, and naming them made a no-op make in sysnode 2.5 s, where it is
+# 0.5 s without them (1,200 objects; an LVGL one reads ~400 headers) — after moving a pin,
+# `make clean`. What is recorded is what changes under a pinned tree: board.h forced into every
+# object, the board's lv_conf.h and lv_attr.h, any repo header a pinned source reaches.
+# What c_object itself adds to the command is in every signature instead (c_sigtext).
+#
+# A signature is taken whenever make reads the Makefile, whatever the goal, so a dry run or a
+# what-if with OTHER flags (make -n DEBUG=1) rewrites it, and the next ordinary build remakes what
+# it signs — as v_sign does for a transpile: a rebuild too many, never one too few.
+c_object = $(call c_signed,$(1))$(1) -c $< -o $@ -MMD -MP -MT $@ -MF $@.d.tmp && $(c_unpinned) $@.d.tmp >$@.d.tmp2 && printf '%s\n' '$<:' >>$@.d.tmp2 && mv -f $@.d.tmp2 $@.d && rm -f $@.d.tmp || { rm -f $@ $@.d.tmp $@.d.tmp2; exit 1; }
+# a record without the pinned trees' own headers (any third_party/ path): logical lines rejoined,
+# those headers dropped from each, and a line left with nothing (their -MP rules) dropped
+c_unpinned = awk '{ l = l $$0 } /\\$$/ { sub(/\\$$/, "", l); next } { n = split(l, w, " "); o = ""; for (i = 1; i <= n; i++) if (w[i] !~ /(^|\/)third_party\/.*\.h:?$$/) o = o " " w[i]; if (o != "") print substr(o, 2); l = "" }'
+c_records = $(wildcard $(addsuffix .d,$(1)))
+#
+# An archive is made by ONE command, signed as a compile is — another ar, other flags, remake it:
+#
+#     $(TX_A): $(TX_OBJ) $$(call c_sign,$$@,$$(AR_CMD))
+#     	$(call c_archive,$(AR_CMD))
+#
+# so the objects' own signature is keyed by their directory ($(BUILD)/tx), not by the archive.
+AR_CMD = $(AR) -rc
+c_archive = $(call c_signed,$(1))$(1) $@ $(filter-out %.sig,$^)
+#
+# A last check before a c_build target is linked, where its Makefile needs one: $(c_check_<target>),
+# expanded in the recipe (boot/boot.mk refuses an application with no app-slot layout).
+.SECONDEXPANSION:
 
 TOOL_REPO := $(abspath $(REPO))
 TOOL_DIR  := $(CURDIR)/bin

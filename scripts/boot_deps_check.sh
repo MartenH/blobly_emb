@@ -38,6 +38,20 @@ for ecu in examples/*/nodes/*/ecu.toml examples/*/ecu.toml; do
 		fail=1
 	fi
 	make -C "$d" boot >/dev/null 2>&1 || { echo "boot_deps_check: $d: rebuild failed"; fail=1; }
+	# The app-slot layout (boot/boot.mk boot_layout) is asked of the whole $(CC) as it runs: a
+	# compiler written behind an assignment still gets it, and a host-only `make gen` with no
+	# compiler at all still generates. Both parses sign another command, so the signatures are
+	# kept, with their times, and put back.
+	find "$d/build" -name '*.sig' -exec cp -p {} {}.keep \;
+	ld=$(make -s -C "$d" --no-print-directory --eval 'boot-deps-layout: ; @echo "$(call boot_layout,app-ld)"' boot-deps-layout CC='BOOT_DEPS_CHECK=1 arm-none-eabi-gcc' 2>/dev/null | tail -1)
+	case $ld in
+		*__flash_base__=*) ;;
+		*) echo "boot_deps_check: $d: a CC behind an assignment gets no app-slot layout ('$ld')"; fail=1 ;;
+	esac
+	make -C "$d" gen CC=boot-deps-check-no-such-gcc >/dev/null 2>&1 || { echo "boot_deps_check: $d: make gen fails with no cross compiler"; fail=1; }
+	find "$d/build" -name '*.sig' | while read -r f; do [ -f "$f.keep" ] || rm -f "$f"; done
+	find "$d/build" -name '*.sig.keep' | while read -r k; do mv -f "$k" "${k%.keep}"; done
+	make -C "$d" -q boot >/dev/null 2>&1 || { echo "boot_deps_check: $d: the bootloader is out of date with its signatures restored"; fail=1; }
 	echo "boot_deps_check: $d ok"
 done
 exit $fail

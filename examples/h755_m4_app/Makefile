@@ -29,6 +29,7 @@ LDFLAGS = $(MCU_CM4) -T $(BOARD_LD_CM4_THREADX) -nostartfiles -Wl,--gc-sections 
 
 BUILD = build
 TX_A  = $(BUILD)/tx.a
+TX_CMD = $(CC) $(CFLAGS)
 TX_ASM = $(wildcard $(PORT)/src/*.S)
 TX_C   = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
@@ -59,17 +60,19 @@ $(BUILD)/app.c: main.v gen/loom_gen.v $(call v_unrecorded,$(BUILD)/app.c) $(call
 # what V compiled into it (tools/tools.mk v_deps)
 -include $(BUILD)/app.c.d
 
-$(BUILD)/tx/%.o: $(PORT)/src/%.S Makefile
+$(BUILD)/tx/%.o: $(PORT)/src/%.S $$(call c_unrecorded,$$@) $$(call c_sign,$(BUILD)/tx,$$(TX_CMD))
 	@mkdir -p $(BUILD)/tx
-	$(CC) $(CFLAGS) -c $< -o $@
-$(BUILD)/tx/%.o: $(TX)/common/src/%.c Makefile
+	$(call c_object,$(TX_CMD))
+$(BUILD)/tx/%.o: $(TX)/common/src/%.c $$(call c_unrecorded,$$@) $$(call c_sign,$(BUILD)/tx,$$(TX_CMD))
 	@mkdir -p $(BUILD)/tx
-	$(CC) $(CFLAGS) -c $< -o $@
-$(TX_A): $(TX_OBJ)
-	$(AR) -rc $@ $^
+	$(call c_object,$(TX_CMD))
+$(TX_A): $(TX_OBJ) $$(call c_sign,$$@,$$(AR_CMD))
+	$(call c_archive,$(AR_CMD))
+-include $(call c_records,$(TX_OBJ))
 
-$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(BOARD_LD_CM4_THREADX) $(call c_unrecorded,$(BUILD)/$(NAME).elf)
-	$(call c_build,$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(TX_A))
+ELF_CMD = $(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(TX_A)
+$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(BOARD_LD_CM4_THREADX) $(call c_unrecorded,$(BUILD)/$(NAME).elf) $$(call c_sign,$$@,$$(ELF_CMD))
+	$(call c_build,$(ELF_CMD))
 	$(SIZE) $@
 -include $(BUILD)/$(NAME).elf.d
 
