@@ -156,3 +156,21 @@ fn test_the_reference_has_a_section_per_table() {
 		}
 	}
 }
+
+fn test_check_refuses_a_value_outside_its_row() {
+	assert errs_of('[target]\nkind = "threadX"\n') == [
+		'[target] "kind": "threadX" is not one of "baremetal", "threadx"',
+	]
+	assert errs_of('[[signal]]\nname = "A"\nfields = { v = "u8" }\nfrom = "p"\nto = "q"\ntransport = "tripple"\n').len == 1
+	assert errs_of('[isotp]\nbus = "can0"\nrx_id = 0x800\ntx_id = 0x7E8\n') == [
+		'[isotp] "rx_id": 0x800 is outside 0x0..0x7FF',
+	]
+	assert errs_of('[[did]]\nid = 0xF190\nread = { session = ["extended", "factory"] }\n') == [
+		'[[did]] read/write "session": "factory" is not one of "default", "extended", "programming", "safety"',
+	]
+	// 0 is [doip]'s spelling of the default functional address
+	assert errs_of('[doip]\naddress = "192.168.0.2"\nlogical_address = 0x10\nfunctional_address = 0\n') == []
+	assert errs_of('[doip]\naddress = "192.168.0.2"\nlogical_address = 0x10\nfunctional_address = 0x10\n').len == 1
+	// an own_check row is ecumodel.validate's to judge (ecucheck runs both): said once, there
+	assert errs_of('[trace]\npre_pct = 150\n') == []
+}

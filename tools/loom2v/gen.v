@@ -210,9 +210,12 @@ fn schema_key(ctx string, name string) cfgschema.Key {
 	return cfgschema.ecu.key(ctx, name)
 }
 
-// schema_int: toml_int bounded by the key's schema range
+// schema_int: toml_int bounded by the key's schema range (a row with no range is a caller defect)
 fn schema_int(m map[string]toml.Any, ctx string, key string, def i64, what string) int {
 	k := schema_key(ctx, key)
+	if !k.ranged || k.or_zero {
+		panic('loom2v: schema row ${ctx}.${key} is not a plain range — schema_int cannot bound it')
+	}
 	return toml_int(m, key, def, k.min, k.max, what)
 }
 
@@ -1357,9 +1360,6 @@ fn parse_frames(doc toml.Doc, eth string, buses map[string]bool, bus_kind map[st
 			sm := (fm['secoc'] or { toml.Any('') }).as_map()
 			f.secoc_on[fk] = true
 			f.secoc_id[fk] = schema_int(sm, 'secoc', 'data_id', 0, 'frame "${fk}" secoc')
-			if f.secoc_id[fk] < 0 || f.secoc_id[fk] > 0xffff {
-				panic('frame "${fk}": secoc data_id 0x${f.secoc_id[fk].hex()} is out of range (0..0xFFFF)')
-			}
 			f.secoc_fresh[fk] = int((sm['fresh_pos'] or { toml.Any(0) }).int())
 			f.secoc_mac[fk] = int((sm['mac_pos'] or { toml.Any(0) }).int())
 			f.secoc_maclen[fk] = int((sm['mac_len'] or { toml.Any(4) }).int())
@@ -5305,7 +5305,8 @@ fn parse_faults(doc toml.Doc) []FaultCfg {
 			}
 			ons := schema_key('fault', 'on').choices
 			if signal == '' || on !in ons {
-				panic('loom2v: [[fault]] "${name}": a signal-status fault needs signal = "<received signal>" and on = ${ons.map('"${it}"').join(' | ')}')
+				on_list := ons.map('"' + it + '"').join(' | ')
+				panic('loom2v: [[fault]] "${name}": a signal-status fault needs signal = "<received signal>" and on = ${on_list}')
 			}
 		} else {
 			parts = from.split('.')

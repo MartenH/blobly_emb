@@ -226,7 +226,7 @@ The SOME/IP service identity and static endpoints (docs/someip.md). Deliberately
 | `bus` | string | yes | — |  | the eth bus it binds to |
 | `service` | integer | yes | — | 0x0..0xFFFF | the SOME/IP service id |
 | `version` | integer | yes | — | 0..255 | the interface version byte, explicitly managed |
-| `port` | integer | yes | — | 0x1..0xFFFF | the local UDP port |
+| `port` | integer | yes | — | 1..65535 | the local UDP port |
 | `peer` | string | yes | — |  | address:port — the tx destination AND the rx source filter |
 
 <a id="ecu-bus"></a>
@@ -309,7 +309,7 @@ A typed signal from one endpoint to another: a partition, a thread, a bus, or "i
 | `to` | string | yes | — |  | the consumer: a partition, thread, bus or "io" |
 | `transport` | string |  | `"double"` | `"double"`, `"triple"`, `"seqlock"`, `"dma"`, `"hw_sem"`, `"mailbox"` | the IOC buffer between partitions (derived for io signals); the hardware ones are target backends, double on host |
 | `persist` | string |  | — | `"now"`, `"shutdown"` | keep it in NvM: write-through, or flush at sleep — intent, not tuning (docs/nvm.md) |
-| `nvm_id` | integer |  | `0` | 0x0..0xFFFE | pins the NvM record id (0 = derived; only to resolve a reported collision) |
+| `nvm_id` | integer |  | `0` | 0..65534 | pins the NvM record id (0 = derived; only to resolve a reported collision) |
 
 <a id="ecu-frame"></a>
 
@@ -338,8 +338,8 @@ How a frame is sent (comm/com).
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
 | `mode` | string |  | `"cyclic"` | `"cyclic"`, `"event"`, `"mixed"`, `"triggered"` | periodic, on a change, both, or on an explicit trigger (eth: not triggered) |
-| `cycle_ms` | integer |  | `100` |  | the period of a cyclic or mixed frame (ms; CAN: a multiple of 10) |
-| `min_delay_ms` | integer |  | `0` |  | the least gap between two event sends (ms) |
+| `cycle_ms` | integer |  | — |  | the period of a cyclic or mixed frame (ms). Absent: CAN takes the DBC's GenMsgCycleTime, else 100, in multiples of 10; eth takes 100, within 1..1000000 |
+| `min_delay_ms` | integer |  | `0` |  | the least gap between two event sends (ms; eth: 0..1000000) |
 
 <a id="ecu-rx"></a>
 
@@ -427,7 +427,7 @@ The diagnostic server over DoIP (ISO 13400) too — ThreadX target; one parser f
 |---|---|---|---|---|---|
 | `address` | string | yes | — |  | the node's static IPv4 address — a host on its /24 (not .0, .1 or .255) |
 | `logical_address` | integer | yes | — |  | the entity's logical address (0x0001..0x0DFF or 0x1000..0x7FFF); unique |
-| `functional_address` | integer |  | `0xE400` | 0xE400..0xEFFF | the functional address it also answers |
+| `functional_address` | integer |  | `0xE400` | 0, or 0xE400..0xEFFF | the functional address it also answers |
 | `testers` | array of integers |  | — | 0xE00..0xFFF | tester addresses allowed to activate routing (at most 8); absent = any 0x0E00..0x0FFF |
 | `activation_types` | array of integers |  | `[0x00]` |  | routing activation types served: 0x00, 0x01, 0xE1..0xFF (at most 4) |
 | `initial_inactivity_ms` | integer |  | `2000` | 100..60000 | T_TCP_Initial_Inactivity: time to activate after the TCP connect (ms); <= general_inactivity_ms |
@@ -518,12 +518,12 @@ A counter debounce counts results; a time debounce times them. Each kind takes o
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
 | `kind` | string |  | `"counter"` | `"counter"`, `"time"` | count results, or time them |
-| `fail` | integer |  | `1` | 0x1..0xFFFF | counter: the failed-result threshold |
-| `pass` | integer |  | `1` | 0x1..0xFFFF | counter: the passed-result threshold |
+| `fail` | integer |  | `1` | 1..65535 | counter: the failed-result threshold |
+| `pass` | integer |  | `1` | 1..65535 | counter: the passed-result threshold |
 | `fail_ms` | integer |  | — | 1..2147483 | time: how long it keeps failing before it is failed (ms; required) |
 | `pass_ms` | integer |  | — | 1..2147483 | time: how long it keeps passing before it is passed (ms; required) |
-| `inc` | integer |  | `1` | 0x1..0xFFFF | counter: the step per failed result |
-| `dec` | integer |  | `1` | 0x1..0xFFFF | counter: the step per passed result |
+| `inc` | integer |  | `1` | 1..65535 | counter: the step per failed result |
+| `dec` | integer |  | `1` | 1..65535 | counter: the step per passed result |
 | `jump` | boolean |  | — |  | counter: reset on a reversal ("N in a row"); default true when fail = 1, else it accumulates |
 
 <a id="ecu-param"></a>
@@ -540,7 +540,7 @@ A coded parameter (variant coding): a read-only FB input, coded with 0x2E on its
 | `range` | tables by name → [`[[param]] range`](#ecu-param-range) |  | — |  | per field, the values it may be coded to; absent = the type's |
 | `apply` | string |  | `"next_dispatch"` | `"next_dispatch"`, `"reset"` | when a coded value takes effect: the FB's next dispatch, or the next start |
 | `version` | integer |  | `0` | 0..255 | bump when a field's meaning changes but its type does not (stored values revert) |
-| `nvm_id` | integer |  | `0` | 0x0..0xFFFE | pins the journal block (0 = derived; only to resolve a reported collision) |
+| `nvm_id` | integer |  | `0` | 0..65534 | pins the journal block (0 = derived; only to resolve a reported collision) |
 
 <a id="ecu-param-range"></a>
 
@@ -746,7 +746,7 @@ A member ECU and its system-owned identities.
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
 | `address` | string |  | — |  | IPv4 dotted quad; unique per segment; a DoIP node needs a host address (not .0, .1 or .255) |
-| `port` | integer |  | — | 0x1..0xFFFF | the SOME/IP listen port (required on a someip bus; not 13400 on a DoIP node) |
+| `port` | integer |  | — | 1..65535 | the SOME/IP listen port (required on a someip bus; not 13400 on a DoIP node) |
 
 <a id="system-sys-doip"></a>
 
@@ -813,8 +813,8 @@ A SOME/IP event on a someip bus: its id, its signals and how it is sent. Lowerin
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
 | `data_id` | integer |  | — | 0x0..0xFFFF | the E2E Data ID (required) |
-| `counter_pos` | integer |  | `0` | 0x0..0xFFFF | the counter's byte offset in the payload |
-| `crc_pos` | integer |  | `0` | 0x0..0xFFFF | the CRC's byte offset in the payload |
+| `counter_pos` | integer |  | `0` | 0..65535 | the counter's byte offset in the payload |
+| `crc_pos` | integer |  | `0` | 0..65535 | the CRC's byte offset in the payload |
 | `timeout_ms` | integer |  | — | 1..2147483 | the receiver's sender-loss timeout (ms), longer than the cycle; required unless mode = "event" |
 
 <a id="system-sys-route"></a>

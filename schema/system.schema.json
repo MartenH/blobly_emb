@@ -25,7 +25,7 @@
         "dbc": {"type": "string", "description": "the bus's frame contract, relative to system.toml; required on a CAN bus carrying a [[signal]], refused on someip"},
         "service": {"type": "integer", "minimum": 0, "maximum": 65535, "description": "someip: the SOME/IP service id (required on a someip bus, refused on CAN)"},
         "version": {"type": "integer", "minimum": 0, "maximum": 255, "description": "someip: the interface version byte (required on a someip bus of a dissolved system, refused on CAN)"},
-        "nm": {"$ref": "#/definitions/sys_bus_nm", "description": "the bus's NM cluster (CAN only); without it a node's nm id generates a disabled [nm]"}
+        "nm": {"allOf": [{"$ref": "#/definitions/sys_bus_nm"}], "description": "the bus's NM cluster (CAN only); without it a node's nm id generates a disabled [nm]"}
       },
       "additionalProperties": false
     },
@@ -52,9 +52,9 @@
         "buses": {"type": "array", "items": {"type": "string"}, "description": "the system buses it sits on; more than one CAN bus makes it a [[route]] gateway Default: []."},
         "nm": {"type": "integer", "minimum": 0, "maximum": 255, "description": "its NM node id (alive = peers lo + nm); absent = not an NM node"},
         "trace": {"type": "integer", "description": "its trace node id, unique across the system (checked only, not generated)"},
-        "diag": {"$ref": "#/definitions/sys_diag", "description": "its ISO-TP diagnostic ids, unique across the system (checked only, not generated)"},
-        "endpoint": {"$ref": "#/definitions/sys_endpoint", "description": "its network identity: the address SOME/IP and DoIP answer at"},
-        "doip": {"$ref": "#/definitions/sys_doip", "description": "the node is a DoIP entity at its endpoint address (lowered into [doip]; dissolved systems only)"}
+        "diag": {"allOf": [{"$ref": "#/definitions/sys_diag"}], "description": "its ISO-TP diagnostic ids, unique across the system (checked only, not generated)"},
+        "endpoint": {"allOf": [{"$ref": "#/definitions/sys_endpoint"}], "description": "its network identity: the address SOME/IP and DoIP answer at"},
+        "doip": {"allOf": [{"$ref": "#/definitions/sys_doip"}], "description": "the node is a DoIP entity at its endpoint address (lowered into [doip]; dissolved systems only)"}
       },
       "additionalProperties": false
     },
@@ -116,8 +116,8 @@
         "bus": {"type": "string", "description": "the someip bus it is on"},
         "id": {"type": "integer", "minimum": 32768, "maximum": 65535, "description": "the SOME/IP event id (bit 15 set; methods own 0x0001..0x7FFF); unique per bus"},
         "signals": {"type": "array", "items": {"type": "string"}, "description": "its payload signals, in packing order; non-empty, all on the same bus"},
-        "tx": {"$ref": "#/definitions/sys_frame_tx", "description": "how the producer sends it; absent = cyclic every 100 ms"},
-        "e2e": {"$ref": "#/definitions/sys_frame_e2e", "description": "AUTOSAR E2E Profile 1 trailer"}
+        "tx": {"allOf": [{"$ref": "#/definitions/sys_frame_tx"}], "description": "how the producer sends it; absent = cyclic every 100 ms"},
+        "e2e": {"allOf": [{"$ref": "#/definitions/sys_frame_e2e"}], "description": "AUTOSAR E2E Profile 1 trailer"}
       },
       "additionalProperties": false
     },

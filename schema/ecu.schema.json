@@ -5,30 +5,30 @@
   "description": "blobly_emb ECU configuration: partitions, threads, Function Blocks, signals, buses and services of one node",
   "type": "object",
   "properties": {
-    "import": {"$ref": "#/definitions/import", "description": "the DBC the node's CAN signals come from"},
-    "telemetry": {"$ref": "#/definitions/telemetry", "description": "the CPU-load transmitter"},
-    "trace": {"$ref": "#/definitions/trace", "description": "the trace ring and its dump protocol (docs/telemetry.md)"},
-    "shell": {"$ref": "#/definitions/shell", "description": "the command shell over CAN or SOME/IP"},
-    "nm": {"$ref": "#/definitions/nm", "description": "network management: the module's endpoint bindings and timings"},
-    "nvm": {"$ref": "#/definitions/nvm", "description": "the NvM journal: persisted signals and its wear check (docs/nvm.md)"},
-    "target": {"$ref": "#/definitions/target", "description": "what the node is built for: host (absent), bare metal or ThreadX"},
-    "someip": {"$ref": "#/definitions/someip", "description": "the SOME/IP service identity and static endpoints (docs/someip.md)"},
+    "import": {"allOf": [{"$ref": "#/definitions/import"}], "description": "the DBC the node's CAN signals come from"},
+    "telemetry": {"allOf": [{"$ref": "#/definitions/telemetry"}], "description": "the CPU-load transmitter"},
+    "trace": {"allOf": [{"$ref": "#/definitions/trace"}], "description": "the trace ring and its dump protocol (docs/telemetry.md)"},
+    "shell": {"allOf": [{"$ref": "#/definitions/shell"}], "description": "the command shell over CAN or SOME/IP"},
+    "nm": {"allOf": [{"$ref": "#/definitions/nm"}], "description": "network management: the module's endpoint bindings and timings"},
+    "nvm": {"allOf": [{"$ref": "#/definitions/nvm"}], "description": "the NvM journal: persisted signals and its wear check (docs/nvm.md)"},
+    "target": {"allOf": [{"$ref": "#/definitions/target"}], "description": "what the node is built for: host (absent), bare metal or ThreadX"},
+    "someip": {"allOf": [{"$ref": "#/definitions/someip"}], "description": "the SOME/IP service identity and static endpoints (docs/someip.md)"},
     "bus": {"type": "object", "additionalProperties": {"$ref": "#/definitions/bus"}, "description": "the node's buses, one [bus.<name>] each; signals and frames name them"},
     "partition": {"type": "array", "items": {"$ref": "#/definitions/partition"}, "description": "memory-protection partitions, each pinned to a core with its threads"},
     "fb": {"type": "array", "items": {"$ref": "#/definitions/fb"}, "description": "Function Blocks: the application, scheduled on a thread"},
     "signal": {"type": "array", "items": {"$ref": "#/definitions/signal"}, "description": "typed signals between partitions and to/from buses"},
     "frame": {"type": "array", "items": {"$ref": "#/definitions/frame"}, "description": "per-frame COM settings: tx mode, rx deadline, E2E, SecOC (CAN), or a SOME/IP event (eth)"},
-    "isotp": {"$ref": "#/definitions/isotp", "description": "ISO 15765-2: the diagnostic server on CAN"},
-    "uds": {"$ref": "#/definitions/uds", "description": "ISO 14229: the node's one diagnostic server"},
-    "doip": {"$ref": "#/definitions/doip", "description": "the diagnostic server over DoIP too (ThreadX target)"},
-    "boot": {"$ref": "#/definitions/boot", "description": "the node runs behind the bootloader: 0x10 02 hands over to it (docs/bootloader.md)"},
-    "display": {"$ref": "#/definitions/display", "description": "a local screen: one more ThreadX thread (docs/display.md)"},
+    "isotp": {"allOf": [{"$ref": "#/definitions/isotp"}], "description": "ISO 15765-2: the diagnostic server on CAN"},
+    "uds": {"allOf": [{"$ref": "#/definitions/uds"}], "description": "ISO 14229: the node's one diagnostic server"},
+    "doip": {"allOf": [{"$ref": "#/definitions/doip"}], "description": "the diagnostic server over DoIP too (ThreadX target)"},
+    "boot": {"allOf": [{"$ref": "#/definitions/boot"}], "description": "the node runs behind the bootloader: 0x10 02 hands over to it (docs/bootloader.md)"},
+    "display": {"allOf": [{"$ref": "#/definitions/display"}], "description": "a local screen: one more ThreadX thread (docs/display.md)"},
     "did": {"type": "array", "items": {"$ref": "#/definitions/did"}, "description": "the server's data identifiers"},
     "fault": {"type": "array", "items": {"$ref": "#/definitions/fault"}, "description": "diagnostic faults and their DTCs (docs/diagnostics.md §3.3)"},
     "param": {"type": "array", "items": {"$ref": "#/definitions/param"}, "description": "coded parameters (docs/diagnostics.md §3.4)"},
-    "fault_memory": {"$ref": "#/definitions/fault_memory", "description": "the fault memory's operation cycle and snapshot entries"},
+    "fault_memory": {"allOf": [{"$ref": "#/definitions/fault_memory"}], "description": "the fault memory's operation cycle and snapshot entries"},
     "route": {"type": "array", "items": {"$ref": "#/definitions/route"}, "description": "gateway routes: raw frames or decoded signals between buses"},
-    "io": {"$ref": "#/definitions/io", "description": "physical IO points (docs/io.md)"},
+    "io": {"allOf": [{"$ref": "#/definitions/io"}], "description": "physical IO points (docs/io.md)"},
     "bulk": {"type": "array", "items": {"$ref": "#/definitions/bulk"}, "description": "bulk transport pools (docs/bulk-transport.md)"}
   },
   "additionalProperties": false,
@@ -70,7 +70,7 @@
         "rsp": {"type": ["integer", "string"], "default": 2019, "description": "the command response frame Default: 0x7E3."},
         "record": {"type": ["integer", "string"], "default": 2021, "description": "the dump stream frame (raw records, or ISO-TP blocks) Default: 0x7E5."},
         "dump_fc": {"type": ["integer", "string"], "default": 2022, "description": "the dump's ISO-TP flow control; binding it selects the block dump Default: 0x7E6."},
-        "trigger": {"$ref": "#/definitions/trigger", "description": "what freezes the ring; absent = no trigger"}
+        "trigger": {"allOf": [{"$ref": "#/definitions/trigger"}], "description": "what freezes the ring; absent = no trigger"}
       },
       "additionalProperties": false
     },
@@ -150,7 +150,7 @@
         "sector_records": {"type": "integer", "minimum": 8, "maximum": 1000000, "default": 4096, "description": "a journal sector in records (the wear check's geometry) Default: 4096."},
         "endurance": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 10000, "description": "flash erase cycles per sector Default: 10000."},
         "min_years": {"type": "integer", "minimum": 1, "maximum": 100, "default": 10, "description": "the lifetime the journal must reach at the assumed rates Default: 10."},
-        "assume": {"$ref": "#/definitions/nvm_assume", "description": "the vehicle's rates the wear check takes"}
+        "assume": {"allOf": [{"$ref": "#/definitions/nvm_assume"}], "description": "the vehicle's rates the wear check takes"}
       },
       "additionalProperties": false
     },
@@ -279,10 +279,10 @@
         "id": {"type": "integer", "minimum": 32768, "maximum": 65535, "description": "eth: the SOME/IP event id (required there; CAN ids come from the DBC)"},
         "signals": {"type": "array", "items": {"type": "string"}, "description": "eth: its member signals; the payload layout is derived from them"},
         "peer": {"type": "string", "description": "eth: this event's own address:port, when not [someip].peer"},
-        "tx": {"$ref": "#/definitions/tx", "description": "how it is sent"},
-        "rx": {"$ref": "#/definitions/rx", "description": "the receive deadline"},
-        "e2e": {"$ref": "#/definitions/e2e", "description": "AUTOSAR E2E Profile 1 (the DBC's E2E attributes otherwise)"},
-        "secoc": {"$ref": "#/definitions/secoc", "description": "SecOC: AES-CMAC (CAN only)"}
+        "tx": {"allOf": [{"$ref": "#/definitions/tx"}], "description": "how it is sent"},
+        "rx": {"allOf": [{"$ref": "#/definitions/rx"}], "description": "the receive deadline"},
+        "e2e": {"allOf": [{"$ref": "#/definitions/e2e"}], "description": "AUTOSAR E2E Profile 1 (the DBC's E2E attributes otherwise)"},
+        "secoc": {"allOf": [{"$ref": "#/definitions/secoc"}], "description": "SecOC: AES-CMAC (CAN only)"}
       },
       "required": ["name", "bus"],
       "additionalProperties": false
@@ -293,8 +293,8 @@
       "type": "object",
       "properties": {
         "mode": {"type": "string", "enum": ["cyclic", "event", "mixed", "triggered"], "default": "cyclic", "description": "periodic, on a change, both, or on an explicit trigger (eth: not triggered) Default: \"cyclic\"."},
-        "cycle_ms": {"type": "integer", "default": 100, "description": "the period of a cyclic or mixed frame (ms; CAN: a multiple of 10) Default: 100."},
-        "min_delay_ms": {"type": "integer", "default": 0, "description": "the least gap between two event sends (ms) Default: 0."}
+        "cycle_ms": {"type": "integer", "description": "the period of a cyclic or mixed frame (ms). Absent: CAN takes the DBC's GenMsgCycleTime, else 100, in multiples of 10; eth takes 100, within 1..1000000"},
+        "min_delay_ms": {"type": "integer", "default": 0, "description": "the least gap between two event sends (ms; eth: 0..1000000) Default: 0."}
       },
       "additionalProperties": false
     },
@@ -377,7 +377,7 @@
       "properties": {
         "address": {"type": "string", "description": "the node's static IPv4 address — a host on its /24 (not .0, .1 or .255)"},
         "logical_address": {"type": "integer", "description": "the entity's logical address (0x0001..0x0DFF or 0x1000..0x7FFF); unique"},
-        "functional_address": {"type": "integer", "minimum": 58368, "maximum": 61439, "default": 58368, "description": "the functional address it also answers Default: 0xE400."},
+        "functional_address": {"type": "integer", "anyOf": [{"const": 0}, {"minimum": 58368, "maximum": 61439}], "default": 58368, "description": "the functional address it also answers Default: 0xE400."},
         "testers": {"type": "array", "items": {"type": "integer", "minimum": 3584, "maximum": 4095}, "description": "tester addresses allowed to activate routing (at most 8); absent = any 0x0E00..0x0FFF"},
         "activation_types": {"type": "array", "items": {"type": "integer"}, "description": "routing activation types served: 0x00, 0x01, 0xE1..0xFF (at most 4) Default: [0x00]."},
         "initial_inactivity_ms": {"type": "integer", "minimum": 100, "maximum": 60000, "default": 2000, "description": "T_TCP_Initial_Inactivity: time to activate after the TCP connect (ms); <= general_inactivity_ms Default: 2000."},
@@ -423,8 +423,8 @@
         "param": {"type": "string", "description": "the [[param]] this DID codes (0x2E) and reads back (0x22)"},
         "param_status": {"type": "boolean", "default": false, "description": "one byte per [[param]]: 0 default / 1 coded / 2 reverted Default: false."},
         "tx_saturations": {"type": "boolean", "default": false, "description": "the count of sent values saturated to their DBC range since start (u32 BE) Default: false."},
-        "read": {"$ref": "#/definitions/did_access", "description": "the 0x22 gate; absent = every session, no security"},
-        "write": {"$ref": "#/definitions/did_access", "description": "the 0x2E gate (makes the DID writable); absent = every session, no security"}
+        "read": {"allOf": [{"$ref": "#/definitions/did_access"}], "description": "the 0x22 gate; absent = every session, no security"},
+        "write": {"allOf": [{"$ref": "#/definitions/did_access"}], "description": "the 0x2E gate (makes the DID writable); absent = every session, no security"}
       },
       "required": ["id"],
       "additionalProperties": false
@@ -449,7 +449,7 @@
         "from": {"type": "string", "description": "\"Fb.handler\" — the handler that tests it (or `signal` + `on` for a signal-status fault)"},
         "signal": {"type": "string", "description": "a signal-status fault: the received signal whose rx status the bridge watches"},
         "on": {"type": "string", "enum": ["timeout", "integrity", "lost"], "description": "a signal-status fault: the rx status that counts as failed"},
-        "debounce": {"$ref": "#/definitions/fault_debounce", "description": "how test results become failed / passed; absent = counter, fail 1, pass 1"},
+        "debounce": {"allOf": [{"$ref": "#/definitions/fault_debounce"}], "description": "how test results become failed / passed; absent = counter, fail 1, pass 1"},
         "enable": {"type": "array", "items": {"type": "string"}, "description": "\"Signal.field\" bool conditions (read by the handler) that must hold for a result to count Default: []."},
         "confirm": {"type": "integer", "minimum": 1, "maximum": 255, "default": 1, "description": "failed operation cycles to confirm the DTC Default: 1."},
         "aging": {"type": "integer", "minimum": 0, "maximum": 255, "default": 0, "description": "passing cycles before a confirmed DTC ages out (0 = never) Default: 0."},
@@ -519,8 +519,8 @@
       "type": "object",
       "properties": {
         "signal": {"type": "string", "description": "a SIGNAL route: decode it on `from`, re-encode it into `to`; absent = a raw frame route"},
-        "from": {"$ref": "#/definitions/route_from", "description": "the source"},
-        "to": {"$ref": "#/definitions/route_to", "description": "the destination"}
+        "from": {"allOf": [{"$ref": "#/definitions/route_from"}], "description": "the source"},
+        "to": {"allOf": [{"$ref": "#/definitions/route_to"}], "description": "the destination"}
       },
       "required": ["from", "to"],
       "additionalProperties": false

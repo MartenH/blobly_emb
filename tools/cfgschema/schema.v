@@ -44,7 +44,12 @@ pub:
 	max      i64
 	ranged   bool // min..max applies (an integer, or an integer array's elements)
 	open_max bool // only the minimum bounds it (max is meaningless)
-	desc     string
+	or_zero  bool // 0 is accepted beside the range ("0 = the default")
+	hex      bool // the value is an id or an address: written in hex
+	// own_check: the value is judged by a leaf check that ecucheck also runs (ecumodel.validate),
+	// with the context its message needs; the walk leaves it alone so it is said once
+	own_check bool
+	desc      string
 }
 
 // Table is one context: a section of the file, or a sub-table inside one.
@@ -135,6 +140,30 @@ fn (k Key) at_least(lo i64) Key {
 	}
 }
 
+// or_zero: 0 is accepted too, meaning the default
+fn (k Key) or_zero() Key {
+	return Key{
+		...k
+		or_zero: true
+	}
+}
+
+// hex: an id or an address, written in hex in the reference
+fn (k Key) hex() Key {
+	return Key{
+		...k
+		hex: true
+	}
+}
+
+// own_check: ecumodel.validate judges the value (see Key.own_check)
+fn (k Key) own_check() Key {
+	return Key{
+		...k
+		own_check: true
+	}
+}
+
 fn (k Key) doc(s string) Key {
 	return Key{
 		...k
@@ -186,15 +215,23 @@ pub fn (t Table) names() []string {
 
 // in_range: v lies within the key's range (a key with no range takes everything)
 pub fn (k Key) in_range(v i64) bool {
-	return !k.ranged || (v >= k.min && v <= k.max)
+	return !k.ranged || (v >= k.min && v <= k.max) || (k.or_zero && v == 0)
 }
 
-// ---- the structural walk: unknown keys, types, required keys ----
+// default_int: the default of an integer row, for a reader that takes its default from the schema
+pub fn (k Key) default_int() i64 {
+	if k.typ != .int || k.def == '' {
+		panic('cfgschema: "${k.name}" has no integer default')
+	}
+	return k.def.replace('_', '').i64()
+}
+
+// ---- the structural walk: unknown keys, types, required keys, values ----
 
 // check validates a parsed document against the schema from its root — unknown keys (with a "did
-// you mean"), wrong types, missing required keys — and returns every problem, in document order.
-// Leaf VALUES (ranges, enumerations) are not judged here: they are the checks that read their
-// bounds with key(), each with the context its message needs.
+// you mean"), wrong types, missing required keys, and a value outside its row's enumeration or
+// range — and returns every problem, in document order. A row marked own_check is judged by
+// ecumodel.validate instead (which ecucheck also runs), so its refusal is said once, with context.
 pub fn (s Schema) check(m map[string]toml.Any) []string {
 	mut errs := []string{}
 	s.check_table(m, s.root, mut errs)
@@ -219,6 +256,9 @@ fn (s Schema) check_table(m map[string]toml.Any, ctx string, mut errs []string) 
 		if !type_ok(v, key.typ) {
 			errs << '${t.label} "${name}": expected ${type_name(key.typ)}, got ${actual(v)}'
 			continue
+		}
+		if !key.own_check {
+			errs << value_errors(t.label, key, v)
 		}
 		match key.typ {
 			.tbl {
@@ -262,6 +302,27 @@ fn (s Schema) check_table(m map[string]toml.Any, ctx string, mut errs []string) 
 			errs << '${t.label}: missing required key "${key.name}"'
 		}
 	}
+}
+
+// value_errors: a value (of the right type) outside its row's enumeration or range
+fn value_errors(label string, key Key, v toml.Any) []string {
+	mut errs := []string{}
+	mut vals := []toml.Any{}
+	if v is []toml.Any {
+		vals = v.clone()
+	} else {
+		vals << v
+	}
+	for e in vals {
+		if key.choices.len > 0 && e is string && e !in key.choices {
+			one_of := key.choices.map('"' + it + '"').join(', ')
+			errs << '${label} "${key.name}": "${e}" is not one of ${one_of}'
+		}
+		if key.ranged && e is i64 && !key.in_range(e) {
+			errs << '${label} "${key.name}": ${num(key, e)} is outside ${allowed(key)}'
+		}
+	}
+	return errs
 }
 
 // unknown: the keys of `m` that table `ctx` does not name (a table-valued key passes where the

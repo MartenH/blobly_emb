@@ -119,24 +119,18 @@ pub fn allowed(k Key) string {
 	if k.open_max {
 		return '>= ${k.min}'
 	}
+	if k.ranged && k.or_zero {
+		return '0, or ${num(k, k.min)}..${num(k, k.max)}'
+	}
 	if k.ranged {
 		return '${num(k, k.min)}..${num(k, k.max)}'
 	}
 	return ''
 }
 
-// num: an integer bound in the base its field is written in (an id or an address in hex)
+// num: an integer in the base its field is written in (an id or an address in hex)
 fn num(k Key, v i64) string {
-	if k.max > 0xFF && hexish(k.max) {
-		return '0x${v:X}'
-	}
-	return '${v}'
-}
-
-// hexish: a bound that is a run of ones or ends in F (0x7FF, 0xFFFF, 0xEFFF) — an id or an
-// address, written in hex; a decimal limit (1000000, 4096) is written as it is
-fn hexish(v i64) bool {
-	return (v & (v + 1)) == 0 || (v & 0xF) == 0xF || (v & 0xF) == 0xE
+	return if k.hex { '0x${v:X}' } else { '${v}' }
 }
 
 fn md_escape(s string) string {
@@ -225,7 +219,9 @@ fn key_json(k Key) string {
 			f << '"items": ${ref(k.sub)}'
 		}
 		.tbl {
-			f << '"\$ref": "#/definitions/${k.sub}"'
+			// draft-07 ignores every sibling of a $ref, so the reference goes in an allOf and this
+			// key's own description and default stay visible to the editor
+			f << '"allOf": [${ref(k.sub)}]'
 		}
 		.str_arr {
 			f << '"type": "array"'
@@ -237,10 +233,7 @@ fn key_json(k Key) string {
 		}
 		.int_arr {
 			f << '"type": "array"'
-			inner := ['"type": "integer"'].filter(it != '')
-			mut items := inner.clone()
-			items << bounds(k)
-			f << '"items": {${items.filter(it != '').join(', ')}}'
+			f << '"items": {${['"type": "integer"', bounds(k)].filter(it != '').join(', ')}}'
 		}
 		.id_range {
 			f << '"type": "array"'
@@ -280,6 +273,9 @@ fn bounds(k Key) string {
 	}
 	if k.open_max {
 		return '"minimum": ${k.min}'
+	}
+	if k.or_zero {
+		return '"anyOf": [{"const": 0}, {"minimum": ${k.min}, "maximum": ${k.max}}]'
 	}
 	return '"minimum": ${k.min}, "maximum": ${k.max}'
 }

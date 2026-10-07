@@ -14,6 +14,7 @@
 module main
 
 import toml
+import tools.cfgschema
 import comm.fault
 import comm.param
 
@@ -28,8 +29,8 @@ mut:
 	declared []string // the keys the configuration states (the rest are the defaults)
 }
 
-const wear_assume_keys = ['cycles_per_day', 'resets_per_day', 'clears_per_day',
-	'setting_changes_per_day', 'codings_per_day']
+// the [nvm.assume] keys: the schema's (tools/cfgschema)
+const wear_assume_keys = cfgschema.ecu.table('nvm_assume').names()
 
 // parse_wear_assume: [nvm.assume], each key a bounded non-negative integer per day.
 fn parse_wear_assume(nm map[string]toml.Any) WearAssume {

@@ -26,7 +26,7 @@ fn system_schema() Schema {
 				k('fd', .boolean).d('false').doc("CAN-FD; in a composed system it must equal each member's own [bus] fd"),
 				k('bitrate', .int).doc('nominal bitrate in bit/s — informational: syscheck prints it, nothing is generated from it'),
 				k('dbc', .str).doc("the bus's frame contract, relative to system.toml; required on a CAN bus carrying a [[signal]], refused on someip"),
-				k('service', .int).range(0, 0xFFFF).doc('someip: the SOME/IP service id (required on a someip bus, refused on CAN)'),
+				k('service', .int).range(0, 0xFFFF).hex().doc('someip: the SOME/IP service id (required on a someip bus, refused on CAN)'),
 				k('version', .int).range(0, 0xFF).doc('someip: the interface version byte (required on a someip bus of a dissolved system, refused on CAN)'),
 				sub('nm', .tbl, 'sys_bus_nm').doc("the bus's NM cluster (CAN only); without it a node's nm id generates a disabled [nm]"),
 			]),
@@ -67,7 +67,7 @@ fn system_schema() Schema {
 			tbl('sys_frame', '[[frame]]', 'A SOME/IP event on a someip bus: its id, its signals and how it is sent. Lowering copies only what it recognises, so an unknown key is refused.', [
 				k('name', .str).doc('the event name; unique per bus'),
 				k('bus', .str).doc('the someip bus it is on'),
-				k('id', .int).range(0x8000, 0xFFFF).doc('the SOME/IP event id (bit 15 set; methods own 0x0001..0x7FFF); unique per bus'),
+				k('id', .int).range(0x8000, 0xFFFF).hex().doc('the SOME/IP event id (bit 15 set; methods own 0x0001..0x7FFF); unique per bus'),
 				k('signals', .str_arr).doc('its payload signals, in packing order; non-empty, all on the same bus'),
 				sub('tx', .tbl, 'sys_frame_tx').doc('how the producer sends it; absent = cyclic every 100 ms'),
 				sub('e2e', .tbl, 'sys_frame_e2e').doc('AUTOSAR E2E Profile 1 trailer'),
@@ -78,7 +78,7 @@ fn system_schema() Schema {
 				k('min_delay_ms', .int).d('0').range(0, 1_000_000).doc('the least gap between two event sends (ms)'),
 			]),
 			tbl('sys_frame_e2e', '[[frame]] e2e', '', [
-				k('data_id', .int).range(0, 0xFFFF).doc('the E2E Data ID (required)'),
+				k('data_id', .int).range(0, 0xFFFF).hex().doc('the E2E Data ID (required)'),
 				k('counter_pos', .int).d('0').range(0, 0xFFFF).doc("the counter's byte offset in the payload"),
 				k('crc_pos', .int).d('0').range(0, 0xFFFF).doc("the CRC's byte offset in the payload"),
 				k('timeout_ms', .int).range(1, 2147483).doc('the receiver\'s sender-loss timeout (ms), longer than the cycle; required unless mode = "event"'),
@@ -106,14 +106,14 @@ pub fn eth_tx_modes() []string {
 fn doip_entity_keys(logical string, functional string) []Key {
 	mut keys := []Key{}
 	keys << k(logical, .int).doc("the entity's logical address (0x0001..0x0DFF or 0x1000..0x7FFF); unique")
-	keys << k(functional, .int).d('0xE400').range(0xE400, 0xEFFF).doc('the functional address it also answers')
+	keys << k(functional, .int).d('0xE400').range(0xE400, 0xEFFF).hex().doc('the functional address it also answers')
 	keys << doip_policy_keys()
 	return keys
 }
 
 fn doip_policy_keys() []Key {
 	return [
-		k('testers', .int_arr).range(doip.tester_first, doip.tester_last).doc('tester addresses allowed to activate routing (at most ${doip.max_testers}); absent = any 0x0E00..0x0FFF'),
+		k('testers', .int_arr).range(doip.tester_first, doip.tester_last).hex().doc('tester addresses allowed to activate routing (at most ${doip.max_testers}); absent = any 0x0E00..0x0FFF'),
 		k('activation_types', .int_arr).d('[0x00]').doc('routing activation types served: 0x00, 0x01, 0xE1..0xFF (at most ${doip.max_act_types})'),
 		k('initial_inactivity_ms', .int).d('${doip.initial_inactivity_ms}').range(doip.initial_inactivity_min_ms, doip.initial_inactivity_max_ms).doc('T_TCP_Initial_Inactivity: time to activate after the TCP connect (ms); <= general_inactivity_ms'),
 		k('general_inactivity_ms', .int).d('${doip.general_inactivity_ms}').range(doip.general_inactivity_min_ms, doip.general_inactivity_max_ms).doc('T_TCP_General_Inactivity: idle timeout once activated (ms)'),

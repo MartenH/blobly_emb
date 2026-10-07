@@ -10,16 +10,16 @@ fn ecu_diag_tables() []Table {
 	return [
 		tbl('isotp', '[isotp]', "The diagnostic server's ISO 15765-2 connection on CAN (docs/diagnostics.md).", [
 			req('bus', .str).doc('the CAN bus ([bus.*] name) the connection runs on'),
-			req('rx_id', .int).range(0, 0x7FF).doc('the CAN id physical requests arrive on (11-bit)'),
-			req('tx_id', .int).range(0, 0x7FF).doc('the CAN id responses are sent on (11-bit)'),
+			req('rx_id', .int).range(0, 0x7FF).hex().doc('the CAN id physical requests arrive on (11-bit)'),
+			req('tx_id', .int).range(0, 0x7FF).hex().doc('the CAN id responses are sent on (11-bit)'),
 			k('bs', .int).d('0').doc('the block size granted in our Flow Control (0 = the whole message at once)'),
 			k('stmin_ms', .int).d('0').doc('the STmin (ms) we ask a sender to keep between consecutive frames'),
-			k('functional_id', .int).range(0, 0x7FF).doc('the functional (broadcast) request id, e.g. 0x7DF, single frames only; absent = none'),
+			k('functional_id', .int).range(0, 0x7FF).hex().doc('the functional (broadcast) request id, e.g. 0x7DF, single frames only; absent = none'),
 		]),
 		tbl('uds', '[uds]', "The node's one ISO 14229 diagnostic server: session and security timing, the 0x27 key, the service table.", [
-			k('s3_ms', .int).d('5000').doc('the session timeout back to the default session (ms; 0 = the default)'),
+			k('s3_ms', .int).d('${uds.default_s3_us / 1000}').doc('the session timeout back to the default session (ms; 0 = the default)'),
 			k('security_attempts', .int).d('${uds.default_sa_attempts}').range(0, 255).doc('wrong 0x27 keys before the lockout (0 = the default)'),
-			k('security_delay_ms', .int).d('10000').doc('the 0x27 lockout delay after too many wrong keys (ms; 0 = the default)'),
+			k('security_delay_ms', .int).d('${uds.default_sa_delay_us / 1000}').doc('the 0x27 lockout delay after too many wrong keys (ms; 0 = the default)'),
 			k('security_key', .str).one_of(['reference']).doc('"reference" = blobly_net\'s PUBLIC bench key (a target); absent = the OEM\'s diag_sa_key_ok'),
 			sub('services', .namedmap, 'uds_service').doc('the service table, "0xSID" = { ... } ("0x10 02": the [boot] handoff); absent = every service the build performs'),
 		]),
@@ -29,7 +29,7 @@ fn ecu_diag_tables() []Table {
 		]),
 		tbl('doip', '[doip]', "The diagnostic server over DoIP (ISO 13400) too — ThreadX target; one parser for this and a system node's `doip` (tools/doipcfg).", doip_ecu_keys()),
 		tbl('did', '[[did]]', 'A data identifier the server reads (0x22) and may write (0x2E). Its value is ONE of: `ascii` / `bytes` (a constant), `signal` (live), `param` (a coded [[param]]), `param_status`, `tx_saturations`.', [
-			req('id', .int).range(0, 0xFFFF).doc('the 16-bit data identifier (0 is skipped)'),
+			req('id', .int).range(0, 0xFFFF).hex().doc('the 16-bit data identifier (0 is skipped)'),
 			k('ascii', .str).doc('a constant value as an ASCII string (at most ${uds.max_did_data} bytes)'),
 			k('bytes', .str).doc('a constant value as space-separated hex bytes (at most ${uds.max_did_data})'),
 			k('writable', .boolean).d('false').doc("0x2E may overwrite the constant's RAM copy (implied by `write`)"),
@@ -59,7 +59,7 @@ fn ecu_diag_tables() []Table {
 		]),
 		tbl('fault', '[[fault]]', 'A diagnostic fault: a DTC, the test that sets it and how its results are debounced, confirmed and aged (docs/diagnostics.md §3.3).', [
 			req('name', .str).doc("PascalCase, unique; a field of the testing FB's Faults struct"),
-			req('dtc', .int).range(1, 0xFFFFFF).doc('the 3-byte DTC 0x19 reports; unique per server'),
+			req('dtc', .int).range(1, 0xFFFFFF).hex().doc('the 3-byte DTC 0x19 reports; unique per server'),
 			k('from', .str).doc('"Fb.handler" — the handler that tests it (or `signal` + `on` for a signal-status fault)'),
 			k('signal', .str).doc('a signal-status fault: the received signal whose rx status the bridge watches'),
 			k('on', .str).one_of(['timeout', 'integrity', 'lost']).doc('a signal-status fault: the rx status that counts as failed'),
@@ -70,7 +70,7 @@ fn ecu_diag_tables() []Table {
 			k('freeze', .int_arr).d('[]').doc('the snapshot: [[did]] ids captured at the failure, 0x19 04 (at most ${fault.max_freeze})'),
 			k('priority', .int).d('128').range(1, 255).doc('displacement when the snapshot entries are full: 1 (most important) .. 255'),
 			k('snapshot_id', .int).doc('retired: refused, with the move to `snapshot_ids`'),
-			k('snapshot_ids', .int_arr).range(1, 0xFFFE).doc("pins the snapshot's two journal blocks [A, B] (only to resolve a reported collision)"),
+			k('snapshot_ids', .int_arr).range(1, 0xFFFE).hex().doc("pins the snapshot's two journal blocks [A, B] (only to resolve a reported collision)"),
 		]),
 		tbl('fault_debounce', '[[fault]] debounce', 'A counter debounce counts results; a time debounce times them. Each kind takes only its own keys.', [
 			k('kind', .str).d('"counter"').one_of(['counter', 'time']).doc('count results, or time them'),
@@ -101,7 +101,11 @@ fn doip_ecu_keys() []Key {
 		req('address', .str).doc("the node's static IPv4 address — a host on its /24 (not .0, .1 or .255)"),
 	]
 	for key in doip_entity_keys('logical_address', 'functional_address') {
-		keys << if key.name == 'logical_address' { key.required() } else { key }
+		keys << match key.name {
+			'logical_address' { key.required() }
+			'functional_address' { key.or_zero() } // [doip] reads 0 as the default
+			else { key }
+		}
 	}
 	return keys
 }

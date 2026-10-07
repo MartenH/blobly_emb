@@ -4,10 +4,12 @@
 
 [[rule]]
 include = ["**/ecu.toml", "**/gen-*.toml"]
+exclude = ["requirements/**"]  # requirements/ecu.toml and system.toml are [[req]] documents
 [rule.schema]
 path = "./schema/ecu.schema.json"
 
 [[rule]]
 include = ["**/system.toml"]
+exclude = ["requirements/**"]
 [rule.schema]
 path = "./schema/system.schema.json"
