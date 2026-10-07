@@ -23,13 +23,18 @@
 #     a repo module it compiles in (driver/doipnet where it imports it), a header it includes
 #     (the board's bootmap.h where it reads one, and the forced board.h), or the rule that records
 #     it, leaves it out of date; so does another flag (MCU, and DEBUG=1 where the Makefile has
-#     one), while the unchanged command leaves it up to date — each asked of make, apps and
-#     bootloaders alike, and of one object of each archive, which another record filter
-#     (tools/tools.mk c_unpinned) leaves stale too.
+#     one), and so does a change of whitespace inside a quoted argument (a signature is compared as
+#     written, never stripped), while the unchanged command leaves it up to date — each asked of
+#     make, apps and bootloaders alike, and of one object of each archive, which another record
+#     filter (tools/tools.mk c_unpinned) leaves stale too; and each archive is stale on another ar
+#     command or another c_archive, its objects held old (and the objects current on another
+#     c_archive); each generated C is stale on a V define that differs only in its whitespace.
 # Run after the cross builds (the CI cross job does); exits 1 on a stale dependency.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 fail=0
+# c_archive as tools/tools.mk defines it, with one more (harmless) step: another archive rule
+other_archive='c_archive=$(call c_signed,$(1))$(1) $@ $(filter-out %.sig,$^) && :'
 tmpf=$(mktemp) || exit 1
 # A what-if with another flag rewrites the signatures make reads (tools/tools.mk c_sign writes one
 # whenever it differs), and writing the old text back would make it NEWER than what it signs: keep
@@ -61,17 +66,34 @@ ask() {
 # out of date / up to date, each false when make could not answer (ask reports that, and fails)
 stale() { local a; a=$(ask "$@"); [ "$a" = none ] && fail=1; [ "$a" = stale ]; }
 current() { local a; a=$(ask "$@"); [ "$a" = none ] && fail=1; [ "$a" = current ]; }
+# A signature is compared as written (tools/tools.mk tool_signed): <one> on the command, signed and
+# dated back as if <dir> <target> had been built with it, leaves the target current, and <two> — the
+# same but for the whitespace inside a string literal — leaves it out of date (a stripped signature
+# read the two as one). <vars> carry the value onto the command; <sig> is the target's signature.
+# Asked inside a sigs_keep window.
+quoted_ws() {
+	local d=$1 t=$2 sig=$3 one=$4 two=$5 vars=$6; shift 6
+	local a1=() a2=() v
+	for v in $vars; do a1+=("$v=$one"); a2+=("$v=$two"); done
+	ask "$d" "$t" "$@" "${a1[@]}" >/dev/null
+	[ -f "$sig.keep" ] || { echo "app_deps_check: $d/$t has no signature $sig to date back"; fail=1; return; }
+	touch -r "$sig.keep" "$sig"
+	current "$d" "$t" "$@" "${a1[@]}" || { echo "app_deps_check: $d/$t is not up to date with its signature dated back to it"; fail=1; }
+	stale "$d" "$t" "$@" "${a2[@]}" || { echo "app_deps_check: $d/$t ignores a change of whitespace inside a quoted argument"; fail=1; }
+}
 # another flag leaves <dir> <target> out of date: MCU (MCU_CM4 on a CM4 image; on every compile
-# line), DEBUG=1 where the Makefile reads one; the signatures are restored after, and the target
-# is current again. Asked of a target just built, before any -W what-if: one of tools.mk remakes
-# the generators, and with them the generated headers the target reads.
+# line), DEBUG=1 where the Makefile reads one, and a string-literal define that differs only in its
+# whitespace (quoted_ws, <sig> the target's signature); the signatures are restored after, and the
+# target is current again. Asked of a target just built, before any -W what-if: one of tools.mk
+# remakes the generators, and with them the generated headers the target reads.
 flags_check() {
-	local d=$1 t=$2; shift 2
+	local d=$1 t=$2 sig=$3; shift 3
 	sigs_keep "$d"
 	stale "$d" "$t" "$@" MCU=-DAPP_DEPS_CHECK MCU_CM4=-DAPP_DEPS_CHECK || { echo "app_deps_check: $d/$t ignores a change of compile flags (MCU), or make could not say"; fail=1; }
 	if grep -qF 'ifeq ($(DEBUG),1)' "$d/Makefile"; then
 		stale "$d" "$t" "$@" DEBUG=1 || { echo "app_deps_check: $d/$t ignores DEBUG=1, or make could not say"; fail=1; }
 	fi
+	quoted_ws "$d" "$t" "$sig" '-DAPP_DEPS_CHECK="\"a b\""' '-DAPP_DEPS_CHECK="\"a  b\""' "MCU MCU_CM4" "$@"
 	sigs_back
 	current "$d" "$t" "$@" || { echo "app_deps_check: $d/$t is not up to date with its signatures restored"; fail=1; }
 }
@@ -118,6 +140,10 @@ for mk in examples/*/Makefile examples/*/nodes/*/Makefile; do
 			fail=1
 		fi
 		make -C "$d" "$rel" >/dev/null 2>&1 || { echo "app_deps_check: $c rebuild failed"; fail=1; }
+		# and its signature is compared as written: a define's whitespace leaves the C out of date
+		sigs_keep "$d"
+		quoted_ws "$d" "$rel" "$c.sig" '-d app_deps_check="a b"' '-d app_deps_check="a  b"' "LOOM_VDEFS VDBG BOOT_VDEFS"
+		sigs_back
 		# a repo module it compiles in: the shared DoIP loop where it imports it, else the first one
 		src=$(grep -m1 'driver/doipnet/doipnet.v' "$c.files" || grep -m1 -E '^\./(comm|loom|driver|boot|bcrypto|nvm)/' "$c.files")
 		[ -n "$src" ] || { echo "app_deps_check: $c compiles in no repo module?"; fail=1; continue; }
@@ -136,7 +162,7 @@ for mk in examples/*/Makefile examples/*/nodes/*/Makefile; do
 			fi
 			make -C "$d" "$rel" >/dev/null 2>&1 || { echo "app_deps_check: $c rebuild failed"; fail=1; }
 		done
-		echo "app_deps_check: $c ok (${src#./}, the rule)"
+		echo "app_deps_check: $c ok (${src#./}, the rule, quoted whitespace)"
 	done
 done
 
@@ -238,21 +264,28 @@ for mk in $cmks; do
 		make -C "$d" "$o" >/dev/null 2>&1 && [ -f "$d/$o.d" ] || { echo "app_deps_check: $d/$o did not rebuild its record"; fail=1; continue; }
 		bh=$(grep -m1 -E '(^|/)board\.h:$' "$d/$o.d" | sed 's/:$//')
 		[ -n "$bh" ] || { echo "app_deps_check: $d/$o's record does not name the forced board.h"; fail=1; continue; }
-		flags_check "$d" "$o"
+		flags_check "$d" "$o" "$d/build/$a.sig"
 		# how c_object records it is part of its signature: another record filter leaves it stale
 		sigs_keep "$d"
 		stale "$d" "$o" c_unpinned=cat || { echo "app_deps_check: $d/$o ignores a change to how its record is written (c_unpinned)"; fail=1; }
 		sigs_back
 		stale "$d" "$o" -W "$bh" || { echo "app_deps_check: an edit to $bh leaves $d/$o up to date"; fail=1; }
-		# and the archive is made by a signed command too (tools/tools.mk c_archive)
+		# and the archive is made by a signed command too (tools/tools.mk c_archive) — the ar command
+		# and c_archive's own text, asked with its objects held old (-o), so only its OWN signature
+		# answers
 		if [ -f "$d/build/$a.a" ]; then
 			make -C "$d" "build/$a.a" >/dev/null 2>&1 || { echo "app_deps_check: $d/build/$a.a does not build"; fail=1; continue; }
+			objs=()
+			while read -r f; do objs+=(-o "$f"); done < <(cd "$d" && find "build/$a" -name '*.o')
 			sigs_keep "$d"
-			stale "$d" "build/$a.a" 'AR_CMD=$(AR) -rcs' || { echo "app_deps_check: $d/build/$a.a ignores a change of its ar command"; fail=1; }
+			stale "$d" "build/$a.a" "${objs[@]}" 'AR_CMD=$(AR) -rcs' || { echo "app_deps_check: $d/build/$a.a ignores a change of its ar command"; fail=1; }
+			stale "$d" "build/$a.a" "${objs[@]}" "$other_archive" || { echo "app_deps_check: $d/build/$a.a ignores a change of c_archive"; fail=1; }
+			# which signs the archive alone: its objects are not compiled by it
+			current "$d" "$o" "$other_archive" || { echo "app_deps_check: a change of c_archive leaves $d/$o out of date"; fail=1; }
 			sigs_back
 			current "$d" "build/$a.a" || { echo "app_deps_check: $d/build/$a.a is not up to date with its signatures restored"; fail=1; }
 		fi
-		echo "app_deps_check: $d/$o ok (board.h, the flags, the record filter, the archive command)"
+		echo "app_deps_check: $d/$o ok (board.h, the flags, quoted whitespace, the record filter, the archive command, c_archive)"
 	done
 	for t in "$d"/build/*.elf "$d"/build/app.o "$d"/build/boot/boot.elf; do
 		[ -f "$t" ] || continue
@@ -291,7 +324,7 @@ for mk in $cmks; do
 		for a in build/tx.a build/nx.a build/lvgl.a; do
 			[ -f "$d/$a" ] && held+=(-o "$a")
 		done
-		flags_check "$d" "$rel" "${held[@]}"
+		flags_check "$d" "$rel" "$t.sig" "${held[@]}"
 		for h in $bm $bh $rule; do
 			make -C "$d" -q "${old[@]}" -W "$h" "$rel" >/dev/null 2>&1
 			case $? in
@@ -300,7 +333,7 @@ for mk in $cmks; do
 				*) echo "app_deps_check: make could not answer for $t with $h edited"; fail=1 ;;
 			esac
 		done
-		echo "app_deps_check: $t ok (${bm:+$(basename "$bm"), }$(basename "$bh"), the rule, the flags)"
+		echo "app_deps_check: $t ok (${bm:+$(basename "$bm"), }$(basename "$bh"), the rule, the flags, quoted whitespace)"
 	done
 done
 exit $fail

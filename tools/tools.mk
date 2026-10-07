@@ -82,10 +82,12 @@ v_unrecorded = $(if $(wildcard $(1).d),,v-unrecorded)
 # <target>.sig, rewritten while make reads the Makefile and only when it differs, and names it as
 # a prerequisite: a changed define or compiler remakes the C. The rule's recipe runs V with the
 # same <flags>, so the signature is what was actually run.
-v_sigtext = $(strip $(V) | $(TOOL_V_PATH) | $(TOOL_V_VERSION) | $(1) | $(VFLAGS))
+v_sigtext = $(V) | $(TOOL_V_PATH) | $(TOOL_V_VERSION) | $(1) | $(VFLAGS)
 v_sign = $(call tool_signed,$(1),$(call v_sigtext,$(2)))
-# <stem>.sig holding <text>: rewritten only when it differs, so an unchanged signature keeps its age
-tool_signed = $(if $(call tool_same,$(2),$(strip $(if $(wildcard $(1).sig),$(file <$(1).sig)))),,$(shell mkdir -p $(dir $(1)))$(file >$(1).sig,$(2)))$(1).sig
+# <stem>.sig holding <text>: rewritten only when it differs, so an unchanged signature keeps its age.
+# Compared as written, never stripped: strip collapses the whitespace inside a quoted argument
+# (-DMSG='"a b"' and '"a  b"' are two programs), so neither a signature's text nor its reading is.
+tool_signed = $(if $(call tool_holds,$(2),$(if $(wildcard $(1).sig),$(file <$(1).sig))),,$(shell mkdir -p $(dir $(1)))$(file >$(1).sig,$(2)))$(1).sig
 .PHONY: v-unrecorded
 v-unrecorded: ;
 # a signature is written while make reads the Makefile; never made on its own, and never deleted
@@ -139,14 +141,17 @@ c-unrecorded: ;
 # would be and reports the compiler behind it. Asked once per make (once per value of CC and AR).
 # A C rule's command runs $(CC) — or, for an archive, $(AR).
 c_toolid = $(if $(call tool_same,x$(CC) | $(AR),$(C_TOOLID_FOR)),,$(eval C_TOOLID_FOR := x$$(CC) | $$(AR))$(eval C_TOOLID := $$(shell $$(CC) -v 2>&1; $$(CC) -print-prog-name=cc1 2>&1; $$(AR) --version 2>&1 | head -n 1)))$(C_TOOLID)
-# the command, the toolchain, and how c_object compiles and records an archive object, EXPANDED
-# (its own text and the record filter's): the arguments it adds and the record it writes are part
-# of how that object is built, and its record does not name this file (below)
-c_sigtext = $(strip $(1) | $(c_toolid) | $(value c_object) | $(c_unpinned))
+# <command> as <target> runs it: the command, the toolchain, how c_object compiles and records an
+# archive object (its own text and the record filter's), and for an archive (a .a target) how
+# c_archive makes it (its own text): the arguments they add and the record c_object writes are part
+# of how an object or an archive is built, and neither has a record naming this file (below).
+# c_archive only in an archive's: in the objects' it would recompile all of them for a rule that
+# does not compile them. As written, whitespace and all (tool_signed).
+c_sigtext = $(1) | $(c_toolid) | $(value c_object) | $(c_unpinned)$(if $(filter %.a,$(2)), | $(value c_archive))
 # once per signature per make: an archive's objects (about 1,200 in sysnode) all name one
-c_sign = $(if $(C_SIGNED_$(1)),$(1).sig,$(eval C_SIGNED_$(1) := 1)$(call tool_signed,$(1),$(call c_sigtext,$(2))))
+c_sign = $(if $(C_SIGNED_$(1)),$(1).sig,$(eval C_SIGNED_$(1) := 1)$(call tool_signed,$(1),$(call c_sigtext,$(2),$(1))))
 # at recipe time: the rule names exactly one signature, and it records the command about to run
-c_signed = $(if $(filter-out 1,$(words $(filter %.sig,$^))),$(error $@: a C rule names exactly one $$$$(call c_sign,...) among its prerequisites (tools/tools.mk)),$(if $(call tool_same,$(call c_sigtext,$(1)),$(strip $(file <$(filter %.sig,$^)))),,$(error $@: the command does not match its signature $(filter %.sig,$^) — the rule signs one variable and runs another (tools/tools.mk c_sign))))
+c_signed = $(if $(filter-out 1,$(words $(filter %.sig,$^))),$(error $@: a C rule names exactly one $$$$(call c_sign,...) among its prerequisites (tools/tools.mk)),$(if $(call tool_holds,$(call c_sigtext,$(1),$@),$(file <$(filter %.sig,$^))),,$(error $@: the command does not match its signature $(filter %.sig,$^) — the rule signs one variable and runs another (tools/tools.mk c_sign))))
 #
 # The pinned third-party archives (the ThreadX kernel, NetX Duo, LVGL) are compiled one object per
 # source by a pattern rule, with the image's CFLAGS — the forced board.h among them — so they get
@@ -212,10 +217,20 @@ tool_src = $(if $(filter /%,$(TOOL_SRC_$(1))),$(TOOL_SRC_$(1)),$(TOOL_REPO)/$(TO
 # tools/loom2v/no_v_run_makefiles_test.v changes each kind of input and asks make.
 TOOL_V_PATH    := $(shell command -v $(firstword $(V)) 2>/dev/null)
 TOOL_V_VERSION := $(shell $(V) version 2>/dev/null)
-tool_sig = $(strip $(TOOL_DIR)/.tool-$(1) | $(V) | $(TOOL_V_PATH) | $(TOOL_V_VERSION) | $(TOOL_FLAGS_$(1)) | $(VFLAGS))
+tool_sig = $(TOOL_DIR)/.tool-$(1) | $(V) | $(TOOL_V_PATH) | $(TOOL_V_VERSION) | $(TOOL_FLAGS_$(1)) | $(VFLAGS)
 # string equality: each a substring of the other (findstring is literal, filter is not)
 tool_same = $(and $(findstring $(1),$(2)),$(findstring $(2),$(1)))
-tool_recorded = $(and $(wildcard $(TOOL_DIR)/.tool-$(1).d),$(call tool_same,$(call tool_sig,$(1)),$(strip $(if $(wildcard $(TOOL_DIR)/.tool-$(1).sig),$(file <$(TOOL_DIR)/.tool-$(1).sig)))))
+# <text> is what $(file <) read back of a file $(file >) wrote it to. The writer adds one newline
+# and the reader should take it off, but GNU make 4.3's sometimes keeps it (it tests the end
+# against a pointer into a buffer the read may have moved; measured on sysnode's ELF signature),
+# so the text is compared with and without that newline — and nothing else is normalised
+tool_holds = $(or $(call tool_same,$(1),$(2)),$(call tool_same,$(1)$(tool_nl),$(2)))
+define tool_nl
+
+
+endef
+# compared as written, as an image's signature is (tool_signed)
+tool_recorded = $(and $(wildcard $(TOOL_DIR)/.tool-$(1).d),$(call tool_holds,$(call tool_sig,$(1)),$(if $(wildcard $(TOOL_DIR)/.tool-$(1).sig),$(file <$(TOOL_DIR)/.tool-$(1).sig))))
 
 $(TOOL_DIR)/.tool-%: $(TOOL_REPO)/tools/tools.mk $(TOOL_REPO)/scripts/build_tool.sh $(TOOL_REPO)/scripts/vdeps.sh
 	@test -n "$(TOOL_SRC_$*)" || { echo "tools.mk: no tool named '$*'"; exit 1; }

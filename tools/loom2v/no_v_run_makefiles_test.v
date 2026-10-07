@@ -291,6 +291,16 @@ fn test_a_tool_is_rebuilt_when_any_input_changes() {
 	}
 	assert make_q(d, tool, v)
 
+	// the signature is compared as written: one more space in it is another signature
+	sig := os.read_file(tool + '.sig') or { panic(err) }
+	sig_t := os.file_last_mod_unix(tool + '.sig')
+	os.write_file(tool + '.sig', sig.replace_once(' | ', ' |  ')) or { panic(err) }
+	set_mtime(tool + '.sig', sig_t)
+	assert !make_q(d, tool, v), 'a signature differing in whitespace and the tool is still up to date'
+	os.write_file(tool + '.sig', sig) or { panic(err) }
+	set_mtime(tool + '.sig', sig_t)
+	assert make_q(d, tool, v)
+
 	// a header behind `#flag -I` deleted (the wildcard alone would just stop naming it)
 	os.mv(hdr, hdr + '.away') or { panic(err) }
 	assert !make_q(d, tool, v), 'a header was deleted and the tool is still up to date'
