@@ -388,7 +388,7 @@
         "general_inactivity_ms": {"type": "integer", "minimum": 1000, "maximum": 3600000, "default": 300000, "description": "T_TCP_General_Inactivity: idle timeout once activated (ms) Default: 300000."},
         "announce_count": {"type": "integer", "minimum": 0, "maximum": 10, "default": 3, "description": "A_DoIP_Announce_Num: vehicle announcements at start-up Default: 3."},
         "announce_interval_ms": {"type": "integer", "minimum": 10, "maximum": 10000, "default": 500, "description": "A_DoIP_Announce_Interval (ms); count x interval at most 10000 ms Default: 500."},
-        "allow_bench_key": {"type": "boolean", "default": false, "description": "answer 0x27 with blobly_net's PUBLIC reference key over the network — a bench posture, opted into by name Default: false."}
+        "allow_bench_key": {"type": "boolean", "default": false, "description": "answer 0x27 with blobly_net's PUBLIC reference key over the network — a bench posture, opted into by name; required (true) when [uds] security_key = \"reference\" Default: false."}
       },
       "required": ["address", "logical_address"],
       "additionalProperties": false

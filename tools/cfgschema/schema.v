@@ -49,8 +49,9 @@ pub:
 	// own_check: the value is judged by a leaf check that ecucheck also runs (ecumodel.validate),
 	// with the context its message needs; the walk leaves it alone so it is said once
 	own_check bool
-	// by_model: a required row whose ABSENCE ecumodel.validate reports (the partition / thread /
-	// fb / handler structure, shared with loom2v); the walk does not say it a second time
+	// by_model: a required row whose ABSENCE the model reports — ecumodel.validate for the
+	// partition / thread / fb / handler structure (shared with loom2v), sysmodel for every
+	// system.toml row (system.toml is never walked) — so the walk does not say it a second time
 	by_model bool
 	desc     string
 }

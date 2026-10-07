@@ -11,6 +11,7 @@
     "frame": {"type": "array", "items": {"$ref": "#/definitions/sys_frame"}, "description": "SOME/IP events: id, signal set, tx mode and E2E trailer — a someip bus has no DBC to carry them"},
     "route": {"type": "array", "items": {"$ref": "#/definitions/sys_route"}, "description": "gateway routes between buses (dissolution only)"}
   },
+  "required": ["bus", "node"],
   "additionalProperties": false,
   "definitions": {
     "sys_bus": {
@@ -18,7 +19,7 @@
       "description": "One system bus: a CAN bus with its DBC, or a SOME/IP segment with its service.",
       "type": "object",
       "properties": {
-        "interface": {"type": "string", "description": "the physical channel (SocketCAN name, driver channel); unique across buses — one system bus per wire"},
+        "interface": {"type": "string", "description": "the physical channel (SocketCAN name, driver channel); unique across buses — one system bus per wire; needed where a member's own [bus.*] (its NM / telemetry bus) is matched to it"},
         "kind": {"type": "string", "enum": ["can", "someip"], "default": "can", "description": "the carrier: \"can\" (DBC frames) or \"someip\" (a service over Ethernet) Default: \"can\"."},
         "fd": {"type": "boolean", "default": false, "description": "CAN-FD; in a composed system it must equal each member's own [bus] fd Default: false."},
         "bitrate": {"type": "integer", "description": "nominal bitrate in bit/s — informational: syscheck prints it, nothing is generated from it"},
@@ -34,7 +35,7 @@
       "description": "An NM cluster: the alive-id range and the timings every member shares. A timing absent (or <= 0) is not lowered, so the node takes loom2v's default.",
       "type": "object",
       "properties": {
-        "peers": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2, "description": "[lo, hi] — the cluster's alive CAN ids; a member's alive id is lo + its nm; both at most 0x7FF"},
+        "peers": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2, "description": "[lo, hi] — the cluster's alive CAN ids; a member's alive id is lo + its nm; both at most 0x7FF; required when a member allocates `nm`"},
         "msg_cycle_ms": {"type": "integer", "default": 100, "description": "NM message cycle (ms) Default: 100."},
         "timeout_ms": {"type": "integer", "default": 300, "description": "NM timeout (ms) Default: 300."},
         "repeat_ms": {"type": "integer", "default": 200, "description": "NM repeat-message time (ms) Default: 200."},
@@ -50,12 +51,13 @@
         "name": {"type": "string", "description": "identifier, unique; the node's generated config is gen-<name>.toml"},
         "ecu": {"type": "string", "description": "the node's ecu.toml, relative to system.toml (internals only in a dissolved system)"},
         "buses": {"type": "array", "items": {"type": "string"}, "description": "the system buses it sits on; more than one CAN bus makes it a [[route]] gateway Default: []."},
-        "nm": {"type": "integer", "minimum": 0, "maximum": 255, "description": "its NM node id (alive = peers lo + nm); absent = not an NM node"},
+        "nm": {"type": "integer", "minimum": 0, "maximum": 255, "description": "its NM node id (alive = peers lo + nm); absent = not an NM node; required for a ThreadX member of a bus with an NM cluster"},
         "trace": {"type": "integer", "description": "its trace node id, unique across the system (checked only, not generated)"},
-        "diag": {"allOf": [{"$ref": "#/definitions/sys_diag"}], "description": "its ISO-TP diagnostic ids, unique across the system (checked only, not generated)"},
-        "endpoint": {"allOf": [{"$ref": "#/definitions/sys_endpoint"}], "description": "its network identity: the address SOME/IP and DoIP answer at"},
+        "diag": {"allOf": [{"$ref": "#/definitions/sys_diag"}], "description": "its ISO-TP diagnostic ids, unique across the system (checked only, not generated); required with `doip`"},
+        "endpoint": {"allOf": [{"$ref": "#/definitions/sys_endpoint"}], "description": "its network identity: the address SOME/IP and DoIP answer at; required on a someip bus member and on a DoIP entity"},
         "doip": {"allOf": [{"$ref": "#/definitions/sys_doip"}], "description": "the node is a DoIP entity at its endpoint address (lowered into [doip]; dissolved systems only)"}
       },
+      "required": ["name", "ecu", "buses"],
       "additionalProperties": false
     },
     "sys_diag": {
@@ -74,6 +76,7 @@
         "address": {"type": "string", "description": "IPv4 dotted quad; unique per segment; a DoIP node needs a host address (not .0, .1 or .255)"},
         "port": {"type": "integer", "minimum": 1, "maximum": 65535, "description": "the SOME/IP listen port (required on a someip bus; not 13400 on a DoIP node)"}
       },
+      "required": ["address"],
       "additionalProperties": false
     },
     "sys_doip": {
@@ -89,8 +92,9 @@
         "general_inactivity_ms": {"type": "integer", "minimum": 1000, "maximum": 3600000, "default": 300000, "description": "T_TCP_General_Inactivity: idle timeout once activated (ms) Default: 300000."},
         "announce_count": {"type": "integer", "minimum": 0, "maximum": 10, "default": 3, "description": "A_DoIP_Announce_Num: vehicle announcements at start-up Default: 3."},
         "announce_interval_ms": {"type": "integer", "minimum": 10, "maximum": 10000, "default": 500, "description": "A_DoIP_Announce_Interval (ms); count x interval at most 10000 ms Default: 500."},
-        "allow_bench_key": {"type": "boolean", "default": false, "description": "answer 0x27 with blobly_net's PUBLIC reference key over the network — a bench posture, opted into by name Default: false."}
+        "allow_bench_key": {"type": "boolean", "default": false, "description": "answer 0x27 with blobly_net's PUBLIC reference key over the network — a bench posture, opted into by name; required (true) when [uds] security_key = \"reference\" Default: false."}
       },
+      "required": ["logical"],
       "additionalProperties": false
     },
     "sys_signal": {
@@ -105,6 +109,7 @@
         "frame": {"type": "string", "description": "CAN: the DBC message carrying it (sent by the producer); someip: the [[frame]] event carrying it"},
         "cycle_ms": {"type": "integer", "default": 100, "description": "CAN tx cadence (ms); signals sharing a frame must agree; refused on someip (the [[frame]] tx says it) Default: 100."}
       },
+      "required": ["name", "fields", "producer", "bus", "frame"],
       "additionalProperties": false
     },
     "sys_frame": {
@@ -119,6 +124,7 @@
         "tx": {"allOf": [{"$ref": "#/definitions/sys_frame_tx"}], "description": "how the producer sends it; absent = cyclic every 100 ms"},
         "e2e": {"allOf": [{"$ref": "#/definitions/sys_frame_e2e"}], "description": "AUTOSAR E2E Profile 1 trailer"}
       },
+      "required": ["name", "bus", "id", "signals"],
       "additionalProperties": false
     },
     "sys_frame_tx": {
@@ -140,6 +146,7 @@
         "crc_pos": {"type": "integer", "minimum": 0, "maximum": 65535, "description": "the CRC's byte, right after the counter"},
         "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 2147483, "description": "the receiver's sender-loss timeout (ms), longer than the cycle; required unless mode = \"event\""}
       },
+      "required": ["data_id"],
       "additionalProperties": false
     },
     "sys_route": {
@@ -148,11 +155,12 @@
       "type": "object",
       "properties": {
         "gateway": {"type": "string", "description": "the node that forwards; it must sit on both buses"},
-        "frame": {"type": "string", "description": "a raw frame route: the DBC message forwarded as it is (in both DBCs; not on an FD bus)"},
-        "signal": {"type": "string", "description": "a signal route: the [[signal]] decoded on `from` and re-encoded on `to`"},
+        "frame": {"type": "string", "description": "a raw frame route: the DBC message forwarded as it is (in both DBCs; not on an FD bus); this or `signal`, exactly one"},
+        "signal": {"type": "string", "description": "a signal route: the [[signal]] decoded on `from` and re-encoded on `to`; this or `frame`, exactly one"},
         "from": {"type": "string", "description": "the source bus"},
         "to": {"type": "string", "description": "the destination bus"}
       },
+      "required": ["gateway", "from", "to"],
       "additionalProperties": false
     }
   }

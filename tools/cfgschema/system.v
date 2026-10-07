@@ -14,14 +14,14 @@ fn system_schema() Schema {
 		desc: 'A system of ECUs (docs/multi-node.md). A system that declares any `[[signal]]`, `[[route]]` or `[[frame]]`, or a node `endpoint`, is DISSOLVED: its nodes author only their internals and `sysgen` lowers the rest into each `gen-<node>.toml`. Otherwise it is COMPOSED from complete per-node ecu.toml files, and syscheck checks them against each other.'
 		tables: [
 			tbl('sys_top', '(top level)', "The sections of a system.toml. At least one bus and one node; `[[signal]]`, `[[frame]]` and `[[route]]` are the dissolution model's.", [
-				sub('bus', .namedmap, 'sys_bus').doc('the system buses, one [bus.<name>] each; the name is how signals, frames, routes and nodes refer to it'),
-				sub('node', .arr, 'sys_node').doc('the member ECUs'),
+				sub('bus', .namedmap, 'sys_bus').required_by_model().doc('the system buses, one [bus.<name>] each; the name is how signals, frames, routes and nodes refer to it'),
+				sub('node', .arr, 'sys_node').required_by_model().doc('the member ECUs'),
 				sub('signal', .arr, 'sys_signal').doc('cross-node signals, declared once at system scope (dissolution)'),
 				sub('frame', .arr, 'sys_frame').doc('SOME/IP events: id, signal set, tx mode and E2E trailer — a someip bus has no DBC to carry them'),
 				sub('route', .arr, 'sys_route').doc('gateway routes between buses (dissolution only)'),
 			]),
 			tbl('sys_bus', '[bus.*]', 'One system bus: a CAN bus with its DBC, or a SOME/IP segment with its service.', [
-				k('interface', .str).doc('the physical channel (SocketCAN name, driver channel); unique across buses — one system bus per wire'),
+				k('interface', .str).doc("the physical channel (SocketCAN name, driver channel); unique across buses — one system bus per wire; needed where a member's own [bus.*] (its NM / telemetry bus) is matched to it"),
 				k('kind', .str).d('"can"').one_of(['can', 'someip']).doc('the carrier: "can" (DBC frames) or "someip" (a service over Ethernet)'),
 				k('fd', .boolean).d('false').doc("CAN-FD; in a composed system it must equal each member's own [bus] fd"),
 				k('bitrate', .int).doc('nominal bitrate in bit/s — informational: syscheck prints it, nothing is generated from it'),
@@ -31,28 +31,28 @@ fn system_schema() Schema {
 				sub('nm', .tbl, 'sys_bus_nm').doc("the bus's NM cluster (CAN only); without it a node's nm id generates a disabled [nm]"),
 			]),
 			tbl('sys_bus_nm', '[bus.*.nm]', "An NM cluster: the alive-id range and the timings every member shares. A timing absent (or <= 0) is not lowered, so the node takes loom2v's default.", [
-				k('peers', .id_range).doc("[lo, hi] — the cluster's alive CAN ids; a member's alive id is lo + its nm; both at most 0x7FF"),
+				k('peers', .id_range).doc("[lo, hi] — the cluster's alive CAN ids; a member's alive id is lo + its nm; both at most 0x7FF; required when a member allocates `nm`"),
 				k('msg_cycle_ms', .int).d('100').doc('NM message cycle (ms)'),
 				k('timeout_ms', .int).d('300').doc('NM timeout (ms)'),
 				k('repeat_ms', .int).d('200').doc('NM repeat-message time (ms)'),
 				k('wait_sleep_ms', .int).d('150').doc('NM wait-bus-sleep time (ms)'),
 			]),
 			tbl('sys_signal', '[[signal]]', 'A cross-node signal, declared exactly once: who produces it, on which bus and in which frame.', [
-				k('name', .str).doc('the signal name; FBs read and write it by this name'),
-				k('fields', .str_map).doc('payload fields, name -> scalar type (bool, u8/i8, u16/i16, u32/i32, f32, f64; u64/i64 not on CAN); one value field on CAN'),
-				k('producer', .str).doc('the node that transmits it; must be on `bus` and have an FB that writes it'),
-				k('bus', .str).doc('the system bus it rides'),
-				k('frame', .str).doc('CAN: the DBC message carrying it (sent by the producer); someip: the [[frame]] event carrying it'),
+				k('name', .str).required_by_model().doc('the signal name; FBs read and write it by this name'),
+				k('fields', .str_map).required_by_model().doc('payload fields, name -> scalar type (bool, u8/i8, u16/i16, u32/i32, f32, f64; u64/i64 not on CAN); one value field on CAN'),
+				k('producer', .str).required_by_model().doc('the node that transmits it; must be on `bus` and have an FB that writes it'),
+				k('bus', .str).required_by_model().doc('the system bus it rides'),
+				k('frame', .str).required_by_model().doc('CAN: the DBC message carrying it (sent by the producer); someip: the [[frame]] event carrying it'),
 				k('cycle_ms', .int).d('100').doc('CAN tx cadence (ms); signals sharing a frame must agree; refused on someip (the [[frame]] tx says it)'),
 			]),
 			tbl('sys_node', '[[node]]', 'A member ECU and its system-owned identities.', [
-				k('name', .str).doc("identifier, unique; the node's generated config is gen-<name>.toml"),
-				k('ecu', .str).doc("the node's ecu.toml, relative to system.toml (internals only in a dissolved system)"),
-				k('buses', .str_arr).d('[]').doc('the system buses it sits on; more than one CAN bus makes it a [[route]] gateway'),
-				k('nm', .int).range(0, 0xFF).doc('its NM node id (alive = peers lo + nm); absent = not an NM node'),
+				k('name', .str).required_by_model().doc("identifier, unique; the node's generated config is gen-<name>.toml"),
+				k('ecu', .str).required_by_model().doc("the node's ecu.toml, relative to system.toml (internals only in a dissolved system)"),
+				k('buses', .str_arr).d('[]').required_by_model().doc('the system buses it sits on; more than one CAN bus makes it a [[route]] gateway'),
+				k('nm', .int).range(0, 0xFF).doc('its NM node id (alive = peers lo + nm); absent = not an NM node; required for a ThreadX member of a bus with an NM cluster'),
 				k('trace', .int).doc('its trace node id, unique across the system (checked only, not generated)'),
-				sub('diag', .tbl, 'sys_diag').doc('its ISO-TP diagnostic ids, unique across the system (checked only, not generated)'),
-				sub('endpoint', .tbl, 'sys_endpoint').doc('its network identity: the address SOME/IP and DoIP answer at'),
+				sub('diag', .tbl, 'sys_diag').doc('its ISO-TP diagnostic ids, unique across the system (checked only, not generated); required with `doip`'),
+				sub('endpoint', .tbl, 'sys_endpoint').doc('its network identity: the address SOME/IP and DoIP answer at; required on a someip bus member and on a DoIP entity'),
 				sub('doip', .tbl, 'sys_doip').doc('the node is a DoIP entity at its endpoint address (lowered into [doip]; dissolved systems only)'),
 			]),
 			tbl('sys_diag', '[[node]] diag', '', [
@@ -60,15 +60,17 @@ fn system_schema() Schema {
 				k('rsp', .int).doc('the diagnostic response CAN id'),
 			]),
 			tbl('sys_endpoint', '[[node]] endpoint', '', [
-				k('address', .str).doc('IPv4 dotted quad; unique per segment; a DoIP node needs a host address (not .0, .1 or .255)'),
+				k('address', .str).required_by_model().doc('IPv4 dotted quad; unique per segment; a DoIP node needs a host address (not .0, .1 or .255)'),
 				k('port', .int).range(1, 0xFFFF).doc('the SOME/IP listen port (required on a someip bus; not 13400 on a DoIP node)'),
 			]),
-			tbl('sys_doip', '[[node]] doip', 'The DoIP entity and its ISO 13400-2 transport policy (one parser for both files: tools/doipcfg; bounds: comm/doip policy.v).', doip_entity_keys('logical', 'functional')),
+			tbl('sys_doip', '[[node]] doip', 'The DoIP entity and its ISO 13400-2 transport policy (one parser for both files: tools/doipcfg; bounds: comm/doip policy.v).', doip_entity_keys('logical', 'functional').map(if it.name == 'logical' {
+				it.required_by_model()} else {
+				it})),
 			tbl('sys_frame', '[[frame]]', 'A SOME/IP event on a someip bus: its id, its signals and how it is sent. Lowering copies only what it recognises, so an unknown key is refused.', [
-				k('name', .str).doc('the event name; unique per bus'),
-				k('bus', .str).doc('the someip bus it is on'),
-				k('id', .int).range(0x8000, 0xFFFF).hex().doc('the SOME/IP event id (bit 15 set; methods own 0x0001..0x7FFF); unique per bus'),
-				k('signals', .str_arr).doc('its payload signals, in packing order; non-empty, all on the same bus'),
+				k('name', .str).required_by_model().doc('the event name; unique per bus'),
+				k('bus', .str).required_by_model().doc('the someip bus it is on'),
+				k('id', .int).range(0x8000, 0xFFFF).hex().required_by_model().doc('the SOME/IP event id (bit 15 set; methods own 0x0001..0x7FFF); unique per bus'),
+				k('signals', .str_arr).required_by_model().doc('its payload signals, in packing order; non-empty, all on the same bus'),
 				sub('tx', .tbl, 'sys_frame_tx').doc('how the producer sends it; absent = cyclic every 100 ms'),
 				sub('e2e', .tbl, 'sys_frame_e2e').doc('AUTOSAR E2E Profile 1 trailer'),
 			]),
@@ -78,17 +80,17 @@ fn system_schema() Schema {
 				k('min_delay_ms', .int).d('0').range(0, 1_000_000).doc('the least gap between two event sends (ms)'),
 			]),
 			tbl('sys_frame_e2e', '[[frame]] e2e', '', [
-				k('data_id', .int).range(0, 0xFFFF).hex().doc('the E2E Data ID (required)'),
+				k('data_id', .int).range(0, 0xFFFF).hex().required_by_model().doc('the E2E Data ID (required)'),
 				k('counter_pos', .int).range(0, 0xFFFF).doc("the counter's byte: the appended trailer starts at the derived payload size"),
 				k('crc_pos', .int).range(0, 0xFFFF).doc("the CRC's byte, right after the counter"),
 				k('timeout_ms', .int).range(1, 2147483).doc('the receiver\'s sender-loss timeout (ms), longer than the cycle; required unless mode = "event"'),
 			]),
 			tbl('sys_route', '[[route]]', 'A gateway route between two buses (dissolution only): set exactly one of `frame` / `signal`.', [
-				k('gateway', .str).doc('the node that forwards; it must sit on both buses'),
-				k('frame', .str).doc('a raw frame route: the DBC message forwarded as it is (in both DBCs; not on an FD bus)'),
-				k('signal', .str).doc('a signal route: the [[signal]] decoded on `from` and re-encoded on `to`'),
-				k('from', .str).doc('the source bus'),
-				k('to', .str).doc('the destination bus'),
+				k('gateway', .str).required_by_model().doc('the node that forwards; it must sit on both buses'),
+				k('frame', .str).doc('a raw frame route: the DBC message forwarded as it is (in both DBCs; not on an FD bus); this or `signal`, exactly one'),
+				k('signal', .str).doc('a signal route: the [[signal]] decoded on `from` and re-encoded on `to`; this or `frame`, exactly one'),
+				k('from', .str).required_by_model().doc('the source bus'),
+				k('to', .str).required_by_model().doc('the destination bus'),
 			]),
 		]
 	}
@@ -119,6 +121,6 @@ fn doip_policy_keys() []Key {
 		k('general_inactivity_ms', .int).d('${doip.general_inactivity_ms}').range(doip.general_inactivity_min_ms, doip.general_inactivity_max_ms).doc('T_TCP_General_Inactivity: idle timeout once activated (ms)'),
 		k('announce_count', .int).d('${doip.announce_count}').range(0, doip.announce_count_max).doc('A_DoIP_Announce_Num: vehicle announcements at start-up'),
 		k('announce_interval_ms', .int).d('${doip.announce_interval_ms}').range(doip.announce_interval_min_ms, doip.announce_interval_max_ms).doc('A_DoIP_Announce_Interval (ms); count x interval at most ${doip.announce_total_max_ms} ms'),
-		k('allow_bench_key', .boolean).d('false').doc("answer 0x27 with blobly_net's PUBLIC reference key over the network — a bench posture, opted into by name"),
+		k('allow_bench_key', .boolean).d('false').doc('answer 0x27 with blobly_net\'s PUBLIC reference key over the network — a bench posture, opted into by name; required (true) when [uds] security_key = "reference"'),
 	]
 }

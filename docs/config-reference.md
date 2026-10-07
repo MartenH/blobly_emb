@@ -434,7 +434,7 @@ The diagnostic server over DoIP (ISO 13400) too — ThreadX target; one parser f
 | `general_inactivity_ms` | integer |  | `300000` | 1000..3600000 | T_TCP_General_Inactivity: idle timeout once activated (ms) |
 | `announce_count` | integer |  | `3` | 0..10 | A_DoIP_Announce_Num: vehicle announcements at start-up |
 | `announce_interval_ms` | integer |  | `500` | 10..10000 | A_DoIP_Announce_Interval (ms); count x interval at most 10000 ms |
-| `allow_bench_key` | boolean |  | `false` |  | answer 0x27 with blobly_net's PUBLIC reference key over the network — a bench posture, opted into by name |
+| `allow_bench_key` | boolean |  | `false` |  | answer 0x27 with blobly_net's PUBLIC reference key over the network — a bench posture, opted into by name; required (true) when [uds] security_key = "reference" |
 
 <a id="ecu-boot"></a>
 
@@ -676,8 +676,8 @@ The sections of a system.toml. At least one bus and one node; `[[signal]]`, `[[f
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
-| `bus` | tables by name → [`[bus.*]`](#system-sys-bus) |  | — |  | the system buses, one [bus.<name>] each; the name is how signals, frames, routes and nodes refer to it |
-| `node` | array of tables → [`[[node]]`](#system-sys-node) |  | — |  | the member ECUs |
+| `bus` | tables by name → [`[bus.*]`](#system-sys-bus) | yes | — |  | the system buses, one [bus.<name>] each; the name is how signals, frames, routes and nodes refer to it |
+| `node` | array of tables → [`[[node]]`](#system-sys-node) | yes | — |  | the member ECUs |
 | `signal` | array of tables → [`[[signal]]`](#system-sys-signal) |  | — |  | cross-node signals, declared once at system scope (dissolution) |
 | `frame` | array of tables → [`[[frame]]`](#system-sys-frame) |  | — |  | SOME/IP events: id, signal set, tx mode and E2E trailer — a someip bus has no DBC to carry them |
 | `route` | array of tables → [`[[route]]`](#system-sys-route) |  | — |  | gateway routes between buses (dissolution only) |
@@ -690,7 +690,7 @@ One system bus: a CAN bus with its DBC, or a SOME/IP segment with its service.
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
-| `interface` | string |  | — |  | the physical channel (SocketCAN name, driver channel); unique across buses — one system bus per wire |
+| `interface` | string |  | — |  | the physical channel (SocketCAN name, driver channel); unique across buses — one system bus per wire; needed where a member's own [bus.*] (its NM / telemetry bus) is matched to it |
 | `kind` | string |  | `"can"` | `"can"`, `"someip"` | the carrier: "can" (DBC frames) or "someip" (a service over Ethernet) |
 | `fd` | boolean |  | `false` |  | CAN-FD; in a composed system it must equal each member's own [bus] fd |
 | `bitrate` | integer |  | — |  | nominal bitrate in bit/s — informational: syscheck prints it, nothing is generated from it |
@@ -707,7 +707,7 @@ An NM cluster: the alive-id range and the timings every member shares. A timing 
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
-| `peers` | [lo, hi] of integers |  | — |  | [lo, hi] — the cluster's alive CAN ids; a member's alive id is lo + its nm; both at most 0x7FF |
+| `peers` | [lo, hi] of integers |  | — |  | [lo, hi] — the cluster's alive CAN ids; a member's alive id is lo + its nm; both at most 0x7FF; required when a member allocates `nm` |
 | `msg_cycle_ms` | integer |  | `100` |  | NM message cycle (ms) |
 | `timeout_ms` | integer |  | `300` |  | NM timeout (ms) |
 | `repeat_ms` | integer |  | `200` |  | NM repeat-message time (ms) |
@@ -721,13 +721,13 @@ A member ECU and its system-owned identities.
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
-| `name` | string |  | — |  | identifier, unique; the node's generated config is gen-<name>.toml |
-| `ecu` | string |  | — |  | the node's ecu.toml, relative to system.toml (internals only in a dissolved system) |
-| `buses` | array of strings |  | `[]` |  | the system buses it sits on; more than one CAN bus makes it a [[route]] gateway |
-| `nm` | integer |  | — | 0..255 | its NM node id (alive = peers lo + nm); absent = not an NM node |
+| `name` | string | yes | — |  | identifier, unique; the node's generated config is gen-<name>.toml |
+| `ecu` | string | yes | — |  | the node's ecu.toml, relative to system.toml (internals only in a dissolved system) |
+| `buses` | array of strings | yes | `[]` |  | the system buses it sits on; more than one CAN bus makes it a [[route]] gateway |
+| `nm` | integer |  | — | 0..255 | its NM node id (alive = peers lo + nm); absent = not an NM node; required for a ThreadX member of a bus with an NM cluster |
 | `trace` | integer |  | — |  | its trace node id, unique across the system (checked only, not generated) |
-| `diag` | table → [`[[node]] diag`](#system-sys-diag) |  | — |  | its ISO-TP diagnostic ids, unique across the system (checked only, not generated) |
-| `endpoint` | table → [`[[node]] endpoint`](#system-sys-endpoint) |  | — |  | its network identity: the address SOME/IP and DoIP answer at |
+| `diag` | table → [`[[node]] diag`](#system-sys-diag) |  | — |  | its ISO-TP diagnostic ids, unique across the system (checked only, not generated); required with `doip` |
+| `endpoint` | table → [`[[node]] endpoint`](#system-sys-endpoint) |  | — |  | its network identity: the address SOME/IP and DoIP answer at; required on a someip bus member and on a DoIP entity |
 | `doip` | table → [`[[node]] doip`](#system-sys-doip) |  | — |  | the node is a DoIP entity at its endpoint address (lowered into [doip]; dissolved systems only) |
 
 <a id="system-sys-diag"></a>
@@ -745,7 +745,7 @@ A member ECU and its system-owned identities.
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
-| `address` | string |  | — |  | IPv4 dotted quad; unique per segment; a DoIP node needs a host address (not .0, .1 or .255) |
+| `address` | string | yes | — |  | IPv4 dotted quad; unique per segment; a DoIP node needs a host address (not .0, .1 or .255) |
 | `port` | integer |  | — | 1..65535 | the SOME/IP listen port (required on a someip bus; not 13400 on a DoIP node) |
 
 <a id="system-sys-doip"></a>
@@ -756,7 +756,7 @@ The DoIP entity and its ISO 13400-2 transport policy (one parser for both files:
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
-| `logical` | integer |  | — |  | the entity's logical address (0x0001..0x0DFF or 0x1000..0x7FFF); unique |
+| `logical` | integer | yes | — |  | the entity's logical address (0x0001..0x0DFF or 0x1000..0x7FFF); unique |
 | `functional` | integer |  | `0xE400` | 0xE400..0xEFFF | the functional address it also answers |
 | `testers` | array of integers |  | — | 0xE00..0xFFF | tester addresses allowed to activate routing (at most 8); absent = any 0x0E00..0x0FFF |
 | `activation_types` | array of integers |  | `[0x00]` |  | routing activation types served: 0x00, 0x01, 0xE1..0xFF (at most 4) |
@@ -764,7 +764,7 @@ The DoIP entity and its ISO 13400-2 transport policy (one parser for both files:
 | `general_inactivity_ms` | integer |  | `300000` | 1000..3600000 | T_TCP_General_Inactivity: idle timeout once activated (ms) |
 | `announce_count` | integer |  | `3` | 0..10 | A_DoIP_Announce_Num: vehicle announcements at start-up |
 | `announce_interval_ms` | integer |  | `500` | 10..10000 | A_DoIP_Announce_Interval (ms); count x interval at most 10000 ms |
-| `allow_bench_key` | boolean |  | `false` |  | answer 0x27 with blobly_net's PUBLIC reference key over the network — a bench posture, opted into by name |
+| `allow_bench_key` | boolean |  | `false` |  | answer 0x27 with blobly_net's PUBLIC reference key over the network — a bench posture, opted into by name; required (true) when [uds] security_key = "reference" |
 
 <a id="system-sys-signal"></a>
 
@@ -774,11 +774,11 @@ A cross-node signal, declared exactly once: who produces it, on which bus and in
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
-| `name` | string |  | — |  | the signal name; FBs read and write it by this name |
-| `fields` | table of strings |  | — |  | payload fields, name -> scalar type (bool, u8/i8, u16/i16, u32/i32, f32, f64; u64/i64 not on CAN); one value field on CAN |
-| `producer` | string |  | — |  | the node that transmits it; must be on `bus` and have an FB that writes it |
-| `bus` | string |  | — |  | the system bus it rides |
-| `frame` | string |  | — |  | CAN: the DBC message carrying it (sent by the producer); someip: the [[frame]] event carrying it |
+| `name` | string | yes | — |  | the signal name; FBs read and write it by this name |
+| `fields` | table of strings | yes | — |  | payload fields, name -> scalar type (bool, u8/i8, u16/i16, u32/i32, f32, f64; u64/i64 not on CAN); one value field on CAN |
+| `producer` | string | yes | — |  | the node that transmits it; must be on `bus` and have an FB that writes it |
+| `bus` | string | yes | — |  | the system bus it rides |
+| `frame` | string | yes | — |  | CAN: the DBC message carrying it (sent by the producer); someip: the [[frame]] event carrying it |
 | `cycle_ms` | integer |  | `100` |  | CAN tx cadence (ms); signals sharing a frame must agree; refused on someip (the [[frame]] tx says it) |
 
 <a id="system-sys-frame"></a>
@@ -789,10 +789,10 @@ A SOME/IP event on a someip bus: its id, its signals and how it is sent. Lowerin
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
-| `name` | string |  | — |  | the event name; unique per bus |
-| `bus` | string |  | — |  | the someip bus it is on |
-| `id` | integer |  | — | 0x8000..0xFFFF | the SOME/IP event id (bit 15 set; methods own 0x0001..0x7FFF); unique per bus |
-| `signals` | array of strings |  | — |  | its payload signals, in packing order; non-empty, all on the same bus |
+| `name` | string | yes | — |  | the event name; unique per bus |
+| `bus` | string | yes | — |  | the someip bus it is on |
+| `id` | integer | yes | — | 0x8000..0xFFFF | the SOME/IP event id (bit 15 set; methods own 0x0001..0x7FFF); unique per bus |
+| `signals` | array of strings | yes | — |  | its payload signals, in packing order; non-empty, all on the same bus |
 | `tx` | table → [`[[frame]] tx`](#system-sys-frame-tx) |  | — |  | how the producer sends it; absent = cyclic every 100 ms |
 | `e2e` | table → [`[[frame]] e2e`](#system-sys-frame-e2e) |  | — |  | AUTOSAR E2E Profile 1 trailer |
 
@@ -812,7 +812,7 @@ A SOME/IP event on a someip bus: its id, its signals and how it is sent. Lowerin
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
-| `data_id` | integer |  | — | 0x0..0xFFFF | the E2E Data ID (required) |
+| `data_id` | integer | yes | — | 0x0..0xFFFF | the E2E Data ID (required) |
 | `counter_pos` | integer |  | — | 0..65535 | the counter's byte: the appended trailer starts at the derived payload size |
 | `crc_pos` | integer |  | — | 0..65535 | the CRC's byte, right after the counter |
 | `timeout_ms` | integer |  | — | 1..2147483 | the receiver's sender-loss timeout (ms), longer than the cycle; required unless mode = "event" |
@@ -825,8 +825,8 @@ A gateway route between two buses (dissolution only): set exactly one of `frame`
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
-| `gateway` | string |  | — |  | the node that forwards; it must sit on both buses |
-| `frame` | string |  | — |  | a raw frame route: the DBC message forwarded as it is (in both DBCs; not on an FD bus) |
-| `signal` | string |  | — |  | a signal route: the [[signal]] decoded on `from` and re-encoded on `to` |
-| `from` | string |  | — |  | the source bus |
-| `to` | string |  | — |  | the destination bus |
+| `gateway` | string | yes | — |  | the node that forwards; it must sit on both buses |
+| `frame` | string |  | — |  | a raw frame route: the DBC message forwarded as it is (in both DBCs; not on an FD bus); this or `signal`, exactly one |
+| `signal` | string |  | — |  | a signal route: the [[signal]] decoded on `from` and re-encoded on `to`; this or `frame`, exactly one |
+| `from` | string | yes | — |  | the source bus |
+| `to` | string | yes | — |  | the destination bus |
