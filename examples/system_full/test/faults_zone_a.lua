@@ -40,6 +40,20 @@ local function find(list, name)
   return nil
 end
 
+-- inject the implausible speed in BURST_MS bursts, reading the status after each, until DTC's status
+-- bit `bit` is set or MAX_BURSTS have gone: the bursts it took, or nil. Not one fixed window,
+-- because the gateway's plausible copy of 0x130 competes: a dispatch that reads it moves the
+-- accumulating counter down, so qualifying takes a varying number of dispatches.
+local BURST_MS, MAX_BURSTS = 300, 10
+local function fail_until(d, bit)
+  for n = 1, MAX_BURSTS do
+    implausible(BURST_MS)
+    local e = find(d:supported_dtcs(), DTC)
+    if e and e[bit] then return n end
+  end
+  return nil
+end
+
 -- a clean slate: cleared, then long enough for the producer to apply the clear and pass its test
 local function clean(d)
   d:clear_dtcs()
@@ -58,10 +72,10 @@ end)
 test("zone_a: an implausible speed confirms the DTC; plausible speeds clear testFailed only", function()
   local d = diag()
   clean(d)
-  implausible(600)
+  local bursts = fail_until(d, "confirmedDTC")
   local r = check.dtc(d, DTC, { confirmedDTC = true, pendingDTC = true,
     testFailedThisOperationCycle = true, testFailedSinceLastClear = true })
-  log(string.format("%s status 0x%02X after the injection", DTC, r.status))
+  log(string.format("%s status 0x%02X after %s injection burst(s)", DTC, r.status, tostring(bursts)))
   check.truthy(find(d:dtcs(0x08), DTC) ~= nil, DTC .. " is not listed as confirmed")
   -- the gateway's own speed passes the test again: the history stays (one power cycle)
   sleep_ms(600)
@@ -72,7 +86,7 @@ end)
 test("zone_a: 0x14 clears the DTC (by number and as a group)", function()
   local d = diag()
   clean(d)
-  implausible(600)
+  fail_until(d, "confirmedDTC")
   check.dtc(d, DTC, { confirmedDTC = true })
   sleep_ms(600)
   d:clear_dtcs(0xC40100) -- by number
@@ -87,12 +101,12 @@ end)
 test("zone_a: a DTC cleared while failing returns only by failing again", function()
   local d = diag()
   clean(d)
-  implausible(600)
+  check.truthy(fail_until(d, "testFailed"), DTC .. " did not fail") -- the clear lands on a failed debounce
   d:clear_dtcs()
   check.dtc(d, DTC, { confirmedDTC = false, testFailedSinceLastClear = false })
   sleep_ms(600) -- plausible speeds: the restarted debounce passes
   check.dtc(d, DTC, { testFailed = false, confirmedDTC = false, testFailedSinceLastClear = false })
-  implausible(600) -- failing again after the clear
+  fail_until(d, "confirmedDTC") -- failing again after the clear
   check.dtc(d, DTC, { confirmedDTC = true, testFailedSinceLastClear = true })
   sleep_ms(600)
   d:clear_dtcs()
@@ -105,7 +119,7 @@ test("zone_a: with DTC setting off (0x85, extended session) nothing is recorded"
   check.nrc(0x7F, function() d:dtc_setting(false) end) -- not in the default session
   d:session(0x03)
   d:dtc_setting(false)
-  implausible(600)
+  implausible(1500) -- longer than a failure takes to qualify (fail_until)
   check.dtc(d, DTC, { testFailed = false, confirmedDTC = false, testFailedSinceLastClear = false })
   d:dtc_setting(true)
   sleep_ms(600) -- passing again: the suppressed failure is not replayed

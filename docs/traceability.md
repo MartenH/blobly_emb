@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 207 | 114 | 33 | 60 | 0 |
+| 207 | 115 | 33 | 59 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -158,7 +158,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NVM-007 | QM | test | uncovered | — |
 | REQ-NVM-008 | QM | test | uncovered | — |
 | REQ-NVM-009 | QM | test | uncovered | — |
-| REQ-NVM-010 | QM | analysis | uncovered | — |
+| REQ-NVM-010 | QM | analysis | verified | persist_test.v (pass), wear_test.v (pass) |
 | REQ-NVM-011 | QM | analysis | uncovered | — |
 | REQ-NVM-012 | QM | test | uncovered | — |
 | REQ-NVM-013 | QM | test | verified | journal_test.v (pass) |
@@ -370,7 +370,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NVM-007 | | | | | | | | | | | | | | | | | | | | | |
 | REQ-NVM-008 | | | | | | | | | | | | | | | | | | | | | |
 | REQ-NVM-009 | | | | | | | | | | | | | | | | | | | | | |
-| REQ-NVM-010 | | | | | | | | | | | | | | | | | | | | | |
+| REQ-NVM-010 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-NVM-011 | | | | | | | | | | | | | | | | | | | | | |
 | REQ-NVM-012 | | | | | | | | | | | | | | | | | | | | | |
 | REQ-NVM-013 | | | | | | | | | | | | | | | | | | ✓ | | | |

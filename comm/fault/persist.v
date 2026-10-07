@@ -59,6 +59,34 @@ import comm.uds
 // DTC per cycle: an entry that failed this cycle cannot be displaced) and tombstoned once when
 // freed. A refused write is retried no sooner than `retry_us` later.
 
+// The write budget as numbers: what loom2v's wear check (REQ-NVM-010) multiplies by the declared
+// rates, and what test_traffic_stays_inside_the_write_budget holds this memory to.
+//
+// cycle_images: the status-image writes one operation cycle makes at most with `n` DTCs, `nsnap`
+// of them keeping a snapshot — its start and its end, per DTC its first completed test and its
+// first failure, and per snapshot DTC the claim of the snapshot captured at that failure (it
+// normally rides with the failure; counted apart for one that commits a pass later, and the
+// displaced entry's release rides in the same image). A flush adds at most one more, for deferred
+// occurrence counters; the caller counts its flushes.
+pub fn cycle_images(n int, nsnap int) int {
+	return 2 + 2 * n + nsnap
+}
+
+// clear_images: a 0x14's own write, and the requalification it reopens inside the cycle — a
+// cleared DTC is untested again, so its first test, its first failure and its new snapshot's
+// claim can each write once more.
+pub fn clear_images(n int, nsnap int) int {
+	return 1 + 2 * n + nsnap
+}
+
+// setting_images: a 0x85 change (the image records the setting).
+pub const setting_images = 1
+
+// captures_per_cycle: snapshot blocks a snapshot DTC writes per operation cycle, and per 0x14 (a
+// cleared DTC fails afresh). Every block written is tombstoned at most once, so tombstones never
+// outnumber the snapshot writes before them.
+pub const captures_per_cycle = 1
+
 pub const image_version = u8(5) // the image's format; each record names its claimed block by id
 const image_v4 = u8(4) // the format before: read for status and counters, its snapshot claims never loaded
 pub const image_rec = 10 // bytes per DTC in the image: DTC 3, flags 1, failed cycles 1, aging 1, occurrence 2, the claimed snapshot block's id 2
