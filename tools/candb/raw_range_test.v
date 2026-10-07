@@ -95,3 +95,42 @@ fn test_named_values_outside_the_range_are_listed() {
 	assert lines[1] == 'mut raw, mut sat := com.encode_raw(raw_x, 0.0, 250.0, u64(0), u64(250), u64(0), u64(0xff))'
 	assert lines[2] == 'if sat && com.round_steps(raw_x) == 255.0 { // VAL_ "SNA": outside the range, sent as named'
 }
+
+// A negative VAL_ key is parsed as the 64-bit two's complement; on a narrower signed signal it is the
+// width's sign-extended pattern, named outside the range and let through (codex #397 r1).
+fn test_a_negative_named_value_of_a_narrow_signed_signal_is_kept() {
+	for n in [8, 12, 16] {
+		top := u64(1) << (n - 1)
+		db := parse_dbc('VERSION ""
+BO_ 256 F: 8 ECU
+ SG_ S : 0|${n}@1- (1,0) [-100|100] "" ECU
+VAL_ 256 S -${top} "SNA" -1 "Err" 50 "Half" ;
+') or { panic(err) }
+		r := db.messages[0].signals[0].raw_range()!
+		assert r.named.len == 1, '${n} bits: ${r.named}'
+		assert r.named[0].raw == top && r.named[0].steps == -f64(top) && r.named[0].label == 'SNA'
+		lines := db.messages[0].signals[0].encode_lines('phys', 'raw', 'sat', '')!
+		assert lines.any(it.contains('== -${top}.0 { // VAL_ "SNA"')), lines.str()
+		assert lines.any(it == '\traw = u64(${top})'), lines.str()
+	}
+	// a negative key past the width names nothing of it
+	db := parse_dbc('VERSION ""
+BO_ 256 F: 8 ECU
+ SG_ S : 0|8@1- (1,0) [-100|100] "" ECU
+VAL_ 256 S -200 "Far" ;
+') or { panic(err) }
+	assert db.messages[0].signals[0].raw_range()!.named.len == 0
+}
+
+// An exact integral boundary is never widened, however large (past 2^50 four ULPs are a step).
+fn test_a_large_exact_boundary_stays_exact() {
+	for q in [f64(u64(1) << 51), f64(u64(1) << 52)] {
+		r := sig(0, 60, false, 1, 0, 0, q).raw_range()!
+		assert r.hi == q, '${q}: ${r.hi}'
+		l := sig(0, 60, false, 1, 0, q, q + 2).raw_range()!
+		assert l.lo == q, '${q}: ${l.lo}'
+	}
+	// off the grid at 2^51 (a half step there): still floored, not rounded up
+	h := sig(0, 60, false, 1, 0, 0, f64(u64(1) << 51) + 0.5).raw_range()!
+	assert h.hi == f64(u64(1) << 51)
+}

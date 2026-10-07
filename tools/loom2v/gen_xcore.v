@@ -341,7 +341,7 @@ fn lane_send_lines(si SigInfo, lanes []string, ind string) []string {
 }
 
 // target_encodes: the ThreadX comm thread encodes a sent value — a local FB's external TX signal,
-// or a satellite's (xcore_encodes). Mirrors the producers comm_thread_entry emits.
+// a satellite's (xcore_encodes), or a signal a gateway route forwards. Mirrors the producers comm_thread_entry emits.
 fn target_encodes(m Model) bool {
 	for sn in m.sig_names {
 		s := m.sig_of[sn] or { continue }
@@ -352,5 +352,6 @@ fn target_encodes(m Model) bool {
 			return true
 		}
 	}
-	return xcore_encodes(m)
+	// a gateway's signal routes re-encode on the comm thread too (route_reencode_lines)
+	return xcore_encodes(m) || m.routes.any(it.signal != '')
 }

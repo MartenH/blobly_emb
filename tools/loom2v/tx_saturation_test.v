@@ -2,6 +2,7 @@ module main
 
 import os
 import time
+import tools.candb
 
 // @verifies REQ-COM-010
 // A sent value outside its DBC signal's range is saturated by the generated `_set` (com.encode_raw,
@@ -112,4 +113,50 @@ fn test_the_did_is_the_nodes_alone() {
 		ts_did.replace('0x0120', '0x0121'))
 	assert code != 0
 	assert out.contains('2 [[did]]s are the count of saturated sent values'), out
+}
+
+// A target gateway's SIGNAL route re-encodes its value through the one send encode — held to the
+// destination signal's range and counted, as the host route is — while a FRAME route forwards the
+// payload as it is (codex #397 r1: a raw copy put 500 on a [0|360] signal).
+fn test_a_target_signal_route_is_held_to_the_range_and_a_frame_route_is_copied() {
+	sg := candb.Signal{
+		name:    'SteeringAngle'
+		length:  32
+		maximum: 360
+	}
+	m := Model{
+		routes: [
+			Route{
+				from_bus:   'edge'
+				from_id:    0x132
+				from_dlc:   8
+				to_bus:     'compute'
+				to_id:      0x125
+				to_dlc:     8
+				signal:     'SteeringAngle'
+				to_frame:   'SteeringFrameC'
+				from_frame: 'SteeringFrame'
+				raw_ident:  true
+				dst_sg:     sg
+			},
+			Route{
+				from_bus: 'edge'
+				from_id:  0x200
+				from_dlc: 8
+				to_bus:   'compute'
+				to_id:    0x201
+				to_dlc:   8
+			},
+		]
+	}
+	g := gateway_forward_arms(m, 'edge').join('\n')
+	sig_arm := g.all_before('route : edge')
+	assert sig_arm.contains('rt_raw, rt_sat := com.encode_raw(rt_raw_x, 0.0, 360.0, u64(0), u64(360), u64(0), u64(0xffffffff))'), g
+	assert sig_arm.contains('ff.data[g / 8] = (ff.data[g / 8] & ~bm) | (u8((rt_raw >> i) & 1) << (g % 8))')
+	assert sig_arm.contains('send(ff) && rt_sat {'), g
+	assert sig_arm.contains('tx_sat.add(1)')
+	frame_arm := g.all_after('route : edge')
+	assert frame_arm.contains('ff.data = rx.data // frame route: forwarded as is'), g
+	assert !frame_arm.contains('encode_raw')
+	assert target_encodes(m)
 }

@@ -91,8 +91,10 @@ signal's bit width holds, never wrapped into the bits (#306). `comm/com` `encode
 rule, and `tools/candb` `encode_lines` the one place that emits the call to it with the signal's
 bounds (`raw_range`): every generated `<frame>_<signal>_set` (`tools/dbc2cfg`) is built from it, and
 so is the ThreadX comm thread's producer — local and a satellite's lanes alike — which writes the
-same raw bits into its lane contract's bytes. So the host bus bridge, a gateway's signal route and
-the target put the same bits on the wire for the same value. The value is rounded half away from
+same raw bits into its lane contract's bytes — and so is a ThreadX gateway's signal route, which
+decodes the forwarded value and re-encodes it (a frame route forwards its payload as it is: those
+bytes are not the gateway's values). So the host bus bridge, a gateway's signal route and the target
+put the same bits on the wire for the same value. The value is rounded half away from
 zero to a raw step first, then held to the range in raw steps (the declared ends converted with ceil
 and floor, so an end off the raw grid is never passed); `[0|0]` declares no range and leaves the
 width. ±inf go to the nearest end, and NaN, which carries no value, goes out as raw 0 brought into

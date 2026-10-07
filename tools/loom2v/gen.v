@@ -119,6 +119,7 @@ mut:
 	from_ext   bool // the source frame is an extended (29-bit) id — the rx match checks rx.ext
 	to_ext     bool // the destination on-wire id width (raw: = from_ext; signal: the dest frame)
 	raw_ident  bool // src/dst frames are byte-layout identical — forward by raw copy + id remap
+	dst_sg     candb.Signal // SIGNAL route: the destination signal, whose range the re-encode holds to
 	// (the ThreadX gateway comm thread forwards these on the target without a decode/re-encode
 	//  codec; a route whose layouts DIFFER stays host-only until on-target transcode lands)
 }
@@ -534,11 +535,12 @@ fn gateway_extra_buses(m Model) []string {
 	return out
 }
 
-// gateway_forward_arms emits the raw-copy + id-remap forwarders for every route whose
-// SOURCE is `src_bus`, to be injected into that channel's rx-drain loop. Each arm matches
-// the source frame (id + dlc + id-width) and re-sends the SAME payload under the
-// destination id on the destination channel, tx_ready-gated. Only raw_ident routes reach
-// here (parse-time + emit-time guards), so a verbatim payload copy is exact on the wire.
+// gateway_forward_arms emits the forwarders for every route whose SOURCE is `src_bus`, to be
+// injected into that channel's rx-drain loop. Each arm matches the source frame (id + dlc +
+// id-width) and sends it under the destination id on the destination channel, tx_ready-gated: a
+// FRAME route forwards the payload as it is; a SIGNAL route re-encodes its value through the one
+// send encode (route_reencode_lines), held to the destination signal's range and counted. Only
+// raw_ident routes reach here (parse-time + emit-time guards), so the layouts are identical.
 fn gateway_forward_arms(m Model, src_bus string) []string {
 	mut out := []string{}
 	// NM gate: a gateway with NM enabled must stay SILENT on its MANAGED bus while asleep — a
@@ -563,14 +565,63 @@ fn gateway_forward_arms(m Model, src_bus string) []string {
 		out << '\t\t\t\t\tlen: ${r.to_dlc}'
 		out << '\t\t\t\t\text: ${r.to_ext}'
 		out << '\t\t\t\t}'
-		out << '\t\t\t\tff.data = rx.data // raw_ident: bytes are bit-identical, only the id/bus differ'
-		out << '\t\t\t\tif ${nm_gate}${dst}.tx_ready() {'
-		out << '\t\t\t\t\t${dst}.send(ff)'
-		out << '\t\t\t\t\tg_fwd_count++ // count frames actually forwarded, not ones dropped on a full tx FIFO / NM sleep'
-		out << '\t\t\t\t}'
+		if r.signal == '' {
+			// a FRAME route forwards the PDU as it is: its bytes are not this node's values
+			out << '\t\t\t\tff.data = rx.data // frame route: forwarded as is, only the id/bus differ'
+			out << '\t\t\t\tif ${nm_gate}${dst}.tx_ready() {'
+			out << '\t\t\t\t\t${dst}.send(ff)'
+			out << '\t\t\t\t\tg_fwd_count++ // count frames actually forwarded, not ones dropped on a full tx FIFO / NM sleep'
+			out << '\t\t\t\t}'
+		} else {
+			out << route_reencode_lines(r, dst, nm_gate)
+		}
 		out << '\t\t\t}'
 	}
 	return out
+}
+
+// route_reencode_lines: a SIGNAL route on the target comm thread — the value decoded from the source
+// frame and re-encoded into the destination through the one send encode (candb encode_lines:
+// com.encode_raw, held to the destination signal's range, counted once sent), as the host bridge's
+// route does through `_set`. The route is layout-identical (raw_ident: the frame carries only this
+// signal, little-endian, at one position and scale, <= 52 bits), so the payload is copied and only the
+// signal's own bits are rewritten.
+fn route_reencode_lines(r Route, dst string, nm_gate string) []string {
+	sg := r.dst_sg
+	n := sg.length
+	ind := '\t\t\t\t'
+	mut out := ['${ind}ff.data = rx.data // signal route: the payload, the value re-encoded below']
+	out << '${ind}mut rt_v := u64(0)'
+	out << '${ind}for i in 0 .. ${n} {'
+	out << '${ind}\tg := ${sg.start_bit} + i'
+	out << '${ind}\trt_v |= u64((rx.data[g / 8] >> (g % 8)) & 1) << i'
+	out << '${ind}}'
+	raw := if sg.is_signed {
+		'(if rt_v & (u64(1) << ${n - 1}) != 0 { f64(i64(rt_v) - (i64(1) << ${n})) } else { f64(rt_v) })'
+	} else {
+		'f64(rt_v)'
+	}
+	out << '${ind}rt_phys := ${raw} * ${route_f64lit(sg.factor)} + ${route_f64lit(sg.offset)}'
+	out << sg.encode_lines('rt_phys', 'rt_raw', 'rt_sat', ind) or {
+		panic('route: signal "${r.signal}": ${err}')
+	}
+	out << '${ind}for i in 0 .. ${n} {'
+	out << '${ind}\tg := ${sg.start_bit} + i'
+	out << '${ind}\tbm := u8(1) << (g % 8)'
+	out << '${ind}\tff.data[g / 8] = (ff.data[g / 8] & ~bm) | (u8((rt_raw >> i) & 1) << (g % 8))'
+	out << '${ind}}'
+	out << '${ind}if ${nm_gate}${dst}.tx_ready() {'
+	out << '${ind}\tif ${dst}.send(ff) && rt_sat {'
+	out << '${ind}\t\ttx_sat.add(1)'
+	out << '${ind}\t}'
+	out << '${ind}\tg_fwd_count++ // count frames actually forwarded, not ones dropped on a full tx FIFO / NM sleep'
+	out << '${ind}}'
+	return out
+}
+
+fn route_f64lit(x f64) string {
+	t := x.str()
+	return if t.contains('.') || t.contains('e') { t } else { t + '.0' }
 }
 
 fn parse_routes(doc toml.Doc, dbc string, frames FrameCfg) []Route {
@@ -672,6 +723,7 @@ fn parse_routes(doc toml.Doc, dbc string, frames FrameCfg) []Route {
 				// remember the destination signal's bit span so validation can reject a
 				// route whose value would land on the frame's E2E/SecOC protection bytes.
 				routes[i].to_bit = dst_sg.start_bit
+				routes[i].dst_sg = dst_sg
 				routes[i].to_len = dst_sg.length
 				// P2a.2b TRANSCODES the physical value (differing factor/offset/width/bit-
 				// position) and RATE-ADAPTS (differing cadence) — but it routes a NUMBER, so

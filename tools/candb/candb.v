@@ -330,8 +330,8 @@ pub fn (s Signal) raw_range() !RawRange {
 		if s.factor < 0 {
 			a, z = z, a
 		}
-		rl := math.max(math.ceil(a - grid_tol(a)), wlo)
-		rh := math.min(math.floor(z + grid_tol(z)), whi)
+		rl := math.max(grid_ceil(a), wlo)
+		rh := math.min(grid_floor(z), whi)
 		if rl > rh {
 			note = 'range [${s.minimum}|${s.maximum}] holds no raw value the ${n}-bit width carries'
 		} else {
@@ -350,10 +350,20 @@ pub fn (s Signal) raw_range() !RawRange {
 	mut named := []NamedRaw{}
 	mut keys := s.values.keys()
 	keys.sort()
-	for k in keys {
-		if k > mask {
-			continue // not a value of this width
+	mut seen := map[u64]bool{}
+	for key in keys {
+		// a negative key of a signed signal is parsed as the 64-bit two's complement (-128 is
+		// 0xFF..80): sign-extended from the width, it is that width's pattern (0x80)
+		k := if key > mask && s.is_signed && n < 64 && key | mask == ~u64(0)
+			&& key & (u64(1) << (n - 1)) != 0 {
+			key & mask
+		} else {
+			key
 		}
+		if k > mask || k in seen {
+			continue // not a value of this width, or one already listed
+		}
+		seen[k] = true
 		steps := if s.is_signed && n < 64 && k & (u64(1) << (n - 1)) != 0 {
 			f64(i64(k | ~mask)) // sign-extended
 		} else if s.is_signed {
@@ -365,7 +375,7 @@ pub fn (s Signal) raw_range() !RawRange {
 			named << NamedRaw{
 				steps: steps
 				raw:   k
-				label: s.values[k] or { '' }
+				label: s.values[key] or { '' }
 			}
 		}
 	}
@@ -381,10 +391,23 @@ pub fn (s Signal) raw_range() !RawRange {
 	}
 }
 
-// grid_tol: how far a quotient may sit off the raw grid by the division's rounding alone — a few
-// ULPs of it, never a fraction of a raw step that a real value could occupy.
+// grid_floor / grid_ceil: the last raw step at or below / the first at or above a quotient, taking
+// one that misses a step by the division's own rounding alone (0.3 / 0.1 is 2.9999999999999996, and is
+// 3) as that step. The miss is measured on the fraction, which is exact, so an exact boundary is never
+// moved and the tolerance — a few ULPs, never a quarter step — cannot round a sum across a step.
+fn grid_floor(q f64) f64 {
+	f := math.floor(q)
+	return if q - f >= 1.0 - grid_tol(q) { f + 1.0 } else { f }
+}
+
+fn grid_ceil(q f64) f64 {
+	c := math.ceil(q)
+	return if c - q >= 1.0 - grid_tol(q) { c - 1.0 } else { c }
+}
+
+// grid_tol: how far a quotient may sit off the raw grid by the division's rounding alone.
 fn grid_tol(q f64) f64 {
-	return 4.0 * 2.220446049250313e-16 * math.max(1.0, math.abs(q))
+	return math.min(4.0 * 2.220446049250313e-16 * math.max(1.0, math.abs(q)), 0.25)
 }
 
 // exact_raw: a whole-number f64 inside the width as its raw bits (two's complement when negative).
