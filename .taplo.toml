@@ -1,0 +1,15 @@
+# Taplo / Even Better TOML: completion, hover docs and validation for the two configuration files.
+# The schemas are GENERATED from tools/cfgschema (`make config-docs`); docs/config-reference.md is
+# the same schema as a document. gen-<node>.toml is sysgen's complete ecu.toml, so it validates as one.
+
+[[rule]]
+include = ["**/ecu.toml", "**/gen-*.toml"]
+exclude = ["requirements/**"]  # requirements/ecu.toml and system.toml are [[req]] documents
+[rule.schema]
+path = "./schema/ecu.schema.json"
+
+[[rule]]
+include = ["**/system.toml"]
+exclude = ["requirements/**"]
+[rule.schema]
+path = "./schema/system.schema.json"

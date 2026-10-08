@@ -10,6 +10,7 @@ module sysmodel
 import os
 import tools.candb
 import tools.doipcfg
+import tools.cfgschema
 
 pub enum Severity {
 	error
@@ -145,12 +146,13 @@ fn check_dissolved_nodes(s System) []Issue {
 		// host-side node): the generator emits no [nm] for it and the cluster checks skip it.
 		// Not every ECU on an NM bus is an NM node; the alive/peer coherence rules apply to
 		// the ones that are (REQ-TOPO-004).
-		if n.has_nm_alloc && n.nm > 0xff {
+		nm_key := cfgschema.system.key('sys_node', 'nm')
+		if n.has_nm_alloc && !nm_key.in_range(i64(n.nm)) {
 			// loom2v requires the NM node id in 0..255 (the generated [nm] node)
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-002'
-				msg:      'node "${n.name}": nm 0x${n.nm.hex()} exceeds 0xff — the NM node id is 0..255'
+				msg:      'node "${n.name}": nm 0x${n.nm.hex()} exceeds 0x${nm_key.max:x} — the NM node id is ${nm_key.min}..${nm_key.max}'
 			}
 		}
 		someip_leaf := s.is_someip_leaf(n)
@@ -736,7 +738,14 @@ fn check_topology_wellformed(s System) []Issue {
 		issues << Issue{
 			severity: .error
 			req:      'REQ-TOPO-001'
-			msg:      'unknown top-level section "${k}" in system.toml (expected bus / node / signal / route)'
+			msg:      'unknown top-level section "${k}" in system.toml (expected ${cfgschema.system.table('sys_top').names().join(' / ')})'
+		}
+	}
+	for m in s.unknown_nested {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-001'
+			msg:      m
 		}
 	}
 	mut iface_seen := map[string]string{}
@@ -745,7 +754,7 @@ fn check_topology_wellformed(s System) []Issue {
 		// the exact string 'someip', so a typo ("somepi") would silently fall back to
 		// CAN behaviour — DBC required, membership by interface — instead of failing
 		// here where the mistake is (REQ-TOPO-001).
-		if b.kind !in ['can', 'someip'] {
+		if b.kind !in cfgschema.system.key('sys_bus', 'kind').choices {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-001'
@@ -782,18 +791,20 @@ fn check_topology_wellformed(s System) []Issue {
 				msg:      'bus "${b.name}": `version` must be an integer — a non-integer coerces to 0, which is a legal interface version, so the error would lower into a real wire contract'
 			}
 		}
+		svc_key := cfgschema.system.key('sys_bus', 'service')
+		ver_key := cfgschema.system.key('sys_bus', 'version')
 		if b.kind == 'someip' && !b.service_ok {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-003'
-				msg:      'bus "${b.name}": `service` is outside the SOME/IP service id range 0x0000..0xFFFF'
+				msg:      'bus "${b.name}": `service` is outside the SOME/IP service id range 0x${svc_key.min:04X}..0x${svc_key.max:04X}'
 			}
 		}
 		if b.kind == 'someip' && !b.version_ok {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-003'
-				msg:      'bus "${b.name}": `version` is outside the SOME/IP interface version range 0..255'
+				msg:      'bus "${b.name}": `version` is outside the SOME/IP interface version range ${ver_key.min}..${ver_key.max}'
 			}
 		}
 		// NM is the CAN alive-frame protocol (the node validator rejects [nm] on an eth
@@ -2217,14 +2228,15 @@ fn check_someip_signal_frames(s System) []Issue {
 		// data id likewise; u32() had already truncated an out-of-range value into a
 		// legal-looking one, which then passed the generated config's own 16-bit check and
 		// transmitted under an id the system never declared (codex on #245).
-		if fr.has_id && (fr.id_raw < 0x8000 || fr.id_raw > 0xFFFF) {
+		id_key := cfgschema.system.key('sys_frame', 'id')
+		if fr.has_id && !id_key.in_range(fr.id_raw) {
 			// The class bit, not just the width: a signal frame is an EVENT (bit 15 set), and
 			// the generated gate says so too — checking only 16 bits let syscheck report OK on
 			// a config sysgen then refused (codex on #245).
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-003'
-				msg:      'frame "${fr.name}": id ${fr.id_raw} is not a SOME/IP event id — a signal frame is an event, so bit 15 is set (0x8000..0xFFFF); methods own 0x0001..0x7FFF'
+				msg:      'frame "${fr.name}": id ${fr.id_raw} is not a SOME/IP event id — a signal frame is an event, so bit 15 is set (0x${id_key.min:X}..0x${id_key.max:X}); methods own 0x0001..0x7FFF'
 			}
 		}
 		for k in fr.unknown_keys {
@@ -2256,7 +2268,7 @@ fn check_someip_signal_frames(s System) []Issue {
 					req:      'REQ-TOPO-003'
 					msg:      'frame "${fr.name}": e2e counter_pos/crc_pos must be integers — a fraction truncates to a VALID offset (1.5 -> 1), and the lowered integer is then indistinguishable from an authored one'
 				}
-			} else if fr.e2e_data_id_raw < 0 || fr.e2e_data_id_raw > 0xFFFF {
+			} else if !cfgschema.system.key('sys_frame_e2e', 'data_id').in_range(fr.e2e_data_id_raw) {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-003'
@@ -2265,14 +2277,14 @@ fn check_someip_signal_frames(s System) []Issue {
 			}
 			// The TRAILER POSITIONS narrow the same way: 4294967303 became 7, a legal offset
 			// for the reference payload, silently relocating the counter.
-			if fr.e2e_counter_raw < 0 || fr.e2e_counter_raw > 0xFFFF {
+			if !cfgschema.system.key('sys_frame_e2e', 'counter_pos').in_range(fr.e2e_counter_raw) {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-003'
 					msg:      'frame "${fr.name}": e2e counter_pos ${fr.e2e_counter_raw} is not a byte offset in the payload'
 				}
 			}
-			if fr.e2e_crc_raw < 0 || fr.e2e_crc_raw > 0xFFFF {
+			if !cfgschema.system.key('sys_frame_e2e', 'crc_pos').in_range(fr.e2e_crc_raw) {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-003'
@@ -2282,6 +2294,7 @@ fn check_someip_signal_frames(s System) []Issue {
 			// the receiver's sender-loss timeout (REQ-E2E-002): required, as loom2v requires it on
 			// the receiving node, and longer than the sender's own cycle — at or below it the
 			// timeout fires between healthy frames and every value is withheld as late
+			to_key := cfgschema.system.key('sys_frame_e2e', 'timeout_ms')
 			if fr.tx_mode == 'event' {
 				// an event-only producer is silent while its value does not change, so the
 				// receiver's sender-loss timeout would report a healthy sender as lost
@@ -2296,11 +2309,11 @@ fn check_someip_signal_frames(s System) []Issue {
 					req:      'REQ-TOPO-003'
 					msg:      'frame "${fr.name}": e2e has no timeout_ms — the receiving node needs E2E\'s own sender-loss timeout (REQ-E2E-002)'
 				}
-			} else if !fr.e2e_timeout_int || fr.e2e_timeout_raw < 1 || fr.e2e_timeout_raw > 2147483 {
+			} else if !fr.e2e_timeout_int || !to_key.in_range(fr.e2e_timeout_raw) {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-003'
-					msg:      'frame "${fr.name}": e2e timeout_ms ${fr.e2e_timeout_raw} is not a timeout in ms (1..2147483)'
+					msg:      'frame "${fr.name}": e2e timeout_ms ${fr.e2e_timeout_raw} is not a timeout in ms (${to_key.min}..${to_key.max})'
 				}
 			} else if cyc := someip_send_cycle_ms(fr) {
 				if fr.e2e_timeout_raw <= cyc {
@@ -2348,18 +2361,20 @@ fn check_someip_signal_frames(s System) []Issue {
 				msg:      'frame "${fr.name}": tx min_delay_ms must be an integer — .i64() drops the fraction, so the lowered value would differ from the authored one'
 			}
 		}
-		if fr.has_cycle_ms && (fr.cycle_ms_raw < 1 || fr.cycle_ms_raw > 1_000_000) {
+		cyc_key := cfgschema.system.key('sys_frame_tx', 'cycle_ms')
+		gap_key := cfgschema.system.key('sys_frame_tx', 'min_delay_ms')
+		if fr.has_cycle_ms && !cyc_key.in_range(fr.cycle_ms_raw) {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-003'
-				msg:      'frame "${fr.name}": tx cycle_ms ${fr.cycle_ms_raw} is outside 1..1000000'
+				msg:      'frame "${fr.name}": tx cycle_ms ${fr.cycle_ms_raw} is outside ${cyc_key.min}..${cyc_key.max}'
 			}
 		}
-		if fr.has_min_delay_ms && (fr.min_delay_ms_raw < 0 || fr.min_delay_ms_raw > 1_000_000) {
+		if fr.has_min_delay_ms && !gap_key.in_range(fr.min_delay_ms_raw) {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-003'
-				msg:      'frame "${fr.name}": tx min_delay_ms ${fr.min_delay_ms_raw} is outside 0..1000000'
+				msg:      'frame "${fr.name}": tx min_delay_ms ${fr.min_delay_ms_raw} is outside ${gap_key.min}..${gap_key.max}'
 			}
 		}
 		// NOTE: the derived payload is NOT measured here. Its size, its alignment and the E2E
@@ -2613,6 +2628,7 @@ fn check_someip_segment(s System) []Issue {
 			}
 		}
 		mut addr_of := map[string]string{}
+		port_key := cfgschema.system.key('sys_endpoint', 'port')
 		for n in members {
 			if n.has_endpoint && !n.has_port {
 				issues << Issue{
@@ -2620,11 +2636,11 @@ fn check_someip_segment(s System) []Issue {
 					req:      'REQ-TOPO-005'
 					msg:      'node "${n.name}": its `endpoint` has no `port` — the generated [someip] needs one, and 0 is not a UDP port'
 				}
-			} else if n.has_endpoint && (n.port_raw < 1 || n.port_raw > 0xFFFF) {
+			} else if n.has_endpoint && !port_key.in_range(n.port_raw) {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-005'
-					msg:      'node "${n.name}": endpoint port ${n.port_raw} is outside 1..65535'
+					msg:      'node "${n.name}": endpoint port ${n.port_raw} is outside ${port_key.min}..${port_key.max}'
 				}
 			}
 			if !n.has_endpoint || n.endpoint == '' {
@@ -2841,17 +2857,18 @@ fn check_doip(s System) []Issue {
 			logical_of[n.doip_logical] = n.name
 		}
 		if n.has_doip_functional {
+			fa_key := cfgschema.system.key('sys_doip', 'functional')
 			if !n.doip_functional_int {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-005'
 					msg:      'node "${n.name}": doip `functional` must be an integer'
 				}
-			} else if n.doip_functional_raw < 0xE400 || n.doip_functional_raw > 0xEFFF {
+			} else if !fa_key.in_range(n.doip_functional_raw) {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-005'
-					msg:      'node "${n.name}": doip functional address 0x${n.doip_functional_raw.hex()} is outside the functional range 0xE400..0xEFFF'
+					msg:      'node "${n.name}": doip functional address 0x${n.doip_functional_raw.hex()} is outside the functional range 0x${fa_key.min:X}..0x${fa_key.max:X}'
 				}
 			}
 		}

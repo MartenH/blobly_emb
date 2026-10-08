@@ -13,6 +13,7 @@
 module ecumodel
 
 import toml
+import tools.cfgschema
 
 // toml_arr returns the array of tables under `key`, or empty when the key is absent — so an
 // ecu.toml that omits an optional section doesn't phantom-iterate a single empty entry.
@@ -223,32 +224,35 @@ pub fn validate(doc toml.Doc) []string {
 		}
 		if 'level' in trm {
 			lvl := str_of(trm, 'level')
-			if lvl !in ['fb', 'thread', 'thread+isr', 'thread+fb', 'all'] {
-				errs << '[trace] level "${lvl}" is invalid (fb | thread | thread+isr | thread+fb | all)'
+			levels := cfgschema.ecu.key('trace', 'level').choices
+			if lvl !in levels {
+				errs << '[trace] level "${lvl}" is invalid (${levels.join(' | ')})'
 			}
 		}
 		if 'mode' in trm {
 			md := str_of(trm, 'mode')
-			if md !in ['ring', 'oneshot'] {
-				errs << '[trace] mode "${md}" is invalid (ring | oneshot)'
+			modes := cfgschema.ecu.key('trace', 'mode').choices
+			if md !in modes {
+				errs << '[trace] mode "${md}" is invalid (${modes.join(' | ')})'
 			}
 		}
 		// pre_pct/buffer_records: only range-check actual integers. .i64() returns 0 for a
 		// non-numeric value, so a string like "150" would slip through when loom2v calls
 		// validate() without ecucheck's type pass first — check the type here too.
 		if v := trm['pre_pct'] {
+			pk := cfgschema.ecu.key('trace', 'pre_pct')
 			if v is i64 {
-				if v < 0 || v > 100 {
-					errs << '[trace] pre_pct ${v} out of range (0..100)'
+				if !pk.in_range(v) {
+					errs << '[trace] pre_pct ${v} out of range (${pk.min}..${pk.max})'
 				}
 			} else {
-				errs << '[trace] pre_pct must be an integer (0..100)'
+				errs << '[trace] pre_pct must be an integer (${pk.min}..${pk.max})'
 			}
 		}
 		if v := trm['push_ms'] {
 			if v is i64 {
-				if v < 0 {
-					errs << '[trace] push_ms ${v} must be >= 0 (0 disables the HandlerStat heartbeat)'
+				if !cfgschema.ecu.key('trace', 'push_ms').in_range(v) {
+					errs << '[trace] push_ms ${v} must be >= ${cfgschema.ecu.key('trace', 'push_ms').min} (0 disables the HandlerStat heartbeat)'
 				}
 			} else {
 				errs << '[trace] push_ms must be an integer (0 = off)'
@@ -260,12 +264,13 @@ pub fn validate(doc toml.Doc) []string {
 			// capped by a single payload. The bound left is memory sanity — 4096 records is
 			// 32 KB of ring — and the ThreadX exec-hook path also can't snapshot more than
 			// the recorder's RING_CAP (256 in trace_hooks.c).
+			bk := cfgschema.ecu.key('trace', 'buffer_records')
 			if v is i64 {
-				if v < 1 || v > 4096 {
-					errs << '[trace] buffer_records ${v} out of range (1..4096 — the dump is multi-block; 4096 records = 32 KB of ring)'
+				if !bk.in_range(v) {
+					errs << '[trace] buffer_records ${v} out of range (${bk.min}..${bk.max} — the dump is multi-block; ${bk.max} records = ${bk.max * 8 / 1024} KB of ring)'
 				}
 			} else {
-				errs << '[trace] buffer_records must be an integer (1..4096)'
+				errs << '[trace] buffer_records must be an integer (${bk.min}..${bk.max})'
 			}
 		}
 		// Frame ids (cmd_id/rsp_id/stat_id/record_id/dump_fc_id) are each either a literal CAN id
@@ -281,11 +286,11 @@ pub fn validate(doc toml.Doc) []string {
 			src := str_of(tgm, 'source')
 			if src == '' {
 				errs << '[trace] trigger table has no source — set source = "overrun", or omit the whole [trace.trigger] table for no trigger'
-			} else if src != 'overrun' {
+			} else if src !in cfgschema.ecu.key('trigger', 'source').choices {
 				errs << '[trace] trigger source "${src}" is not supported (only "overrun" is generated today)'
 			} else {
 				b := tgm['budget_us'] or { toml.Any(0) }
-				if b !is i64 || b.i64() <= 0 {
+				if b !is i64 || !cfgschema.ecu.key('trigger', 'budget_us').in_range(b.i64()) {
 					errs << '[trace] trigger source "overrun" needs a positive budget_us (µs a handler may run before the ring freezes)'
 				}
 			}
@@ -453,8 +458,9 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 	if bv := doc.value_opt('bus') {
 		for bname, btbl in bv.as_map() {
 			kind := str_of(btbl.as_map(), 'kind')
-			if kind !in ['', 'can', 'eth'] {
-				errs << 'bus "${bname}" kind "${kind}" is invalid (can | eth)'
+			kinds := cfgschema.ecu.key('bus', 'kind').choices
+			if kind != '' && kind !in kinds {
+				errs << 'bus "${bname}" kind "${kind}" is invalid (${kinds.join(' | ')})'
 			} else if kind == 'eth' {
 				eth_buses << bname
 			}
@@ -567,7 +573,7 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 		}
 		if v := fm['id'] {
 			if v is i64 {
-				if v < 0x8000 || v > 0xFFFF {
+				if !cfgschema.ecu.key('frame', 'id').in_range(v) { // the SOME/IP event-id range
 					errs << 'eth frame "${fname}" id 0x${v.hex()} is not an event id — signal frames are events (bit 15 set: 0x8000..0xFFFF); methods are module-bound and arrive with the RPC phase'
 				} else if v in seen_ids {
 					errs << 'eth frame "${fname}" reuses event id 0x${v.hex()} (already bound by "${seen_ids[v]}") — ids are unique across all bindings'
@@ -698,20 +704,23 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 		if txv := fm['tx'] {
 			txm := txv.as_map()
 			mode := str_of(txm, 'mode')
-			if 'mode' in txm && mode !in ['cyclic', 'event', 'mixed'] {
+			// an eth frame IS a SOME/IP event: the system [[frame]]'s modes and bounds are its own
+			if 'mode' in txm && mode !in cfgschema.eth_tx_modes() {
 				errs << 'eth frame "${fname}" tx mode "${mode}" is invalid (cyclic | event | mixed — the P1 modes; triggered has no generated trigger path)'
 			}
 			// bound cycle_ms whenever PRESENT (the generator always narrows +
 			// emits it), and require it valid for the modes that consume it
 			if mode in ['', 'cyclic', 'mixed'] || 'cycle_ms' in txm {
 				cyc := txm['cycle_ms'] or { toml.Any(i64(100)) }
-				if cyc !is i64 || cyc.i64() < 1 || cyc.i64() > 1_000_000 {
-					errs << 'eth frame "${fname}" tx cycle_ms must be 1..1000000'
+				ck := cfgschema.system.key('sys_frame_tx', 'cycle_ms')
+				if cyc !is i64 || !ck.in_range(cyc.i64()) {
+					errs << 'eth frame "${fname}" tx cycle_ms must be ${ck.min}..${ck.max}'
 				}
 			}
 			if v := txm['min_delay_ms'] {
-				if v !is i64 || v.i64() < 0 || v.i64() > 1_000_000 {
-					errs << 'eth frame "${fname}" tx min_delay_ms must be 0..1000000'
+				gk := cfgschema.system.key('sys_frame_tx', 'min_delay_ms')
+				if v !is i64 || !gk.in_range(v.i64()) {
+					errs << 'eth frame "${fname}" tx min_delay_ms must be ${gk.min}..${gk.max}'
 				}
 			}
 		}
@@ -752,7 +761,7 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			// too: .i64() coerces a string to 0, which would pass the range
 			// when loom2v runs without ecucheck's schema pass.
 			if dv := evm['data_id'] {
-				if dv !is i64 || dv.i64() < 0 || dv.i64() > 0xFFFF {
+				if dv !is i64 || !cfgschema.ecu.key('e2e', 'data_id').in_range(dv.i64()) {
 					errs << 'eth frame "${fname}" E2E data_id must be an integer fitting 16 bits (0..0xFFFF)'
 				}
 			} else {
@@ -958,7 +967,7 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			}
 			if mv := bm['method'] {
 				if mv is i64 {
-					if mv < 1 || mv > 0x7FFF {
+					if !cfgschema.ecu.key('shell', 'method').in_range(mv) {
 						errs << '[shell] method 0x${mv.hex()} is not a method id — methods have bit 15 CLEAR and are nonzero (0x0001..0x7FFF; events own 0x8000..)'
 					}
 				} else {
@@ -1000,7 +1009,7 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 		for kk in mod_id_keys[blk] {
 			v := bm[kk] or { continue }
 			if v is i64 {
-				if v < 0x8000 || v > 0xFFFF {
+				if !cfgschema.ecu.key('frame', 'id').in_range(v) { // the SOME/IP event-id range
 					errs << '[${blk}] ${kk} id 0x${v.hex()} on the eth bus is not an event id (0x8000..0xFFFF)'
 				} else if v in seen_ids {
 					errs << '[${blk}] ${kk} reuses event id 0x${v.hex()} (already bound by "${seen_ids[v]}") — ids are unique across all bindings'
@@ -1073,18 +1082,19 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			}
 		}
 		if v := spm['service'] {
-			if v !is i64 || v.i64() < 0 || v.i64() > 0xFFFF {
+			if v !is i64 || !cfgschema.ecu.key('someip', 'service').in_range(v.i64()) {
 				errs << '[someip] service must fit 16 bits (0..0xFFFF)'
 			}
 		}
 		if v := spm['version'] {
-			if v !is i64 || v.i64() < 0 || v.i64() > 0xFF {
+			if v !is i64 || !cfgschema.ecu.key('someip', 'version').in_range(v.i64()) {
 				errs << '[someip] version must fit 8 bits (0..255) — the interface version byte in every header'
 			}
 		}
 		if v := spm['port'] {
-			if v !is i64 || v.i64() < 1 || v.i64() > 65535 {
-				errs << '[someip] port must be 1..65535'
+			pk := cfgschema.ecu.key('someip', 'port')
+			if v !is i64 || !pk.in_range(v.i64()) {
+				errs << '[someip] port must be ${pk.min}..${pk.max}'
 			}
 		}
 		if 'peer' in spm && !peer_ok(str_of(spm, 'peer')) {
@@ -1318,14 +1328,16 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 		}
 		if kind == 'pwm' {
 			fh := (pm['freq_hz'] or { toml.Any(0) })
-			if fh !is i64 || (fh as i64) <= 0 || (fh as i64) > 10_000_000 {
+			fk := cfgschema.ecu.key('io_pwm', 'freq_hz')
+			if fh !is i64 || !fk.in_range(fh as i64) {
 				// 10 MHz PWM ceiling: also keeps freq_hz inside V int / u32 before the
 				// generator narrows it (a >2^31 value would wrap — codex emb#152)
-				errs << 'io.pwm "${name}" needs a freq_hz in 1..10000000 (the carrier; a zero divisor is not a timer, and a huge value wraps the 32-bit codegen)'
+				errs << 'io.pwm "${name}" needs a freq_hz in ${fk.min}..${fk.max} (the carrier; a zero divisor is not a timer, and a huge value wraps the 32-bit codegen)'
 			}
 			if iv := pm['init'] {
-				if iv is i64 && (iv < 0 || iv > 1000) {
-					errs << 'io.pwm "${name}" init must be a permille 0..1000 (the pre-publication duty)'
+				ik := cfgschema.ecu.key('io_pwm', 'init')
+				if iv is i64 && !ik.in_range(iv) {
+					errs << 'io.pwm "${name}" init must be a permille ${ik.min}..${ik.max} (the pre-publication duty)'
 				}
 			}
 		}
@@ -1459,14 +1471,16 @@ pub fn validate_bulk(doc toml.Doc, part_names map[string]bool, thread_part map[s
 		// arithmetic (BULK_BYTES, the shared-window offset accumulation) can never overflow and
 		// silently pass the budget check. 1 MiB buffers x 1024 deep is already far beyond any
 		// real on-chip pool; a cross-core pool is separately bounded by the shared window.
-		max_bufsz := i64(1) << 20 // 1 MiB
-		max_nbuf := i64(1024)
+		bufsz_key := cfgschema.ecu.key('bulk', 'bufsz')
+		nbuf_key := cfgschema.ecu.key('bulk', 'nbuf')
+		max_bufsz := bufsz_key.max // 1 MiB
+		max_nbuf := nbuf_key.max
 		if 'bufsz' !in bm {
 			errs << 'bulk pool "${bname}" is missing `bufsz`'
 		} else if v := bm['bufsz'] {
 			if v is i64 {
-				if v <= 0 {
-					errs << 'bulk pool "${bname}" bufsz ${v} must be > 0'
+				if v < bufsz_key.min {
+					errs << 'bulk pool "${bname}" bufsz ${v} must be > ${bufsz_key.min - 1}'
 				} else if v % 32 != 0 {
 					errs << 'bulk pool "${bname}" bufsz ${v} must be a multiple of 32 (cache line alignment)'
 				} else if v > max_bufsz {
@@ -1481,8 +1495,8 @@ pub fn validate_bulk(doc toml.Doc, part_names map[string]bool, thread_part map[s
 			errs << 'bulk pool "${bname}" is missing `nbuf`'
 		} else if v := bm['nbuf'] {
 			if v is i64 {
-				if v <= 0 {
-					errs << 'bulk pool "${bname}" nbuf ${v} must be > 0'
+				if v < nbuf_key.min {
+					errs << 'bulk pool "${bname}" nbuf ${v} must be > ${nbuf_key.min - 1}'
 				} else if v > max_nbuf {
 					errs << 'bulk pool "${bname}" nbuf ${v} exceeds the ${max_nbuf} limit'
 				}

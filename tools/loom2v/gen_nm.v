@@ -60,8 +60,9 @@ fn parse_nm(doc toml.Doc, dbc string) NmCfg {
 	}
 	t.bus = (sm['bus'] or { toml.Any('') }).string()
 	node := (sm['node'] or { panic('loom2v: [nm] needs node = <this ECU source node id, 0..255>') }).int()
-	if node < 0 || node > 255 {
-		panic('loom2v: [nm] node must be 0..255, got ${node}')
+	nk := schema_key('nm', 'node')
+	if !nk.in_range(node) {
+		panic('loom2v: [nm] node must be ${nk.min}..${nk.max}, got ${node}')
 	}
 	t.node = u8(node)
 	t.pn = u64((sm['pn'] or { toml.Any(0) }).int())

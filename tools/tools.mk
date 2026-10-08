@@ -22,6 +22,7 @@ V ?= v
 
 # name -> what V compiles: one file for a single-file program, the directory for a multi-file one
 TOOL_SRC_cfg2v       := tools/cfg2v/gen.v
+TOOL_SRC_cfgdoc      := tools/cfgdoc/main.v
 TOOL_SRC_dbc2cfg     := tools/dbc2cfg/gen.v
 TOOL_SRC_dbcmerge    := tools/dbcmerge/gen.v
 TOOL_SRC_ecucheck    := tools/ecucheck/gen.v

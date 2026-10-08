@@ -159,16 +159,18 @@ fn parse_params(doc toml.Doc) []ParamCfg {
 			}
 		}
 		apply := (pm['apply'] or { toml.Any('next_dispatch') }).string()
-		if apply !in ['next_dispatch', 'reset'] {
+		if apply !in schema_key('param', 'apply').choices {
 			panic('loom2v: [[param]] "${name}" apply = "${apply}" — "next_dispatch" (the FB\'s next dispatch after the write) or "reset" (the next start)')
 		}
 		ver := (pm['version'] or { toml.Any(0) }).i64()
-		if ver < 0 || ver > 255 {
-			panic('loom2v: [[param]] "${name}" version = ${ver} is out of range (0..255)')
+		vk := schema_key('param', 'version')
+		if !vk.in_range(ver) {
+			panic('loom2v: [[param]] "${name}" version = ${ver} is out of range (${vk.min}..${vk.max})')
 		}
 		pin := (pm['nvm_id'] or { toml.Any(0) }).i64()
-		if pin < 0 || pin > 65534 {
-			panic('loom2v: [[param]] "${name}" nvm_id = ${pin} is out of range (0 = derived, 1..65534 = pin)')
+		nk := schema_key('param', 'nvm_id')
+		if !nk.in_range(pin) {
+			panic('loom2v: [[param]] "${name}" nvm_id = ${pin} is out of range (0 = derived, 1..${nk.max} = pin)')
 		}
 		if out.any(it.name == name) {
 			panic('loom2v: [[param]] "${name}" is declared twice')

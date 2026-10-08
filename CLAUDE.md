@@ -52,6 +52,19 @@ FBs, and generated code. Imports are short (`import sig`/`ports`/`osal`) via V's
 `-path`. No generated file lives in a hand-written dir; app never mixes with
 platform.
 
+**Configuration schema** (`tools/cfgschema`): ONE table per file — every table and key of
+`ecu.toml` and `system.toml` with its type, required flag, default, enumeration or range and a
+one-line description, as data. `ecucheck` walks an ecu.toml against it (unknown keys, types,
+required keys); sysmodel takes each system.toml table's key set from it; the leaf checks (a range,
+an enumeration — in ecumodel, loom2v and sysmodel) read their bounds with `cfgschema.ecu.key(ctx,
+name)` / `cfgschema.system.key(...)`, so a limit is stated once; the relation checks (cross-key,
+cross-node) stay where they are. A bound the runtime owns (DoIP timers, UDS levels, fault-memory
+sizes) is read from the runtime module there, not copied. **[`docs/config-reference.md`](docs/config-reference.md)**
+and `schema/{ecu,system}.schema.json` are GENERATED from it (`make config-docs`, `tools/cfgdoc`);
+`make check` fails when they are stale. `.taplo.toml` maps `**/ecu.toml`, `**/gen-*.toml` (sysgen's
+complete ecu.toml) and `**/system.toml` to the schemas, so Even Better TOML completes, explains and
+validates both files. Adding a key: add its row, then `make config-docs`.
+
 ## Build & test
 
 ```sh
