@@ -39,6 +39,13 @@ pub fn mask_ok(m u32) bool {
 	return m != 0 && host >= 3 && (host & (host + 1)) == 0
 }
 
+// unicast: an address a host or a router can hold — not in 0.0.0.0/8 (this network), 127.0.0.0/8
+// (loopback) or at or above 224.0.0.0 (multicast, reserved, the limited broadcast)
+pub fn unicast(a u32) bool {
+	top := a >> 24
+	return top != 0 && top != 127 && top < 224
+}
+
 // default_gateway: the .1 of the subnet, what driver/eth/netx_up.c sets when none is configured
 pub fn default_gateway(address u32, mask u32) u32 {
 	return (address & mask) | 1
@@ -106,7 +113,9 @@ pub fn resolve(address string, netmask ?string, gateway ?string) (Net, []string)
 	if errs.len > 0 {
 		return n, errs
 	}
-	if g & m != n.network() {
+	if !unicast(g) {
+		errs << 'gateway "${dotted(g)}" is not a unicast address (0.x, 127.x and 224.0.0.0 and above are not)'
+	} else if g & m != n.network() {
 		errs << 'gateway "${dotted(g)}" is not on the subnet ${n.subnet()}'
 	} else if g == n.network() {
 		errs << 'gateway "${dotted(g)}" is the network address of ${n.subnet()}'
@@ -121,6 +130,9 @@ pub fn resolve(address string, netmask ?string, gateway ?string) (Net, []string)
 // netmask or gateway is configured; on the default /24 this is the old rule: not .0, .1 or .255.
 pub fn host_problems(n Net) []string {
 	a := dotted(n.address)
+	if !unicast(n.address) {
+		return ['address "${a}" is not a unicast address (0.x, 127.x and 224.0.0.0 and above are not)']
+	}
 	if n.address == n.network() {
 		return ['address "${a}" is the network address of ${n.subnet()}']
 	}

@@ -19,7 +19,6 @@ import toml
 import tools.candb
 import tools.ecumodel
 import tools.doipcfg
-import tools.netcfg
 import tools.cfgschema
 
 // Bus — one CAN segment with its own contract. `name` is the system-scope key

@@ -1025,6 +1025,11 @@ fn test_a_subnet_the_node_cannot_bring_up_is_refused() {
 	sys.nodes[1].endpoint_netmask = '255.255.255.192'
 	sys.nodes[1].endpoint = '192.168.0.191'
 	assert seg_errs(sys).any(it.contains('address "192.168.0.191" is the broadcast address of 192.168.0.128/255.255.255.192')), seg_errs(sys).str()
+	// and only where NetX brings it up: a host member binds on the host's own network
+	sys = tel_system()
+	sys.nodes[1].view.is_threadx = false
+	sys.nodes[1].endpoint_netmask = '255.255.0.0'
+	assert seg_errs(sys).any(it.contains('configures a netmask or gateway, but it is not a threadx target')), seg_errs(sys).str()
 	sys = tel_system()
 	sys.nodes[1].endpoint_not_str = ['netmask']
 	assert seg_errs(sys).any(it.contains('endpoint `netmask` must be a string')), seg_errs(sys).str()

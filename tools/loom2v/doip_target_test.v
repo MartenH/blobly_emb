@@ -447,6 +447,14 @@ fn test_doip_and_someip_share_one_netx() {
 	// a CAN bus has no subnet
 	c7, o7, _, _ := generate_ecu('doip_can_mask', both.replace('interface = "vcan0"\n', 'interface = "vcan0"\ngateway = "192.168.0.1"\n'))
 	assert c7 != 0 && o7.contains('[bus.can0] `gateway` is an eth bus'), o7
+	// and a subnet nothing brings up is refused rather than dropped: the host backend binds on the
+	// host's own network
+	host := doip_eth_ecu.replace(doip_conn, '').replace('[target]\nkind    = "threadx"\ntick_ms = 1\n', '')
+	c8, o8, _, _ := generate_ecu('eth_host', host)
+	assert c8 == 0, o8
+	c9, o9, _, _ := generate_ecu('eth_host_mask', host.replace('interface = "192.168.0.50"\n',
+		'interface = "192.168.0.50"\nnetmask   = "255.255.0.0"\n'))
+	assert c9 != 0 && o9.contains('brings up no network to apply it to'), o9
 	// and a node with neither links no network at all
 	_, _, _, mk3 := generate_mk('no_net', '')
 	assert mk3.contains('LOOM_NET_SRCS :=\n'), mk3

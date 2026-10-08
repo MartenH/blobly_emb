@@ -91,3 +91,15 @@ fn test_check_judges_the_host_where_the_policy_says() {
 	_, s5, _ := check('192.168.0', '255.0.255.0', none, true)
 	assert s5.len == 2, s5.str()
 }
+
+// a gateway and a host address are unicast: subnet membership alone would take a multicast one
+// on a /1
+fn test_a_non_unicast_gateway_or_address_is_refused() {
+	_, e1 := resolve('192.168.0.50', '128.0.0.0', '224.0.0.1')
+	assert e1 == ['gateway "224.0.0.1" is not a unicast address (0.x, 127.x and 224.0.0.0 and above are not)']
+	_, e2 := resolve('127.0.0.5', '255.0.0.0', '127.0.0.1')
+	assert e2.len == 1 && e2[0].contains('not a unicast'), e2.str()
+	n, _ := resolve('239.1.2.3', none, none)
+	assert host_problems(n) == ['address "239.1.2.3" is not a unicast address (0.x, 127.x and 224.0.0.0 and above are not)']
+	assert unicast(0x0A000001) && !unicast(0x00000001) && !unicast(0xE0000001) && !unicast(0xFFFFFFFF)
+}

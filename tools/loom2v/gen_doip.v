@@ -67,6 +67,13 @@ fn node_net(m Model) netcfg.Net {
 // address that is not a host of it (a DoIP entity's always — its old /24 rule — an eth bus's once
 // it configures its subnet); and a subnet on a CAN bus, and two subnets on one node.
 fn validate_net(m Model) {
+	// a subnet is NetX's (driver/eth/netx_up.c): an image that brings none up has nothing to apply
+	// it to — the host backend binds an address on the host's own network, whatever its mask
+	configured := (m.doip.on && (m.doip.netmask != none || m.doip.gateway != none))
+		|| (m.eth != '' && (m.eth_netmask != none || m.eth_gateway != none))
+	if configured && !(m.target.threadx && (eth_thread_on(m) || m.doip.on)) {
+		panic('loom2v: a netmask or gateway is configured, but this image brings up no network to apply it to (a ThreadX target with [doip] or SOME/IP on its eth bus); the host binds an address on the host\'s own network')
+	}
 	for k in m.non_eth_net_keys {
 		panic('loom2v: [bus.${k} is an eth bus\'s key (its interface is an address); a CAN bus has no subnet')
 	}

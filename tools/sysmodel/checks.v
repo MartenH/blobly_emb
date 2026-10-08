@@ -3004,6 +3004,14 @@ fn check_endpoint_net(s System) []Issue {
 		if n.endpoint_netmask == none && n.endpoint_gateway == none && !n.has_doip {
 			continue // nothing configured, nothing brought up as an entity: the defaults stand
 		}
+		if (n.endpoint_netmask != none || n.endpoint_gateway != none) && !n.view.is_threadx {
+			// the subnet is NetX's (driver/eth/netx_up.c); a host member binds on the host's network
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": its endpoint configures a netmask or gateway, but it is not a threadx target — the subnet is brought up by NetX on the target; a host member binds its address on the host\'s own network, which nothing here configures'
+			}
+		}
 		_, subnet, host := netcfg.check(n.endpoint, n.endpoint_netmask, n.endpoint_gateway,
 			n.has_doip)
 		for w in subnet {
