@@ -472,7 +472,7 @@ A data identifier the server reads (0x22) and may write (0x2E). Its value is ONE
 | `id` | integer | yes | — | 0x0..0xFFFF | the 16-bit data identifier (0 is skipped) |
 | `ascii` | string |  | — |  | a constant value as an ASCII string (at most 32 bytes) |
 | `bytes` | string |  | — |  | a constant value as space-separated hex bytes (at most 32) |
-| `writable` | boolean |  | `false` |  | 0x2E may overwrite the constant's RAM copy (implied by `write`) |
+| `writable` | boolean |  | `false` |  | 0x2E may overwrite the constant's RAM copy with a record of exactly its size (implied by `write`) |
 | `signal` | string |  | — |  | a live value: the signal's, refreshed every pass, big-endian at its width; read-only |
 | `param` | string |  | — |  | the [[param]] this DID codes (0x2E) and reads back (0x22) |
 | `param_status` | boolean |  | `false` |  | one byte per [[param]]: 0 default / 1 coded / 2 reverted |

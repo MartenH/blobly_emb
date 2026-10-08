@@ -32,7 +32,7 @@ fn ecu_diag_tables() []Table {
 			req('id', .int).range(0, 0xFFFF).hex().doc('the 16-bit data identifier (0 is skipped)'),
 			k('ascii', .str).doc('a constant value as an ASCII string (at most ${uds.max_did_data} bytes)'),
 			k('bytes', .str).doc('a constant value as space-separated hex bytes (at most ${uds.max_did_data})'),
-			k('writable', .boolean).d('false').doc("0x2E may overwrite the constant's RAM copy (implied by `write`)"),
+			k('writable', .boolean).d('false').doc("0x2E may overwrite the constant's RAM copy with a record of exactly its size (implied by `write`)"),
 			k('signal', .str).doc("a live value: the signal's, refreshed every pass, big-endian at its width; read-only"),
 			k('param', .str).doc('the [[param]] this DID codes (0x2E) and reads back (0x22)'),
 			k('param_status', .boolean).d('false').doc('one byte per [[param]]: 0 default / 1 coded / 2 reverted'),

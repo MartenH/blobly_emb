@@ -36,7 +36,8 @@ module param
 // the parameter's status saying so (`reverted`), so a narrowed range is never bypassed.
 //
 // A write is durable before anything changes (§7, R6 / R7): the value is validated (0x13 for a
-// record of the wrong length, 0x31 for a field out of range), put into the journal, and only once
+// record of the wrong length — the server's check on the DID's declared size, which bind sets to the
+// parameter's width — 0x31 for a field out of range), put into the journal, and only once
 // the journal has accepted it does the 0x22 record, the status, and — for `apply = next_dispatch`
 // — the FB's input change. A refused put answers 0x72 generalProgrammingFailure and leaves this
 // run's live value, record and status as they were; the durable value too, unless the flash took
@@ -318,9 +319,9 @@ pub fn (mut ps Params) write(did u16, data &u8, n int) u8 {
 		return uds.nrc_request_out_of_range
 	}
 	mut p := &ps.p[i]
-	if n != p.width() {
-		return uds.nrc_incorrect_length
-	}
+	// the record's length is already checked: bind set the DID's declared size to p.width(), and
+	// the server refuses any other length with 0x13 before it calls the seam (one check, for
+	// every writable DID)
 	mut v := [max_fields]i64{}
 	p.decode(data, mut v)
 	if !p.in_range(v) {

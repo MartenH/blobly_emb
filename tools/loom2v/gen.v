@@ -1115,6 +1115,14 @@ fn parse_dids(doc toml.Doc) []DidCfg {
 		if 'write' in m && 'writable' in m && !(m['writable'] or { toml.Any(false) }).bool() {
 			panic('loom2v: [[did]] 0x${id.hex()} has writable = false AND a write = {...} gate — say which')
 		}
+		// a RAM cell's declared size is its record: 0x2E accepts exactly that many bytes (comm/uds,
+		// 0x13 otherwise), so a writable cell with none could never be written. A parameter's size
+		// is its width (comm/param bind); a live DID is refused as writable by validate_live_dids.
+		writable_cell := ((m['writable'] or { toml.Any(false) }).bool() || 'write' in m)
+			&& pname == '' && 'signal' !in m
+		if writable_cell && bytes.len == 0 {
+			panic('loom2v: [[did]] 0x${id.hex()} is writable but declares no record — give it `bytes` or `ascii`: 0x2E accepts a record of exactly that size')
+		}
 		dids << DidCfg{
 			id:             id
 			bytes:          bytes

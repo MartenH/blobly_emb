@@ -258,6 +258,33 @@ signal = "Workload"
 	assert did_value_width('i32') or { 0 } == 4
 }
 
+// emb#403: a writable RAM cell's declared size is what 0x2E accepts — the generator states it as the
+// DID's `len`, and a writable cell that declares no record (so no write could ever match it) is
+// refused
+fn test_a_writable_did_is_generated_with_its_declared_size() {
+	code, out, glue := generate('did_size', diag_conn + '
+[[did]]
+id    = 0x0102
+bytes = "00"
+write = { session = ["extended"], security = 1 }
+
+[[did]]
+id       = 0x0100
+writable = true
+bytes    = "00 00 00 00"
+')
+	assert code == 0, out
+	assert glue.contains('.dids[1].data[0] = u8(0x00)\n') && glue.contains('.dids[1].len = 1\n'), glue
+	assert glue.contains('.dids[2].len = 4\n'), glue
+	code2, out2, _ := generate('did_nosize', diag_conn + '
+[[did]]
+id       = 0x0100
+writable = true
+')
+	assert code2 != 0, 'loom2v accepted a writable DID with no record'
+	assert out2.contains('declares no record'), out2
+}
+
 // on a node with [nvm], the reset is an orderly shutdown: the journal flushed and marked clean
 // first, and a failing flush holds the reset for a bounded number of passes
 fn test_the_reset_flushes_the_journal_first() {
