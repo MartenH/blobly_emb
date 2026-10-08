@@ -65,7 +65,10 @@ sizes) is read from the runtime module there, not copied. **[`docs/config-refere
 and `schema/{ecu,system}.schema.json` are GENERATED from it (`make config-docs`, `tools/cfgdoc`);
 `make check` fails when they are stale. `.taplo.toml` maps `**/ecu.toml`, `**/gen-*.toml` (sysgen's
 complete ecu.toml) and `**/system.toml` to the schemas, so Even Better TOML completes, explains and
-validates both files. Adding a key: add its row, then `make config-docs`.
+validates both files. Adding a key: add its row, then `make config-docs`. A string row may carry
+`.ipv4()` (a dotted quad, `tools/netcfg`'s rule); a node's subnet — `endpoint`'s `netmask` and
+`gateway`, lowered beside the address — is judged by `tools/netcfg` in both sysmodel and loom2v and
+reaches `driver/eth/netx_up.c` (application and bootloader) as `LOOM_NET_ADDR_DEFS` (docs/net.md).
 
 ## Build & test
 

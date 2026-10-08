@@ -13,7 +13,8 @@
 #define MS_TICKS(ms) ((ULONG)(ms) * TX_TIMER_TICKS_PER_SECOND / 1000u)
 
 /* blob_net_up: NetX, the packet pool and the IP instance on the STM32H7 driver, with ARP, ICMP and
- * UDP, at the node's static address (the gateway is the .1 of its /24). The first call does it;
+ * UDP, at the node's static address on its subnet (BLOB_NET_NETMASK / BLOB_NET_GATEWAY; absent, the
+ * gateway is the .1 of its /24). The first call does it;
  * a later one with the SAME address is a no-op (0), with another address a refusal (-1) — one
  * address per node. ip_prio is the IP thread's priority, the FIRST caller's: DoIP calls from
  * tx_application_define with one below every application thread (loom2v doip_net_prio), so an image

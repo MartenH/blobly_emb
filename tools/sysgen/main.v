@@ -701,6 +701,7 @@ fn someip_sections(sys sysmodel.System, node sysmodel.Node, bus sysmodel.Bus, vi
 	b << '[bus.${iface}]'
 	b << 'kind      = "eth"'
 	b << 'interface = "${node.endpoint}"'
+	b << subnet_lines(node, 'netmask   ', 'gateway   ')
 	b << 'core      = 0'
 	b << ''
 	// The service contract comes from the BUS (every member is held to one service+version);
@@ -854,6 +855,20 @@ fn frame_peer(sys sysmodel.System, node sysmodel.Node, fr sysmodel.SysFrame, def
 	return endpoint_of(sys, p) or { '' }
 }
 
+// subnet_lines: the endpoint's `netmask` and `gateway`, beside its address wherever the address is
+// lowered (an eth [bus.*]'s interface, [doip]'s address) — only what system.toml configures, so a
+// node without them generates, and builds, exactly as before (the defaults are driver/eth's)
+fn subnet_lines(node sysmodel.Node, mask_key string, gw_key string) []string {
+	mut b := []string{}
+	if nm := node.endpoint_netmask {
+		b << '${mask_key}= "${nm}"'
+	}
+	if gw := node.endpoint_gateway {
+		b << '${gw_key}= "${gw}"'
+	}
+	return b
+}
+
 // doip_section: the node's [doip], lowered from its `doip` and its endpoint — one address per
 // node, declared once in system.toml (check_doip has refused every shape this cannot carry).
 fn doip_section(node sysmodel.Node) []string {
@@ -863,6 +878,7 @@ fn doip_section(node sysmodel.Node) []string {
 	mut b := []string{}
 	b << '[doip]'
 	b << 'address         = "${node.endpoint}"'
+	b << subnet_lines(node, 'netmask         ', 'gateway         ')
 	b << 'logical_address = 0x${node.doip_logical.hex().to_upper()}'
 	if node.has_doip_functional {
 		b << 'functional_address = 0x${node.doip_functional.hex().to_upper()}'

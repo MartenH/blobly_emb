@@ -17,6 +17,12 @@ static UCHAR pool_mem[POOL_COUNT * (POOL_PAYLOAD + sizeof(NX_PACKET))] __attribu
 static UCHAR ip_thread_stack[2048] __attribute__((aligned(8)));
 static UCHAR arp_cache[1024] __attribute__((aligned(4)));
 
+/* the node's subnet (gen/loom_build.mk's LOOM_NET_ADDR_DEFS, from its endpoint's netmask and
+ * gateway — tools/netcfg checked them): absent, a /24 whose first host, .1, is the gateway */
+#ifndef BLOB_NET_NETMASK
+#define BLOB_NET_NETMASK 0xFFFFFF00UL
+#endif
+
 static NX_PACKET_POOL pool;
 static NX_IP ip;
 static ULONG ip_addr;
@@ -97,7 +103,7 @@ int blob_net_up(const char *addr, unsigned int ip_prio) {
 	if (nx_packet_pool_create(&pool, "net-pool", POOL_PAYLOAD, pool_mem, sizeof(pool_mem)) != NX_SUCCESS) {
 		return -1;
 	}
-	if (nx_ip_create(&ip, "net-ip", a, 0xFFFFFF00UL, &pool, nx_driver_stm32h7,
+	if (nx_ip_create(&ip, "net-ip", a, BLOB_NET_NETMASK, &pool, nx_driver_stm32h7,
 	                 ip_thread_stack, sizeof(ip_thread_stack), ip_prio) != NX_SUCCESS) {
 		return -1;
 	}
@@ -105,7 +111,11 @@ int blob_net_up(const char *addr, unsigned int ip_prio) {
 	nx_icmp_enable(&ip); /* pingable — the bench habit */
 	nx_udp_enable(&ip);
 	/* static-endpoint deployments (REQ-NET-017) put the peer on the same segment */
-	nx_ip_gateway_address_set(&ip, (a & 0xFFFFFF00UL) | 1u);
+#ifdef BLOB_NET_GATEWAY
+	nx_ip_gateway_address_set(&ip, BLOB_NET_GATEWAY);
+#else
+	nx_ip_gateway_address_set(&ip, (a & BLOB_NET_NETMASK) | 1u);
+#endif
 	up = 1;
 	return 0;
 }

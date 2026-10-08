@@ -98,6 +98,12 @@ pub mut:
 	has_port     bool // an omitted port is diagnosed as omitted, not as a zero
 	port_int     bool = true // ...and 30490.5 truncates to a legal, different port
 	has_endpoint bool
+	// the endpoint's subnet: its netmask and default gateway (none = absent: tools/netcfg's
+	// defaults, a /24 whose .1 is the gateway), lowered beside the address; endpoint_not_str names
+	// a key of the two authored as something other than a string
+	endpoint_netmask ?string
+	endpoint_gateway ?string
+	endpoint_not_str []string
 	// `doip = { logical = 0x07A0 }`: the node's diagnostic server is reachable over DoIP
 	// (ISO 13400) too, at its endpoint address. Lowered into the node's [doip] — the address is
 	// the endpoint's, so a node has ONE network identity and it is declared here, not per node.
@@ -579,6 +585,17 @@ pub fn parse_system(path string) !System {
 				node.has_port = 'port' in em
 				node.port_int = m_is_int(em, 'port')
 				node.has_endpoint = true
+				for key in ['netmask', 'gateway'] {
+					if v := em[key] {
+						if v !is string {
+							node.endpoint_not_str << key
+						} else if key == 'netmask' {
+							node.endpoint_netmask = v.string()
+						} else {
+							node.endpoint_gateway = v.string()
+						}
+					}
+				}
 			}
 			if dv := m['doip'] {
 				dm := dv.as_map()

@@ -242,6 +242,8 @@ One of the node's buses: a CAN channel or the eth interface.
 | `core` | integer |  | `0` |  | the core the bus bridge runs on |
 | `kind` | string |  | `"can"` | `"can"`, `"eth"` | "can", or "eth" (SOME/IP, docs/someip.md; at most one) |
 | `dbc` | string |  | — |  | a per-bus DBC (a multi-bus GATEWAY speaks more than one contract) |
+| `netmask` | string |  | — | dotted IPv4 | eth only (a CAN bus has none): the subnet mask the node is brought up on; contiguous, /1../30, equal to [doip]'s where the node has one. Absent = 255.255.255.0 |
+| `gateway` | string |  | — | dotted IPv4 | eth only (a CAN bus has none): the default gateway; inside interface/netmask and not its network or broadcast address. Absent = the subnet's first host, (address & netmask) \| 1 |
 
 <a id="ecu-partition"></a>
 
@@ -425,7 +427,9 @@ The diagnostic server over DoIP (ISO 13400) too — ThreadX target; one parser f
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
-| `address` | string | yes | — |  | the node's static IPv4 address — a host on its /24 (not .0, .1 or .255) |
+| `address` | string | yes | — |  | the node's static IPv4 address — a host of its subnet (not its network, broadcast or gateway address — on the default /24: not .0, .1 or .255) |
+| `netmask` | string |  | `"255.255.255.0"` | dotted IPv4 | the subnet mask the node is brought up on, application and bootloader alike; contiguous, /1../30 (equal to the eth bus's, where the node has one) |
+| `gateway` | string |  | — | dotted IPv4 | the default gateway; inside address/netmask and not its network or broadcast address. Absent = the subnet's first host, (address & netmask) \| 1 |
 | `logical_address` | integer | yes | — |  | the entity's logical address (0x0001..0x0DFF or 0x1000..0x7FFF); unique |
 | `functional_address` | integer |  | `0xE400` | 0, or 0xE400..0xEFFF | the functional address it also answers |
 | `testers` | array of integers |  | — | 0xE00..0xFFF | tester addresses allowed to activate routing (at most 8); absent = any 0x0E00..0x0FFF |
@@ -745,8 +749,10 @@ A member ECU and its system-owned identities.
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
-| `address` | string | yes | — |  | IPv4 dotted quad; unique per segment; a DoIP node needs a host address (not .0, .1 or .255) |
+| `address` | string | yes | — |  | IPv4 dotted quad; unique per segment; a DoIP node needs a host address of its subnet (not its network, broadcast or gateway address — on the default /24: not .0, .1 or .255) |
 | `port` | integer |  | — | 1..65535 | the SOME/IP listen port (required on a someip bus; not 13400 on a DoIP node) |
+| `netmask` | string |  | `"255.255.255.0"` | dotted IPv4 | the subnet mask the node is brought up on (application and bootloader alike); contiguous, /1../30 |
+| `gateway` | string |  | — | dotted IPv4 | the default gateway; inside address/netmask and not its network or broadcast address. Absent = the subnet's first host, (address & netmask) \| 1 |
 
 <a id="system-sys-doip"></a>
 

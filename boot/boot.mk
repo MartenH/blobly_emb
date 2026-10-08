@@ -49,7 +49,9 @@ $(BUILD)/$(NAME).elf: $(BOARD_DIR)/bootmap.h $(REPO)/scripts/boot_layout.sh
 # the board (BOARD_BSP_THREADX, BOARD_LD_THREADX) and the node's ThreadX/NetX archives (TX_A, NX_A).
 ifeq ($(BOOT_DOIP),1)
 BOOT_VDEFS   = -d boot_doip
+# $(LOOM_NET_ADDR_DEFS): the application's subnet (gen/loom_build.mk), so the boot answers on the same one
 BOOT_RT_DEFS = -DTX_TIMER_TICKS_PER_SECOND=1000 -DNX_IP_PERIODIC_RATE=1000 -DBLOB_NET_POOL_COUNT=12u \
+               $(LOOM_NET_ADDR_DEFS) \
                -I$(REPO)/third_party/threadx/ports/cortex_m7/gnu/inc -I$(REPO)/third_party/threadx/common/inc \
                -I$(REPO)/third_party/netxduo/ports/cortex_m7/gnu/inc -I$(REPO)/third_party/netxduo/common/inc
 BOOT_RT_SRCS = $(BOARD_BSP_THREADX) $(REPO)/boards/$(BOARD)/eth.c $(REPO)/net/nx_driver_stm32h7.c \

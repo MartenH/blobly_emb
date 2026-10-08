@@ -375,13 +375,21 @@ void doip_stream_notify_activated(int on) {
 	doip_idle_activated(&idle, on);
 }
 
+/* the subnet's broadcast address: the node's address with every host bit set (BLOB_NET_NETMASK, the
+ * configured subnet, as netx_up.c brings it up; absent, the /24's .255) */
+#ifdef BLOB_NET_NETMASK
+#define NET_BROADCAST(a) (((a) & BLOB_NET_NETMASK) | ~BLOB_NET_NETMASK)
+#else
+#define NET_BROADCAST(a) ((a) | 0xFFu)
+#endif
+
 void doip_udp_broadcast(const unsigned char *buf, int len) {
 	NX_PACKET *p = NX_NULL;
 	if (nx_packet_allocate(blob_net_pool(), &p, NX_UDP_PACKET, NX_NO_WAIT) != NX_SUCCESS) {
 		return;
 	}
 	if (nx_packet_data_append(p, (void *)buf, (ULONG)len, blob_net_pool(), NX_NO_WAIT) != NX_SUCCESS ||
-	    nx_udp_socket_send(&udp_sock, p, blob_net_addr() | 0xFFu, DOIP_PORT) != NX_SUCCESS) {
+	    nx_udp_socket_send(&udp_sock, p, NET_BROADCAST(blob_net_addr()), DOIP_PORT) != NX_SUCCESS) {
 		nx_packet_release(p);
 	}
 }

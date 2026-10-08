@@ -14,6 +14,7 @@
 module cfgschema
 
 import toml
+import tools.netcfg
 
 // Typ is the shape of a key's value.
 pub enum Typ {
@@ -46,6 +47,7 @@ pub:
 	open_max bool // only the minimum bounds it (max is meaningless)
 	or_zero  bool // 0 is accepted beside the range ("0 = the default")
 	hex      bool // the value is an id or an address: written in hex
+	ipv4     bool // a string that must be a dotted IPv4 address (tools/netcfg parse)
 	// own_check: the value is judged by a leaf check that ecucheck also runs (ecumodel.validate),
 	// with the context its message needs; the walk leaves it alone so it is said once
 	own_check bool
@@ -160,6 +162,14 @@ fn (k Key) hex() Key {
 	}
 }
 
+// ipv4: a dotted IPv4 address (tools/netcfg's rule, driver/eth/ip4.h's)
+fn (k Key) ipv4() Key {
+	return Key{
+		...k
+		ipv4: true
+	}
+}
+
 // required_by_model: required, and ecumodel.validate reports its absence (see Key.by_model)
 fn (k Key) required_by_model() Key {
 	return Key{
@@ -229,6 +239,11 @@ pub fn (t Table) names() []string {
 // in_range: v lies within the key's range (a key with no range takes everything)
 pub fn (k Key) in_range(v i64) bool {
 	return !k.ranged || (v >= k.min && v <= k.max) || (k.or_zero && v == 0)
+}
+
+// ip4_ok: a string row's value passes its IPv4 leaf rule (a row without one takes everything)
+pub fn (k Key) ip4_ok(v string) bool {
+	return !k.ipv4 || netcfg.parse(v) != none
 }
 
 // default_int: the default of an integer row, for a reader that takes its default from the schema
@@ -330,6 +345,9 @@ fn value_errors(label string, key Key, v toml.Any) []string {
 		if key.choices.len > 0 && e is string && e !in key.choices {
 			one_of := key.choices.map('"' + it + '"').join(', ')
 			errs << '${label} "${key.name}": "${e}" is not one of ${one_of}'
+		}
+		if key.ipv4 && e is string && !key.ip4_ok(e) {
+			errs << '${label} "${key.name}": "${e}" is not a dotted IPv4 address'
 		}
 		if key.ranged && e is i64 && !key.in_range(e) {
 			errs << '${label} "${key.name}": ${num(key, e)} is outside ${allowed(key)}'
