@@ -969,6 +969,67 @@ fn test_doip_is_lowered_at_the_endpoint_address() {
 	assert !bout.contains('[doip]'), bout
 }
 
+// the endpoint's subnet rides beside its address, into [doip] and the eth bus alike — only what
+// system.toml configures, so a node without it generates exactly as before
+fn test_the_subnet_is_lowered_beside_the_address() {
+	mut sys := doip_system()
+	views := {
+		'BenchLoad': 'app'
+	}
+	plain := generate_someip_node(sys, sys.nodes[0], sys.buses[0], sysmodel.NodeView{}, views,
+		'') or { panic(err) }
+	assert !plain.contains('netmask') && !plain.contains('gateway'), plain
+	sys.nodes[0].endpoint_netmask = '255.255.0.0'
+	sys.nodes[0].endpoint_gateway = '192.168.0.254'
+	assert seg_errs(sys).len == 0, seg_errs(sys).str()
+	out := generate_someip_node(sys, sys.nodes[0], sys.buses[0], sysmodel.NodeView{}, views,
+		'') or { panic(err) }
+	assert out.contains('[bus.eth0]\nkind      = "eth"\ninterface = "192.168.0.51"\nnetmask   = "255.255.0.0"\ngateway   = "192.168.0.254"\ncore      = 0\n'), out
+	assert out.contains('[doip]\naddress         = "192.168.0.51"\nnetmask         = "255.255.0.0"\ngateway         = "192.168.0.254"\nlogical_address = 0x7A0\n'), out
+	// one key alone is carried alone (the other keeps its default)
+	sys.nodes[0].endpoint_gateway = none
+	one := doip_section(sys.nodes[0]).join('\n')
+	assert one.contains('netmask         = "255.255.0.0"') && !one.contains('gateway'), one
+}
+
+// syscheck refuses a subnet driver/eth cannot bring up, by tools/netcfg's rule (the node gate's)
+fn test_a_subnet_the_node_cannot_bring_up_is_refused() {
+	for c in [
+		['255.0.255.0', '', 'not a contiguous mask'],
+		['255.255.255.x', '', 'netmask "255.255.255.x" is not a dotted IPv4 address'],
+		['255.255.255.0', '192.168.1.1', 'gateway "192.168.1.1" is not on the subnet 192.168.0.0/255.255.255.0'],
+		['', '192.168.0.0', 'gateway "192.168.0.0" is the network address'],
+		['255.255.0.0', '192.168.255.255', 'gateway "192.168.255.255" is the broadcast address'],
+	] {
+		mut sys := doip_system()
+		if c[0] != '' {
+			sys.nodes[0].endpoint_netmask = c[0]
+		}
+		if c[1] != '' {
+			sys.nodes[0].endpoint_gateway = c[1]
+		}
+		assert seg_errs(sys).any(it.contains(c[2])), '${c}: ${seg_errs(sys)}'
+	}
+	// a DoIP node's address is judged on its subnet: .255 is a host of a /16, its own gateway is not
+	mut sys := doip_system()
+	sys.nodes[0].endpoint = '192.168.0.255'
+	sys.nodes[0].endpoint_netmask = '255.255.0.0'
+	assert doip_errs(sys).len == 0, doip_errs(sys).str()
+	sys.nodes[0].endpoint_gateway = '192.168.0.255'
+	assert doip_errs(sys).any(it.contains('is its own gateway')), doip_errs(sys).str()
+	// ...and so is a SOME/IP-only node's, once it configures one
+	sys = tel_system()
+	sys.nodes[1].endpoint_gateway = '192.168.0.190'
+	assert seg_errs(sys).any(it.contains('endpoint address "192.168.0.190" is its own gateway')), seg_errs(sys).str()
+	sys.nodes[1].endpoint_gateway = none
+	sys.nodes[1].endpoint_netmask = '255.255.255.192'
+	sys.nodes[1].endpoint = '192.168.0.191'
+	assert seg_errs(sys).any(it.contains('address "192.168.0.191" is the broadcast address of 192.168.0.128/255.255.255.192')), seg_errs(sys).str()
+	sys = tel_system()
+	sys.nodes[1].endpoint_not_str = ['netmask']
+	assert seg_errs(sys).any(it.contains('endpoint `netmask` must be a string')), seg_errs(sys).str()
+}
+
 fn test_a_functional_address_is_carried_through() {
 	mut sys := doip_system()
 	sys.nodes[0].has_doip_functional = true

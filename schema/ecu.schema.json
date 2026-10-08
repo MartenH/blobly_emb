@@ -200,7 +200,9 @@
         "fd": {"type": "boolean", "default": false, "description": "open the channel as CAN-FD Default: false."},
         "core": {"type": "integer", "default": 0, "description": "the core the bus bridge runs on Default: 0."},
         "kind": {"type": "string", "enum": ["can", "eth"], "default": "can", "description": "\"can\", or \"eth\" (SOME/IP, docs/someip.md; at most one) Default: \"can\"."},
-        "dbc": {"type": "string", "description": "a per-bus DBC (a multi-bus GATEWAY speaks more than one contract)"}
+        "dbc": {"type": "string", "description": "a per-bus DBC (a multi-bus GATEWAY speaks more than one contract)"},
+        "netmask": {"type": "string", "pattern": "^([01]?[0-9]?[0-9]|2[0-4][0-9]|25[0-5])(\\.([01]?[0-9]?[0-9]|2[0-4][0-9]|25[0-5])){3}$", "description": "eth only (a CAN bus has none): the subnet mask the node is brought up on; contiguous, /1../30, equal to [doip]'s where the node has one. Absent = 255.255.255.0"},
+        "gateway": {"type": "string", "pattern": "^([01]?[0-9]?[0-9]|2[0-4][0-9]|25[0-5])(\\.([01]?[0-9]?[0-9]|2[0-4][0-9]|25[0-5])){3}$", "description": "eth only (a CAN bus has none): the default gateway; inside interface/netmask and not its network or broadcast address. Absent = the subnet's first host, (address & netmask) | 1"}
       },
       "required": ["interface"],
       "additionalProperties": false
@@ -379,7 +381,9 @@
       "description": "The diagnostic server over DoIP (ISO 13400) too — ThreadX target; one parser for this and a system node's `doip` (tools/doipcfg).",
       "type": "object",
       "properties": {
-        "address": {"type": "string", "description": "the node's static IPv4 address — a host on its /24 (not .0, .1 or .255)"},
+        "address": {"type": "string", "description": "the node's static IPv4 address — a host of its subnet (not its network, broadcast or gateway address — on the default /24: not .0, .1 or .255)"},
+        "netmask": {"type": "string", "pattern": "^([01]?[0-9]?[0-9]|2[0-4][0-9]|25[0-5])(\\.([01]?[0-9]?[0-9]|2[0-4][0-9]|25[0-5])){3}$", "default": "255.255.255.0", "description": "the subnet mask the node is brought up on, application and bootloader alike; contiguous, /1../30 (equal to the eth bus's, where the node has one) Default: \"255.255.255.0\"."},
+        "gateway": {"type": "string", "pattern": "^([01]?[0-9]?[0-9]|2[0-4][0-9]|25[0-5])(\\.([01]?[0-9]?[0-9]|2[0-4][0-9]|25[0-5])){3}$", "description": "the default gateway; inside address/netmask and not its network or broadcast address. Absent = the subnet's first host, (address & netmask) | 1"},
         "logical_address": {"type": "integer", "description": "the entity's logical address (0x0001..0x0DFF or 0x1000..0x7FFF); unique"},
         "functional_address": {"type": "integer", "anyOf": [{"const": 0}, {"minimum": 58368, "maximum": 61439}], "default": 58368, "description": "the functional address it also answers Default: 0xE400."},
         "testers": {"type": "array", "items": {"type": "integer", "minimum": 3584, "maximum": 4095}, "description": "tester addresses allowed to activate routing (at most 8); absent = any 0x0E00..0x0FFF"},

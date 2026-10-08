@@ -272,14 +272,60 @@ fn test_the_public_bench_key_over_ip_is_allowed_only_by_name() {
 	assert c4 != 0 && o4.contains('must be true or false'), o4
 }
 
-fn test_ip4_ok_is_the_drivers_rule() {
-	for good in ['192.168.0.50', '10.0.0.2', '255.255.255.254'] {
-		assert ip4_ok(good), good
+// the [doip] address is a host of its subnet (tools/netcfg): on the default /24 not .0, .1 or .255
+// (driver/eth/netx_up.c's network, broadcast and gateway addresses), on a configured one its own
+fn test_the_doip_address_is_a_host_of_its_subnet() {
+	for bad in ['192.168.0', '192.168..50', '1.2.3.0050', '192.168.0.0', '192.168.0.1', '192.168.0.255'] {
+		code, out, _ := generate('doip_addr', doip_conn.replace('"192.168.0.50"', '"${bad}"'))
+		assert code != 0 && out.contains('[doip] address "${bad}" is not'), '${bad}: ${out}'
 	}
-	for bad in ['192.168.0', '192.168..50', '192.168.0.', '256.1.1.1', '1.2.3.4.5', 'a.b.c.d', '1.2.3.0050', '0.0.0.0', '192.168.0.1', '192.168.0.255'] {
-		assert !ip4_ok(bad), bad
+	code, out, _ := generate('doip_addr_16', doip_conn.replace('"192.168.0.50"', '"192.168.0.255"') +
+		'netmask = "255.255.0.0"\n')
+	assert code == 0, out
+}
+
+// the node's subnet: absent, nothing reaches the compiler and driver/eth's /24 with its .1 gateway
+// stands (so the image is the one it was before the keys existed); configured, the values reach the
+// application's network sources and LOOM_NET_ADDR_DEFS, which boot/boot.mk adds to the bootloader's
+fn test_the_subnet_reaches_the_network_sources() {
+	code, out, _, mk := generate_mk('net_default', doip_conn)
+	assert code == 0, out
+	assert mk.contains('LOOM_NET_ADDR_DEFS :=\nLOOM_NET_DEFS := -DBLOB_NET_POOL_COUNT=12u\n'), mk
+	c2, o2, _, mk2 := generate_mk('net_set', doip_conn +
+		'netmask = "255.255.254.0"\ngateway = "192.168.1.254"\n')
+	assert c2 == 0, o2
+	defs := '-DBLOB_NET_NETMASK=0xFFFFFE00UL -DBLOB_NET_GATEWAY=0xC0A801FEUL'
+	assert mk2.contains('LOOM_NET_ADDR_DEFS := ${defs}\nLOOM_NET_DEFS := -DBLOB_NET_POOL_COUNT=12u ${defs}\n'), mk2
+	// what the C does with them, and without them: today's constants
+	src := os.read_file(os.join_path(@VMODROOT, 'driver', 'eth', 'netx_up.c')) or { panic(err) }
+	for want in ['#ifndef BLOB_NET_NETMASK\n#define BLOB_NET_NETMASK 0xFFFFFF00UL\n#endif',
+		'nx_ip_create(&ip, "net-ip", a, BLOB_NET_NETMASK,',
+		'#ifdef BLOB_NET_GATEWAY\n\tnx_ip_gateway_address_set(&ip, BLOB_NET_GATEWAY);\n#else\n\tnx_ip_gateway_address_set(&ip, (a & BLOB_NET_NETMASK) | 1u);\n#endif'] {
+		assert src.contains(want), want
+	}
+	// and the DoIP announcements go to that subnet's broadcast address
+	doip := os.read_file(os.join_path(@VMODROOT, 'driver', 'eth', 'doip_netx.c')) or { panic(err) }
+	for want in ['#ifdef BLOB_NET_NETMASK\n#define NET_BROADCAST(a) (((a) & BLOB_NET_NETMASK) | ~BLOB_NET_NETMASK)\n#else\n#define NET_BROADCAST(a) ((a) | 0xFFu)\n#endif',
+		'nx_udp_socket_send(&udp_sock, p, NET_BROADCAST(blob_net_addr()), DOIP_PORT)'] {
+		assert doip.contains(want), want
 	}
 }
+
+// a subnet the target cannot bring up is refused, by tools/netcfg's rule (syscheck's)
+fn test_a_subnet_the_node_cannot_bring_up_is_refused() {
+	for keys, want in {
+		'netmask = "255.0.255.0"':   'not a contiguous mask'
+		'netmask = "/24"':           'netmask "/24" is not a dotted IPv4 address'
+		'gateway = "192.168.1.1"':   'gateway "192.168.1.1" is not on the subnet 192.168.0.0/255.255.255.0'
+		'gateway = "192.168.0.0"':   'is the network address of'
+		'gateway = "192.168.0.255"': 'is the broadcast address of'
+		'gateway = "192.168.0.50"':  'is its own gateway'
+	} {
+		code, out, _ := generate('net_bad', doip_conn + keys + '\n')
+		assert code != 0 && out.contains(want), '${keys}: ${out}'
+	}
+}
+
 
 // the trace recorder binds 8 thread ids: the fixture with DoIP fills them exactly (comm, three
 // app threads, NetX IP, doip, doip-svc, the timer); one thread more is refused, not mislabelled
@@ -390,6 +436,17 @@ fn test_doip_and_someip_share_one_netx() {
 	// and one UDP 13400: a SOME/IP endpoint there would take DoIP's socket
 	c4, o4, _, _ := generate_ecu('doip_eth_port', doip_eth_ecu.replace('port    = 30490', 'port    = 13400'))
 	assert c4 != 0 && o4.contains("is DoIP's"), o4
+	// and one network: the subnet sits beside the address on both, and must be one subnet
+	sub := doip_eth_ecu.replace('logical_address = 0x07B0\n', 'logical_address = 0x07B0\nnetmask = "255.255.0.0"\n')
+	c5, o5, _, _ := generate_ecu('doip_eth_mask', sub)
+	assert c5 != 0 && o5.contains('a node has one network'), o5
+	both := sub.replace('interface = "192.168.0.50"\n', 'interface = "192.168.0.50"\nnetmask   = "255.255.0.0"\n')
+	c6, o6, _, mk6 := generate_ecu('doip_eth_mask2', both)
+	assert c6 == 0, o6
+	assert mk6.contains('LOOM_NET_DEFS := -DBLOB_NET_POOL_COUNT=16u -DBLOB_NET_NETMASK=0xFFFF0000UL\n'), mk6
+	// a CAN bus has no subnet
+	c7, o7, _, _ := generate_ecu('doip_can_mask', both.replace('interface = "vcan0"\n', 'interface = "vcan0"\ngateway = "192.168.0.1"\n'))
+	assert c7 != 0 && o7.contains('[bus.can0] `gateway` is an eth bus'), o7
 	// and a node with neither links no network at all
 	_, _, _, mk3 := generate_mk('no_net', '')
 	assert mk3.contains('LOOM_NET_SRCS :=\n'), mk3

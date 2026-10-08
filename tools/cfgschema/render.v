@@ -116,6 +116,9 @@ pub fn allowed(k Key) string {
 	if k.choices.len > 0 {
 		return k.choices.map('`"${it}"`').join(', ')
 	}
+	if k.ipv4 {
+		return 'dotted IPv4'
+	}
 	if k.open_max {
 		return '>= ${k.min}'
 	}
@@ -206,6 +209,9 @@ fn key_json(k Key) string {
 			if k.choices.len > 0 {
 				f << '"enum": [${k.choices.map(jstr(it)).join(', ')}]'
 			}
+			if k.ipv4 {
+				f << '"pattern": ${jstr(ip4_pattern)}'
+			}
 		}
 		.int {
 			f << '"type": "integer"'
@@ -266,6 +272,10 @@ fn key_json(k Key) string {
 	}
 	return '{${f.filter(it != '').join(', ')}}'
 }
+
+// ip4_pattern: tools/netcfg's dotted quad as a regular expression — one to three digits, at most 255
+const ip4_octet = '([01]?[0-9]?[0-9]|2[0-4][0-9]|25[0-5])'
+const ip4_pattern = '^${ip4_octet}(\\.${ip4_octet}){3}\$'
 
 fn bounds(k Key) string {
 	if !k.ranged {

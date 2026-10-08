@@ -1432,6 +1432,10 @@ mut:
 	bus_kind     map[string]string // 'can' (default) | 'eth'
 	eth          string            // the (single) eth bus name, '' = none
 	eth_iface    string            // its [bus.<eth>].interface: the node's static address
+	eth_netmask  ?string           // ...and its subnet (none = tools/netcfg's defaults)
+	eth_gateway  ?string
+	// a subnet key on a CAN bus ("<bus>] `netmask`"), which validate_net refuses
+	non_eth_net_keys []string
 	someip       SomeipCfg
 	eth_frames   []EthFrame
 	sig_of       map[string]SigInfo
@@ -1668,6 +1672,9 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		bus_kind:     bus_kind
 		eth:          eth
 		eth_iface:    bus_interface(doc, eth)
+		eth_netmask:  bus_opt(doc, eth, 'netmask')
+		eth_gateway:  bus_opt(doc, eth, 'gateway')
+		non_eth_net_keys: non_eth_net_keys(doc, bus_kind)
 		someip:       parse_someip(doc)
 		eth_frames:   parse_eth_frames(doc, eth, sig_of)
 		frames:       frames
@@ -4000,6 +4007,7 @@ fn main() {
 	m.fault_grace_us = fault_grace_us(m, doc)
 	wear_report := check_journal_wear(m, doc)
 	validate_doip(m)
+	validate_net(m)
 	display_check(m)
 
 	// [trace]: ThreadX streams the exec hooks (gen_trace.v); every other shape serves comm/trace's

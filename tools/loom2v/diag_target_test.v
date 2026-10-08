@@ -646,6 +646,8 @@ logical_address  = 0x07B0
 testers          = [0x0E00, 0x0E80]
 announce_count   = 2
 allow_bench_key  = true
+netmask          = "255.255.0.0"
+gateway          = "192.168.0.254"
 '
 	code, out, _ := run_in_scratch(tmp, fixture_dir, fn (src string) string {
 		return src
@@ -663,6 +665,12 @@ allow_bench_key  = true
 	}
 	mk := os.read_file(os.join_path(tmp, 'loom_build.mk')) or { panic(err) }
 	assert mk.contains('BOOT_DOIP := 1\ninclude ' + r'$(REPO)/boot/boot.mk'), mk
+	// ...on the application's subnet: its configured netmask and gateway, which boot/boot.mk
+	// compiles the bootloader's network (driver/eth/netx_up.c) with
+	assert mk.contains('LOOM_NET_ADDR_DEFS := -DBLOB_NET_NETMASK=0xFFFF0000UL -DBLOB_NET_GATEWAY=0xC0A800FEUL\n'), mk
+	boot := os.read_file(os.join_path(@VMODROOT, 'boot', 'boot.mk')) or { panic(err) }
+	rt := boot.all_after('BOOT_RT_DEFS = ').all_before('\nBOOT_RT_SRCS')
+	assert rt.contains(r'$(LOOM_NET_ADDR_DEFS)') && rt.contains('-DBLOB_NET_POOL_COUNT=12u'), rt
 }
 
 // the node's bootloader is built from the same config: gen/boot_gen.h carries the [isotp] ids, its

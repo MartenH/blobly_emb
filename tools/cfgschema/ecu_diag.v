@@ -98,7 +98,9 @@ pub fn session_names() []string {
 
 fn doip_ecu_keys() []Key {
 	mut keys := [
-		req('address', .str).doc("the node's static IPv4 address — a host on its /24 (not .0, .1 or .255)"),
+		req('address', .str).doc("the node's static IPv4 address — a host of its subnet (not its network, broadcast or gateway address — on the default /24: not .0, .1 or .255)"),
+		k('netmask', .str).ipv4().d('"255.255.255.0"').doc('the subnet mask the node is brought up on, application and bootloader alike; contiguous, /1../30 (equal to the eth bus\'s, where the node has one)'),
+		k('gateway', .str).ipv4().doc('the default gateway; inside address/netmask and not its network or broadcast address. Absent = the subnet\'s first host, (address & netmask) | 1'),
 	]
 	for key in doip_entity_keys('logical_address', 'functional_address') {
 		keys << match key.name {
