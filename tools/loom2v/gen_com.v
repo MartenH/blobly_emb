@@ -925,6 +925,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			glue << '\t\tid:  ${msg}_id'
 			glue << '\t\tlen: ${msg}_dlc'
 			glue << '\t}'
+			// a field no local signal has published this pass goes out at its initial value
+			glue << pdu_init_lines(m.sig_of[list[0]] or { SigInfo{} }, 'tx_${msg}', '\t')
 			glue << '\tmut tx_${msg}_any := false'
 			glue << '\tmut tx_${msg}_sat := u32(0) // values com.encode_raw saturated'
 			for sname in list {

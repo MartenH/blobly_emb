@@ -218,6 +218,7 @@ fn C.load_overruns() u32
 fn C.ioc_pool_init()
 fn C.ioc_pub(int, u32, u32)
 fn C.ioc_get(int, &u32, &u32)
+fn C.ioc_get_ever(int, &u32, &u32) int
 
 __global (
 	g_load_fast_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned
@@ -456,20 +457,26 @@ fn comm_thread_entry(input u32) {
 			last_tx_workload = t1
 			mut tv_a := u32(0)
 			mut tv_b := u32(0)
-			C.ioc_get(0, &tv_a, &tv_b)
 			mut tf := can.Frame{
 				id:  u32(0x200)
 				len: 4
 			}
+			// initial payload of workload_frame: every signal at its initial value (REQ-COM-011)
+			tf.data[0] = u8(0x00)
+			tf.data[1] = u8(0x00)
+			tf.data[2] = u8(0x00)
+			tf.data[3] = u8(0x00)
 			mut tf_sat := u32(0)
-			tf_raw0_x := (f64(tv_a) - 0.0) / 1.0
-			tf_raw0, tf_raw0_sat := com.encode_raw(tf_raw0_x, 0.0, 4294967295.0, u64(0), u64(4294967295), u64(0), u64(0xffffffff))
-			tf.data[0] = u8(tf_raw0)
-			tf.data[1] = u8(tf_raw0 >> 8)
-			tf.data[2] = u8(tf_raw0 >> 16)
-			tf.data[3] = u8(tf_raw0 >> 24)
-			if tf_raw0_sat {
-				tf_sat++
+			if C.ioc_get_ever(0, &tv_a, &tv_b) != 0 {
+				tf_raw0_x := (f64(tv_a) - 0.0) / 1.0
+				tf_raw0, tf_raw0_sat := com.encode_raw(tf_raw0_x, 0.0, 4294967295.0, u64(0), u64(4294967295), u64(0), u64(0xffffffff))
+				tf.data[0] = u8(tf_raw0)
+				tf.data[1] = u8(tf_raw0 >> 8)
+				tf.data[2] = u8(tf_raw0 >> 16)
+				tf.data[3] = u8(tf_raw0 >> 24)
+				if tf_raw0_sat {
+					tf_sat++
+				}
 			}
 			if ch.send(tf) {
 				tx_sat.add(tf_sat)
@@ -504,6 +511,15 @@ fn comm_thread_entry(input u32) {
 			&& C.xcore_poll(0, &xcore_m4_count_a, &xcore_m4_count_b) != 0 {
 			xcore_txf.id = u32(0x201)
 			xcore_txf.len = 8
+			// initial payload of m4_load_frame: every signal at its initial value (REQ-COM-011)
+			xcore_txf.data[0] = u8(0x00)
+			xcore_txf.data[1] = u8(0x00)
+			xcore_txf.data[2] = u8(0x00)
+			xcore_txf.data[3] = u8(0x00)
+			xcore_txf.data[4] = u8(0x00)
+			xcore_txf.data[5] = u8(0x00)
+			xcore_txf.data[6] = u8(0x00)
+			xcore_txf.data[7] = u8(0x00)
 			mut xcore_sat := u32(0)
 			xcore_txf_raw0_x := (f64(xcore_m4_count_a) - 0.0) / 1.0
 			xcore_txf_raw0, xcore_txf_raw0_sat := com.encode_raw(xcore_txf_raw0_x, 0.0, 4294967295.0, u64(0), u64(4294967295), u64(0), u64(0xffffffff))

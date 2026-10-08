@@ -135,6 +135,34 @@ DBC range, deliberately: a tester has to be able to send an out-of-range value t
 of one. One difference is a defect there: a negative value for an unsigned signal wraps to its
 maximum (blobly_net#415).
 
+### Initial values
+
+A PDU goes out as soon as it is due, not once every one of its signals has been published: the host
+bridge sends a frame when any of its local signals has a value, and the target's producers send on
+their cycle from boot (#399). So every signal of a PDU a node sends starts at an **initial value**,
+as AUTOSAR COM's signal init value does, and the frame is built over it:
+
+- the DBC's `BA_ "GenSigStartValue" SG_ <id> <signal> <raw>;` where the signal declares one — a RAW
+  value, which must be a whole number inside the signal's raw range (`raw_range`), or a value its
+  VAL_ table names (an "SNA"), which the send rule above sends as itself. Anything else is refused
+  when the node is generated. A file-wide `BA_DEF_DEF_` default is not a declaration: editors
+  write `BA_DEF_DEF_ "GenSigStartValue" 0;` into almost every file, which as a declaration would
+  refuse every signal whose range excludes 0;
+- otherwise the physical value nearest 0 inside `[min|max]` — 0 itself where the range holds it.
+
+`tools/candb` `init_raw` is the rule, through `encode_raw` like every sent value, and
+`init_payload` the message's bytes (a multiplexed message: the signals its multiplexor's initial
+value selects — the page is fixed at generation, so a node that publishes another selector gets that
+page's unpublished fields from the initial page's bits; no example sends a multiplexed frame). Every
+signal of a sent message must be able to hold one: a range with no value in it, a signal reaching past
+the DLC, or a refused start value on any page fails generation, a spare signal the node never writes
+included. loom2v emits those bytes in ONE place, `pdu_init_lines`, at the start of every frame
+the host bridge, a target's local producer and its satellite lanes build, before any published field
+is written over them. (A gateway's signal-route frame needs none: generation refuses one with a
+signal no route fills, and a frame route forwards its payload as it is.) A target producer encodes its IOC cell only once the FB has published it
+(`ioc_get_ever`): until then the cell holds the slot's zero, which is not a value. An initial value
+is never counted as a saturation.
+
 This replaces the bridge's unconditional 10 ms send: each PDU runs its own little
 TX state machine (last-sent timestamp, change detection, repeat counter), all
 generated as a static per-PDU table + a shared stepping routine (no-alloc).

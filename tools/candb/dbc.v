@@ -9,6 +9,7 @@
 //                       [<min>|<max>] "<unit>" <receivers>   — signal definition
 //   VAL_ <id> <Signal> <int> "label" <int> "label" … ;       — value table (enum)
 //   CM_ SG_ <id> <Signal> "comment" ;                        — signal description
+//   BA_ "GenSigStartValue" SG_ <id> <Signal> <raw> ;         — signal initial value (raw)
 // @order: 1 = Intel/little-endian, 0 = Motorola/big-endian.  sign: + unsigned, - signed.
 // Multiplexor markers (M / m<n>) are tolerated but not yet modelled. Other DBC
 // records (BU_, BA_, network attrs, …) are ignored.
@@ -104,6 +105,7 @@ mut:
 	is_multiplexor    bool
 	is_multiplexed    bool
 	multiplexor_value int
+	start_value       string
 }
 
 struct MsgBuilder {
@@ -157,6 +159,8 @@ pub fn parse_dbc(text string) !Database {
 		} else if line.starts_with('BU_:') {
 			// BU_: NodeA NodeB …  — the declared ECU nodes
 			nodes = line[4..].fields()
+		} else if line.starts_with('BA_ "GenSigStartValue"') {
+			apply_start_value(mut msgs, by_id, line)
 		} else if line.starts_with('BA_ "GenMsgCycleTime"') {
 			apply_cycle_time(mut msgs, by_id, line)
 		} else if line.starts_with('BA_ "E2E') {
@@ -203,6 +207,7 @@ pub fn parse_dbc(text string) !Database {
 				is_multiplexor:    sb.is_multiplexor
 				is_multiplexed:    sb.is_multiplexed
 				multiplexor_value: sb.multiplexor_value
+				start_value:       sb.start_value
 			}
 		}
 		out << Message{
@@ -236,6 +241,23 @@ fn apply_cycle_time(mut msgs []MsgBuilder, by_id map[u64]int, line string) {
 	if idx := by_id[idkey(id, ext)] {
 		msgs[idx].cycle_ms = f[4].int()
 	}
+}
+
+// apply_start_value parses `BA_ "GenSigStartValue" SG_ <id> <signal> <raw>;` — the signal's
+// initial value, a RAW value — onto its signal, as written (Signal.init_raw judges it).
+fn apply_start_value(mut msgs []MsgBuilder, by_id map[u64]int, line string) {
+	f := line.trim_right(';').fields()
+	// f: BA_ "GenSigStartValue" SG_ <id> <signal> <raw>
+	if f.len < 5 || f[2] != 'SG_' {
+		return
+	}
+	raw_id := u32(f[3].u64())
+	ext := raw_id & can_eff_flag != 0
+	id := if ext { raw_id & can_eff_mask } else { raw_id }
+	mi := by_id[idkey(id, ext)] or { return }
+	si := signal_index(msgs[mi], f[4]) or { return }
+	// a record with no value is a malformed declaration, never an absent one: init_raw refuses it
+	msgs[mi].sigs[si].start_value = if f.len > 5 { f[5] } else { '(none)' }
 }
 
 // apply_e2e_attr parses one of the E2E contract attributes blobly_net's docs/dbc_attributes.md

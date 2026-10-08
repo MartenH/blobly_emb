@@ -617,8 +617,8 @@ fn validate_diag_live_dids(m Model, tx_cells map[string]bool) {
 }
 
 // diag_target_fns: the live-DID refresh the connection calls before every dispatch — each
-// signal-backed DID takes its cell's current value, the value the comm thread transmits (zero until
-// the FB first publishes, as on the bus).
+// signal-backed DID takes its cell's current value, the value the comm thread transmits once the FB
+// has published (zero until then, while the bus carries the frame's initial payload, REQ-COM-011).
 fn diag_target_fns(m Model, ioc_idx map[string]int) []string {
 	if m.isotp_conns.len == 0 || !m.dids.any(it.signal != '') {
 		return []string{}

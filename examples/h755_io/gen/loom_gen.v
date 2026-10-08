@@ -60,8 +60,8 @@ fn C.load_overruns() u32
 fn C.ioc_pool_init()
 fn C.ioc_pub(int, u32, u32)
 fn C.ioc_get(int, &u32, &u32)
-fn C._tx_thread_resume(voidptr) u32
 fn C.ioc_get_ever(int, &u32, &u32) int
+fn C._tx_thread_resume(voidptr) u32
 
 __global (
 	g_app_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned
@@ -212,20 +212,26 @@ fn comm_thread_entry(input u32) {
 			last_tx_btn_pressed = t1
 			mut tv_a := u32(0)
 			mut tv_b := u32(0)
-			C.ioc_get(0, &tv_a, &tv_b)
 			mut tf := can.Frame{
 				id:  u32(0x310)
 				len: 4
 			}
+			// initial payload of button_state: every signal at its initial value (REQ-COM-011)
+			tf.data[0] = u8(0x00)
+			tf.data[1] = u8(0x00)
+			tf.data[2] = u8(0x00)
+			tf.data[3] = u8(0x00)
 			mut tf_sat := u32(0)
-			tf_raw0_x := (f64(tv_a) - 0.0) / 1.0
-			tf_raw0, tf_raw0_sat := com.encode_raw(tf_raw0_x, 0.0, 1.0, u64(0), u64(1), u64(0), u64(0xffffffff))
-			tf.data[0] = u8(tf_raw0)
-			tf.data[1] = u8(tf_raw0 >> 8)
-			tf.data[2] = u8(tf_raw0 >> 16)
-			tf.data[3] = u8(tf_raw0 >> 24)
-			if tf_raw0_sat {
-				tf_sat++
+			if C.ioc_get_ever(0, &tv_a, &tv_b) != 0 {
+				tf_raw0_x := (f64(tv_a) - 0.0) / 1.0
+				tf_raw0, tf_raw0_sat := com.encode_raw(tf_raw0_x, 0.0, 1.0, u64(0), u64(1), u64(0), u64(0xffffffff))
+				tf.data[0] = u8(tf_raw0)
+				tf.data[1] = u8(tf_raw0 >> 8)
+				tf.data[2] = u8(tf_raw0 >> 16)
+				tf.data[3] = u8(tf_raw0 >> 24)
+				if tf_raw0_sat {
+					tf_sat++
+				}
 			}
 			if ch.send(tf) {
 				tx_sat.add(tf_sat)

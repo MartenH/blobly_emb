@@ -352,6 +352,10 @@ fn io_can0_10ms(ctx voidptr) {
 		id:  lamp_frame_id
 		len: lamp_frame_dlc
 	}
+	// initial payload of lamp_frame: every signal at its initial value (REQ-COM-011)
+	tx_lamp_frame.data[0] = u8(0x00)
+	tx_lamp_frame.data[1] = u8(0x00)
+	tx_lamp_frame.data[2] = u8(0x00)
 	mut tx_lamp_frame_any := false
 	mut tx_lamp_frame_sat := u32(0) // values com.encode_raw saturated
 	mut warn_lamp := sig.WarnLamp{}
@@ -376,6 +380,10 @@ fn io_can0_10ms(ctx voidptr) {
 		id:  brake_report_id
 		len: brake_report_dlc
 	}
+	// initial payload of brake_report: every signal at its initial value (REQ-COM-011)
+	tx_brake_report.data[0] = u8(0x00)
+	tx_brake_report.data[1] = u8(0x00)
+	tx_brake_report.data[2] = u8(0x00)
 	mut tx_brake_report_any := false
 	mut tx_brake_report_sat := u32(0) // values com.encode_raw saturated
 	mut brake_rx_status := sig.BrakeRxStatus{}
@@ -402,6 +410,15 @@ fn io_can0_10ms(ctx voidptr) {
 		id:  secure_frame_id
 		len: secure_frame_dlc
 	}
+	// initial payload of secure_frame: every signal at its initial value (REQ-COM-011)
+	tx_secure_frame.data[0] = u8(0x00)
+	tx_secure_frame.data[1] = u8(0x00)
+	tx_secure_frame.data[2] = u8(0x00)
+	tx_secure_frame.data[3] = u8(0x00)
+	tx_secure_frame.data[4] = u8(0x00)
+	tx_secure_frame.data[5] = u8(0x00)
+	tx_secure_frame.data[6] = u8(0x00)
+	tx_secure_frame.data[7] = u8(0x00)
 	mut tx_secure_frame_any := false
 	mut tx_secure_frame_sat := u32(0) // values com.encode_raw saturated
 	mut secure_status := sig.SecureStatus{}

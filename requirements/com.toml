@@ -111,3 +111,14 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-COMMS-001"
+
+# #399: AUTOSAR COM's signal init value — a PDU goes out before every one of its signals has been
+# written, so each starts at an in-range value rather than raw 0 (candb init_raw / init_payload).
+[[req]]
+id = "REQ-COM-011"
+title = "Transmitted signals start at an in-range initial value"
+text = "COM shall transmit every signal of a PDU that has not yet been given a value at its initial value: the start value the bus database declares for the signal, or, where it declares none, the in-range value nearest zero. A declared start value that lies outside the signal's range, and is not a value the database names, shall be refused when the node is generated. An initial value shall not be counted as a value held to the signal range."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-COMMS-001"

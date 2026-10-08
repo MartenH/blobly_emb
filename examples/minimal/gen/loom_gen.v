@@ -71,6 +71,8 @@ fn io_can0_10ms(ctx voidptr) {
 		id:  lamp_frame_id
 		len: lamp_frame_dlc
 	}
+	// initial payload of lamp_frame: every signal at its initial value (REQ-COM-011)
+	tx_lamp_frame.data[0] = u8(0x00)
 	mut tx_lamp_frame_any := false
 	mut tx_lamp_frame_sat := u32(0) // values com.encode_raw saturated
 	mut warn_lamp := sig.WarnLamp{}
