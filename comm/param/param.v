@@ -319,9 +319,12 @@ pub fn (mut ps Params) write(did u16, data &u8, n int) u8 {
 		return uds.nrc_request_out_of_range
 	}
 	mut p := &ps.p[i]
-	// the record's length is already checked: bind set the DID's declared size to p.width(), and
-	// the server refuses any other length with 0x13 before it calls the seam (one check, for
-	// every writable DID)
+	// the length rule is the server's (bind sets the DID's declared size to p.width(), and 0x2E
+	// refuses any other length before the seam); this only keeps decode inside `data` for a caller
+	// that is not that server
+	if n != p.width() {
+		return uds.nrc_incorrect_length
+	}
 	mut v := [max_fields]i64{}
 	p.decode(data, mut v)
 	if !p.in_range(v) {

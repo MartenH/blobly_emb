@@ -508,21 +508,46 @@ pub fn partition_can0(ch can.Channel) {
 	st.conn_diag.server.dids[2].data[1] = u8(0x00)
 	st.conn_diag.server.dids[2].len = 2
 	st.conn_diag.server.dids[3] = uds.Did{
+		id: u16(0xf1ad)
+		writable: true
+	}
+	st.conn_diag.server.dids[3].data[0] = u8(0x00)
+	st.conn_diag.server.dids[3].data[1] = u8(0x00)
+	st.conn_diag.server.dids[3].data[2] = u8(0x00)
+	st.conn_diag.server.dids[3].data[3] = u8(0x00)
+	st.conn_diag.server.dids[3].data[4] = u8(0x00)
+	st.conn_diag.server.dids[3].data[5] = u8(0x00)
+	st.conn_diag.server.dids[3].data[6] = u8(0x00)
+	st.conn_diag.server.dids[3].data[7] = u8(0x00)
+	st.conn_diag.server.dids[3].data[8] = u8(0x00)
+	st.conn_diag.server.dids[3].data[9] = u8(0x00)
+	st.conn_diag.server.dids[3].data[10] = u8(0x00)
+	st.conn_diag.server.dids[3].data[11] = u8(0x00)
+	st.conn_diag.server.dids[3].data[12] = u8(0x00)
+	st.conn_diag.server.dids[3].data[13] = u8(0x00)
+	st.conn_diag.server.dids[3].data[14] = u8(0x00)
+	st.conn_diag.server.dids[3].data[15] = u8(0x00)
+	st.conn_diag.server.dids[3].data[16] = u8(0x00)
+	st.conn_diag.server.dids[3].data[17] = u8(0x00)
+	st.conn_diag.server.dids[3].data[18] = u8(0x00)
+	st.conn_diag.server.dids[3].data[19] = u8(0x00)
+	st.conn_diag.server.dids[3].len = 20
+	st.conn_diag.server.dids[4] = uds.Did{
 		id: u16(0xf1ab)
 		writable: true
 		write_sessions: u8(0x04)
 	}
-	st.conn_diag.server.dids[3].data[0] = u8(0x00)
-	st.conn_diag.server.dids[3].len = 1
-	st.conn_diag.server.dids[4] = uds.Did{
+	st.conn_diag.server.dids[4].data[0] = u8(0x00)
+	st.conn_diag.server.dids[4].len = 1
+	st.conn_diag.server.dids[5] = uds.Did{
 		id: u16(0xf1ac)
 		writable: true
 		write_sessions: u8(0x04)
 		write_security: u8(1)
 	}
-	st.conn_diag.server.dids[4].data[0] = u8(0x00)
-	st.conn_diag.server.dids[4].len = 1
-	st.conn_diag.server.ndid = 5
+	st.conn_diag.server.dids[5].data[0] = u8(0x00)
+	st.conn_diag.server.dids[5].len = 1
+	st.conn_diag.server.ndid = 6
 	st.conn_diag.refresh = diag_refresh_diag
 	st.conn_diag.server.security = st.sa_diag.ops(u32(osal.now_us()))
 	st.conn_diag.server.security_levels = u8(0x01)

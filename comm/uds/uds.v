@@ -903,7 +903,7 @@ fn (mut s Server) write_did(req &u8, req_len int, resp &u8) int {
 	// ISO 14229-1 0x2E order: a DID that does not exist, is not writable, or is not writable
 	// in the active session is NOT SUPPORTED for write (0x31); then security (0x33); then the
 	// record length (0x13); then, for a parameter, its conditions (0x22), range (0x31) and the
-	// write itself (0x72) — the seam's, the order comm/param already used.
+	// write itself (0x72) — the seam's.
 	if i < 0 || !s.dids[i].writable || !in_mask(s.dids[i].write_sessions, s.session) {
 		return negative(resp, 0x2E, nrc_request_out_of_range)
 	}

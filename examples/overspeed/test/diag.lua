@@ -33,11 +33,15 @@ test("UDS: read DID 0xF1A0 = live VehicleSpeed signal", function()
   check.truthy(kph >= 90 and kph <= 110, "diag read VehicleSpeed ~100, got " .. tostring(kph))
 end)
 
-test("UDS: write + read DID 0xF1AA (RAM, multi-frame both ways)", function()
+test("UDS: write + read DID 0xF1AD (RAM, multi-frame both ways)", function()
   local d = diag()
   local payload = string.rep("Z", 20)
-  d:write_did(0xF1AA, payload) -- 0x2E, 23-byte request -> FF/CF
-  check.equal(d:read_did(0xF1AA), payload) -- 0x22, 23-byte response -> FF/CF
+  d:write_did(0xF1AD, payload) -- 0x2E, 23-byte request -> FF/CF
+  check.equal(d:read_did(0xF1AD), payload) -- 0x22, 23-byte response -> FF/CF
+  -- a record of another length is refused, and the cell keeps its value and size (emb#403)
+  check.nrc(0x13, function() d:write_did(0xF1AD, "Z") end)
+  check.nrc(0x13, function() d:write_did(0xF1AA, fromhex("12 34 56")) end)
+  check.equal(d:read_did(0xF1AD), payload)
 end)
 
 -- R1 (docs/diagnostics.md): the server's session model, gating, multi-DID reads, functional
