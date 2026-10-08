@@ -425,6 +425,9 @@ pub fn (s Signal) raw_range() !RawRange {
 // never a saturation.
 pub fn (s Signal) init_raw() !u64 {
 	r := s.raw_range() or { return error('signal "${s.name}": ${err}') }
+	if r.note != '' {
+		return error('signal "${s.name}": ${r.note} — a signal of a sent PDU starts at a value inside its range, so the range must hold one')
+	}
 	if s.start_value == '' {
 		// physical 0 in raw steps, rounded and held to the range: the in-range value nearest 0
 		raw, _ := com.encode_raw((0.0 - s.offset) / s.factor, r.lo, r.hi, r.lo_raw, r.hi_raw,
@@ -443,29 +446,34 @@ pub fn (s Signal) init_raw() !u64 {
 			return nr.raw // a VAL_ entry outside the range: sent as named, as encode_lines sends it
 		}
 	}
-	return error('signal "${s.name}": GenSigStartValue ${s.start_value} is outside its raw range ${int_f64lit(r.lo)}..${int_f64lit(r.hi)}${if r.note != '' {
-		' (' + r.note + ')'
-	} else {
-		''
-	}} — the initial value must be one the signal can be sent with')
+	return error('signal "${s.name}": GenSigStartValue ${s.start_value} is outside its raw range ${int_f64lit(r.lo)}..${int_f64lit(r.hi)} — the initial value must be one the signal can be sent with')
 }
 
 // init_payload: the message's payload before anything has been sent — every signal at its init_raw
 // (only the multiplexed signals its multiplexor's initial value selects), `dlc` bytes. loom2v emits
 // it as the starting bytes of every frame of this message a node sends (pdu_init_lines).
 pub fn (m Message) init_payload() ![]u8 {
-	mut data := []u8{len: m.dlc}
-	mux := m.multiplexor_index()
-	mut sel := u64(0)
-	if mux >= 0 {
-		sel = m.signals[mux].init_raw() or { return error('message "${m.name}": ${err}') }
+	if m.dlc < 0 || m.dlc > 64 {
+		return error('message "${m.name}": a DLC of ${m.dlc} bytes is no CAN payload')
 	}
+	mut data := []u8{len: m.dlc}
+	// every signal's initial value is judged, a multiplexed page not selected at start included
+	mut raws := []u64{cap: m.signals.len}
 	for s in m.signals {
+		raws << s.init_raw() or { return error('message "${m.name}": ${err}') }
+		for g in 0 .. 64 * 8 {
+			if g >= m.dlc * 8 && s.owns(g) {
+				return error('message "${m.name}": signal "${s.name}" reaches past its ${m.dlc}-byte payload, so its initial value would be cut')
+			}
+		}
+	}
+	mux := m.multiplexor_index()
+	sel := if mux >= 0 { raws[mux] } else { u64(0) }
+	for i, s in m.signals {
 		if s.is_multiplexed && u64(s.multiplexor_value) != sel {
 			continue
 		}
-		raw := s.init_raw() or { return error('message "${m.name}": ${err}') }
-		s.set_raw(mut data, raw)
+		s.set_raw(mut data, raws[i])
 	}
 	return data
 }

@@ -248,7 +248,7 @@ fn apply_cycle_time(mut msgs []MsgBuilder, by_id map[u64]int, line string) {
 fn apply_start_value(mut msgs []MsgBuilder, by_id map[u64]int, line string) {
 	f := line.trim_right(';').fields()
 	// f: BA_ "GenSigStartValue" SG_ <id> <signal> <raw>
-	if f.len < 6 || f[2] != 'SG_' {
+	if f.len < 5 || f[2] != 'SG_' {
 		return
 	}
 	raw_id := u32(f[3].u64())
@@ -256,7 +256,8 @@ fn apply_start_value(mut msgs []MsgBuilder, by_id map[u64]int, line string) {
 	id := if ext { raw_id & can_eff_mask } else { raw_id }
 	mi := by_id[idkey(id, ext)] or { return }
 	si := signal_index(msgs[mi], f[4]) or { return }
-	msgs[mi].sigs[si].start_value = f[5].trim_right(';')
+	// a record with no value is a malformed declaration, never an absent one: init_raw refuses it
+	msgs[mi].sigs[si].start_value = if f.len > 5 { f[5] } else { '(none)' }
 }
 
 // apply_e2e_attr parses one of the E2E contract attributes blobly_net's docs/dbc_attributes.md

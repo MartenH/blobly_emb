@@ -134,3 +134,50 @@ fn test_init_payload_of_a_multiplexed_message_follows_the_switch() {
 	}
 	assert m.init_payload()! == [u8(2), 5]
 }
+
+// What would leave a signal's initial value out of its range or out of the frame is refused: a range
+// that holds no value, a signal reaching past the payload, a start value on a page the multiplexor
+// does not select at start, a start record with no value, and a DLC no CAN payload has.
+fn test_init_payload_refuses_what_cannot_hold_an_initial_value() {
+	cases := {
+		'holds no raw value':          Message{
+			name:    'M'
+			dlc:     1
+			signals: [isig('Spare', 0, 8, false, 1, 0, 300, 400, '')]
+		}
+		'reaches past its 2-byte':     Message{
+			name:    'M'
+			dlc:     2
+			signals: [isig('Wide', 8, 16, false, 1, 0, 0, 0, '')]
+		}
+		'GenSigStartValue 99':         Message{
+			name:    'M'
+			dlc:     2
+			signals: [Signal{
+				...isig('Sw', 0, 8, false, 1, 0, 0, 1, '')
+				is_multiplexor: true
+			}, Signal{
+				...isig('B', 8, 8, false, 1, 0, 30, 40, '99')
+				is_multiplexed:    true
+				multiplexor_value: 1
+			}]
+		}
+		'is no CAN payload':           Message{
+			name: 'M'
+			dlc:  1000000000
+		}
+	}
+	for want, m in cases {
+		if p := m.init_payload() {
+			assert false, '${want}: got ${p}'
+		} else {
+			assert err.msg().contains(want), err.msg()
+		}
+	}
+	db := parse_dbc('BO_ 256 F: 1 Gw\n SG_ A : 0|8@1+ (1,0) [10|20] "" Sink\nBA_ "GenSigStartValue" SG_ 256 A ;\n')!
+	if r := db.messages[0].signals[0].init_raw() {
+		assert false, 'a start record with no value read as absent: ${r}'
+	} else {
+		assert err.msg().contains('GenSigStartValue "(none)" is not a whole raw value'), err.msg()
+	}
+}

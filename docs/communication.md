@@ -152,7 +152,11 @@ as AUTOSAR COM's signal init value does, and the frame is built over it:
 
 `tools/candb` `init_raw` is the rule, through `encode_raw` like every sent value, and
 `init_payload` the message's bytes (a multiplexed message: the signals its multiplexor's initial
-value selects). loom2v emits those bytes in ONE place, `pdu_init_lines`, at the start of every frame
+value selects — the page is fixed at generation, so a node that publishes another selector gets that
+page's unpublished fields from the initial page's bits; no example sends a multiplexed frame). Every
+signal of a sent message must be able to hold one: a range with no value in it, a signal reaching past
+the DLC, or a refused start value on any page fails generation, a spare signal the node never writes
+included. loom2v emits those bytes in ONE place, `pdu_init_lines`, at the start of every frame
 the host bridge, a target's local producer and its satellite lanes build, before any published field
 is written over them. (A gateway's signal-route frame needs none: generation refuses one with a
 signal no route fills, and a frame route forwards its payload as it is.) A target producer encodes its IOC cell only once the FB has published it
