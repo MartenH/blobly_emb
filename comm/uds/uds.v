@@ -112,8 +112,9 @@ pub mut:
 }
 
 // DidWrite is the seam a bound DID's 0x2E goes through, after the server's session and security
-// gates: `write` returns the NRC (0 = accepted — the server then stores the record as the DID's
-// data and answers). comm/param builds it: length (0x13), range (0x31), then the journal (0x72).
+// gates and its record-length check (the DID's declared size, 0x13): `write` returns the NRC (0 =
+// accepted — the server then stores the record as the DID's data and answers). comm/param builds
+// it: range (0x31), then the journal (0x72).
 pub struct DidWrite {
 pub mut:
 	ctx   voidptr
@@ -155,7 +156,8 @@ pub const reset_into_boot = u8(0x80)
 // Did is one Data Identifier: constant bytes, a RAM cell (writable), and/or kept fresh from a
 // live signal by the bridge. Access is gated per DID: the session masks (0 = every session) and
 // the security level a write needs (0 = none). A BOUND writable DID is a parameter's (comm/param):
-// its 0x2E goes through Server.did_write, which validates and makes it durable first.
+// its 0x2E goes through Server.did_write, which validates and makes it durable first. A writable
+// DID's `len` is its declared size: 0x2E accepts a record of exactly that length (0x13 otherwise).
 pub struct Did {
 pub mut:
 	id             u16
@@ -900,15 +902,18 @@ fn (mut s Server) write_did(req &u8, req_len int, resp &u8) int {
 	i := s.find_did(did)
 	// ISO 14229-1 0x2E order: a DID that does not exist, is not writable, or is not writable
 	// in the active session is NOT SUPPORTED for write (0x31); then security (0x33); then the
-	// record length (0x13); then, for a parameter, its conditions, range (0x31) and the write
-	// itself (0x72) — the seam's.
+	// record length (0x13); then, for a parameter, its conditions (0x22), range (0x31) and the
+	// write itself (0x72) — the seam's.
 	if i < 0 || !s.dids[i].writable || !in_mask(s.dids[i].write_sessions, s.session) {
 		return negative(resp, 0x2E, nrc_request_out_of_range)
 	}
 	if s.dids[i].write_security != 0 && s.unlocked != s.dids[i].write_security {
 		return negative(resp, 0x2E, nrc_security_access_denied)
 	}
-	if n > max_did_data {
+	// a writable DID's declared size is its `len` — a RAM cell's configured bytes, a parameter's
+	// record width (comm/param bind) — and a record of any other length is refused: a write
+	// never changes a DID's size (and never writes past the cell, whatever `len` was set to)
+	if n != int(s.dids[i].len) || n > max_did_data {
 		return negative(resp, 0x2E, nrc_incorrect_length)
 	}
 	if s.dids[i].bound {
@@ -925,7 +930,6 @@ fn (mut s Server) write_did(req &u8, req_len int, resp &u8) int {
 			s.dids[i].data[j] = req[3 + j]
 		}
 	}
-	s.dids[i].len = u8(n)
 	unsafe {
 		resp[0] = 0x6E
 		resp[1] = req[1]

@@ -472,17 +472,18 @@ fn test_an_unreadable_journal_runs_the_defaults_and_says_so() {
 fn test_a_bound_did_without_the_seam_refuses() {
 	mut s := uds.Server{}
 	s.init(64)
-	s.dids[0] = uds.Did{
+	s.dids[0] = uds.Did{ // a two-byte parameter record, as bind would size it
 		id:       0x0110
 		writable: true
 		bound:    true
+		len:      2
 	}
 	s.ndid = 1
 	mut out := [8]u8{}
 	req := [u8(0x2E), 0x01, 0x10, 0x00, 0x01]
 	n := s.handle(&req[0], req.len, &out[0])
 	assert out[..n] == [u8(0x7F), 0x2E, 0x22]
-	assert s.dids[0].len == 0
+	assert s.dids[0].len == 2 && s.dids[0].data[1] == 0
 }
 
 // rng: a deterministic xorshift for the fuzz

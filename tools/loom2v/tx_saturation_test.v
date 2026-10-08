@@ -55,7 +55,7 @@ fn example(name string) string {
 
 // the DID record: the count, big-endian, written into the server's table after the pass's sends
 fn did_writes(srv string, count string) string {
-	return '${srv}.dids[5].data[0] = u8(${count} >> 24)'
+	return '${srv}.dids[6].data[0] = u8(${count} >> 24)'
 }
 
 fn test_the_host_bridge_counts_what_it_saturates_and_the_did_reads_it() {
@@ -66,9 +66,9 @@ fn test_the_host_bridge_counts_what_it_saturates_and_the_did_reads_it() {
 	assert glue.contains('if lamp_frame_warn_lamp_set(mut tx_lamp_frame.data, '), glue
 	assert glue.contains('tx_lamp_frame_sat++')
 	assert glue.contains('st.tx_sat.add(tx_lamp_frame_sat)')
-	// the DID (the sixth in overspeed's table) holds the count
+	// the DID (the seventh in overspeed's table) holds the count
 	assert glue.contains(did_writes('st.conn_diag.server', 'st.tx_sat.count')), glue
-	assert glue.contains('st.conn_diag.server.dids[5].len = 4')
+	assert glue.contains('st.conn_diag.server.dids[6].len = 4')
 }
 
 fn test_a_gateway_signal_route_counts_too() {

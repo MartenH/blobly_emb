@@ -195,6 +195,11 @@ writable = true
 bytes    = "00 00"              # RAM cell (write then read back)
 
 [[did]]
+id       = 0xF1AD
+writable = true
+bytes    = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00" # 20 B: FF/CF both ways
+
+[[did]]
 id    = 0xF1AB
 bytes = "00"                    # a RAM cell writable ONLY in the extended session
 write = { session = ["extended"] }

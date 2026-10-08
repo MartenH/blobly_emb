@@ -472,13 +472,13 @@ A data identifier the server reads (0x22) and may write (0x2E). Its value is ONE
 | `id` | integer | yes | — | 0x0..0xFFFF | the 16-bit data identifier (0 is skipped) |
 | `ascii` | string |  | — |  | a constant value as an ASCII string (at most 32 bytes) |
 | `bytes` | string |  | — |  | a constant value as space-separated hex bytes (at most 32) |
-| `writable` | boolean |  | `false` |  | 0x2E may overwrite the constant's RAM copy (implied by `write`) |
+| `writable` | boolean |  | `false` |  | 0x2E may overwrite the constant's RAM copy with a record of exactly its size (implied by `write`) |
 | `signal` | string |  | — |  | a live value: the signal's, refreshed every pass, big-endian at its width; read-only |
-| `param` | string |  | — |  | the [[param]] this DID codes (0x2E) and reads back (0x22) |
+| `param` | string |  | — |  | the [[param]] this DID codes (0x2E, a record of exactly its width) and reads back (0x22) |
 | `param_status` | boolean |  | `false` |  | one byte per [[param]]: 0 default / 1 coded / 2 reverted |
 | `tx_saturations` | boolean |  | `false` |  | the count of sent values saturated to their DBC range since start (u32 BE) |
 | `read` | table → [`[[did]] read/write`](#ecu-did-access) |  | — |  | the 0x22 gate; absent = every session, no security |
-| `write` | table → [`[[did]] read/write`](#ecu-did-access) |  | — |  | the 0x2E gate (makes the DID writable); absent = every session, no security |
+| `write` | table → [`[[did]] read/write`](#ecu-did-access) |  | — |  | the 0x2E gate (makes the DID writable; a record of exactly its size); absent = every session, no security |
 
 <a id="ecu-did-access"></a>
 
