@@ -283,6 +283,14 @@ writable = true
 ')
 	assert code2 != 0, 'loom2v accepted a writable DID with no record'
 	assert out2.contains('declares no record'), out2
+	code3, out3, _ := generate('did_nosize_sig', diag_conn + '
+[[did]]
+id       = 0x0100
+writable = true
+signal   = ""
+')
+	assert code3 != 0, 'loom2v accepted a writable DID with an empty signal and no record'
+	assert out3.contains('declares no record'), out3
 }
 
 // on a node with [nvm], the reset is an orderly shutdown: the journal flushed and marked clean
