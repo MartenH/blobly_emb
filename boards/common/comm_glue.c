@@ -44,28 +44,33 @@ void ioc_pub(int i, unsigned a, unsigned b) {
     sig_t v = { a, b };
     if (i >= 0 && i < IOC_POOL_N) ioc_write(&g_ioc_pool[i], v);
 }
+/* g_ioc_seen[i]: cell i has EVER been published, latched by whichever read consumed its
+ * first fresh flag — ioc_get and ioc_get_ever alike, so a plain read of a cell (a DID refresh on
+ * the comm thread) cannot eat the one publish the ever gate is waiting for. Per-cell, written only
+ * by the cell's one reader thread (each cell has exactly ONE: io thread for outputs, FB thread for
+ * inputs, comm thread for TX signals) — disjoint bytes, no race. */
+static unsigned char g_ioc_seen[IOC_POOL_N];
 /* One ioc_read per logical read (it advances the reader's private slot), both fields out. */
 void ioc_get(int i, unsigned *a, unsigned *b) {
     sig_t v = { 0, 0 };
-    if (i >= 0 && i < IOC_POOL_N) v = ioc_read(&g_ioc_pool[i]);
+    int ever = 0;
+    if (i >= 0 && i < IOC_POOL_N) {
+        v = ioc_read_ever(&g_ioc_pool[i], &ever);
+        if (ever) g_ioc_seen[i] = 1;
+    }
     *a = v.a; *b = v.b;
 }
-/* ioc_get_ever — the ever-published gate (docs/io.md, REQ-IO-009): returns 1 once the
- * cell has EVER been published, latched race-free by ioc_read_ever from the same
- * atomic exchange that consumes the fresh flag; *a/*b always hold the latest value. Until
- * then the io thread keeps the driver-established init on an output pin, and an FB handler
- * keeps an input port's declared default (a zero slot is not a sample). seen[] is per-cell
- * and each cell has exactly ONE reader (io thread: outputs; FB thread: inputs) — disjoint
- * bytes, no race. */
+/* ioc_get_ever — the ever-published gate (docs/io.md, REQ-IO-009; REQ-COM-011): returns 1 once
+ * the cell has EVER been published, latched race-free by ioc_read_ever from the same atomic
+ * exchange that consumes the fresh flag; *a/*b always hold the latest value. Until then the io
+ * thread keeps the driver-established init on an output pin, an FB handler keeps an input port's
+ * declared default (a zero slot is not a sample), and a comm-thread producer sends its frame's
+ * initial payload. */
 int ioc_get_ever(int i, unsigned *a, unsigned *b) {
-    static unsigned char seen[IOC_POOL_N];
     if (i < 0 || i >= IOC_POOL_N) { *a = 0; *b = 0; return 0; }
-    int ever = 0;
-    sig_t v = ioc_read_ever(&g_ioc_pool[i], &ever); /* latched IN the consuming
-        exchange — a pre-read check could eat a one-sample pulse (emb#150) */
-    if (ever) seen[i] = 1;
-    *a = v.a; *b = v.b;
-    return seen[i];
+    ioc_get(i, a, b); /* latched IN the consuming exchange — a pre-read check could eat a
+        one-sample pulse (emb#150) */
+    return g_ioc_seen[i];
 }
 
 /* ---- Loom-load cells (telemetry) -------------------------------------------------------

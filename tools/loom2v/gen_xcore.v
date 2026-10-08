@@ -329,8 +329,9 @@ fn xcore_manifest(m Model) []string {
 // into bytes 4j..4j+3 (lane_encode_lines: the one send encode) — sent, and its saturations counted
 // once the channel accepts it.
 fn lane_send_lines(si SigInfo, lanes []string, ind string) []string {
-	mut g := ['${ind}xcore_txf.id = u32(0x${si.dbc_id.hex()})', '${ind}xcore_txf.len = ${si.dbc_dlc}',
-		'${ind}mut xcore_sat := u32(0)']
+	mut g := ['${ind}xcore_txf.id = u32(0x${si.dbc_id.hex()})', '${ind}xcore_txf.len = ${si.dbc_dlc}']
+	g << pdu_init_lines(si, 'xcore_txf', ind)
+	g << '${ind}mut xcore_sat := u32(0)'
 	for j, lane in lanes {
 		g << lane_encode_lines(si, j, si.fields[j].typ, lane, 'xcore_txf', 'xcore_sat', ind)
 	}

@@ -153,6 +153,11 @@ at the bus, in the generated codec, both ways. Two things are yours to get right
   output can leave the range on purpose. Values pass through `f64` both
   ways, so an integer is exact only up to 2^53 — a 64-bit counter or identifier on the wire needs
   care.
+- **Before your first publish: the signal's initial value.** A frame goes out once any of its
+  signals has a value (on a target, on its cycle from boot), so a signal nobody has published yet
+  goes out at its initial value — the DBC's `GenSigStartValue` (a raw value inside the range, or one
+  the VAL_ table names), else the in-range value nearest 0 — never as raw 0 outside its range
+  (communication.md, "Initial values"). It is not counted as a saturation.
 
 Any other conversion — unit changes, clamping, filtering, rate limits — is ordinary FB code today;
 declared transforms on a connection are planned, not built. On the ThreadX target the lean codec

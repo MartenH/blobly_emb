@@ -6,6 +6,7 @@ module candb
 
 import math
 import math.big
+import comm.com
 
 pub enum ByteOrder {
 	little_endian // Intel:    start_bit = LSB, bits ascend in the LSB-0 numbering
@@ -27,6 +28,9 @@ pub:
 	values     map[u64]string    // DBC VAL_ table: raw value -> named state (enum)
 	is_signed  bool
 	byte_order ByteOrder = .little_endian
+	// start_value: the `BA_ "GenSigStartValue" SG_` attribute as the file writes it — a RAW value,
+	// '' where the signal declares none (a file-wide BA_DEF_DEF_ default is not a declaration)
+	start_value string
 	// Multiplexing (DBC 'M' / 'm<N>'): a message may have ONE multiplexor switch
 	// signal; multiplexed signals are only present when the switch equals their
 	// selector value. is_multiplexor and is_multiplexed can both be true for
@@ -409,6 +413,91 @@ pub fn (s Signal) raw_range() !RawRange {
 		named:   named
 		note:    note
 	}
+}
+
+// init_raw: the raw bits a signal holds before anything has been sent for it — what every emitter
+// starts the signal's PDU with, so a field nobody has published yet goes out in range rather than as
+// raw 0 (docs/communication.md "Initial values"). The DBC's GenSigStartValue where the signal declares
+// one: a RAW value, which must be a whole number inside the signal's raw range (raw_range) or a VAL_
+// entry the send rule lets through as named — anything else is refused. Otherwise the physical value
+// nearest 0 inside [min|max], through comm/com encode_raw, the one send encode (a start value inside
+// the range is what encode_raw sends for it, so its bits are taken exactly). An initial value is
+// never a saturation.
+pub fn (s Signal) init_raw() !u64 {
+	r := s.raw_range() or { return error('signal "${s.name}": ${err}') }
+	if s.start_value == '' {
+		// physical 0 in raw steps, rounded and held to the range: the in-range value nearest 0
+		raw, _ := com.encode_raw((0.0 - s.offset) / s.factor, r.lo, r.hi, r.lo_raw, r.hi_raw,
+			r.nan_raw, r.mask)
+		return raw
+	}
+	v := whole_literal(s.start_value) or {
+		return error('signal "${s.name}": GenSigStartValue "${s.start_value}" is not a whole raw value')
+	}
+	n := s.length
+	if !(v < steps_of(r.lo_raw, s.is_signed, n)) && !(steps_of(r.hi_raw, s.is_signed, n) < v) {
+		return big_raw(v, r.mask) // inside the range: what encode_raw sends for it, the value itself
+	}
+	for nr in r.named {
+		if steps_of(nr.raw, s.is_signed, n) == v {
+			return nr.raw // a VAL_ entry outside the range: sent as named, as encode_lines sends it
+		}
+	}
+	return error('signal "${s.name}": GenSigStartValue ${s.start_value} is outside its raw range ${int_f64lit(r.lo)}..${int_f64lit(r.hi)}${if r.note != '' {
+		' (' + r.note + ')'
+	} else {
+		''
+	}} — the initial value must be one the signal can be sent with')
+}
+
+// init_payload: the message's payload before anything has been sent — every signal at its init_raw
+// (only the multiplexed signals its multiplexor's initial value selects), `dlc` bytes. loom2v emits
+// it as the starting bytes of every frame of this message a node sends (pdu_init_lines).
+pub fn (m Message) init_payload() ![]u8 {
+	mut data := []u8{len: m.dlc}
+	mux := m.multiplexor_index()
+	mut sel := u64(0)
+	if mux >= 0 {
+		sel = m.signals[mux].init_raw() or { return error('message "${m.name}": ${err}') }
+	}
+	for s in m.signals {
+		if s.is_multiplexed && u64(s.multiplexor_value) != sel {
+			continue
+		}
+		raw := s.init_raw() or { return error('message "${m.name}": ${err}') }
+		s.set_raw(mut data, raw)
+	}
+	return data
+}
+
+// whole_literal: an integer written in decimal, optionally signed, with an all-zero fraction allowed
+// ("12", "-3", "12.0"); none for anything else.
+fn whole_literal(t string) ?big.Integer {
+	mut d := t.trim_space()
+	if dot := d.index('.') {
+		if !d[dot + 1..].bytes().all(it == `0`) {
+			return none
+		}
+		d = d[..dot]
+	}
+	neg := d.starts_with('-')
+	if neg || d.starts_with('+') {
+		d = d[1..]
+	}
+	if d.len == 0 || !d.bytes().all(it.is_digit()) {
+		return none
+	}
+	v := big.integer_from_string(d) or { return none }
+	return if neg { v.neg() } else { v }
+}
+
+// steps_of: a raw bit pattern of an `n`-bit signal as the integer it means (sign-extended if signed).
+fn steps_of(raw u64, signed bool, n int) big.Integer {
+	if signed && raw & (u64(1) << (n - 1)) != 0 {
+		ext := if n == 64 { raw } else { raw | ~((u64(1) << n) - 1) }
+		return big.integer_from_i64(i64(ext))
+	}
+	return big.integer_from_u64(raw)
 }
 
 // Ratio is an exact rational num / den (den > 0).

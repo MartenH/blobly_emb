@@ -51,6 +51,8 @@ mut:
 	// means an unrelated SG gets overwritten silently (codex #211 r5)
 	dbc_lanes []candb.Signal // per 32-bit lane of the message, the DBC signal that owns it (lane 0 is
 	// the signal itself; a name of '' = none there) — the target producers encode through its range
+	dbc_init []u8 // a sent signal's DBC message before anything is published: every signal at its
+	// initial value (candb init_payload, REQ-COM-011) — the bytes every emitter starts the frame with
 	fields    []SigField // the signal's fields in declaration order (for the `sig` struct emit)
 	persist   string // '' | 'now' | 'shutdown' — restored + journaled by the platform
 	nvm_id    u16 // explicit schema-identity pin (0 = derive by hash); see gen_nvm.v
@@ -365,6 +367,12 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool, eth string) (m
 				rr := sg.raw_range() or { panic('loom2v: sent signal "${sname}": ${err}') }
 				if rr.note != '' {
 					panic('loom2v: sent signal "${sname}": ${rr.note} in ${os.file_name(dbc)} — a sent value is held to its signal\'s range, so the range must be one a value can be sent in (docs/communication.md)')
+				}
+				msg := dbc_msg_named(db, si.dbc_msg) or {
+					panic('loom2v: sent signal "${sname}": no DBC message "${si.dbc_msg}" in ${os.file_name(dbc)}')
+				}
+				si.dbc_init = msg.init_payload() or {
+					panic('loom2v: sent signal "${sname}": ${err} in ${os.file_name(dbc)} (docs/communication.md "Initial values")')
 				}
 			}
 			sig_of[sname] = si
@@ -2490,6 +2498,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << 'fn C.ioc_pool_init()'
 				glue << 'fn C.ioc_pub(int, u32, u32)'
 				glue << 'fn C.ioc_get(int, &u32, &u32)'
+				// 1 once the cell has EVER been published (comm_glue.c): the outputs' and the
+				// producers' gate, so a cell's zero-init is never taken for a value
+				glue << 'fn C.ioc_get_ever(int, &u32, &u32) int'
 			}
 			if eth_thread_on(m) {
 				// the NetX eth seam (driver/eth/eth_netx.c)
@@ -2510,12 +2521,11 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			}
 			if m.io_points.len > 0 {
 				// io thread plumbing: created AUTO_START OFF + resumed after the boot publish
-				// (REQ-IO-009). ioc_get_ever is the outputs' freshness gate — 1 once the cell
+				// (REQ-IO-009). ioc_get_ever (declared with the pool) is the outputs' freshness gate — 1 once the cell
 				// has EVER been published, so the driver-established init holds until the
 				// producing FB's first publish (a plain ioc_get would drive the pin with the
 				// slot's zero-init).
 				glue << 'fn C._tx_thread_resume(voidptr) u32'
-				glue << 'fn C.ioc_get_ever(int, &u32, &u32) int'
 			}
 			glue << ''
 			// TCB as [32]u64 (256 B >= sizeof(TX_THREAD) = 200 B) so it is 8-byte aligned — the
@@ -3129,13 +3139,17 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\t\tlast_tx_${snake(si.name)} = t1'
 					glue << '\t\t\tmut tv_a := u32(0)'
 					glue << '\t\t\tmut tv_b := u32(0)'
-					glue << '\t\t\tC.ioc_get(${idx}, &tv_a, &tv_b)'
 					glue << '\t\t\tmut tf := can.Frame{'
 					glue << '\t\t\t\tid:  u32(0x${si.dbc_id.hex()})'
 					glue << '\t\t\t\tlen: ${si.dbc_dlc}'
 					glue << '\t\t\t}'
+					glue << pdu_init_lines(si, 'tf', '\t\t\t')
 					glue << '\t\t\tmut tf_sat := u32(0)'
-					glue << lane_encode_lines(si, 0, si.val_type, 'tv_a', 'tf', 'tf_sat', '\t\t\t')
+					// until the FB's first publish the cell holds no value, only its zero: the frame
+					// goes out at its initial payload, and nothing is encoded or counted
+					glue << '\t\t\tif C.ioc_get_ever(${idx}, &tv_a, &tv_b) != 0 {'
+					glue << lane_encode_lines(si, 0, si.val_type, 'tv_a', 'tf', 'tf_sat', '\t\t\t\t')
+					glue << '\t\t\t}'
 					glue << '\t\t\tif ch.send(tf) {'
 					glue << '\t\t\t\ttx_sat.add(tf_sat)'
 					glue << '\t\t\t}'
@@ -5102,6 +5116,23 @@ fn lane_encode_lines(si SigInfo, j int, typ string, cell string, frame string, s
 	g << '${ind}if ${v}_sat {'
 	g << '${ind}\t${sat}++'
 	g << '${ind}}'
+	return g
+}
+
+// pdu_init_lines: THE one place a sent frame's initial payload is emitted — `frame`.data set to the
+// DBC message's bytes with every signal at its initial value (SigInfo.dbc_init: candb init_payload,
+// GenSigStartValue or the in-range value nearest 0), so a field nobody has published yet goes out in
+// range rather than as raw 0 (REQ-COM-011). Every byte of the DLC is written, so a frame variable
+// reused across messages carries nothing over. The host bridge, the target's local producers and its
+// satellite lanes all start from it; an initial value is never counted as a saturation.
+fn pdu_init_lines(si SigInfo, frame string, ind string) []string {
+	if si.dbc_init.len == 0 {
+		return []string{}
+	}
+	mut g := ['${ind}// initial payload of ${si.dbc_msg}: every signal at its initial value (REQ-COM-011)']
+	for i, b in si.dbc_init {
+		g << '${ind}${frame}.data[${i}] = u8(0x${b:02x})'
+	}
 	return g
 }
 
