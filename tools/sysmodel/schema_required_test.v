@@ -31,7 +31,7 @@ const conditional = {
 const absent = ['sys_bus.bitrate', 'sys_bus_nm.repeat_ms', 'sys_bus_nm.wait_sleep_ms',
 	'sys_doip.functional', 'sys_doip.activation_types', 'sys_doip.initial_inactivity_ms',
 	'sys_doip.general_inactivity_ms', 'sys_doip.announce_count', 'sys_doip.announce_interval_ms',
-	'sys_route.frame']
+	'sys_route.frame', 'sys_endpoint.netmask', 'sys_endpoint.gateway']
 
 struct Drop {
 	row  string // ctx.key
@@ -167,5 +167,41 @@ fn test_a_required_row_is_exactly_a_key_sysmodel_refuses_to_miss() {
 				assert !k.required, '${r} is required but never exercised'
 			}
 		}
+	}
+}
+
+// an endpoint's subnet keys are read from the file and judged there (tools/netcfg); the rows are
+// optional, so their only test of absence is the fixture above, which has neither
+fn test_an_endpoint_subnet_is_read_and_checked() {
+	dir := fixture_dir()
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	text := os.read_file(os.join_path(@VMODROOT, 'examples', 'system_full', 'system.toml')) or {
+		panic(err)
+	}
+	ep := 'endpoint = { address = "192.168.0.50", port = 30490 }'
+	assert text.contains(ep)
+	with := fn [text, ep] (keys string) string {
+		return text.replace_once(ep, 'endpoint = { address = "192.168.0.50", port = 30490, ${keys} }')
+	}
+	good := with('netmask = "255.255.0.0", gateway = "192.168.3.1"')
+	assert refused(dir, good) == []
+	path := os.join_path(dir, 'system.toml')
+	os.write_file(path, good) or { panic(err) }
+	s := parse_system(path) or { panic(err) }
+	n := s.nodes.filter(it.name == 'sysnode')[0]
+	assert n.endpoint_netmask or { '' } == '255.255.0.0'
+	assert n.endpoint_gateway or { '' } == '192.168.3.1'
+	for keys, want in {
+		'netmask = "255.255.255.1"':  'not a contiguous mask'
+		'netmask = 24':               'endpoint `netmask` must be a string'
+		'gateway = "10.0.0.1"':       'gateway "10.0.0.1" is not on the subnet 192.168.0.0/255.255.255.0'
+		'gateway = "192.168.0.0"':    'is the network address of'
+		'gateway = "192.168.0.255"':  'is the broadcast address of'
+		'gateway = "192.168.0.50"':   'is its own gateway'
+	} {
+		e := refused(dir, with(keys))
+		assert e.any(it.contains(want)), '${keys}: ${e}'
 	}
 }

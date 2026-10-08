@@ -10,6 +10,7 @@ module sysmodel
 import os
 import tools.candb
 import tools.doipcfg
+import tools.netcfg
 import tools.cfgschema
 
 pub enum Severity {
@@ -76,6 +77,7 @@ pub fn validate_system_gen(s System) []Issue {
 	// the dissolution path states its own rules rather than inheriting nothing.
 	issues << check_someip_segment(s)
 	issues << check_endpoint_carrier(s)
+	issues << check_endpoint_net(s)
 	issues << check_doip(s)
 	issues << check_dbc_conformance(s)
 	issues << check_route_dbc(s)
@@ -2878,12 +2880,12 @@ fn check_doip(s System) []Issue {
 				req:      'REQ-TOPO-005'
 				msg:      'node "${n.name}": declares `doip` but no `endpoint` — the address DoIP answers at is the node\'s endpoint address, declared once'
 			}
-		} else if !ip4_host(n.endpoint) {
-			// driver/eth/doip_netx.c brings the node up on a /24 with .1 as its gateway
+		} else if netcfg.parse(n.endpoint) == none {
+			// a host of its subnet, the rest of the rule: check_endpoint_net
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-005'
-				msg:      'node "${n.name}": its endpoint address "${n.endpoint}" is not a host address DoIP can bring up (a dotted quad on its /24, not .0, .1 or .255)'
+				msg:      'node "${n.name}": its endpoint address "${n.endpoint}" is not a host address DoIP can bring up (not a dotted quad)'
 			}
 		} else if n.has_port && n.port_raw == 13400 {
 			issues << Issue{
@@ -2981,18 +2983,59 @@ fn is_someip_bus(s System, name string) bool {
 	return b.kind == 'someip'
 }
 
-// ip4_host: a dotted quad, each octet 0..255, and a HOST on the /24 driver/eth brings up — not
-// .0 (the network), .255 (its broadcast) or .1 (the gateway it sets). loom2v's ip4_ok, which the
-// node build applies too; here so syscheck names the node before a cross-build does.
-fn ip4_host(a string) bool {
-	parts := a.split('.')
-	if parts.len != 4 {
-		return false
-	}
-	for p in parts {
-		if p.len == 0 || p.len > 3 || !p.bytes().all(it >= `0` && it <= `9`) || p.int() > 255 {
-			return false
+// check_endpoint_net: an endpoint's subnet, by tools/netcfg's check (the node gate's rule) — its
+// `netmask` and `gateway` dotted quads, the mask contiguous, the gateway on the subnet and neither
+// its network nor its broadcast address; and the address a host of it: a DoIP entity's always (on
+// the default /24 the old rule, not .0, .1 or .255 — driver/eth/netx_up.c's network, gateway and
+// broadcast), any other once its subnet is configured.
+fn check_endpoint_net(s System) []Issue {
+	mut issues := []Issue{}
+	for n in s.nodes {
+		if !n.has_endpoint {
+			continue
+		}
+		for key in n.endpoint_not_str {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": endpoint `${key}` must be a string — a dotted IPv4 address'
+			}
+		}
+		if n.endpoint_netmask == none && n.endpoint_gateway == none && !n.has_doip {
+			continue // nothing configured, nothing brought up as an entity: the defaults stand
+		}
+		if (n.endpoint_netmask != none || n.endpoint_gateway != none) && !n.view.is_threadx {
+			// the subnet is NetX's (driver/eth/netx_up.c); a host member binds on the host's network
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": its endpoint configures a netmask or gateway, but it is not a threadx target — the subnet is brought up by NetX on the target; a host member binds its address on the host\'s own network, which nothing here configures'
+			}
+		}
+		_, subnet, host := netcfg.check(n.endpoint, n.endpoint_netmask, n.endpoint_gateway,
+			n.has_doip)
+		for w in subnet {
+			// a DoIP entity's unparsable address is check_doip's to say, with the rest of its rule
+			if n.has_doip && w.starts_with('address ') {
+				continue
+			}
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": endpoint ${w}'
+			}
+		}
+		for w in host {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      if n.has_doip {
+					'node "${n.name}": its endpoint address "${n.endpoint}" is not a host address DoIP can bring up (${w})'
+				} else {
+					'node "${n.name}": endpoint ${w}'
+				}
+			}
 		}
 	}
-	return parts[3].int() !in [0, 1, 255]
+	return issues
 }

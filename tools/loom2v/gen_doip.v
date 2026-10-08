@@ -2,6 +2,7 @@ module main
 
 import toml
 import tools.doipcfg
+import tools.netcfg
 
 // [doip]: the node's ONE diagnostic server — the [uds] server its [isotp] connection carries — reachable over DoIP
 // (ISO 13400) too, on a ThreadX target. The server stays on the comm thread; a doip thread
@@ -14,6 +15,8 @@ import tools.doipcfg
 struct DoipCfg {
 	on         bool
 	address    string // the node's static IPv4 address
+	netmask    ?string // its subnet mask and default gateway (none = tools/netcfg's defaults)
+	gateway    ?string
 	logical    int    // its DoIP logical address
 	functional int    // 0 = comm/doip's default (0xE400)
 	policy     doipcfg.Policy
@@ -32,6 +35,8 @@ fn parse_doip(doc toml.Doc) DoipCfg {
 	return DoipCfg{
 		on:         true
 		address:    (dm['address'] or { toml.Any('') }).string()
+		netmask:    opt_str(dm, 'netmask')
+		gateway:    opt_str(dm, 'gateway')
 		logical:    toml_int(dm, 'logical_address', 0, 0, 0xFFFF, '[doip]')
 		functional: toml_int(dm, 'functional_address', 0, 0, 0xFFFF, '[doip]')
 		policy:     policy
@@ -39,25 +44,78 @@ fn parse_doip(doc toml.Doc) DoipCfg {
 	}
 }
 
+// opt_str: a key's value as written, none when absent (ecucheck has judged its type)
+fn opt_str(m map[string]toml.Any, key string) ?string {
+	v := m[key] or { return none }
+	return v.string()
+}
+
+// node_net: the node's ONE network (driver/eth/netx_up.c): [doip]'s address and subnet, or on a
+// SOME/IP-only node its eth bus's — validate_net has made the two one where a node has both
+fn node_net(m Model) netcfg.Net {
+	n, _ := if m.doip.on {
+		netcfg.resolve(m.doip.address, m.doip.netmask, m.doip.gateway)
+	} else {
+		netcfg.resolve(m.eth_iface, m.eth_netmask, m.eth_gateway)
+	}
+	return n
+}
+
+// validate_net refuses a subnet the target cannot bring up, by tools/netcfg's check — the rule
+// syscheck applies to a system node's endpoint: a netmask or gateway that is not a dotted quad, a
+// mask that is not contiguous, a gateway off the subnet or on its network or broadcast address, an
+// address that is not a host of it (a DoIP entity's always — its old /24 rule — an eth bus's once
+// it configures its subnet); and a subnet on a CAN bus, and two subnets on one node.
+fn validate_net(m Model) {
+	// a subnet is NetX's (driver/eth/netx_up.c): an image that brings none up has nothing to apply
+	// it to — the host backend binds an address on the host's own network, whatever its mask
+	configured := (m.doip.on && (m.doip.netmask != none || m.doip.gateway != none))
+		|| (m.eth != '' && (m.eth_netmask != none || m.eth_gateway != none))
+	if configured && !(m.target.threadx && (eth_thread_on(m) || m.doip.on)) {
+		panic('loom2v: a netmask or gateway is configured, but this image brings up no network to apply it to (a ThreadX target with [doip] or SOME/IP on its eth bus); the host binds an address on the host\'s own network')
+	}
+	for k in m.non_eth_net_keys {
+		panic('loom2v: [bus.${k} is an eth bus\'s key (its interface is an address); a CAN bus has no subnet')
+	}
+	if m.doip.on {
+		d := m.doip
+		if netcfg.parse(d.address) == none {
+			panic('loom2v: [doip] address "${d.address}" is not a dotted IPv4 address')
+		}
+		net_refusals('[doip]', 'address "${d.address}"', d.address, d.netmask, d.gateway, true)
+	}
+	if m.eth != '' {
+		net_refusals('[bus.${m.eth}]', 'interface "${m.eth_iface}"', m.eth_iface, m.eth_netmask,
+			m.eth_gateway, false)
+	}
+	// one NetX per image, so one subnet: what [doip] and the eth bus say must be one (the address
+	// itself: validate_doip) — where the eth bus is brought up, or states a subnet of its own
+	if m.doip.on && m.eth != '' && (eth_thread_on(m) || m.eth_netmask != none || m.eth_gateway != none) {
+		a, _ := netcfg.resolve(m.doip.address, m.doip.netmask, m.doip.gateway)
+		b, _ := netcfg.resolve(m.eth_iface, m.eth_netmask, m.eth_gateway)
+		if a.netmask != b.netmask || a.gateway != b.gateway {
+			panic('loom2v: [doip] subnet ${a.subnet()} gateway ${netcfg.dotted(a.gateway)} differs from eth bus "${m.eth}"\'s ${b.subnet()} gateway ${netcfg.dotted(b.gateway)} — a node has one network')
+		}
+	}
+}
+
+// net_refusals: netcfg.check's verdict on one place an address is declared, as a refusal
+fn net_refusals(table string, what string, address string, netmask ?string, gateway ?string, entity bool) {
+	if netmask == none && gateway == none && !entity {
+		return // nothing configured: driver/eth's defaults, judged nowhere before either
+	}
+	_, subnet, host := netcfg.check(address, netmask, gateway, entity)
+	for e in subnet {
+		panic('loom2v: ${table} ${e}')
+	}
+	for e in host {
+		panic('loom2v: ${table} ${what} is not a host address on its subnet: ${e}')
+	}
+}
+
 // ip4_octets: the address as numbers, so 192.168.0.050 and 192.168.0.50 are one address
 fn ip4_octets(s string) []int {
 	return s.split('.').map(it.int())
-}
-
-// ip4_ok: a dotted quad, each octet 0..255 with at least one digit (driver/eth/ip4.h's rule), and
-// a HOST on the /24 doip_net_create assumes: not .0 (the network), .255 (its broadcast) or .1 (the
-// gateway it sets)
-fn ip4_ok(s string) bool {
-	parts := s.split('.')
-	if parts.len != 4 {
-		return false
-	}
-	for p in parts {
-		if p.len == 0 || p.len > 3 || !p.bytes().all(it >= `0` && it <= `9`) || p.int() > 255 {
-			return false
-		}
-	}
-	return parts[3].int() !in [0, 1, 255]
 }
 
 // doip_vin: the VIN DoIP announces is DID 0xF190's value — one answer, whichever transport asks
@@ -90,9 +148,6 @@ fn validate_doip(m Model) {
 	// and one UDP 13400: DoIP's announcement/identification socket owns it
 	if eth_thread_on(m) && m.someip.port == doip_port {
 		panic('loom2v: [someip] port ${doip_port} is DoIP\'s (UDP 13400, ISO 13400) on this node — pick another')
-	}
-	if !ip4_ok(d.address) {
-		panic('loom2v: [doip] address "${d.address}" is not a host address on its /24 (dotted quad, not .0, .1 or .255)')
 	}
 	// ISO 13400-2: DoIP entities take 0x0001..0x0DFF and 0x1000..0x7FFF (0x0E00..0x0FFF are testers)
 	if !((d.logical >= 0x0001 && d.logical <= 0x0DFF) || (d.logical >= 0x1000 && d.logical <= 0x7FFF)) {
@@ -332,6 +387,33 @@ fn doip_reset_wait(m Model) []string {
 	return ['\t\t\tdoipnet.drain_tx(diag_now_us)']
 }
 
+// bus_opt: [bus.<name>].<key> as written, none when absent
+fn bus_opt(doc toml.Doc, name string, key string) ?string {
+	if name == '' {
+		return none
+	}
+	bv := doc.value_opt('bus') or { return none }
+	bc := bv.as_map()[name] or { return none }
+	return opt_str(bc.as_map(), key)
+}
+
+// non_eth_net_keys: "<bus> `netmask`" for each subnet key on a bus that is not the eth one
+fn non_eth_net_keys(doc toml.Doc, bus_kind map[string]string) []string {
+	mut out := []string{}
+	for name, kind in bus_kind {
+		if kind == 'eth' {
+			continue
+		}
+		for key in ['netmask', 'gateway'] {
+			if bus_opt(doc, name, key) != none {
+				out << '${name}] `${key}`'
+			}
+		}
+	}
+	out.sort()
+	return out
+}
+
 // bus_interface: [bus.<name>].interface ('' = no such bus or no interface)
 fn bus_interface(doc toml.Doc, name string) string {
 	if name == '' {
@@ -361,5 +443,9 @@ fn net_build_lines(m Model) string {
 	}
 	// the shared pool: SOME/IP 8, DoIP 12 (the TCP window and its socket), both 16
 	pool := if eth_thread_on(m) && m.doip.on { 16 } else if m.doip.on { 12 } else { 8 }
-	return 'LOOM_NET_SRCS = ${srcs.join(' ')}\nLOOM_NET_DEFS := -DBLOB_NET_POOL_COUNT=${pool}u\n'
+	// the subnet the node configures (tools/netcfg c_defs; none = driver/eth's /24 and .1 gateway),
+	// for the application here and for a [doip] node's bootloader through boot/boot.mk
+	addr := node_net(m).c_defs()
+	defs := if addr == '' { '' } else { ' ${addr}' }
+	return 'LOOM_NET_SRCS = ${srcs.join(' ')}\nLOOM_NET_ADDR_DEFS :=${defs}\nLOOM_NET_DEFS := -DBLOB_NET_POOL_COUNT=${pool}u${defs}\n'
 }

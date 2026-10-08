@@ -291,6 +291,16 @@ threads on one NetX, and its node `ecu.toml` authors none of its network. The te
 now has three members, so each EVENT is the point-to-point unit (docs/multi-node.md) and
 the bench tool's generated config names `GwStatus`'s producer as that event's own `peer`.
 
+**The subnet rides beside the address.** `endpoint` also takes `netmask` and `gateway`, both
+optional: absent, the node comes up on a /24 whose first host (`.1`) is the gateway — the
+constants `driver/eth/netx_up.c` always had. sysgen lowers what is configured beside the
+address (into `[doip]` and the eth `[bus.*]`), loom2v writes it as `BLOB_NET_NETMASK` /
+`BLOB_NET_GATEWAY` into `gen/loom_build.mk`'s `LOOM_NET_ADDR_DEFS`, and both the application's
+network and a `[doip]` node's bootloader (`boot/boot.mk`) are compiled with it, so the boot
+answers on the same subnet. `tools/netcfg` is the one rule syscheck and the node gate apply: a
+contiguous mask of /1../30, a gateway inside the subnet that is neither its network nor its
+broadcast address, and an address that is a host of it.
+
 ### The entity at the transport level (ISO 13400-2:2012)
 
 What the entity does with each payload type, and the policy that is configuration rather than

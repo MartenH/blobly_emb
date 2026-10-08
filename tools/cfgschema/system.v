@@ -60,8 +60,10 @@ fn system_schema() Schema {
 				k('rsp', .int).doc('the diagnostic response CAN id'),
 			]),
 			tbl('sys_endpoint', '[[node]] endpoint', '', [
-				k('address', .str).required_by_model().doc('IPv4 dotted quad; unique per segment; a DoIP node needs a host address (not .0, .1 or .255)'),
+				k('address', .str).required_by_model().doc('IPv4 dotted quad; unique per segment; a DoIP node needs a host address of its subnet (not its network, broadcast or gateway address — on the default /24: not .0, .1 or .255)'),
 				k('port', .int).range(1, 0xFFFF).doc('the SOME/IP listen port (required on a someip bus; not 13400 on a DoIP node)'),
+				k('netmask', .str).ipv4().d('"255.255.255.0"').doc('the subnet mask the node is brought up on (application and bootloader alike); contiguous, /1../30'),
+				k('gateway', .str).ipv4().doc('the default gateway; inside address/netmask and not its network or broadcast address. Absent = the subnet\'s first host, (address & netmask) | 1'),
 			]),
 			tbl('sys_doip', '[[node]] doip', 'The DoIP entity and its ISO 13400-2 transport policy (one parser for both files: tools/doipcfg; bounds: comm/doip policy.v).', doip_entity_keys('logical', 'functional').map(if it.name == 'logical' {
 				it.required_by_model()} else {

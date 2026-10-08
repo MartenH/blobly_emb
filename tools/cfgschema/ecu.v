@@ -163,6 +163,8 @@ fn ecu_schema() Schema {
 			k('core', .int).d('0').doc('the core the bus bridge runs on'),
 			k('kind', .str).d('"can"').one_of(['can', 'eth']).own_check().doc('"can", or "eth" (SOME/IP, docs/someip.md; at most one)'),
 			k('dbc', .str).doc('a per-bus DBC (a multi-bus GATEWAY speaks more than one contract)'),
+			k('netmask', .str).ipv4().doc('eth only (a CAN bus has none): the subnet mask the node is brought up on; contiguous, /1../30, equal to [doip]\'s where the node has one. Absent = 255.255.255.0'),
+			k('gateway', .str).ipv4().doc('eth only (a CAN bus has none): the default gateway; inside interface/netmask and not its network or broadcast address. Absent = the subnet\'s first host, (address & netmask) | 1'),
 		]),
 		tbl('someip', '[someip]', 'The SOME/IP service identity and static endpoints (docs/someip.md). Deliberately no `instance`: without SD nothing on the wire carries it.', [
 			req('bus', .str).doc('the eth bus it binds to'),

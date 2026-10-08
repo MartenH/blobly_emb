@@ -35,6 +35,9 @@ fn test_values_are_stated_only_where_they_mean_something() {
 				if key.choices.len > 0 {
 					assert key.typ in [.str, .str_arr], '${t.ctx}.${key.name}: choices on a ${key.typ}'
 				}
+				if key.ipv4 {
+					assert key.typ == .str, '${t.ctx}.${key.name}: an IPv4 rule on a ${key.typ}'
+				}
 				if key.ranged {
 					assert key.typ in [.int, .int_arr, .id], '${t.ctx}.${key.name}: a range on a ${key.typ}'
 					assert key.min <= key.max, '${t.ctx}.${key.name}: empty range'
@@ -63,6 +66,9 @@ fn test_every_default_is_a_legal_value() {
 				}
 				if key.ranged && v is i64 {
 					assert key.in_range(v), '${t.ctx}.${key.name}: default ${key.def} is outside its range'
+				}
+				if v is string {
+					assert key.ip4_ok(v), '${t.ctx}.${key.name}: default ${key.def} is not a dotted IPv4 address'
 				}
 			}
 		}
@@ -171,6 +177,15 @@ fn test_check_refuses_a_value_outside_its_row() {
 	// 0 is [doip]'s spelling of the default functional address
 	assert errs_of('[doip]\naddress = "192.168.0.2"\nlogical_address = 0x10\nfunctional_address = 0\n') == []
 	assert errs_of('[doip]\naddress = "192.168.0.2"\nlogical_address = 0x10\nfunctional_address = 0x10\n').len == 1
+	// a netmask and a gateway are dotted IPv4 addresses (their relations are the node gate's)
+	assert errs_of('[doip]\naddress = "192.168.0.2"\nlogical_address = 0x10\nnetmask = "255.255.0.0"\ngateway = "192.168.0.254"\n') == []
+	assert errs_of('[doip]\naddress = "192.168.0.2"\nlogical_address = 0x10\nnetmask = "/24"\n') == [
+		'[doip] "netmask": "/24" is not a dotted IPv4 address',
+	]
+	assert errs_of('[bus.eth0]\ninterface = "192.168.0.2"\nkind = "eth"\ngateway = "192.168.0.256"\n') == [
+		'[bus.*] "gateway": "192.168.0.256" is not a dotted IPv4 address',
+	]
+	assert ecu.json_schema().contains('"pattern": "^([01]?[0-9]?[0-9]|2[0-4][0-9]|25[0-5])(\\\\.([01]?[0-9]?[0-9]|2[0-4][0-9]|25[0-5])){3}\$"')
 	// an own_check row is ecumodel.validate's to judge (ecucheck runs both): said once, there
 	assert errs_of('[trace]\npre_pct = 150\n') == []
 }
