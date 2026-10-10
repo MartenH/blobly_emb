@@ -412,6 +412,17 @@ verifies = ["REQ-NET-007", "REQ-NET-012"]
 approved_by = "Claude (coding agent) on Marten Hildell's bench — sysnode DoIP suite 7/7"
 date = "2026-10-02"
 
+# sysnode as a DoIP gateway (docs/net.md "a DoIP gateway"): zone_a on the edge bus reached over IP
+# through sysnode — the routing, its access rule, and zone_a reprogrammed through it by the OTA
+# gateway (stm32_linux otad). sysnode's image from this branch, installed through its bootloader.
+[[review]]
+id = "sysnode-doip-routing-hardware"
+method = "review"
+context = "h735/ETH-DoIP + h723/edge CAN-FD"
+verifies = ["REQ-NET-019", "REQ-NET-020"]
+approved_by = "Claude (coding agent) on Marten Hildell's bench — routed reads 1.4-1.7 ms, NACK 0x06 before the unlock and on a new connection, zone_a reprogrammed through sysnode in 3.0 s (v404 -> 1 -> 2 -> 1)"
+date = "2026-10-10"
+
 # The SOME/IP RPC on system_full's tcu (NUCLEO-H723, 192.168.0.51); --flash needs
 # BLOB_TCU_SERIAL and replaces whatever that H723 holds (zone_a, on a CAN bench) with tcu.
 [[check]]

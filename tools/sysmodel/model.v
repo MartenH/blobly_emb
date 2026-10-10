@@ -72,6 +72,12 @@ pub struct Diag {
 pub mut:
 	req u32
 	rsp u32
+	// its DoIP logical address behind a gateway that routes to it (REQ-NET-019): the address a
+	// network tester names; the gateway forwards to req and listens on rsp
+	logical     u32
+	logical_raw i64
+	has_logical bool
+	logical_int bool = true
 }
 
 // Node — one ECU. `ecu` points at its authored ecu.toml (internals); `buses`
@@ -122,6 +128,10 @@ pub mut:
 	// an integer (a list: anything but a list of integers)
 	doip_policy  doipcfg.Policy
 	doip_not_int []string
+	// `doip.routes`: the nodes behind this gateway its DoIP routes diagnostics to (REQ-NET-019);
+	// doip_routes_bad: authored, but not a list of names
+	doip_routes     []string
+	doip_routes_bad bool
 	// --- extracted from the node's ecu.toml (filled by load_node) ---
 	view NodeView
 }
@@ -222,6 +232,16 @@ pub mut:
 	to      string // dest bus name
 }
 
+// AuthoredRoute — a [[doip.route]] a composed system's gateway authors itself (a dissolved
+// system's are lowered from its doip `routes`): the system reads which node it names, the
+// gateway's bus it is on and the request id it sends on (REQ-NET-019, check_route_request_ids).
+pub struct AuthoredRoute {
+pub:
+	node  string
+	bus   string // the gateway's own name for the bus
+	tx_id u32
+}
+
 // NodeView — the system-relevant slice of a node's ecu.toml: what it produces
 // and consumes on each bus (by the node's LOCAL bus interface name), plus its
 // NM cluster range. Keyed by the node's local bus name (== a system bus
@@ -273,6 +293,7 @@ pub mut:
 	someip_peer string // [someip].peer, "<address>:<port>"
 	someip_port int    // [someip].port — the port THIS endpoint listens on
 	has_doip    bool   // an authored [doip] — the system owns it in the dissolution model
+	doip_routes []AuthoredRoute // ... and its [[doip.route]]
 	// the node's [uds] as the network-reachability rule reads it (doipcfg.service_refusals /
 	// bench_key_refusal): a `services` table declared, its rows, and the 0x27 key it names
 	uds_table        bool
@@ -610,6 +631,14 @@ pub fn parse_system(path string) !System {
 				node.doip_functional_int = m_is_int(dm, 'functional')
 				node.doip_policy, node.doip_not_int = doipcfg.parse(dm)
 				node.doip_unknown = cfgschema.system.unknown(dm, 'sys_doip')
+				if rv := dm['routes'] {
+					names := rv.array()
+					if rv is []toml.Any && names.all(it is string) {
+						node.doip_routes = names.map(it.string())
+					} else {
+						node.doip_routes_bad = true
+					}
+				}
 			}
 			for b in (m['buses'] or { toml.Any([]toml.Any{}) }).array() {
 				node.buses << b.string()
@@ -618,8 +647,12 @@ pub fn parse_system(path string) !System {
 				d := dm.as_map()
 				sys.note_unknown(d, 'sys_diag', '${where} diag')
 				node.diag = Diag{
-					req: m_u32(d, 'req')
-					rsp: m_u32(d, 'rsp')
+					req:         m_u32(d, 'req')
+					rsp:         m_u32(d, 'rsp')
+					logical:     m_u32(d, 'logical')
+					logical_raw: (d['logical'] or { toml.Any(0) }).i64()
+					has_logical: 'logical' in d
+					logical_int: m_is_int(d, 'logical')
 				}
 			}
 			sys.nodes << node
@@ -709,6 +742,52 @@ fn (mut s System) note_unknown(m map[string]toml.Any, ctx string, where string) 
 }
 
 // bus_by_name returns the Bus with the given system name, or none.
+// node_by_name returns the node with the given name, or none.
+pub fn (s System) node_by_name(name string) ?Node {
+	for n in s.nodes {
+		if n.name == name {
+			return n
+		}
+	}
+	return none
+}
+
+// local_can_iface: the name a node's generated config gives system bus `bus` — a node on one bus
+// sees it as can0 (its only controller), a node on several by the bus's interface. The one rule
+// sysgen generates by and the route checks resolve a node's [isotp] bus with.
+pub fn local_can_iface(node Node, bus Bus) string {
+	return if node.buses.len == 1 { 'can0' } else { bus.interface }
+}
+
+// diag_bus: the CAN bus a node's diagnostic server ([isotp]) is on — its only CAN bus, or the one
+// its [isotp] interface names; none when that cannot be told
+pub fn (s System) diag_bus(n Node) ?Bus {
+	mut cans := []Bus{}
+	for b in n.buses {
+		bus := s.bus_by_name(b) or { continue }
+		if bus.kind == 'can' {
+			cans << bus
+		}
+	}
+	if n.view.isotp_conns.len == 0 {
+		return if cans.len == 1 { cans[0] } else { none }
+	}
+	iface := n.view.isotp_conns[0].iface
+	for bus in cans {
+		if local_can_iface(n, bus) == iface {
+			return bus
+		}
+	}
+	return none
+}
+
+// routed_bus: the CAN bus a DoIP gateway reaches a routed node on (REQ-NET-019) — the bus the
+// node's diagnostic server is on, when the gateway sits on it too; none otherwise
+pub fn (s System) routed_bus(gw Node, target Node) ?Bus {
+	bus := s.diag_bus(target) or { return none }
+	return if bus.name in gw.buses { bus } else { none }
+}
+
 pub fn (s System) bus_by_name(name string) ?Bus {
 	for b in s.buses {
 		if b.name == name {
@@ -1080,8 +1159,20 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 		v.someip_peer = m_str(sm, 'peer')
 		v.someip_port = m_int(sm, 'port')
 	}
-	if _ := doc.value_opt('doip') {
+	if dv := doc.value_opt('doip') {
 		v.has_doip = true
+		if routes := dv.as_map()['route'] {
+			if routes is []toml.Any {
+				for r in routes {
+					rm := r.as_map()
+					v.doip_routes << AuthoredRoute{
+						node:  m_str(rm, 'node')
+						bus:   m_str(rm, 'bus')
+						tx_id: m_u32(rm, 'tx_id')
+					}
+				}
+			}
+		}
 	}
 	for d in ecumodel.toml_arr(doc, 'did') {
 		dm := d.as_map()

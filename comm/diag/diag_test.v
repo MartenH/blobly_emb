@@ -1010,3 +1010,32 @@ fn test_a_request_refused_under_a_pending_reset_still_holds_it() {
 	c.remote_sent()
 	assert c.reset_due() == 0x01
 }
+
+// REQ-NET-020: a gateway routes only for a network tester holding the gateway's own unlock — the
+// level it earned over the network, never a bus tester's
+// @verifies REQ-NET-020
+fn test_the_network_testers_unlock_is_what_a_router_reads() {
+	mut c := secured_conn()
+	mut t := new_tester()
+	mut now := u64(0)
+	mut cc := &c
+	over_doip := fn [mut cc] (req []u8) []u8 {
+		return remote(mut cc, req, false)
+	}
+	assert c.remote_unlocked() == 0
+	// a bus tester's unlock is not the network's
+	assert exchange(mut c, mut t, mut &now, [u8(0x10), 0x03])[0] == 0x50
+	seed := exchange(mut c, mut t, mut &now, [u8(0x27), 0x01])[2..]
+	mut key := [u8(0x27), 0x02]
+	for b in seed {
+		key << b ^ 0xFF
+	}
+	assert exchange(mut c, mut t, mut &now, key) == [u8(0x67), 0x02]
+	assert c.remote_unlocked() == 0
+	// the network's own
+	assert unlock(over_doip) == [u8(0x67), 0x02]
+	assert c.remote_unlocked() == 1
+	// gone with its connection
+	c.remote_dropped()
+	assert c.remote_unlocked() == 0
+}

@@ -65,7 +65,8 @@
       "type": "object",
       "properties": {
         "req": {"type": "integer", "description": "the diagnostic request CAN id"},
-        "rsp": {"type": "integer", "description": "the diagnostic response CAN id"}
+        "rsp": {"type": "integer", "description": "the diagnostic response CAN id"},
+        "logical": {"type": "integer", "description": "its DoIP logical address behind a DoIP gateway that routes to it (a gateway's doip `routes`; 0x0001..0x0DFF or 0x1000..0x7FFF; unique among every logical address); needs `req` and `rsp`"}
       },
       "additionalProperties": false
     },
@@ -86,6 +87,7 @@
       "description": "The DoIP entity and its ISO 13400-2 transport policy (one parser for both files: tools/doipcfg; bounds: comm/doip policy.v).",
       "type": "object",
       "properties": {
+        "routes": {"type": "array", "items": {"type": "string"}, "description": "the nodes behind this gateway its DoIP routes diagnostics to (REQ-NET-019), at most 8: each a CAN node on a bus this node sits on, with a diag `logical`; lowered into [[doip.route]]"},
         "logical": {"type": "integer", "description": "the entity's logical address (0x0001..0x0DFF or 0x1000..0x7FFF); unique"},
         "functional": {"type": "integer", "minimum": 58368, "maximum": 61439, "default": 58368, "description": "the functional address it also answers Default: 0xE400."},
         "testers": {"type": "array", "items": {"type": "integer", "minimum": 3584, "maximum": 4095}, "description": "tester addresses allowed to activate routing (at most 8); absent = any 0x0E00..0x0FFF"},
@@ -94,6 +96,7 @@
         "general_inactivity_ms": {"type": "integer", "minimum": 1000, "maximum": 3600000, "default": 300000, "description": "T_TCP_General_Inactivity: idle timeout once activated (ms) Default: 300000."},
         "announce_count": {"type": "integer", "minimum": 0, "maximum": 10, "default": 3, "description": "A_DoIP_Announce_Num: vehicle announcements at start-up Default: 3."},
         "announce_interval_ms": {"type": "integer", "minimum": 10, "maximum": 10000, "default": 500, "description": "A_DoIP_Announce_Interval (ms); count x interval at most 10000 ms Default: 500."},
+        "route_level": {"type": "integer", "minimum": 1, "maximum": 8, "default": 1, "description": "a gateway's: the security level of its own server a tester must have unlocked over the network before it routes to the nodes behind it (REQ-NET-020); one its [uds] serves Default: 1."},
         "allow_bench_key": {"type": "boolean", "default": false, "description": "answer 0x27 with blobly_net's PUBLIC reference key over the network — a bench posture, opted into by name; required (true) when [uds] security_key = \"reference\" Default: false."}
       },
       "required": ["logical"],
