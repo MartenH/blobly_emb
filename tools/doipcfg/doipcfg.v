@@ -12,7 +12,7 @@ import comm.uds
 // the policy's keys: the same names in ecu.toml's [doip] and a node's `doip`
 pub const list_keys = ['testers', 'activation_types']
 pub const int_keys = ['initial_inactivity_ms', 'general_inactivity_ms', 'announce_count',
-	'announce_interval_ms']
+	'announce_interval_ms', 'route_level']
 // allow_bench_key: the node may answer 0x27 with blobly_net's PUBLIC reference key over the
 // network — a bench posture, opted into by name (bench_key_refusal)
 pub const bench_key = 'allow_bench_key'
@@ -88,6 +88,7 @@ pub fn (p Policy) int_of(k string) i64 {
 		'initial_inactivity_ms' { doip.initial_inactivity_ms }
 		'general_inactivity_ms' { doip.general_inactivity_ms }
 		'announce_count' { doip.announce_count }
+		'route_level' { doip.route_level }
 		else { doip.announce_interval_ms }
 	}
 }
@@ -128,6 +129,10 @@ pub fn (p Policy) problems() []string {
 	general := p.int_of('general_inactivity_ms')
 	if !doip.timers_ok(initial, general) {
 		errs << '`initial_inactivity_ms` ${initial} / `general_inactivity_ms` ${general} out of bounds (${doip.initial_inactivity_min_ms}..${doip.initial_inactivity_max_ms} and ${doip.general_inactivity_min_ms}..${doip.general_inactivity_max_ms} ms, initial <= general)'
+	}
+	level := p.int_of('route_level')
+	if level < 1 || level > uds.max_security_level {
+		errs << '`route_level` ${level} is not a security level (1..${uds.max_security_level})'
 	}
 	count := p.int_of('announce_count')
 	interval := p.int_of('announce_interval_ms')

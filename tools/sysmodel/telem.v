@@ -284,16 +284,94 @@ fn tbus_name(s System, iface string) string {
 	return iface
 }
 
-fn check_telemetry_frames(s System) []Issue {
-	mut issues := []Issue{}
+// bus_dbcs: each bus's DBC that loads, by bus name (load errors are check_bus_dbcs' to report)
+fn bus_dbcs(s System) map[string]candb.Database {
 	mut dbs := map[string]candb.Database{}
 	for bus in s.buses {
 		if bus.dbc == '' {
 			continue
 		}
 		path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(s.dir, bus.dbc) }
-		dbs[bus.name] = candb.load_dbc_file(path) or { continue } // load errors already reported
+		dbs[bus.name] = candb.load_dbc_file(path) or { continue }
 	}
+	return dbs
+}
+
+// node_can_bus: the system CAN bus a node's own config names `iface` — by local_can_iface (a node
+// on one bus calls it can0), or by the bus's interface
+fn node_can_bus(s System, n Node, iface string) ?Bus {
+	for name in n.buses {
+		bus := s.bus_by_name(name) or { continue }
+		if bus.kind == 'can' && (local_can_iface(n, bus) == iface || bus.interface == iface) {
+			return bus
+		}
+	}
+	return none
+}
+
+// RouteTx — a DoIP gateway's route as a transmitter: it sends the routed node's requests on `id`
+struct RouteTx {
+	gw     string
+	target string
+	bus    string // the system bus
+	id     u32
+}
+
+// check_route_request_ids: a DoIP gateway sends a routed node's requests on that node's request id
+// (REQ-NET-019) — a transmitter module_frames does not list, so check_telemetry_frames never sees
+// it. Any OTHER node that receives that id on the routed bus (an [isotp] rx or functional id, a
+// trace or shell receive id) would take the routed requests as its own: a routed 10 03 would
+// change its session too. Only the routed node listens on it. The routes are the system's doip
+// `routes` in a dissolved system and the gateways' own [[doip.route]] in a composed one.
+fn check_route_request_ids(s System) []Issue {
+	mut issues := []Issue{}
+	mut routes := []RouteTx{}
+	for gw in s.nodes {
+		for name in gw.doip_routes {
+			t := s.node_by_name(name) or { continue } // check_doip_routes reports it
+			bus := s.routed_bus(gw, t) or { continue }
+			if t.diag.req == 0 && t.diag.rsp == 0 {
+				continue // no diag allocation (check_doip_routes); CAN id 0 alone is an id like any
+			}
+			routes << RouteTx{gw.name, t.name, bus.name, t.diag.req}
+		}
+		for r in gw.view.doip_routes {
+			bus := node_can_bus(s, gw, r.bus) or { continue } // the node gate checks its own buses
+			if _ := s.node_by_name(r.node) {
+				routes << RouteTx{gw.name, r.node, bus.name, r.tx_id}
+			} else {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-NET-019'
+					msg:      'node "${gw.name}": its [[doip.route]] to "${r.node}" names no node of this system — the system tells the routed node from the others that must not listen on its request id by that name'
+				}
+			}
+		}
+	}
+	dbs := bus_dbcs(s)
+	for rt in routes {
+		for n in s.nodes {
+			if n.name == rt.target || rt.bus !in n.buses {
+				continue
+			}
+			for f in module_rx_frames(n, s, dbs) {
+				b := node_can_bus(s, n, f.iface) or { continue }
+				if b.name == rt.bus && f.id == rt.id {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-NET-019'
+						msg:      'node "${rt.gw}": doip route to "${rt.target}" sends its requests on 0x${f.id.hex()} on bus "${rt.bus}", which is also the ${f.label} of "${n.name}" — it would take the routed requests as its own'
+					}
+				}
+			}
+		}
+	}
+	return issues
+}
+
+fn check_telemetry_frames(s System) []Issue {
+	mut issues := []Issue{}
+	dbs := bus_dbcs(s)
 	mut owner := map[string]string{} // "<busname>#<id>" -> a phrase naming the owner
 	// module RECEIVE + TRANSMIT reservations only (NOT alive/app frames): a produced
 	// application frame landing on one is misrouted into that module or contends for

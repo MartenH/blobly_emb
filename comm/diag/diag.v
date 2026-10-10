@@ -224,6 +224,13 @@ pub fn (mut c Connection) remote_dropped() {
 	c.sa_level[1] = 0
 }
 
+// remote_unlocked: the security level the network tester holds on this server now, 0 = none — an
+// unlock it earned over its own transport (REQ-NET-012); a bus tester's never counts. A gateway's
+// router routes for the network tester only while it holds the configured level (REQ-NET-020).
+pub fn (c &Connection) remote_unlocked() u8 {
+	return if c.unlock_remote { c.server.unlocked } else { u8(0) }
+}
+
 // enter: before a request over one transport — the session entry it starts in, and the unlock the OTHER
 // transport holds, hidden for the request (0 = none hidden); its own exchange in progress loaded
 fn (mut c Connection) enter(remote bool) (u32, u8) {

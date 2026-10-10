@@ -61,6 +61,24 @@ fn generate(name string, extra string) (int, string, string) {
 
 // generate_mk is generate, with the gen/loom_build.mk it wrote
 fn generate_mk(name string, extra string) (int, string, string, string) {
+	return generate_src(name, fn (s string) string {
+		return s
+	}, extra)
+}
+
+// generate_without_nm is generate on the fixture with its [nm] left out (the bus it runs NM on is
+// the only one with frames to collide with)
+fn generate_without_nm(name string, extra string) (int, string, string) {
+	code, out, glue, _ := generate_src(name, fn (s string) string {
+		start := s.index('\n[nm]\n') or { return s }
+		end := s[start + 1..].index('\n[') or { return s[..start] }
+		return s[..start] + s[start + 1 + end..]
+	}, extra)
+	return code, out, glue
+}
+
+// generate_src is generate_mk on the fixture's config as `edit` changes it
+fn generate_src(name string, edit fn (string) string, extra string) (int, string, string, string) {
 	tmp := os.join_path(os.temp_dir(), 'doip_target_${name}_${os.getpid()}')
 	defer {
 		os.rmdir_all(tmp) or {}
@@ -68,7 +86,7 @@ fn generate_mk(name string, extra string) (int, string, string, string) {
 	ex := fixture_dir
 	os.mkdir_all(tmp) or { panic(err) }
 	ecu := os.join_path(tmp, 'ecu.toml')
-	src := os.read_file(os.join_path(ex, 'ecu.toml')) or { panic(err) }
+	src := edit(os.read_file(os.join_path(ex, 'ecu.toml')) or { panic(err) })
 	os.write_file(ecu, src + extra) or { panic(err) }
 	dbc := os.join_path(tmp, 'bus.dbc')
 	os.cp(os.join_path(ex, 'bus.dbc'), dbc) or { panic(err) }
@@ -458,4 +476,168 @@ fn test_doip_and_someip_share_one_netx() {
 	// and a node with neither links no network at all
 	_, _, _, mk3 := generate_mk('no_net', '')
 	assert mk3.contains('LOOM_NET_SRCS :=\n'), mk3
+}
+
+// A DoIP gateway (REQ-NET-019/020): the routes sysgen lowers into [[doip.route]] — the router on
+// the comm thread, fed from the route's bus and pumped onto it, served from the route channel after
+// the mailbox; the entity told the routed addresses and given the hook; the doip loop the gateway's.
+// @verifies REQ-NET-019 REQ-NET-020
+// the routed node on the gateway's second bus (the fixture runs NM on can0)
+const doip_route = '
+[bus.can1]
+interface = "vcan1"
+fd        = false
+core      = 0
+
+[[doip.route]]
+node    = "zone_a"
+logical = 0x07C0
+bus     = "can1"
+tx_id   = 0x7C0
+rx_id   = 0x7C8
+'
+
+// a further route on can1 (the bus declared once, by doip_route)
+const doip_route_more = '
+[[doip.route]]
+node    = "zone_a"
+logical = 0x07C0
+bus     = "can1"
+tx_id   = 0x7C0
+rx_id   = 0x7C8
+'
+
+// a route on can0, the bus of the node's own diagnostic server, telemetry and DBC frames
+const doip_route_can0 = doip_route_more.replace('"can1"', '"can0"')
+
+fn test_a_gateway_routes_from_the_comm_thread() {
+	code, out, glue := generate('doip_route_ok', doip_conn + doip_route)
+	assert code == 0, out
+	assert glue.contains('import comm.diagroute')
+	assert glue.contains('g_droute   diagroute.Router')
+	// the router before the loop: the level a tester must hold (route_level's default, 1), BS 8
+	assert glue.contains('g_droute.init(u8(1), u8(8))')
+	assert glue.contains('logical: u16(0x7c0)') && glue.contains('tx_id:   u32(0x7c0)')
+		&& glue.contains('rx_id:   u32(0x7c8)')
+	// each pass: the mailbox first (a dropped tester's unlock ends before the next is judged),
+	// then the route channel, the bus drain feeding the router, its pump after the server's answer
+	steps := [
+		'doipnet.serve_mailbox(mut g_diag, &g_doip_req[0], &g_doip_resp[0])',
+		'doipnet.serve_routes(mut g_droute, g_diag.remote_unlocked(), &g_rt_req[0], C.board_now_us())',
+		// the route's bus is drained only while the router has room for another answer
+		'for ch.recv(mut rx) {', // the node's own bus: no route there, drained as ever
+		'for g_droute.room(C.board_now_us()) && ch_can1.recv(mut rx) {',
+		'if g_droute.on_frame(u8(1), &rx, C.board_now_us()) {',
+		'g_diag.pump(',
+		'g_droute.step(t1)',
+		'1 { g_droute.pump(t1, mut ch_can1) }',
+	]
+	mut at := -1
+	for step in steps {
+		i := glue[at + 1..].index(step) or {
+			assert false, 'step "${step}" missing or out of order (after offset ${at})'
+			return
+		}
+		at = at + 1 + i
+	}
+	assert glue.contains('g_droute.busy()'), 'a routed exchange wakes the comm thread each tick'
+	// a gateway with no [[route]] of its own still arms the route bus's receive interrupt — and
+	// declares the hook it calls (the fixture has no [[route]])
+	assert glue.contains('C.comm_rx_irq_enable_idx(1)')
+	assert glue.contains('fn C.comm_rx_irq_enable_idx(int)')
+	// the entity: the routed address and the hook, the route channel, the gateway's loop
+	assert glue.contains('g_doip.routes[0] = u16(0x7c0) // zone_a')
+	assert glue.contains('g_doip.n_routes = 1')
+	assert glue.contains('g_doip.serve.route = doipnet.route')
+	assert glue.contains('C.doip_rt_init(&g_rt_req[0], &g_rt_ans[0])')
+	assert glue.contains('doipnet.run_gateway(mut g_doip, 3, 500, &g_doip_in[0], &g_doip_out[0], &g_rt_ans[0])')
+}
+
+fn test_a_doip_node_without_routes_has_no_router() {
+	code, out, glue := generate('doip_no_route', doip_conn)
+	assert code == 0, out
+	assert !glue.contains('diagroute') && !glue.contains('g_droute') && !glue.contains('doip_rt_')
+	assert glue.contains('doipnet.run(mut g_doip, 3, 500, &g_doip_in[0], &g_doip_out[0])')
+}
+
+fn test_a_route_the_gateway_cannot_serve_is_refused() {
+	mut nine := doip_route
+	for i in 1 .. 9 {
+		nine += doip_route_more.replace('0x07C0', '0x${0x1000 + i:X}').replace('0x7C0', '0x${0x600 + i:X}').replace('0x7C8',
+			'0x${0x680 + i:X}').replace('"zone_a"', '"n${i}"')
+	}
+	cases := [
+		[doip_route.replace('bus     = "can1"', 'bus     = "can9"'), 'is not one of this node\'s CAN buses'],
+		[doip_route.replace('0x07C0', '0x07B0'), 'is this entity\'s own address'],
+		[doip_route.replace('0x07C0', '0x0E10'), 'is not an entity address'],
+		[doip_route + doip_route_more.replace('"zone_a"', '"twin"').replace('0x7C0', '0x7D0').replace('0x7C8',
+			'0x7D8'), 'route too'],
+		[doip_route.replace('rx_id   = 0x7C8', 'rx_id   = 0x7C0'), 'are one id'],
+		[nine, 'at most 8'],
+	]
+	for c in cases {
+		code, out, _ := generate('doip_route_bad', doip_conn + c[0])
+		assert code != 0, 'accepted: ${c[1]}'
+		assert out.contains(c[1]), 'expected "${c[1]}", got: ${out}'
+	}
+	// on the bus of the node's own server and frames (a fixture without NM there): its ids are taken
+	for c in [
+		[doip_route_can0.replace('tx_id   = 0x7C0', 'tx_id   = 0x7B8'), 'own [isotp] ids'],
+		[doip_route_can0.replace('tx_id   = 0x7C0', 'tx_id   = 0x7E0'), '[[doip.route]] "zone_a" tx_id 0x7e0 is also'],
+	] {
+		code, out, _ := generate_without_nm('doip_route_bad_can0', doip_conn + c[0])
+		assert code != 0, 'accepted: ${c[1]}'
+		assert out.contains(c[1]), 'expected "${c[1]}", got: ${out}'
+	}
+	// a route_level the node's [uds] does not serve: no tester could ever be routed
+	code, out, _ := generate('doip_route_level', doip_conn.replace('logical_address = 0x07B0',
+		'logical_address = 0x07B0\nroute_level = 2') + doip_route)
+	assert code != 0 && out.contains('route_level 2 is not a security level'), out
+}
+
+fn test_more_routes_the_gateway_cannot_serve_are_refused() {
+	cases := [
+		// a bus the comm thread cannot open by name (it would open FDCAN1 again)
+		['
+[bus.edge]
+interface = "vcan1"
+fd        = false
+core      = 0
+' + doip_route.replace('bus     = "can1"', 'bus     = "edge"'), 'must be named exactly "can0" or "can1"'],
+		// two routes with one physical id on one bus: one request would reach both
+		[doip_route + doip_route_more.replace('"zone_a"', '"twin"').replace('0x07C0', '0x07D0'), 'share a diagnostic id'],
+		// on the bus this node runs NM on: the exchange would neither hold nor wake the network
+		[doip_route_can0, 'is the bus this node runs NM on'],
+	]
+	for c in cases {
+		code, out, _ := generate('doip_route_bad2', doip_conn + c[0])
+		assert code != 0, 'accepted: ${c[1]}'
+		assert out.contains(c[1]), 'expected "${c[1]}", got: ${out}'
+	}
+}
+
+fn test_a_route_may_use_id_zero_when_the_gateway_has_no_functional_id() {
+	conn := doip_conn.replace('functional_id = 0x7DF\n', '')
+	assert !conn.contains('functional_id')
+	code, out, _ := generate('doip_route_zero', conn + doip_route.replace('tx_id   = 0x7C0', 'tx_id   = 0x000'))
+	assert code == 0, out
+}
+
+fn test_a_route_bus_on_the_nodes_own_controller_or_core_is_refused() {
+	// the node's own bus spelled "fdcan0": a route on "can0" would open FDCAN1 a second time
+	rename := fn (src string) string {
+		return src.replace('[bus.can0]', '[bus.fdcan0]').replace('"can0"', '"fdcan0"')
+	}
+	other_can0 := '
+[bus.can0]
+interface = "vcan2"
+fd        = false
+core      = 0
+'
+	code, out, _, _ := generate_src('doip_route_alias', rename, rename(doip_conn) + other_can0 +
+		doip_route_can0)
+	assert code != 0 && out.contains('the controller of this node\'s own bus'), out
+	// a route bus assigned to another core: the comm thread here would drive it anyway
+	code2, out2, _ := generate('doip_route_core', doip_conn + doip_route.replace('core      = 0', 'core      = 1'))
+	assert code2 != 0 && out2.contains('is on core 1'), out2
 }

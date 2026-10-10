@@ -81,7 +81,9 @@ fn test_the_doip_policy_keys_are_doipcfgs() {
 	sys_keys := system.table('sys_doip').names()
 	assert ecu_keys[ecu_keys.len - policy.len..] == policy
 	assert sys_keys[sys_keys.len - policy.len..] == policy
-	assert sys_keys[..sys_keys.len - policy.len] == ['logical', 'functional']
+	// the gateway's routes (REQ-NET-019) are the system's to name; the entity's addresses follow
+	assert sys_keys[..sys_keys.len - policy.len] == ['routes', 'logical', 'functional']
+	assert 'route' in ecu_keys
 }
 
 fn errs_of(src string) []string {

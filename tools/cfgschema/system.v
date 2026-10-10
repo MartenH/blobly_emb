@@ -1,6 +1,7 @@
 module cfgschema
 
 import comm.doip
+import comm.uds
 
 // system: system.toml — the buses, the cross-node signals and events, the routes and each node's
 // identities (docs/multi-node.md). sysmodel parses it; this is what it may say.
@@ -58,6 +59,7 @@ fn system_schema() Schema {
 			tbl('sys_diag', '[[node]] diag', '', [
 				k('req', .int).doc('the diagnostic request CAN id'),
 				k('rsp', .int).doc('the diagnostic response CAN id'),
+				k('logical', .int).hex().doc('its DoIP logical address behind a DoIP gateway that routes to it (a gateway\'s doip `routes`; 0x0001..0x0DFF or 0x1000..0x7FFF; unique among every logical address); needs `req` and `rsp`'),
 			]),
 			tbl('sys_endpoint', '[[node]] endpoint', '', [
 				k('address', .str).required_by_model().doc('IPv4 dotted quad; unique per segment; a DoIP node needs a host address of its subnet (not its network, broadcast or gateway address — on the default /24: not .0, .1 or .255)'),
@@ -65,9 +67,7 @@ fn system_schema() Schema {
 				k('netmask', .str).ipv4().d('"255.255.255.0"').doc('the subnet mask the node is brought up on (application and bootloader alike); contiguous, /1../30'),
 				k('gateway', .str).ipv4().doc('the default gateway; inside address/netmask and not its network or broadcast address. Absent = the subnet\'s first host, (address & netmask) | 1'),
 			]),
-			tbl('sys_doip', '[[node]] doip', 'The DoIP entity and its ISO 13400-2 transport policy (one parser for both files: tools/doipcfg; bounds: comm/doip policy.v).', doip_entity_keys('logical', 'functional').map(if it.name == 'logical' {
-				it.required_by_model()} else {
-				it})),
+			tbl('sys_doip', '[[node]] doip', 'The DoIP entity and its ISO 13400-2 transport policy (one parser for both files: tools/doipcfg; bounds: comm/doip policy.v).', sys_doip_keys()),
 			tbl('sys_frame', '[[frame]]', 'A SOME/IP event on a someip bus: its id, its signals and how it is sent. Lowering copies only what it recognises, so an unknown key is refused.', [
 				k('name', .str).required_by_model().doc('the event name; unique per bus'),
 				k('bus', .str).required_by_model().doc('the someip bus it is on'),
@@ -115,6 +115,20 @@ fn doip_entity_keys(logical string, functional string) []Key {
 	return keys
 }
 
+// sys_doip_keys: a system node's `doip` — the entity's keys, and the nodes behind it it routes to
+fn sys_doip_keys() []Key {
+	// the policy keys stay last: doipcfg's list, in its order (cfgschema_test)
+	mut keys := [
+		k('routes', .str_arr).doc('the nodes behind this gateway its DoIP routes diagnostics to (REQ-NET-019), at most ${doip.max_routes}: each a CAN node on a bus this node sits on, with a diag `logical`; lowered into [[doip.route]]'),
+	]
+	keys << doip_entity_keys('logical', 'functional').map(if it.name == 'logical' {
+		it.required_by_model()
+	} else {
+		it
+	})
+	return keys
+}
+
 fn doip_policy_keys() []Key {
 	return [
 		k('testers', .int_arr).range(doip.tester_first, doip.tester_last).hex().doc('tester addresses allowed to activate routing (at most ${doip.max_testers}); absent = any 0x0E00..0x0FFF'),
@@ -123,6 +137,7 @@ fn doip_policy_keys() []Key {
 		k('general_inactivity_ms', .int).d('${doip.general_inactivity_ms}').range(doip.general_inactivity_min_ms, doip.general_inactivity_max_ms).doc('T_TCP_General_Inactivity: idle timeout once activated (ms)'),
 		k('announce_count', .int).d('${doip.announce_count}').range(0, doip.announce_count_max).doc('A_DoIP_Announce_Num: vehicle announcements at start-up'),
 		k('announce_interval_ms', .int).d('${doip.announce_interval_ms}').range(doip.announce_interval_min_ms, doip.announce_interval_max_ms).doc('A_DoIP_Announce_Interval (ms); count x interval at most ${doip.announce_total_max_ms} ms'),
+		k('route_level', .int).d('${doip.route_level}').range(1, uds.max_security_level).doc('a gateway\'s: the security level of its own server a tester must have unlocked over the network before it routes to the nodes behind it (REQ-NET-020); one its [uds] serves'),
 		k('allow_bench_key', .boolean).d('false').doc('answer 0x27 with blobly_net\'s PUBLIC reference key over the network — a bench posture, opted into by name; required (true) when [uds] security_key = "reference"'),
 	]
 }

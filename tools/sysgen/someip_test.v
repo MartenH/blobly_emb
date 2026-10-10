@@ -1370,3 +1370,258 @@ fn test_an_ungated_writable_did_is_refused_at_the_system() {
 	}
 	assert !doip_errs(sys).any(it.contains('writable from the network')), doip_errs(sys).str()
 }
+
+// A DoIP gateway's routes (REQ-NET-019): a CAN node behind it, addressed by its diag `logical`,
+// lowered into the gateway's [[doip.route]] — and every route the system could not serve refused.
+// @verifies REQ-NET-019
+fn route_system() sysmodel.System {
+	mut sys := doip_system()
+	sys.buses << sysmodel.Bus{
+		name:      'edge'
+		interface: 'can1'
+		kind:      'can'
+		fd:        true
+	}
+	sys.nodes[0].buses << 'edge'
+	sys.nodes[0].doip_routes = ['zone']
+	sys.nodes << sysmodel.Node{
+		name:  'zone'
+		ecu:   'zone.toml'
+		buses: ['edge']
+		diag:  sysmodel.Diag{
+			req:         0x7C0
+			rsp:         0x7C8
+			logical:     0x07C0
+			logical_raw: 0x07C0
+			has_logical: true
+		}
+		view:  sysmodel.NodeView{
+			isotp_conns: [sysmodel.IsotpConn{
+				iface: 'can0'
+				rx_id: 0x7C0
+				tx_id: 0x7C8
+			}]
+		}
+	}
+	return sys
+}
+
+fn route_errs(sys sysmodel.System) []string {
+	return seg_errs(sys).filter(it.contains('route') || it.contains('logical'))
+}
+
+fn test_a_route_is_lowered_into_the_gateways_doip() {
+	sys := route_system()
+	assert route_errs(sys).len == 0, route_errs(sys).str()
+	sec := doip_route_section(sys, sys.nodes[0]).join('\n')
+	assert sec.contains('[[doip.route]]')
+	assert sec.contains('node    = "zone"')
+	assert sec.contains('logical = 0x7C0')
+	assert sec.contains('bus     = "can1"') // the gateway's interface on the shared bus
+	assert sec.contains('tx_id   = 0x7C0') && sec.contains('rx_id   = 0x7C8')
+	// a gateway with no routes, and a node that is no gateway, lower nothing
+	assert doip_route_section(sys, sys.nodes.last()).len == 0
+	assert doip_route_section(doip_system(), doip_system().nodes[0]).len == 0
+}
+
+fn test_a_route_the_system_cannot_serve_is_refused() {
+	cases := {
+		'no such node':                          fn (mut s sysmodel.System) {
+			s.nodes[0].doip_routes = ['ghost']
+		}
+		'answers its own address itself':        fn (mut s sysmodel.System) {
+			s.nodes[0].doip_routes = ['zone', s.nodes[0].name]
+		}
+		'is listed twice':                       fn (mut s sysmodel.System) {
+			s.nodes[0].doip_routes = ['zone', 'zone']
+		}
+		'is a DoIP entity itself':               fn (mut s sysmodel.System) {
+			s.nodes[s.nodes.len - 1].has_doip = true
+		}
+		'and the gateway is not':                fn (mut s sysmodel.System) {
+			s.nodes[0].buses = s.nodes[0].buses.filter(it != 'edge')
+		}
+		'has no `diag` allocation':              fn (mut s sysmodel.System) {
+			s.nodes[s.nodes.len - 1].diag = sysmodel.Diag{}
+		}
+		'has no `logical`':                      fn (mut s sysmodel.System) {
+			s.nodes[s.nodes.len - 1].diag.has_logical = false
+		}
+		'must be an integer':                    fn (mut s sysmodel.System) {
+			s.nodes[s.nodes.len - 1].diag.logical_int = false
+		}
+		'is not an entity address':              fn (mut s sysmodel.System) {
+			s.nodes[s.nodes.len - 1].diag.logical_raw = 0x0E10
+		}
+		'shared by':                             fn (mut s sysmodel.System) {
+			s.nodes[s.nodes.len - 1].diag.logical = 0x07A0
+			s.nodes[s.nodes.len - 1].diag.logical_raw = 0x07A0
+		}
+		'the gateway forwards to the allocation': fn (mut s sysmodel.System) {
+			s.nodes[s.nodes.len - 1].view.isotp_conns[0].rx_id = 0x7C1
+		}
+		'names an address no gateway routes to': fn (mut s sysmodel.System) {
+			s.nodes[0].doip_routes = []
+		}
+		'must be a list of node names':          fn (mut s sysmodel.System) {
+			s.nodes[0].doip_routes_bad = true
+		}
+		'at most 8':                             fn (mut s sysmodel.System) {
+			s.nodes[0].doip_routes = ['zone', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
+		}
+	}
+	for want, mutate in cases {
+		mut sys := route_system()
+		assert sys.nodes.last().name == 'zone'
+		mutate(mut sys)
+		errs := route_errs(sys)
+		assert errs.any(it.contains(want)), 'expected "${want}": ${errs}'
+	}
+}
+
+fn test_a_diagnostic_only_gateway_is_a_gateway() {
+	// a DoIP gateway on two CAN buses with no [[route]]: it routes diagnostics, which is routing
+	mut sys := route_system()
+	sys.buses << sysmodel.Bus{
+		name:      'compute'
+		interface: 'can0'
+		kind:      'can'
+	}
+	sys.nodes[0].buses << 'compute'
+	assert !seg_errs(sys).any(it.contains('gateways no route')), seg_errs(sys).str()
+}
+
+fn test_a_route_follows_the_bus_the_nodes_server_is_on() {
+	// zone on two CAN buses, its [isotp] on the one the gateway is not on
+	mut sys := route_system()
+	sys.buses << sysmodel.Bus{
+		name:      'body'
+		interface: 'can0'
+		kind:      'can'
+	}
+	sys.nodes[sys.nodes.len - 1].buses = ['body', 'edge']
+	sys.nodes[sys.nodes.len - 1].view.isotp_conns[0].iface = 'can0' // on several buses: by interface
+	// (a node on two CAN buses is a gateway of its own — refused here for routing nothing, which is
+	// not this test's: the route's own verdict is)
+	routed := fn (s sysmodel.System) []string {
+		return seg_errs(s).filter(it.contains('doip route to'))
+	}
+	errs := routed(sys)
+	assert errs.any(it.contains('is on bus "body", and the gateway is not')), errs.str()
+	// on the shared one, it routes
+	sys.nodes[sys.nodes.len - 1].view.isotp_conns[0].iface = 'can1'
+	assert routed(sys).len == 0, routed(sys).str()
+}
+
+// codex local r7: the route sends the routed node's requests on its request id, and another node
+// listening on that id on the same bus — its functional id here — would take them as its own (a
+// routed 10 03 would change its session too). The routed node itself, and a listener on another
+// bus, are not refused.
+fn test_a_route_request_id_another_node_listens_on_is_refused() {
+	mut sys := route_system()
+	sys.buses << sysmodel.Bus{
+		name:      'body'
+		interface: 'can2'
+		kind:      'can'
+	}
+	sys.nodes << sysmodel.Node{
+		name:  'chassis'
+		ecu:   'chassis.toml'
+		buses: ['edge']
+		view:  sysmodel.NodeView{
+			isotp_conns: [sysmodel.IsotpConn{
+				iface:         'can0' // its only bus: edge
+				rx_id:         0x700
+				tx_id:         0x708
+				functional_id: 0x7DF
+			}]
+		}
+	}
+	sys.nodes << sysmodel.Node{
+		name:  'seat'
+		ecu:   'seat.toml'
+		buses: ['body']
+		view:  sysmodel.NodeView{
+			isotp_conns: [sysmodel.IsotpConn{
+				iface: 'can0'
+				rx_id: 0x7C0 // the same id on another bus
+				tx_id: 0x7C8
+			}]
+		}
+	}
+	listens := fn (s sysmodel.System) []string {
+		return seg_errs(s).filter(it.contains('would take the routed requests'))
+	}
+	assert listens(sys).len == 0, listens(sys).str()
+	sys.nodes[sys.nodes.len - 2].view.isotp_conns[0].functional_id = 0x7C0
+	errs := listens(sys)
+	assert errs.len == 1 && errs[0].contains('isotp functional (rx) id of "chassis"'), errs.str()
+	sys.nodes[sys.nodes.len - 2].view.isotp_conns[0].functional_id = 0x7DF
+	sys.nodes[sys.nodes.len - 2].view.isotp_conns[0].rx_id = 0x7C0
+	assert listens(sys).any(it.contains('isotp rx (rx) id of "chassis"')), listens(sys).str()
+	// CAN id 0 is an id like any other (codex local r8)
+	sys.nodes[sys.nodes.len - 2].view.isotp_conns[0].rx_id = 0
+	sys.nodes[sys.nodes.len - 3].diag.req = 0
+	sys.nodes[sys.nodes.len - 3].view.isotp_conns[0].rx_id = 0
+	assert sys.nodes[sys.nodes.len - 3].name == 'zone'
+	assert listens(sys).any(it.contains('sends its requests on 0x0')), listens(sys).str()
+}
+
+// codex local r9: a composed system's gateway authors its own [[doip.route]]; the system reads it
+// (node, bus, tx_id) and refuses another node listening on its request id just the same — and a
+// route naming no node of the system, since the routed node is told from the others by its name
+fn test_an_authored_route_in_a_composed_system_is_checked_for_other_listeners() {
+	doc := toml.parse_text('[doip]\nlogical_address = 0x07A0\n\n[[doip.route]]\nnode = "zone"\nlogical = 0x07C0\nbus = "can1"\ntx_id = 0x7C0\nrx_id = 0x7C8\n') or {
+		panic(err)
+	}
+	view := sysmodel.parse_node_view(doc)
+	assert view.doip_routes.len == 1
+	assert view.doip_routes[0].node == 'zone' && view.doip_routes[0].bus == 'can1'
+		&& view.doip_routes[0].tx_id == 0x7C0
+	mut sys := route_system()
+	sys.nodes[0].doip_routes = [] // not the system's: authored by the gateway
+	sys.nodes[0].view.doip_routes = view.doip_routes
+	sys.nodes.last().diag.has_logical = false // the authored route carries the address itself
+	sys.nodes << sysmodel.Node{
+		name:  'chassis'
+		ecu:   'chassis.toml'
+		buses: ['edge']
+		view:  sysmodel.NodeView{
+			isotp_conns: [sysmodel.IsotpConn{
+				iface:         'can0'
+				rx_id:         0x700
+				tx_id:         0x708
+				functional_id: 0x7C0
+			}]
+		}
+	}
+	listens := fn (s sysmodel.System) []string {
+		return sysmodel.validate_system(s).filter(it.severity == .error).map(it.msg).filter(it.contains('[[doip.route]]')
+			|| it.contains('would take the routed requests'))
+	}
+	errs := listens(sys)
+	assert errs.len == 1 && errs[0].contains('isotp functional (rx) id of "chassis"'), errs.str()
+	sys.nodes.last().view.isotp_conns[0].functional_id = 0x7DF
+	assert listens(sys).len == 0, listens(sys).str()
+	sys.nodes[0].view.doip_routes = [sysmodel.AuthoredRoute{
+		node:  'ghost'
+		bus:   'can1'
+		tx_id: 0x7C0
+	}]
+	assert listens(sys).any(it.contains('names no node of this system')), listens(sys).str()
+}
+
+fn test_a_single_bus_gateway_routes_on_its_can0() {
+	mut sys := route_system()
+	sys.nodes[0].buses = ['edge'] // the gateway's only bus: it sees it as can0, as its config names it
+	sec := doip_route_section(sys, sys.nodes[0]).join('\n')
+	assert sec.contains('bus     = "can0"'), sec
+}
+
+// diag `logical` is lowered by sysgen alone: in a composed system it would look effective and do
+// nothing, so it is refused there like `doip`
+fn test_a_routed_logical_address_in_a_composed_system_is_refused() {
+	sys := route_system()
+	e := sysmodel.validate_system(sys).filter(it.severity == .error).map(it.msg)
+	assert e.any(it.contains('diag `logical` is lowered into a DoIP gateway')), e.str()
+}

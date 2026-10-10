@@ -8,6 +8,7 @@
 module sysmodel
 
 import os
+import comm.doip
 import tools.candb
 import tools.doipcfg
 import tools.netcfg
@@ -50,6 +51,7 @@ pub fn validate_system(s System) []Issue {
 	issues << check_frame_single_writer(s)
 	issues << check_nm_cluster_coherence(s)
 	issues << check_telemetry_frames(s)
+	issues << check_route_request_ids(s)
 	issues << check_bus_dbcs(s)
 	issues << check_routes(s, false)
 	issues << check_composed_unlowered(s)
@@ -79,6 +81,8 @@ pub fn validate_system_gen(s System) []Issue {
 	issues << check_endpoint_carrier(s)
 	issues << check_endpoint_net(s)
 	issues << check_doip(s)
+	issues << check_doip_routes(s)
+	issues << check_route_request_ids(s)
 	issues << check_dbc_conformance(s)
 	issues << check_route_dbc(s)
 	issues << check_telemetry_frames(s)
@@ -168,7 +172,7 @@ fn check_dissolved_nodes(s System) []Issue {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-006'
-					msg:      'node "${n.name}": is on ${n.buses.len} buses but gateways no route — a multi-bus node must be a declared [[route]] gateway'
+					msg:      'node "${n.name}": is on ${n.buses.len} buses but gateways no route — a multi-bus node must be a declared [[route]] gateway (or a DoIP gateway with doip `routes`)'
 				}
 				continue
 			}
@@ -383,6 +387,11 @@ fn is_route_gateway(s System, name string) bool {
 		if r.gateway == name {
 			return true
 		}
+	}
+	// a DoIP gateway routes too: diagnostics from its network to the nodes on its CAN buses
+	// (REQ-NET-019), which its comm thread opens for them
+	if n := s.node_by_name(name) {
+		return n.has_doip && n.doip_routes.len > 0
 	}
 	return false
 }
@@ -2935,6 +2944,156 @@ fn check_doip(s System) []Issue {
 	return issues
 }
 
+// check_doip_routes: a DoIP gateway's routes (REQ-NET-019) — each a CAN node on a bus the gateway
+// sits on, addressed by its diag `logical` (unique among every logical address, as an entity's
+// is), whose [isotp] answers on the diag ids the gateway forwards to; and a diag `logical` some
+// gateway routes to, or it names nothing a tester could reach.
+fn check_doip_routes(s System) []Issue {
+	mut issues := []Issue{}
+	mut logical_of := map[u32]string{} // every entity's and routed node's logical address
+	for n in s.nodes {
+		if n.has_doip && n.has_doip_logical && n.doip_logical_int {
+			logical_of[n.doip_logical] = n.name
+		}
+	}
+	mut routed_by := map[string]string{} // routed node -> the gateway routing to it
+	for gw in s.nodes {
+		if gw.doip_routes_bad {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-NET-019'
+				msg:      'node "${gw.name}": doip `routes` must be a list of node names'
+			}
+			continue
+		}
+		if gw.doip_routes.len == 0 {
+			continue
+		}
+		if gw.doip_routes.len > doip.max_routes {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-NET-019'
+				msg:      'node "${gw.name}": doip `routes` names ${gw.doip_routes.len} nodes — a gateway routes to at most ${doip.max_routes}'
+			}
+		}
+		for i, name in gw.doip_routes {
+			where := 'node "${gw.name}": doip route to "${name}"'
+			if name in gw.doip_routes[..i] {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-NET-019'
+					msg:      '${where} is listed twice'
+				}
+				continue
+			}
+			if name == gw.name {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-NET-019'
+					msg:      '${where}: a gateway answers its own address itself'
+				}
+				continue
+			}
+			t := s.node_by_name(name) or {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-NET-019'
+					msg:      '${where}: no such node'
+				}
+				continue
+			}
+			if prev := routed_by[name] {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-NET-019'
+					msg:      '${where}: "${prev}" routes to it already — a tester names one way to a node'
+				}
+				continue
+			}
+			routed_by[name] = gw.name
+			if t.has_doip {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-NET-019'
+					msg:      '${where}: it is a DoIP entity itself — a tester reaches it at its own endpoint'
+				}
+				continue
+			}
+			if s.routed_bus(gw, t) == none {
+				on := if b := s.diag_bus(t) { 'bus "${b.name}"' } else { 'no bus this system can tell' }
+				issues << Issue{
+					severity: .error
+					req:      'REQ-NET-019'
+					msg:      '${where}: its diagnostic server ([isotp]) is on ${on}, and the gateway is not — it forwards on the bus the node\'s server listens on'
+				}
+			}
+			if t.diag.req == 0 && t.diag.rsp == 0 {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-NET-019'
+					msg:      '${where}: it has no `diag` allocation — the gateway forwards to its diag request id and listens on its response id'
+				}
+				continue
+			}
+			if !t.diag.has_logical {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-NET-019'
+					msg:      '${where}: its `diag` has no `logical` — the address a tester names it by'
+				}
+			} else if !t.diag.logical_int {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-NET-019'
+					msg:      'node "${t.name}": diag `logical` must be an integer — a fraction truncates to a valid, DIFFERENT address'
+				}
+			} else if !((t.diag.logical_raw >= 0x0001 && t.diag.logical_raw <= 0x0DFF)
+				|| (t.diag.logical_raw >= 0x1000 && t.diag.logical_raw <= 0x7FFF)) {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-NET-019'
+					msg:      'node "${t.name}": diag logical address 0x${t.diag.logical_raw.hex()} is not an entity address (0x0001..0x0DFF or 0x1000..0x7FFF; 0x0E00..0x0FFF are testers\')'
+				}
+			} else if prev := logical_of[t.diag.logical] {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-002'
+					msg:      'logical address 0x${t.diag.logical.hex()} shared by "${prev}" and "${t.name}" — a tester routes by it, so it names one node'
+				}
+			} else {
+				logical_of[t.diag.logical] = t.name
+			}
+			// what the gateway forwards to is what the node's server listens on
+			if t.view.isotp_conns.len != 1 {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-NET-019'
+					msg:      '${where}: its ecu.toml has ${t.view.isotp_conns.len} [isotp] connection(s) — routed requests need its ONE diagnostic server'
+				}
+			} else {
+				c := t.view.isotp_conns[0]
+				if c.rx_id != t.diag.req || c.tx_id != t.diag.rsp {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-NET-019'
+						msg:      '${where}: its [isotp] listens on 0x${c.rx_id.hex()} and answers on 0x${c.tx_id.hex()}, but its diag allocation is 0x${t.diag.req.hex()} / 0x${t.diag.rsp.hex()} — the gateway forwards to the allocation'
+					}
+				}
+			}
+		}
+	}
+	for n in s.nodes {
+		if n.diag.has_logical && n.name !in routed_by {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-NET-019'
+				msg:      'node "${n.name}": diag `logical` 0x${n.diag.logical_raw.hex()} names an address no gateway routes to — name the node in a DoIP gateway\'s doip `routes`'
+			}
+		}
+	}
+	return issues
+}
+
 // check_doip_policy: a node's `doip` transport policy, by the checker the node gate (loom2v
 // validate_doip) applies to the [doip] it is lowered into (tools/doipcfg)
 fn check_doip_policy(n Node) []Issue {
@@ -2972,6 +3131,13 @@ fn check_composed_unlowered(s System) []Issue {
 				severity: .error
 				req:      'REQ-TOPO-005'
 				msg:      'node "${n.name}": `doip` on a [[node]] is lowered by sysgen, which runs only on a dissolved system (one declaring signals, routes, frames or endpoints) — in a composed system author [doip] in the node\'s ecu.toml'
+			}
+		}
+		if n.diag.has_logical {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-NET-019'
+				msg:      'node "${n.name}": diag `logical` is lowered into a DoIP gateway\'s [[doip.route]] by sysgen, which runs only on a dissolved system — in a composed system author the gateway\'s [[doip.route]] in its ecu.toml'
 			}
 		}
 	}

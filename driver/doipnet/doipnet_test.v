@@ -227,3 +227,72 @@ fn test_a_pushed_response_goes_to_the_activated_tester() {
 	assert !push(mut f, mut s, &pending[0], 3, &b.out[0])
 	assert !s.activated && f.act.last() == false
 }
+
+// A gateway's routed answers (REQ-NET-019): only the latest routed request's, only to its tester
+// while connected, framed from the routed node.
+// @verifies REQ-NET-019
+fn routed_gateway() doip.Server {
+	mut s := doip.Server{}
+	s.entity_addr = 0x07A0
+	s.activated = true
+	s.tester_addr = 0x0E00
+	s.ticket = 4
+	s.route_open = true
+	return s
+}
+
+fn test_a_routed_answer_goes_to_the_tester_from_the_routed_node() {
+	mut f := Fake{}
+	mut s := routed_gateway()
+	mut out := [doip.max_resp]u8{}
+	ans := [u8(0x62), 0xF1, 0x90, 0x5A]
+	assert routed(mut f, mut s, 0x07C0, 4, &ans[0], ans.len, &out[0])
+	assert f.sent.len == 1
+	m := f.sent[0]
+	assert m[2] == 0x80 && m[3] == 0x01
+	assert (u16(m[8]) << 8 | m[9]) == 0x07C0
+	assert (u16(m[10]) << 8 | m[11]) == 0x0E00
+	assert m[12..] == ans
+	assert !s.route_open
+}
+
+fn test_an_answer_to_an_earlier_request_or_connection_is_no_ones() {
+	mut f := Fake{}
+	mut s := routed_gateway()
+	mut out := [doip.max_resp]u8{}
+	ans := [u8(0x7E), 0x00]
+	assert !routed(mut f, mut s, 0x07C0, 3, &ans[0], ans.len, &out[0]) // the tester moved on
+	s.activated = false
+	assert !routed(mut f, mut s, 0x07C0, 4, &ans[0], ans.len, &out[0]) // its connection is gone
+	assert f.sent.len == 0
+}
+
+fn test_a_new_connection_has_a_new_number_and_no_routed_answer_due() {
+	mut f := Fake{}
+	mut s := routed_gateway()
+	before := s.conn
+	end(mut f, mut s)
+	assert s.conn == before + 1
+	assert !s.route_open
+}
+
+fn test_the_routers_verdicts_are_diagnostic_nack_codes() {
+	assert verdict_code(.accepted) == 0
+	assert verdict_code(.unknown_target) == int(doip.dnack_unknown_target)
+	assert verdict_code(.locked) == int(doip.dnack_unreachable)
+	assert verdict_code(.busy) == int(doip.dnack_out_of_memory)
+	assert verdict_code(.refused) == int(doip.dnack_transport_error)
+}
+
+fn test_an_answer_due_when_the_connection_ends_never_reaches_the_next_tester() {
+	mut f := Fake{}
+	mut s := routed_gateway()
+	mut out := [doip.max_resp]u8{}
+	due := s.ticket
+	end(mut f, mut s)
+	// the next tester activates on a fresh connection, without the gateway's unlock
+	s.activated = true
+	ans := [u8(0x62), 0xF1, 0x90, 0x5A]
+	assert !routed(mut f, mut s, 0x07C0, due, &ans[0], ans.len, &out[0])
+	assert f.sent.len == 0
+}

@@ -58,6 +58,15 @@ pub mut:
 	// the link the N_Bs timeout exists to protect. 0 disables the WAIT bound.
 	// No field default — same _vinit rule as n_bs_us.
 	wft_max u8
+	// transmissions the link gave up on (no flow control within N_Bs, too many WAITs, an overflow)
+	// — counted, so an owner tells a send that failed from one that completed, both of which leave
+	// the link not busy. Zero from the zeroed struct (no default: the _vinit rule).
+	tx_aborts u32
+	// frames the link took: a single frame, a first frame or a consecutive frame in sequence of a
+	// reception, a flow control its transmission was waiting for (CTS, or a WAIT within WFTmax) —
+	// not what it ignored or rejected: an owner bounding a stalled exchange by "no progress" reads
+	// progress here, not from what merely arrived
+	progress u32
 	// N_Cr: max gap between consecutive frames of an in-flight RECEIVE before the
 	// partial reassembly is abandoned (ISO 15765-2 N_Cr) — without it a sender that
 	// dies after its FF leaves the link .receiving forever (REQ-TP-002 bounds BOTH
@@ -121,6 +130,21 @@ pub fn (mut l Link) abort_tx() {
 	l.tx = .idle
 }
 
+// give_up_tx: the link abandons its transmission (a transport failure, counted in tx_aborts)
+fn (mut l Link) give_up_tx() {
+	l.tx = .idle
+	l.tx_aborts++
+}
+
+// abort_rx abandons the reception in progress and a completed message not yet taken, and owes no
+// flow control — for an owner that is done with the exchange they belonged to (a gateway's
+// routed request superseded by the tester's next one).
+pub fn (mut l Link) abort_rx() {
+	l.rx = .idle
+	l.fc_send = false
+	l.ready = false
+}
+
 // idle reports that nothing is in flight in EITHER direction: no tx segmenting or awaiting flow
 // control, no multi-frame reception in progress or flow control owed, and no completed message
 // waiting to be taken. A caller that interleaves a second kind of traffic on the link (functional
@@ -179,6 +203,7 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 				l.ready = true
 				l.ready_len = n
 				l.rx = .idle
+				l.progress++
 			}
 		}
 		0x10 { // first frame
@@ -197,6 +222,7 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 				l.fc_send = true // answer with FC (CTS); N_Cr is armed when the CTS is
 				// actually emitted (poll), not here — a backpressured bridge may hold the
 				// CTS for a while and the sender is correctly waiting for it
+				l.progress++
 			}
 		}
 		0x20 { // consecutive frame
@@ -216,6 +242,7 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 				l.rx_pos += n
 				l.rx_sn = (l.rx_sn + 1) & 0x0F
 				l.rx_count++
+				l.progress++
 				if l.rx_pos >= l.rx_len {
 					l.ready = true
 					l.ready_len = l.rx_len
@@ -237,7 +264,7 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 				// before polling could otherwise let a late WAIT/CTS extend a dead transfer
 				// past the deadline poll() would have aborted at.
 				if l.n_bs_us != 0 && now >= l.fc_deadline {
-					l.tx = .idle
+					l.give_up_tx()
 					return
 				}
 				fs := low
@@ -249,17 +276,19 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 					l.wft_count = 0
 					l.tx = .send_cf
 					l.fc_deadline = now + l.n_bs_us // stall bound for the CF burst (refreshed per CF)
+					l.progress++
 				} else if fs == 1 { // WAIT: peer not ready — restart N_Bs, but bound the WAITs
 					// check before incrementing so wft_count never exceeds wft_max (<=255) and
 					// can't wrap back to 0 (which would let an endless-WAIT peer wedge the link).
 					if l.wft_max != 0 && l.wft_count >= l.wft_max {
-						l.tx = .idle // too many WAITs -> give up rather than wait forever
+						l.give_up_tx() // too many WAITs -> give up rather than wait forever
 					} else {
 						l.wft_count++
 						l.fc_deadline = now + l.n_bs_us
+						l.progress++
 					}
 				} else if fs == 2 { // OVFLW / reserved -> abort
-					l.tx = .idle
+					l.give_up_tx()
 				}
 			}
 		}
@@ -287,7 +316,7 @@ pub fn (mut l Link) tick(now u64) {
 	// send_cf (CTS received, but backpressure kept the FIFO full so no CF went out). fc_deadline
 	// is set on entering either state and refreshed on each CF sent.
 	if l.n_bs_us != 0 && (l.tx == .wait_fc || l.tx == .send_cf) && now >= l.fc_deadline {
-		l.tx = .idle
+		l.give_up_tx()
 	}
 	// N_Cr: a receive whose sender went quiet mid-transfer is abandoned, so the link
 	// (and its reassembly buffer) cannot stay .receiving forever (REQ-TP-002). Only
@@ -339,7 +368,7 @@ pub fn (mut l Link) poll(now u64, mut out Pdu) bool {
 			// N_Bs: a missed or never-sent FC (e.g. a dump issued before a receiver is
 			// bound) must not leave the link busy forever — abort so the next dump is free.
 			if l.n_bs_us != 0 && now >= l.fc_deadline {
-				l.tx = .idle
+				l.give_up_tx()
 			}
 			return false
 		}

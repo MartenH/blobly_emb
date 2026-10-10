@@ -22,6 +22,9 @@ const conditional = {
 	'sys_node.diag':            'the node declares `doip`'
 	'sys_endpoint.port':        'the node is on a someip bus'
 	'sys_doip.allow_bench_key': 'the node uses [uds] security_key = "reference"'
+	'sys_doip.routes':          'a node declares a diag `logical` (a gateway must route to it)'
+	'sys_node.doip':            'a node declares a diag `logical` (its gateway routes to it over DoIP)'
+	'sys_diag.logical':         'a gateway names the node in its doip `routes`'
 	'sys_frame_e2e.timeout_ms': 'the event is not mode = "event"'
 	'sys_node.endpoint':        'a member of a someip bus, or a DoIP entity'
 	'sys_route.signal':         'exactly one of frame / signal'
@@ -31,6 +34,7 @@ const conditional = {
 const absent = ['sys_bus.bitrate', 'sys_bus_nm.repeat_ms', 'sys_bus_nm.wait_sleep_ms',
 	'sys_doip.functional', 'sys_doip.activation_types', 'sys_doip.initial_inactivity_ms',
 	'sys_doip.general_inactivity_ms', 'sys_doip.announce_count', 'sys_doip.announce_interval_ms',
+	'sys_doip.route_level',
 	'sys_route.frame', 'sys_endpoint.netmask', 'sys_endpoint.gateway']
 
 struct Drop {
@@ -125,6 +129,8 @@ fn test_a_required_row_is_exactly_a_key_sysmodel_refuses_to_miss() {
 	drops << Drop{'sys_doip.logical', 'doip     = { logical = 0x07A0, ', 'doip     = { '}
 	drops << Drop{'sys_doip.testers', 'testers = [0x0E00], ', ''}
 	drops << Drop{'sys_doip.allow_bench_key', ', allow_bench_key = true }', ' }'}
+	drops << Drop{'sys_doip.routes', 'routes = ["zone_a"], ', ''}
+	drops << Drop{'sys_diag.logical', 'rsp = 0x7C8, logical = 0x07C0 }', 'rsp = 0x7C8 }'}
 	drops << Drop{'sys_diag.req', 'diag     = { req = 0x7A0, rsp', 'diag     = { rsp'}
 	drops << Drop{'sys_diag.rsp', 'req = 0x7A0, rsp = 0x7A8 }', 'req = 0x7A0 }'}
 	drops << Drop{'sys_frame_tx.mode', 'tx      = { mode = "cyclic", cycle_ms = 300 }', 'tx      = { cycle_ms = 300 }'}

@@ -427,3 +427,70 @@ fn test_abort_tx_stops_a_transfer_in_flight() {
 	assert !l.poll(1, mut p), 'an aborted transfer kept sending'
 	assert l.send(&msg[0], 3)
 }
+
+// a send the link gave up on is counted; one that completed is not — both leave it not busy
+fn test_a_send_given_up_is_counted_apart_from_a_completed_one() {
+	mut l := Link{
+		n_bs_us: 1000
+	}
+	mut buf := [max_payload]u8{}
+	mut p := Pdu{}
+	assert l.send(&buf[0], 5) // a single frame
+	assert l.poll(0, mut p)
+	assert !l.busy() && l.tx_aborts == 0 // completed
+	assert l.send(&buf[0], 20)
+	assert l.poll(0, mut p) // FF out, waiting for flow control
+	l.tick(1000) // N_Bs ran out
+	assert !l.busy() && l.tx_aborts == 1 // given up
+}
+
+// progress is what advanced a reception, never what the link ignored or rejected
+fn test_only_frames_that_advance_a_reception_count_as_progress() {
+	mut l := Link{}
+	l.init_defaults()
+	mut p := Pdu{}
+	p.data[0] = 0x40 // a reserved PCI
+	l.on_frame(0, p)
+	p.data[0] = 0x30 // flow control nobody waits for
+	l.on_frame(0, p)
+	p.data[0] = 0x21 // a consecutive frame with no reception
+	l.on_frame(0, p)
+	assert l.progress == 0
+	p.data[0] = 0x10 // first frame of 20 bytes
+	p.data[1] = 20
+	l.on_frame(0, p)
+	assert l.progress == 1
+	p.data[0] = 0x23 // out of sequence: aborts, no progress
+	l.on_frame(0, p)
+	assert l.progress == 1
+}
+
+// a flow control the transmission waits for is progress too — a WAIT within WFTmax as much as a
+// CTS (N_Bs bounds each wait, WFTmax their number); the WAIT past WFTmax and an overflow give up,
+// no progress
+fn test_flow_control_a_transmission_waits_for_counts_as_progress() {
+	mut l := Link{}
+	l.init_defaults()
+	l.wft_max = 2
+	buf := []u8{len: 20, init: u8(index)}
+	mut p := Pdu{}
+	mut fc := Pdu{}
+	assert l.send(&buf[0], 20)
+	assert l.poll(0, mut p) // FF out, waiting for flow control
+	fc.data[0] = 0x31 // WAIT
+	l.on_frame(100, fc)
+	l.on_frame(200, fc)
+	assert l.progress == 2 && l.busy()
+	l.on_frame(300, fc) // the third WAIT: past WFTmax
+	assert l.progress == 2 && !l.busy() && l.tx_aborts == 1
+	assert l.send(&buf[0], 20)
+	assert l.poll(400, mut p)
+	fc.data[0] = 0x32 // overflow
+	l.on_frame(500, fc)
+	assert l.progress == 2 && !l.busy() && l.tx_aborts == 2
+	assert l.send(&buf[0], 20)
+	assert l.poll(600, mut p)
+	fc.data[0] = 0x30 // CTS
+	l.on_frame(700, fc)
+	assert l.progress == 3 && l.busy()
+}

@@ -37,6 +37,7 @@ fn C.doip_mb_queue(&C.doip_mb_t)
 fn C.doip_mb_drop(&C.doip_mb_t)
 fn C.doip_mb_sent_take(&C.doip_mb_t, u32, u32) int
 fn C.doip_mb_dropped_take(&C.doip_mb_t) int
+fn C.doip_mb_drop_pending(&C.doip_mb_t) int
 fn C.doip_mb_push(&C.doip_mb_t)
 fn C.doip_mb_push_take(&C.doip_mb_t) int
 fn C.doip_mb_push_sent_take(&C.doip_mb_t, u32, u32) int
@@ -348,4 +349,16 @@ fn test_the_mailbox_against_the_reference_model() {
 	}
 	assert total > 50, 'the walk never reached a reset'
 	assert steps > 50, 'the walk never acknowledged a push'
+}
+
+// a gateway's router waits while a drop is untaken: until the server thread has heard of it, the
+// network unlock it would read is the dropped tester's (REQ-NET-020)
+// @verifies REQ-NET-020
+fn test_a_drop_is_pending_until_the_server_takes_it() {
+	mut m := C.doip_mb_t{}
+	assert C.doip_mb_drop_pending(&m) == 0
+	C.doip_mb_drop(&m)
+	assert C.doip_mb_drop_pending(&m) == 1
+	C.doip_mb_dropped_take(&m)
+	assert C.doip_mb_drop_pending(&m) == 0
 }

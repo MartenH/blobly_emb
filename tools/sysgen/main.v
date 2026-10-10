@@ -223,7 +223,7 @@ fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 		b << 'dbc = "${bus.dbc}"'
 		b << ''
 	}
-	iface := if node.buses.len == 1 { 'can0' } else { bus.interface }
+	iface := sysmodel.local_can_iface(node, bus)
 	b << '[bus.${iface}]'
 	b << 'interface = "${iface}"'
 	b << 'fd        = ${bus.fd}'
@@ -331,6 +331,7 @@ fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 		b << someip_sections(sys, node, someip_bus, view, sig_part)!
 	}
 	b << doip_section(node)
+	b << doip_route_section(sys, node)
 
 	// the authored internals, verbatim and LAST.
 	b << '# --- authored internals (${os.file_name(node_path)}) ---'
@@ -421,6 +422,7 @@ fn generate_gateway_node(sys sysmodel.System, node sysmodel.Node, authored strin
 		b << someip_sections(sys, node, sb, view, sig_part)!
 	}
 	b << doip_section(node)
+	b << doip_route_section(sys, node)
 	b << '# --- authored internals (${os.file_name(node.ecu)}) ---'
 	b << authored.trim_space()
 	b << ''
@@ -685,6 +687,7 @@ fn generate_someip_node(sys sysmodel.System, node sysmodel.Node, bus sysmodel.Bu
 	b << ''
 	b << someip_sections(sys, node, bus, view, sig_part)!
 	b << doip_section(node)
+	b << doip_route_section(sys, node)
 	b << '# --- authored internals (${os.file_name(node.ecu)}) ---'
 	b << authored.trim_space()
 	b << ''
@@ -871,6 +874,29 @@ fn subnet_lines(node sysmodel.Node, mask_key string, gw_key string) []string {
 
 // doip_section: the node's [doip], lowered from its `doip` and its endpoint — one address per
 // node, declared once in system.toml (check_doip has refused every shape this cannot carry).
+// doip_route_section: a DoIP gateway's routes (REQ-NET-019), lowered from its doip `routes` — one
+// [[doip.route]] per routed node: its diag `logical`, the gateway's interface on the CAN bus the
+// two share, the node's diag request id (what the gateway sends on) and response id (what it
+// receives on). syscheck has judged them (check_doip_routes); a route it would refuse is left out.
+fn doip_route_section(sys sysmodel.System, node sysmodel.Node) []string {
+	if !node.has_doip || node.doip_routes.len == 0 {
+		return []string{}
+	}
+	mut b := []string{}
+	for name in node.doip_routes {
+		t := sys.node_by_name(name) or { continue }
+		bus := sys.routed_bus(node, t) or { continue }
+		b << '[[doip.route]] # GENERATED — ${name}, behind this gateway on ${bus.name}'
+		b << 'node    = "${name}"'
+		b << 'logical = 0x${t.diag.logical.hex().to_upper()}'
+		b << 'bus     = "${sysmodel.local_can_iface(node, bus)}"'
+		b << 'tx_id   = 0x${t.diag.req.hex().to_upper()}'
+		b << 'rx_id   = 0x${t.diag.rsp.hex().to_upper()}'
+		b << ''
+	}
+	return b
+}
+
 fn doip_section(node sysmodel.Node) []string {
 	if !node.has_doip {
 		return []string{}
