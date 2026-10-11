@@ -3,7 +3,7 @@
 #     BOARD := h735dk
 #     include $(REPO)/boards/$(BOARD)/board.mk
 # and links $(BOARD_BSP_THREADX)+$(BOARD_LD_THREADX) (ThreadX runtime: crt0/vectors/systick
-# glue; -DBOARD_ENTRY=main__main for a generated V image, -DSYSTICK_HZ=<hz> for a non-1kHz
+# glue; -DBOARD_ENTRY=blob_entry for a generated V image, -DSYSTICK_HZ=<hz> for a non-1kHz
 # tick) or $(BOARD_BSP_BARE)+$(BOARD_LD_BARE) (bare-metal superloop: C startup).
 BOARD_DIR    := $(REPO)/boards/h735dk
 BOARD_COMMON := $(REPO)/boards/common

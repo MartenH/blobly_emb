@@ -22,7 +22,7 @@ include $(REPO)/tools/tools.mk
 
 # TX_ENABLE_EXECUTION_CHANGE_NOTIFY: this core records its OWN thread/ISR trace (trace_hooks.c).
 CFLAGS  = $(MCU_CM4) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
-          $(BOARD_DEFS_CM4) -DBOARD_ENTRY=main__main -DTX_ENABLE_EXECUTION_CHANGE_NOTIFY \
+          $(BOARD_DEFS_CM4) -DBOARD_ENTRY=blob_entry -DTX_ENABLE_EXECUTION_CHANGE_NOTIFY \
           -I. -I$(OWNER)/gen $(BOARD_INCS) -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
 LDFLAGS = $(MCU_CM4) -T $(BOARD_LD_CM4_THREADX) -nostartfiles -Wl,--gc-sections \
           --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/app.map
@@ -52,7 +52,7 @@ ifneq ($(MAKECMDGOALS),clean)
 endif
 
 # how V is run for it — also its signature (tools/tools.mk v_sign)
-TRANSPILE_FLAGS = -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) -path "@vlib|@vmodules|.|$(MOD)"
+TRANSPILE_FLAGS = -freestanding -arch arm32 -target-libc-headers -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) -path "@vlib|@vmodules|.|$(MOD)"
 $(BUILD)/app.c: main.v gen/loom_gen.v $(call v_unrecorded,$(BUILD)/app.c) $(call v_sign,$(BUILD)/app.c,$(TRANSPILE_FLAGS)) | $(BUILD)
 	cd $(REPO) && $(V) $(TRANSPILE_FLAGS) $(call v_dump,$@) -o $(MOD)/$(BUILD)/app.c $(MOD)/main.v
 	$(call v_deps,$@)

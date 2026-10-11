@@ -124,6 +124,30 @@ fn test_no_makefile_runs_a_repo_tool_through_v_run() {
 	}
 }
 
+// Every bare-metal transpile names its target the way V3 needs it named, and neither omission
+// stops V from writing C:
+//   -arch arm32           V3 sizes `int` by the target it writes C for, and with no -arch that is
+//                         the 64-bit HOST: every struct and IOC payload holding an int would be
+//                         wider and every HAL call would pass one the wrong width.
+//   -target-libc-headers  the target's own C library (newlib) supplies the headers. Without it a
+//                         program with any `#include "x.h"` gets V3's HOSTED preamble — dlfcn.h,
+//                         dirent.h, pthread.h — which newlib does not have.
+fn test_every_freestanding_transpile_names_its_target() {
+	mut seen := 0
+	for mk in makefiles(@VMODROOT) {
+		for l in logical_lines(os.read_file(mk) or { panic(err) }) {
+			if !l.contains('-freestanding') {
+				continue
+			}
+			seen++
+			assert l.contains('-arch arm32'), '${mk}: a freestanding transpile without `-arch arm32` gets 64-bit ints: ${l.trim_space()}'
+			assert l.contains('-target-libc-headers'), '${mk}: a freestanding transpile without `-target-libc-headers` gets the hosted libc preamble: ${l.trim_space()}'
+		}
+	}
+	// the 13 applications' Makefiles and boot/boot.mk; fewer means the walk went wrong
+	assert seen >= 14, 'found only ${seen} freestanding transpiles'
+}
+
 // a $(TOOL_x) that is not defined expands to nothing, and the recipe then runs the tool's first
 // ARGUMENT as a command; a tool that is not a prerequisite of its rule is never built, or is
 // stale. So: tools.mk defines it, the Makefile includes tools.mk, and the rule depends on it.

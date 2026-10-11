@@ -32,7 +32,7 @@ include $(REPO)/tools/tools.mk
 # nx_port.h hard-defines NX_IP_PERIODIC_RATE=100, so both must be forced or every NetX timeout
 # runs 10x fast (bench-paid on h735_net P1).
 CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
-          $(BOARD_DEFS) -DBOARD_ENTRY=main__main $(CAN_DEFS) \
+          $(BOARD_DEFS) -DBOARD_ENTRY=blob_entry $(CAN_DEFS) \
           -DTX_TIMER_TICKS_PER_SECOND=1000 -DNX_IP_PERIODIC_RATE=1000 \
           -I. -Igen $(BOARD_INCS) -I$(REPO)/driver/can -I$(REPO)/driver/eth \
           -I$(PORT)/inc -I$(TX)/common/inc -I$(NX_PORT)/inc -I$(NX)/common/inc $(CMSIS)
@@ -93,7 +93,7 @@ CFLAGS += $(LOOM_NET_DEFS) # the network the config sizes (driver/eth/netx_up.c)
 gen/loom_build.mk: gen/.stamp ;
 
 # how V is run for it — also its signature (tools/tools.mk v_sign)
-TRANSPILE_FLAGS = -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) -path "@vlib|@vmodules|.|$(GW)"
+TRANSPILE_FLAGS = -freestanding -arch arm32 -target-libc-headers -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) -path "@vlib|@vmodules|.|$(GW)"
 $(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) $(call v_sign,$(BUILD)/app.c,$(TRANSPILE_FLAGS)) | $(BUILD)
 	cd $(REPO) && $(V) $(TRANSPILE_FLAGS) $(call v_dump,$@) -o $(GW)/$(BUILD)/app.c examples/system_full/main.v
 	$(call v_deps,$@)

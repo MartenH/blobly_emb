@@ -3398,7 +3398,7 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 				glue << "\t\tpanic('io cfg failed: ${pt.name}')"
 				glue << '\t}'
 			}
-			glue << '\tif !io.init() {'
+			glue << '\tif !io.start() {'
 			glue << "\t\tpanic('io init failed')"
 			glue << '\t}'
 			for pt in m.io_points {

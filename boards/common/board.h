@@ -25,6 +25,12 @@ void board_can_clock_pins_init(void);
  * board.c overrides with its real table — only the board knows its silicon. */
 int board_io_pin_reserved(int port, int pin);
 
+/* No thread-local storage on target: a bare-metal image has no thread pointer for
+ * __aeabi_read_tp to return. V3 declares its builtin panic state _Thread_local, and on a
+ * target that never unwinds a panic (bare_panic stops the image, osal/vrt) the state is one
+ * ordinary global. */
+#define _Thread_local
+
 #endif /* __ASSEMBLER__ */
 
 #endif

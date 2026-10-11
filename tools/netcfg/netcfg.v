@@ -81,9 +81,13 @@ pub fn (n Net) subnet() string {
 // itself is judged by host_problems, which only a caller that brings the address up asks.
 pub fn resolve(address string, netmask ?string, gateway ?string) (Net, []string) {
 	mut errs := []string{}
-	a := parse(address) or {
+	// if/else rather than an `or` block that pushes and then yields: in some programs V3 (e7bb21c)
+	// compiled that block's two lines as a pair and emitted C that does not build
+	mut a := u32(0)
+	if pa := parse(address) {
+		a = pa
+	} else {
 		errs << 'address "${address}" is not a dotted IPv4 address'
-		u32(0)
 	}
 	mut m := u32(0xFFFFFF00)
 	if nm := netmask {
@@ -98,9 +102,10 @@ pub fn resolve(address string, netmask ?string, gateway ?string) (Net, []string)
 	}
 	mut g := default_gateway(a, m)
 	if gw := gateway {
-		g = parse(gw) or {
+		if pg := parse(gw) {
+			g = pg
+		} else {
 			errs << 'gateway "${gw}" is not a dotted IPv4 address'
-			g
 		}
 	}
 	n := Net{

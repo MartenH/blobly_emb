@@ -69,7 +69,7 @@ BOOT_LINKLIBS =
 endif
 
 BOOT_CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
-               $(BOARD_DEFS) $(CAN_DEFS) -DBOARD_ENTRY=main__main $(BOOT_RT_DEFS) \
+               $(BOARD_DEFS) $(CAN_DEFS) -DBOARD_ENTRY=blob_entry $(BOOT_RT_DEFS) \
                -Igen $(BOARD_INCS) -I$(REPO)/driver/can $(CMSIS)
 # the boot may not outgrow its region: the link fails instead of the flash overwriting APP_BASE
 BOOT_LDFLAGS = $(MCU) -T $(BOOT_LD) -nostartfiles -Wl,--gc-sections \
@@ -86,7 +86,7 @@ $(BOOT_DIR):
 
 # what V compiles into it is its dependency list (tools/tools.mk v_deps)
 # how V is run for it — -d boot_doip on a [doip] node — also its signature (tools/tools.mk v_sign)
-BOOT_TRANSPILE_FLAGS = -freestanding -gc none -no-bounds-checking -enable-globals $(BOOT_VDEFS) -path "@vlib|@vmodules|."
+BOOT_TRANSPILE_FLAGS = -freestanding -arch arm32 -target-libc-headers -gc none -no-bounds-checking -enable-globals $(BOOT_VDEFS) -path "@vlib|@vmodules|."
 $(BOOT_DIR)/boot.c: $(call v_unrecorded,$(BOOT_DIR)/boot.c) $(call v_sign,$(BOOT_DIR)/boot.c,$(BOOT_TRANSPILE_FLAGS)) | $(BOOT_DIR)
 	cd $(REPO) && $(V) $(BOOT_TRANSPILE_FLAGS) $(call v_dump,$@) -o $(CURDIR)/$@ boot/target
 	$(call v_deps,$@)

@@ -25,7 +25,7 @@ fn test_init_creates_output_files_only() {
 	dir := setup('init')
 	assert cfg(0, 'LedGreen', 'PB0', true, 1, 0, kind_gpio, 0)
 	assert cfg(1, 'UserButton', 'PC13', false, 0, 0, kind_gpio, 0)
-	assert init()
+	assert start()
 	assert os.read_file('io/LedGreen')!.trim_space() == '1'
 	// input: NO driver-created file — a seeded value would be published at
 	// boot as a fabricated "real" sample
@@ -38,7 +38,7 @@ fn test_init_creates_output_files_only() {
 fn test_write_read_round_trip() {
 	dir := setup('rt')
 	assert cfg(0, 'LedGreen', 'PB0', true, 0, 0, kind_gpio, 0)
-	assert init()
+	assert start()
 	gpio_write(0, true)
 	assert gpio_read(0) == true
 	gpio_write(0, false)
@@ -49,7 +49,7 @@ fn test_write_read_round_trip() {
 fn test_garbage_file_returns_last_good() {
 	dir := setup('lastgood')
 	assert cfg(0, 'UserButton', 'PC13', false, 0, 0, kind_gpio, 0)
-	assert init()
+	assert start()
 	os.write_file('io/UserButton', '1\n')!
 	assert gpio_read(0) == true // real value: last-good is now 1
 	os.write_file('io/UserButton', 'garbage')! // non-conforming writer
@@ -76,7 +76,7 @@ fn test_garbage_file_returns_last_good() {
 fn test_temp_rename_leaves_no_tmp() {
 	dir := setup('tmp')
 	assert cfg(0, 'LedGreen', 'PB0', true, 0, 0, kind_gpio, 0)
-	assert init()
+	assert start()
 	gpio_write(0, true)
 	assert !os.exists('io/.LedGreen.drv.tmp')
 	files := os.ls('io')!
@@ -94,7 +94,7 @@ fn test_temp_rename_leaves_no_tmp() {
 fn test_active_low_is_logical_above_the_pad() {
 	dir := setup('active_low') // own temp dir + teardown, like every file-backend test
 	assert cfg(0, 'LampAL', 'PB0', true, 0, 1, kind_gpio, 0) // active-low lamp, logically off
-	assert init()
+	assert start()
 	gpio_write(0, true) // logically ON
 	// the host mirror reads back the LOGICAL value: polarity never leaks up
 	assert gpio_read(0) == true
@@ -111,7 +111,7 @@ fn test_active_low_is_logical_above_the_pad() {
 fn test_adc_read_u16_and_last_good() {
 	dir := setup('adc')
 	assert cfg(0, 'PotVolt', 'PA3', false, 0, 0, kind_adc, 0) // analog input
-	assert init()
+	assert start()
 	os.write_file('io/PotVolt', '3000\n') or { assert false }
 	assert adc_read(0) == 3000
 	os.write_file('io/PotVolt', '65000\n') or { assert false } // full u16 range
@@ -129,7 +129,7 @@ fn test_adc_read_u16_and_last_good() {
 fn test_pwm_write_clamps_permille() {
 	dir := setup('pwm')
 	assert cfg(0, 'FanDuty', 'PE9', true, 250, 0, kind_pwm, 20000) // init 250‰
-	assert init()
+	assert start()
 	assert os.read_file('io/FanDuty')!.trim_space() == '250' // init duty applied
 	pwm_write(0, 750)
 	assert os.read_file('io/FanDuty')!.trim_space() == '750'

@@ -997,7 +997,7 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 			} else if op == 98 {
 				// an operation cycle boundary: while off it changes no status
 				before := [m.slots[0].status, m.slots[1].status]
-				match (rng >> 8) % 3 {
+				match ((rng >> 8) % 3) {
 					0 { m.cycle_start() }
 					1 { m.cycle_end() }
 					else { m.end_cycle_after(now, 30) } // NM's sleep: the end waits for the barrier

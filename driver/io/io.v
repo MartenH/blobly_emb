@@ -35,11 +35,11 @@ pub fn cfg(ch int, name string, pin string, output bool, init u32, active_low in
 		init, active_low, kind, param) == 0
 }
 
-// init opens the backend and applies every output's init level FIRST — before
+// start opens the backend and applies every output's init level FIRST — before
 // any app code runs, so no pin glitches through its reset state into an
 // active-high actuator (REQ-IO-009). ADC points start their free-running
 // continuous scan + circular DMA here (REQ-IO-018). The io thread only reads.
-pub fn init() bool {
+pub fn start() bool {
 	return C.blob_io_init() == 0
 }
 

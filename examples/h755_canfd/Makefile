@@ -48,7 +48,7 @@ all: $(BUILD)/canfd.bin
 # 1) transpile the V echo loop to freestanding C (run from repo root so `import
 #    driver.can` resolves via -path; output back into build/).
 # how V is run for it — also its signature (tools/tools.mk v_sign)
-TRANSPILE_FLAGS = $(VDBG) -freestanding -gc none -no-bounds-checking -path "@vlib|@vmodules|."
+TRANSPILE_FLAGS = $(VDBG) -freestanding -arch arm32 -target-libc-headers -gc none -no-bounds-checking -path "@vlib|@vmodules|."
 $(BUILD)/canfd.c: main.v $(call v_unrecorded,$(BUILD)/canfd.c) $(call v_sign,$(BUILD)/canfd.c,$(TRANSPILE_FLAGS)) | $(BUILD)
 	cd $(REPO) && $(V) $(TRANSPILE_FLAGS) $(call v_dump,$@) -o examples/h755_canfd/$(BUILD)/canfd.c examples/h755_canfd/main.v
 	$(call v_deps,$@)
@@ -81,7 +81,7 @@ gdbserver:
 	openocd $(OOCD_CFG)
 
 gdb: $(BUILD)/canfd.elf
-	$(GDB) $< -ex "target extended-remote :3333" -ex "load" -ex "break main__main" -ex "continue"
+	$(GDB) $< -ex "target extended-remote :3333" -ex "load" -ex "break blob_entry" -ex "continue"
 
 clean:
 	rm -rf $(BUILD)

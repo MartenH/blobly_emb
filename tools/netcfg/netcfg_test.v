@@ -79,7 +79,7 @@ fn test_host_problems_generalise_the_old_24_rule() {
 // the host rule's one policy: a DoIP entity's address always, any other once its subnet is set
 fn test_check_judges_the_host_where_the_policy_says() {
 	_, s1, h1 := check('192.168.0.1', none, none, false)
-	assert s1 == [] && h1 == []
+	assert s1.len == 0 && h1.len == 0
 	_, _, h2 := check('192.168.0.1', none, none, true)
 	assert h2 == ['address "192.168.0.1" is its own gateway']
 	_, _, h3 := check('192.168.0.255', '255.255.255.0', none, false)
