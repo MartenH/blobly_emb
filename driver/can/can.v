@@ -76,7 +76,8 @@ pub fn (c Channel) tx_idle() bool {
 // The backend writes this function's own locals, which are then copied into `f`:
 // V3 cannot see what C does with a pointer, so an address INTO `f` handed to C reads
 // as retained, and every caller's frame would be moved to the heap — which a target
-// does not have (docs/no-alloc.md). The copy is one frame's bytes.
+// does not have (docs/no-alloc.md). Only the bytes that arrived are copied, as the backend
+// writes only those: the rest of `f.data` is left as it was.
 pub fn (mut c Channel) recv(mut f Frame) bool {
 	mut id := u32(0)
 	mut len := u8(0)
@@ -86,7 +87,9 @@ pub fn (mut c Channel) recv(mut f Frame) bool {
 	if ok {
 		f.id = id
 		f.len = len
-		f.data = data
+		for i in 0 .. if len > max_dlc { max_dlc } else { len } {
+			f.data[i] = data[i]
+		}
 	}
 	f.ext = (flags & flag_ext) != 0
 	return ok

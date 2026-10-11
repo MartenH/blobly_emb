@@ -3,13 +3,8 @@ module main
 import os
 import driver.can
 import gen
-import osal.vrt as _ // V's builtin hooks on target
 
-// entry is the image's entry point: crt0.S jumps to it by its exported C name (BOARD_ENTRY)
-// after bss/data init. Not V's `fn main`, which V3 wraps in a hosted C main (VEXE env setup,
-// _vinit); the image enters by a name it owns, never by V's mangling of `main`.
-@[export: 'blob_entry']
-fn entry() {
+fn main() {
 	if0 := if os.args.len > 1 { os.args[1] } else { 'vcan0' }
 	if1 := if os.args.len > 2 { os.args[2] } else { 'vcan1' }
 	if2 := if os.args.len > 3 { os.args[3] } else { 'vcan2' }
@@ -30,9 +25,4 @@ fn entry() {
 		return
 	}
 	gen.run(c0, c1, c2)
-}
-
-// main is never called on target (crt0 enters at `entry`); V requires one in module main
-fn main() {
-	entry()
 }

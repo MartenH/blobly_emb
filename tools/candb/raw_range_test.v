@@ -181,3 +181,18 @@ fn dec_mul_add(f string, k int, off string) f64 {
 	t := padded[..padded.len - scale] + '.' + padded[padded.len - scale..]
 	return (if neg { '-' } else { '' } + t).f64()
 }
+
+// A negative offset is written in brackets, -0 included: V3 does not parse `x - -0.0`.
+fn test_a_negative_offset_is_bracketed_in_the_encode() {
+	for off in [f64(-40), -0.0] {
+		s := Signal{
+			name:    'S'
+			length:  8
+			factor:  1
+			offset:  off
+			maximum: 200
+		}
+		lines := s.encode_lines('phys', 'raw', 'sat', '')!
+		assert lines[0].starts_with('raw_x := (phys - (-'), lines[0]
+	}
+}

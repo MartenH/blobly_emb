@@ -30,6 +30,9 @@ would not. See the longer rationale in the project discussion / git history.
   cross job also checks every linked image: `scripts/check_no_heap.sh` fails it when any allocator
   survives `--gc-sections`, i.e. when the entry can reach one. `-warn-about-allocs` on the
   transpile names each moved local. On target an allocation is nil from `osal/vrt` and a halt.
+  On the host V3 moves a thread's state and scheduler to the heap once, at thread entry, for the
+  loop's life; the target keeps them in bss (loom2v's `g_st_<owner>`, `g_sched_<part>`), and the
+  gate is on the target images.
 
 ## DBC example of the split
 

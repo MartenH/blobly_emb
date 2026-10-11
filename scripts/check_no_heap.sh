@@ -12,9 +12,10 @@ set -euo pipefail
 elf=${1:?usage: check_no_heap.sh <image.elf>}
 nm=${NM:-arm-none-eabi-nm}
 syms=$("$nm" "$elf") || { echo "check_no_heap: $nm could not read $elf" >&2; exit 2; }
-# V's allocation entry points, the libc allocator and newlib's heap underneath it
+# V's allocation entry points, __malloc (the freestanding sink every one of them reaches, which
+# stays when -Os inlines the rest), the libc allocator and newlib's heap underneath it
 found=$(printf '%s\n' "$syms" | awk 'NF >= 3 {print $3}' | grep -xE \
-	'v_malloc|malloc_noscan|malloc_uninit|vcalloc|vcalloc_noscan|v_realloc|realloc_data|memdup|memdup_noscan|memdup_uncollectable|v3_aligned_memdup|__new_array|__new_array_noscan|__new_array_with_default|new_array_from_c_array|alloc_array_data|malloc|calloc|realloc|_malloc_r|_calloc_r|_realloc_r|_sbrk' \
+	'__malloc|v_malloc|malloc_noscan|malloc_uninit|vcalloc|vcalloc_noscan|v_realloc|realloc_data|memdup|memdup_noscan|memdup_uncollectable|memdup_align|v3_aligned_memdup|_aligned_malloc|__new_array|__new_array_noscan|__new_array_with_default|new_array_from_c_array|new_array_from_c_array_noscan|alloc_array_data|malloc|calloc|realloc|_malloc_r|_calloc_r|_realloc_r|_sbrk' \
 	| sort -u || true)
 if [ -n "$found" ]; then
 	echo "check_no_heap: $elf can reach an allocator (docs/no-alloc.md):" >&2

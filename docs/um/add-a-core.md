@@ -44,7 +44,10 @@ identity only: manifest rows + handler ids, no generated code.)
 
 ## 2. The satellite example provides what every example provides
 
-- **`main.v`** — a shim: `import gen` … `fn main() { gen.boot() }`.
+- **`main.v`** — a shim: `import gen` and `import osal.vrt as _` (V's builtin hooks on
+  target), an `@[export: 'blob_entry'] fn entry() { gen.boot() }` that crt0 jumps to, and
+  `fn main() { entry() }`, which V requires and never runs on target
+  ([h755_m4_app/main.v](../../examples/h755_m4_app/main.v) is one).
 - **`app/`** — its FBs, ports convention, exactly like any FB
   ([add-an-fb.md](add-an-fb.md)).
 - **Glue C** (`m4_glue.c`) — the platform contract the generated code calls:

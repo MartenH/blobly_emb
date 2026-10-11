@@ -240,12 +240,13 @@ and coded parameters survive a reflash — clear DTCs with 0x14, recode a parame
 (`test/param_zone_a.lua` leaves it at 360).
 
 **CI pins the V compiler, and it is V3**: the commit in `.v-version`, built from source with the
-vlang/vc bootstrap pinned in `.vc-version` — the SAME pair as blobly_net, so one `~/v` builds both
-repos (`.github/actions/setup-v`, `scripts/v_toolchain.sh`, both from blobly_net, tested by
+vlang/vc bootstrap pinned in `.vc-version` — keep it the pair blobly_net pins, moved in both repos
+together, so one `~/v` builds both (`.github/actions/setup-v`, `scripts/v_toolchain.sh`, both from blobly_net, tested by
 `scripts/v_toolchain_test.sh`). CI sets `V_MACOS_V3_NO_FALLBACK=1`: without it a program V3 cannot
 build is silently rebuilt by a downloaded V1 compiler. Source builds broke before (2026-09-08,
 master's own `unknown module builder`) because `make` cloned vc's default branch; with the
-bootstrap pinned and `make local=1` nothing moves under it. Bump both pins together, and re-run the
+bootstrap pinned and `make local=1` nothing moves under it. Bump both pins together, here and in
+blobly_net, and re-run the
 full local gate on the new compiler — the host suite AND the 16 cross images. Your local V does
 **not** have to match the pin, but it usually explains a local/CI disagreement — `make v-pin`
 compares the commit.

@@ -26,6 +26,8 @@ check 1 'a local V3 moved to the heap (memdup)' "$clean
 08000200 T memdup"
 check 1 'a fixed array copied into a dynamic one' "$clean
 08000300 T new_array_from_c_array"
+check 1 'an allocation inlined into its caller, only the sink left' "$clean
+08000380 T __malloc"
 check 1 'the C allocator, local symbol' "$clean
 08000400 t malloc"
 check 1 'newlib heap underneath it' "$clean

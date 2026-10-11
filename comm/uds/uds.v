@@ -279,9 +279,6 @@ pub fn (s &Server) kept_security() [kept_len]u8 {
 	return k
 }
 
-// restore_security takes back what kept_security kept, at boot, after init: the counts, and the
-// lockout delay armed — from boot, since the clock that timed it did not survive — whenever a
-// lockout was running or any count is non-zero. The same rule reset_state applies.
 // any_sa_failed: whether any level has wrong-key attempts counting. A loop, not `.any()`: V3
 // copies a fixed array into a heap-allocated one to call it, and the target has no heap.
 fn (s &Server) any_sa_failed() bool {
@@ -293,6 +290,9 @@ fn (s &Server) any_sa_failed() bool {
 	return false
 }
 
+// restore_security takes back what kept_security kept, at boot, after init: the counts, and the
+// lockout delay armed — from boot, since the clock that timed it did not survive — whenever a
+// lockout was running or any count is non-zero. The same rule reset_state applies.
 pub fn (mut s Server) restore_security(k [kept_len]u8) {
 	for i in 0 .. max_security_level {
 		s.sa_failed[i] = k[i]

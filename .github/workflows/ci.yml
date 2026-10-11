@@ -45,7 +45,7 @@ jobs:
       - uses: actions/checkout@v4
 
       # PINNED to the V3 commit in .v-version, built from source with the vlang/vc bootstrap
-      # pinned in .vc-version — the same pair as blobly_net, so one ~/v builds both repos. No V
+      # pinned in .vc-version — kept the pair blobly_net pins, so one ~/v builds both repos. No V
       # release carries this V3 commit, so the prebuilt-release download this job used until the
       # move is gone. A source build broke before (2026-09-08, master's own `unknown module
       # builder`; 0.5.2 from source on a duplicate `C.open`) because `make` cloned vc's default
@@ -207,7 +207,7 @@ jobs:
       - uses: actions/checkout@v4
 
       # PINNED to the V3 commit in .v-version, built from source with the vlang/vc bootstrap
-      # pinned in .vc-version — the same pair as blobly_net, so one ~/v builds both repos. No V
+      # pinned in .vc-version — kept the pair blobly_net pins, so one ~/v builds both repos. No V
       # release carries this V3 commit, so the prebuilt-release download this job used until the
       # move is gone. A source build broke before (2026-09-08, master's own `unknown module
       # builder`; 0.5.2 from source on a duplicate `C.open`) because `make` cloned vc's default
