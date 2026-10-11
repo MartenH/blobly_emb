@@ -145,7 +145,8 @@ for mk in examples/*/Makefile examples/*/nodes/*/Makefile; do
 		quoted_ws "$d" "$rel" "$c.sig" '-d app_deps_check="a b"' '-d app_deps_check="a  b"' "LOOM_VDEFS VDBG BOOT_VDEFS"
 		sigs_back
 		# a repo module it compiles in: the shared DoIP loop where it imports it, else the first one
-		src=$(grep -m1 'driver/doipnet/doipnet.v' "$c.files" || grep -m1 -E '^\./(comm|loom|driver|boot|bcrypto|nvm)/' "$c.files")
+		# (V3 lists a file by absolute path, older V relative to where it ran)
+		src=$(grep -m1 'driver/doipnet/doipnet.v' "$c.files" || grep -m1 -E "^(\./|$PWD/)(comm|loom|driver|boot|bcrypto|nvm)/" "$c.files")
 		[ -n "$src" ] || { echo "app_deps_check: $c compiles in no repo module?"; fail=1; continue; }
 		touch "${src#./}"
 		if make -C "$d" -q "$rel" >/dev/null 2>&1; then
