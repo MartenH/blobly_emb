@@ -117,7 +117,7 @@ SocketCAN, so it works against vcan0 sims and the real bench alike.
 ```sh
 cd ../blobly_net
 scripts/setup_env.sh      # once: GLFW + FreeType etc.
-BLOBLY_PROJECT=projects/trace-h755-threadx.blobnet scripts/run_vgui.sh
+BLOBLY_PROJECT=projects/trace-h755-threadx.blobnet scripts/run_gui.sh
 ```
 
 A **project** (`projects/*.blobnet`) wires the panels for a target —

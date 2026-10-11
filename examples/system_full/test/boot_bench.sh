@@ -15,6 +15,8 @@ set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 sys=$(dirname "$here")
 : "${BLOBLY_NET:?set BLOBLY_NET to the blobly_net checkout}"
+. "$here/../../../scripts/blobly_net_check.sh"
+require_blobly_net "$BLOBLY_NET" || exit 1 # before any image is built
 VERSION=${VERSION:-$(( $(date +%s) - 1767225600 ))}
 nodes=("$@"); [ ${#nodes[@]} = 0 ] && nodes=(domain sysnode zone_a sysnode-doip)
 for n in "${nodes[@]}"; do

@@ -4,6 +4,7 @@
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 net=${BLOBLY_NET:-$here/../../../../blobly_net}
-[ -d "$net/blobly" ] || { echo "doip_bench: no blobly_net at $net, or one from before net#447 (set BLOBLY_NET)"; exit 2; }
+. "$here/../../../scripts/blobly_net_check.sh"
+require_blobly_net "$net" || exit 2
 cd "$net"
 exec v -enable-globals run cmd/script/run.v "$here/doip_sysnode.lua"
