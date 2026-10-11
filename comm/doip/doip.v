@@ -151,8 +151,8 @@ pub mut:
 	// the tester connection: a number the transport moves on with every connection (end), so a
 	// router's grant and answers belong to the connection they were made on
 	conn u32
-	// the latest routed request's number, and whether an answer to it is still to come (the
-	// transport then polls for it at its fastest)
+	// the latest routed request's number, and whether an answer to it is still to come and still
+	// taken (the transport polls for it at its fastest, and gives up on it after its poll budget)
 	ticket     u32
 	route_open bool
 }

@@ -41,8 +41,10 @@ fn C.doip_rt_take_ended() int
 const recv_ticks = u32(100)
 const recv_ticks_routed = u32(1)
 // ... but no longer than this many ticks without an answer (7 s: the router's own answer wait and
-// then some) — an answer that never comes must not keep the loop polling at 1 kHz. Measured in
-// ticks, not turns: a turn with tester traffic waiting takes no tick at all.
+// then some) — an answer that never comes must not keep the loop polling at 1 kHz, and one that
+// comes after it is no one's (routed: the tester's P6*, from the request's acknowledgement or its
+// last responsePending, has long run out). Measured in ticks, not turns: a turn with tester
+// traffic waiting takes no tick at all.
 const routed_poll_ticks = u32(7000)
 
 // Netx is the stream of the one TCP_DATA socket doip_netx.c serves.

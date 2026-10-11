@@ -264,7 +264,23 @@ fn test_an_answer_to_an_earlier_request_or_connection_is_no_ones() {
 	assert !routed(mut f, mut s, 0x07C0, 3, &ans[0], ans.len, &out[0]) // the tester moved on
 	s.activated = false
 	assert !routed(mut f, mut s, 0x07C0, 4, &ans[0], ans.len, &out[0]) // its connection is gone
+	s.activated = true
+	s.route_open = false // the poll budget ran out: the tester's P6* long before it
+	assert !routed(mut f, mut s, 0x07C0, 4, &ans[0], ans.len, &out[0])
 	assert f.sent.len == 0
+}
+
+// a responsePending keeps the answer due, so the final answer after it is still taken
+fn test_the_answer_after_a_response_pending_is_still_taken() {
+	mut f := Fake{}
+	mut s := routed_gateway()
+	mut out := [doip.max_resp]u8{}
+	pending := [u8(0x7F), 0x31, 0x78]
+	final := [u8(0x71), 0x01, 0xFF, 0x00]
+	assert routed(mut f, mut s, 0x07C0, 4, &pending[0], pending.len, &out[0])
+	assert s.route_open
+	assert routed(mut f, mut s, 0x07C0, 4, &final[0], final.len, &out[0])
+	assert !s.route_open && f.sent.len == 2
 }
 
 fn test_a_new_connection_has_a_new_number_and_no_routed_answer_due() {
