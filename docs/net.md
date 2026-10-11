@@ -410,10 +410,11 @@ and sysnode's `doip` names it in `routes = ["zone_a"]`. syscheck (`check_doip_ro
 routed node to be a CAN node on a bus the gateway sits on, with a `diag` allocation whose ids its
 `[isotp]` listens on, a logical address unique among every entity's and routed node's, and no
 `doip` of its own; and a `logical` that no gateway routes to is refused. No other node may listen
-on the routed node's request id on that bus (`check_route_request_ids`: its `[isotp]` rx or
+on the routed node's request id on that bus (`check_route_ids`: its `[isotp]` rx or
 functional id, a trace or shell receive id) — it would take the routed requests as its own; a
 composed system's gateway authors its `[[doip.route]]` itself, and the system reads those (`node`,
-`bus`, `tx_id`) and holds them to the same rule. sysgen lowers each route
+`bus`, `tx_id`, `rx_id`) and holds them to the same rule — and to the node they name, which must
+have an `[isotp]` on that bus listening on `tx_id` and answering on `rx_id`. sysgen lowers each route
 into the gateway's `[[doip.route]]` (`node`, `logical`, `bus` — the gateway's interface on the
 shared bus — `tx_id` = the node's request id, `rx_id` = its response id), and the node gate checks
 them against everything else on that bus (`diag_ids_refused`, the rule `[isotp]` ids follow) and

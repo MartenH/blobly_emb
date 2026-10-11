@@ -185,15 +185,16 @@ fn doip_route_serve(m Model) []string {
 	return ['\t\tdoipnet.serve_routes(mut g_droute, g_diag.remote_unlocked(), &g_rt_req[0], C.board_now_us())']
 }
 
-// doip_route_gate: a bus a route is on is drained while the router has room for another answer —
-// with its queue full the bus's frames wait in the FIFO for the doip thread to take one, but only
-// briefly (diagroute.gate_hold_us: the gateway's own traffic on that bus must not stall behind a
-// tester that does not read)
+// doip_route_gate: the bus the routed exchange is on is drained while the router has room for
+// another answer — with its queue full the bus's frames wait in the FIFO for the doip thread to
+// take one, but only briefly (diagroute.gate_hold_us: the gateway's own traffic on that bus must
+// not stall behind a tester that does not read). Another route bus carries no frame of the
+// exchange and is drained as ever.
 fn doip_route_gate(m Model, bus string) string {
 	if !routes_on(m) || !m.doip.routes.any(it.bus == bus) {
 		return ''
 	}
-	return 'g_droute.room(C.board_now_us()) && '
+	return '(g_droute.active_bus() != ${route_bus_index(bus)} || g_droute.room(C.board_now_us())) && '
 }
 
 // doip_route_arm: in the drain of bus `bus`, a frame of the routed exchange is the router's

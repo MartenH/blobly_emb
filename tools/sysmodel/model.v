@@ -234,12 +234,13 @@ pub mut:
 
 // AuthoredRoute — a [[doip.route]] a composed system's gateway authors itself (a dissolved
 // system's are lowered from its doip `routes`): the system reads which node it names, the
-// gateway's bus it is on and the request id it sends on (REQ-NET-019, check_route_request_ids).
+// gateway's bus it is on and the ids it sends and listens on (REQ-NET-019, check_route_ids).
 pub struct AuthoredRoute {
 pub:
 	node  string
 	bus   string // the gateway's own name for the bus
 	tx_id u32
+	rx_id u32
 }
 
 // NodeView — the system-relevant slice of a node's ecu.toml: what it produces
@@ -1169,6 +1170,7 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 						node:  m_str(rm, 'node')
 						bus:   m_str(rm, 'bus')
 						tx_id: m_u32(rm, 'tx_id')
+						rx_id: m_u32(rm, 'rx_id')
 					}
 				}
 			}
