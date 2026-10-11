@@ -120,7 +120,7 @@ response to the boot software. This stack sends it from the application because:
   manager does not otherwise need, for an answer the application can give with what it has.
 - **The timing in the answer is the bootloader's**: both servers build `50 02` from one function,
   so the P2/P2* the tester adopts are the ones the session it is entering keeps.
-- **blobly_net's client takes either** (`modules/uds` `Client.exchange`: a `0x78` re-arms the wait by
+- **blobly_net's client takes either** (`blobly/uds` `Client.exchange`: a `0x78` re-arms the wait by
   P2*, a positive answer ends it), so nothing on the tester side decides it.
 
 What the choice costs: after `50 02` the tester must let the bootloader come up before its next

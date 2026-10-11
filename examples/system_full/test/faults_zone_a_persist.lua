@@ -10,7 +10,7 @@
 -- Needs blobly_net with 0x19 03/04/06 (diag:snapshot / snapshot_ids / extended, check.snapshot /
 -- check.extended). Bench only (zone_a flashed with its bootloader — `make flash` in
 -- nodes/zone_a — on the CANsub, edge = channel 1):
---   BLOBLY_NET=/path/to/blobly_net; v -enable-globals -path "@vlib|@vmodules|$BLOBLY_NET/modules" \
+--   BLOBLY_NET=/path/to/blobly_net; v -enable-globals \
 --     run $BLOBLY_NET/cmd/script/run.v examples/system_full/test/faults_zone_a_persist.lua
 -- The power-cut test runs only when BLOB_ZONE_A_POWER_CUT names a command that cuts zone_a's power
 -- (or resets it with no warning to the firmware, e.g. `st-flash --serial $BLOB_H723_SERIAL reset`

@@ -4,7 +4,7 @@
 -- serving ISO 14229 from its ThreadX comm thread while it keeps routing and transmitting. The same
 -- checks run on both; diag_domain.lua is the full set, this proves the server and the board seam
 -- (TRNG seed, reset, keep cell) on two more chips. Bench only (the flashed boards on the CANsub).
---   BLOBLY_NET=/path/to/blobly_net; v -enable-globals -path "@vlib|@vmodules|$BLOBLY_NET/modules" \
+--   BLOBLY_NET=/path/to/blobly_net; v -enable-globals \
 --     run $BLOBLY_NET/cmd/script/run.v examples/system_full/test/diag_nodes.lua
 -- After flashing with `st-flash --connect-under-reset`, the core-reset vector catch (DEMCR
 -- VC_CORERESET) can stay armed: 0x11 then parks the core at reset_handler, "halted due to

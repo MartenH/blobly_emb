@@ -12,7 +12,7 @@
 -- accumulating counter qualifies; once the script stops, the gateway's plausible values pass it again.
 -- (Two senders of one id can collide in arbitration with different data — an occasional error frame,
 -- retransmitted; harmless on a bench.) Bench only (the flashed board on the CANsub, edge = channel 1):
---   BLOBLY_NET=/path/to/blobly_net; v -enable-globals -path "@vlib|@vmodules|$BLOBLY_NET/modules" \
+--   BLOBLY_NET=/path/to/blobly_net; v -enable-globals \
 --     run $BLOBLY_NET/cmd/script/run.v examples/system_full/test/faults_zone_a.lua
 
 local DTC = "U0401-00" -- 0xC40100, SpeedImplausible (nodes/zone_a/ecu.toml)

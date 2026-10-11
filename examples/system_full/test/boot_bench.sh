@@ -27,4 +27,4 @@ for n in "${nodes[@]}"; do
 done
 list=$(IFS=,; echo "${nodes[*]}")
 BOOT_PHASE=flash BOOT_NODES=$list BOOT_VERSION=$VERSION v -enable-globals \
-	-path "@vlib|@vmodules|$BLOBLY_NET/modules" run "$BLOBLY_NET/cmd/script/run.v" "$here/boot_handoff.lua"
+	run "$BLOBLY_NET/cmd/script/run.v" "$here/boot_handoff.lua"

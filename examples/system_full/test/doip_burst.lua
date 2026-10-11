@@ -3,7 +3,7 @@
 -- must be the answer to its own request (MartenH/blobly_net#373 on real TCP). Carried over from
 -- the retired examples/h735_doip bench (#340). Bench only (the H735 running sysnode on the LAN):
 --   BLOBLY_NET=/path/to/blobly_net; cd $BLOBLY_NET && v -enable-globals \
---     -path "@vlib|@vmodules|modules" run cmd/script/run.v <blobly_emb>/examples/system_full/test/doip_burst.lua
+--     run cmd/script/run.v <blobly_emb>/examples/system_full/test/doip_burst.lua
 local vin = "BLOBLYSYSNODEH735" -- DID 0xF190, as doip_sysnode.lua reads it
 
 test("a burst of DIFFERENT requests stays correlated", function()

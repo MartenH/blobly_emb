@@ -3,7 +3,7 @@
 -- ISO-TP on the compute bus — requests on 0x7B0, answers on 0x7B8 — from its ThreadX comm thread,
 -- while that thread keeps routing, telemetry and the tester's rest-bus traffic going. Bench only:
 -- it needs the flashed board on the CANsub (system_full.blobnet), so it is not in CI.
---   BLOBLY_NET=/path/to/blobly_net; v -enable-globals -path "@vlib|@vmodules|$BLOBLY_NET/modules" \
+--   BLOBLY_NET=/path/to/blobly_net; v -enable-globals \
 --     run $BLOBLY_NET/cmd/script/run.v examples/system_full/test/diag_domain.lua
 -- Recorded in requirements/verifications.toml (uds-on-target-domain, uds-on-target-live-did,
 -- uds-on-target-security, uds-on-target-reset), not

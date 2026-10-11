@@ -53,7 +53,7 @@ Drive from blobly_net — decodes the fixed protocol natively from the generated
 BLOBLY_PROJECT=examples/trace_multicore/trace-multicore.blobnet   # or blobly_net/projects/trace-multicore.blobnet
 
 # headless (both blocks, decoded):
-(blobly_net) v -path "@vlib|@vmodules|modules" run cmd/trace_dump/dump.v vcan0 0x0003 \
+(blobly_net) v -enable-globals run cmd/trace_dump/dump.v vcan0 0x0003 \
     ../blobly_emb/examples/trace_multicore/gen/trace-manifest.csv
 ```
 

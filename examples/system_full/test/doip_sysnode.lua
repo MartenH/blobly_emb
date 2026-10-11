@@ -2,7 +2,7 @@
 -- sysnode's diagnostic server over DoIP (ISO 13400, [doip] in its ecu.toml): discovery, then UDS
 -- over TCP, then the same server from the compute bus — one server, one session, one security
 -- state, whichever transport a tester uses. Bench only (the H735 on the LAN, the CANsub on compute):
---   BLOBLY_NET=/path/to/blobly_net; v -enable-globals -path "@vlib|@vmodules|$BLOBLY_NET/modules" \
+--   BLOBLY_NET=/path/to/blobly_net; v -enable-globals \
 --     run $BLOBLY_NET/cmd/script/run.v examples/system_full/test/doip_sysnode.lua
 local vin = "BLOBLYSYSNODEH735" -- DID 0xF190, which DoIP announces
 local wrong = function(seed) return seed end

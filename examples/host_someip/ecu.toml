@@ -4,7 +4,7 @@
 # loom2v — the generated gen/loom_gen.v carries the frame table + the DERIVED
 # payload codec (canonical order: signals-list order, name-sorted fields, LE,
 # natural widths), and gen/trace-manifest.csv carries the same layout for the
-# host oracle (blobly_net modules/someip). No UDP yet: the tx loop that wraps
+# host oracle (blobly_net blobly/someip). No UDP yet: the tx loop that wraps
 # these payloads in the SOME/IP header is the next rung; run() here only
 # dispatches the app partition.
 
