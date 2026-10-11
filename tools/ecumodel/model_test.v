@@ -1957,3 +1957,20 @@ tx_id = 0x102
 ' + app)
 	assert !ok.any(it.contains('isotp') || it.contains('[uds]')), ok.str()
 }
+
+// a signal field has one width everywhere and is not an array
+fn test_signal_field_types_are_sized_scalars() {
+	sig := fn (fields string) string {
+		return '[[signal]]\nname = "Wide"\nfields = { ${fields} }\nfrom = "app"\nto   = "app"\n'
+	}
+	for typ in ['int', 'uint', 'isize', 'usize'] {
+		e := errs_of(sig('a = "${typ}"') + app)
+		assert e.any(it.contains('field "a" is `${typ}`')), e.str()
+	}
+	e := errs_of(sig('words = "[16]u32"') + app)
+	assert e.any(it.contains('field "words" is an array')), e.str()
+	for typ in ['bool', 'u8', 'i32', 'u64', 'f32', 'f64'] {
+		f := errs_of(sig('a = "${typ}"') + app)
+		assert !f.any(it.contains('field "a"')), f.str()
+	}
+}
