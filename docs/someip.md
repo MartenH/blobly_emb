@@ -15,7 +15,7 @@ declarations, a payload layout fixed at build time, same frame→module routing
 (docs/com-modules.md) — the only new things are a bus kind whose frames travel
 as UDP datagrams instead of CAN frames, and the standard 16-byte SOME/IP header
 in front of the payload so the wire is legible to commodity tooling (Wireshark
-dissects it, scapy generates it, blobly_net's planned `modules/someip` speaks
+dissects it, scapy generates it, blobly_net's planned `blobly/someip` speaks
 it). SOME/IP is adopted as a **wire format, not a middleware**: no service
 discovery on the target, no dynamic types, no broker, no agent. Rejected
 alternatives: DDS/XRCE (discovery + QoS caches + an agent process — alloc-shaped
@@ -216,7 +216,7 @@ the `comm/doip` split (tested V protocol over a four-call C byte-pipe seam,
 the seam is a plain UDP socket on loopback, so the full path — cyclic event tx
 from the comm thread, rx routing into modules — runs on the desk with
 blobly_net (or `nc`/scapy/Wireshark) as the peer, the proven-on-vcan posture
-carried to proven-on-lo. blobly_net's `modules/someip` (its deferred phase E3)
+carried to proven-on-lo. blobly_net's `blobly/someip` (its deferred phase E3)
 becomes the oracle: host encodes ↔ target decodes and vice versa, the same
 two-repo pincer the CAN stack used.
 
@@ -311,7 +311,7 @@ docs/multi-node.md (the system tier this feeds), [[eth-middleware-someip]].
 
 **Rungs 1-2 MERGED (#153):** `comm/someip` (header codec, notification builder,
 the `Drop`-reason rx envelope gate) and the ecumodel/ecucheck schema battery.
-The host oracle (blobly_net `modules/someip`, its phase E3 core) is merged on
+The host oracle (blobly_net `blobly/someip`, its phase E3 core) is merged on
 that repo's main — golden vectors byte-compatible with `comm/someip`.
 
 **Rung 3 — codegen (this branch):** loom2v understands `kind = "eth"`:
@@ -350,7 +350,7 @@ proto/iface/NOTIFICATION), little-endian derived payload with the ticks
 counter advancing, E2E trailer counter incrementing at the derived offsets,
 ~100 ms cyclic cadence, correct static source endpoint. And the pincer: the
 same captured datagram parses + validates through blobly_net's
-`modules/someip` oracle (net#49). One codegen note: V mishandles const-sized
+`blobly/someip` oracle (net#49). One codegen note: V mishandles const-sized
 mut fixed-array params, so the pack fns take a literal `[64]u8` exactly as the
 DBC codec does.
 

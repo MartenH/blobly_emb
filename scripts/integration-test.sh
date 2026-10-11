@@ -16,10 +16,12 @@ IFACE="${IFACE:-vcan0}"
 : "${BLOBLY_NET:?set BLOBLY_NET=/path/to/blobly_net (https://github.com/MartenH/blobly_net)}"
 
 [ -x "$EX/bin/app" ] || { echo "build the example first (make all in $EX)"; exit 1; }
+. "$(dirname "$0")/blobly_net_check.sh"
+require_blobly_net "$BLOBLY_NET" || exit 1
 # The suites stamp and check E2E with blobly_net's AUTOSAR Profile 1 helpers (e2e.p01_protect,
 # MartenH/blobly_net#374): an older checkout fails every E2E test with a nil global, which reads as
 # a firmware regression. Say what it is instead.
-grep -q 'function e2e.p01_protect' "$BLOBLY_NET/modules/script/prelude.v" 2>/dev/null || {
+grep -q 'function e2e.p01_protect' "$BLOBLY_NET/blobly/script/prelude.v" 2>/dev/null || {
     echo "BLOBLY_NET=$BLOBLY_NET predates blobly_net#374 (e2e.p01_protect): update it"; exit 1; }
 ip link show "$IFACE" >/dev/null 2>&1 || { echo "bring up $IFACE: sudo make vcan"; exit 1; }
 
@@ -32,7 +34,7 @@ sleep 0.6
 # blobly_net drives + asserts; its runner exits non-zero if any test fails.
 cd "$EX"
 # Which scripts declare their own project: the RUNNER's rule (blobly_net
-# modules/script/project_decl.v, declaration_in), mirrored — the leading comment is every line
+# blobly/script/project_decl.v, declaration_in), mirrored — the leading comment is every line
 # up to the first non-blank line that is not a `--` comment; a declaration is a comment line
 # whose text after its dashes starts with @project. One awk pass, so no pipe to lose a match to.
 declares_project() {
@@ -46,7 +48,7 @@ declares_project() {
 # Built once: `v run` compiles the runner on every call, and each declared script is a call.
 runner="$(mktemp -d)/run"
 trap 'kill $app 2>/dev/null || true; rm -rf "$(dirname "$runner")"' EXIT
-v -enable-globals -path "@vlib|@vmodules|$BLOBLY_NET/modules" -o "$runner" "$BLOBLY_NET/cmd/script/run.v"
+v -enable-globals -o "$runner" "$BLOBLY_NET/cmd/script/run.v"
 plain=() declared=()
 for t in test/*.lua; do
     if declares_project "$t"; then declared+=("$t"); else plain+=("$t"); fi

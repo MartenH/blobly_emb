@@ -13,7 +13,7 @@
 -- is hand-stamped. The operation cycle is zone_a's power cycle, so a confirmed DTC stays confirmed
 -- until cleared; each test starts from 0x14. SafetyCmdFrame runs every 50 ms. Bench only (the
 -- flashed board on the CANsub, edge = channel 1):
---   BLOBLY_NET=/path/to/blobly_net; v -enable-globals -path "@vlib|@vmodules|$BLOBLY_NET/modules" \
+--   BLOBLY_NET=/path/to/blobly_net; v -enable-globals \
 --     run $BLOBLY_NET/cmd/script/run.v examples/system_full/test/rx_faults_zone_a.lua
 
 local OK, TIMEOUT, INTEGRITY = 1, 2, 3

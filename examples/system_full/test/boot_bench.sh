@@ -15,6 +15,8 @@ set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 sys=$(dirname "$here")
 : "${BLOBLY_NET:?set BLOBLY_NET to the blobly_net checkout}"
+. "$here/../../../scripts/blobly_net_check.sh"
+require_blobly_net "$BLOBLY_NET" || exit 1 # before any image is built
 VERSION=${VERSION:-$(( $(date +%s) - 1767225600 ))}
 nodes=("$@"); [ ${#nodes[@]} = 0 ] && nodes=(domain sysnode zone_a sysnode-doip)
 for n in "${nodes[@]}"; do
@@ -27,4 +29,4 @@ for n in "${nodes[@]}"; do
 done
 list=$(IFS=,; echo "${nodes[*]}")
 BOOT_PHASE=flash BOOT_NODES=$list BOOT_VERSION=$VERSION v -enable-globals \
-	-path "@vlib|@vmodules|$BLOBLY_NET/modules" run "$BLOBLY_NET/cmd/script/run.v" "$here/boot_handoff.lua"
+	run "$BLOBLY_NET/cmd/script/run.v" "$here/boot_handoff.lua"

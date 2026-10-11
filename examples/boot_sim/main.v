@@ -9,7 +9,7 @@ module main
 //
 //   make vcan          # once: vcan0 up
 //   make run           # decision + serve on vcan0 (rx 0x7B0 / tx 0x7B8)
-//   ../../../blobly_net: v run cmd/flash vcan0 <image.bin>   # reflash it
+//   ../../../blobly_net: v -enable-globals run cmd/flash vcan0 <image.bin>   # reflash it
 //
 // The flash file (bin/flash.bin) models the app region: 64 KB at 0x08020000.
 // Erased-new = all 0xFF -> the first boot decides stay_boot (no valid app).

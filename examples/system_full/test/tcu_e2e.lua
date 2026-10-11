@@ -2,7 +2,7 @@
 -- by blobly_net over the LAN — tcu (the NUCLEO-H723) at 192.168.0.51, this host at the bench
 -- tester's endpoint 192.168.0.190:30491, tcu's peer (it accepts and answers only that endpoint):
 --
---   BLOBLY_NET=/path/to/blobly_net; v -enable-globals -path "@vlib|@vmodules|$BLOBLY_NET/modules" \
+--   BLOBLY_NET=/path/to/blobly_net; v -enable-globals \
 --     run $BLOBLY_NET/cmd/script/run.v examples/system_full/test/tcu_e2e.lua
 --
 -- Give the board ~15 s after a flash or reset: NetX and the PHY link come up first, and a run

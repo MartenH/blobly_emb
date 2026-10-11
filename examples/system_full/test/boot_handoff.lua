@@ -18,7 +18,7 @@
 -- BOOT_NODES (comma-separated, default every entry) picks the entries: a node over CAN by its name,
 -- over DoIP as <name>-doip (sysnode-doip).
 --   BLOBLY_NET=/path/to/blobly_net; BOOT_VERSION=<n> v -enable-globals \
---     -path "@vlib|@vmodules|$BLOBLY_NET/modules" run $BLOBLY_NET/cmd/script/run.v \
+--     run $BLOBLY_NET/cmd/script/run.v \
 --     examples/system_full/test/boot_handoff.lua
 
 local all = {

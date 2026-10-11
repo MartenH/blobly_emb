@@ -128,7 +128,7 @@ On a target the comm thread encodes everything and serves the DID; a field it se
 u32 (`u32(field)` into the IOC cell), so a float or a 64-bit field on a sent signal is refused there
 rather than truncated before its range is checked.
 
-blobly_net's encoder (`modules/candb` `raw_from_phys`) agrees with this bit for bit on every value
+blobly_net's encoder (`blobly/candb` `raw_from_phys`) agrees with this bit for bit on every value
 this sends unchanged — inside the declared range, the rounding at both ends included — and at the
 width's ends of a signed signal and the top of an unsigned one. It does **not** hold a value to the
 DBC range, deliberately: a tester has to be able to send an out-of-range value to test the receiver

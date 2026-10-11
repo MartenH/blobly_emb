@@ -129,7 +129,7 @@ fn parse_eth_frames(doc toml.Doc, eth string, sig_of map[string]SigInfo) []EthFr
 }
 
 // someip_manifest: the eth service identity + each frame's DERIVED layout, so
-// the host oracle (blobly_net modules/someip) decodes the payload from the
+// the host oracle (blobly_net blobly/someip) decodes the payload from the
 // same source of truth as the generated codec (docs/someip.md).
 fn someip_manifest(m Model) []string {
 	// identity keys on [someip] itself — a module-only eth service (trace/telem

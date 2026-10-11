@@ -47,7 +47,7 @@ windows.
 
 ```sh
 cd ../blobly_net
-v -enable-globals -path "@vlib|@vmodules|modules" run cmd/trace_dump \
+v -enable-globals run cmd/trace_dump \
     can0 0x3 ../blobly_emb/examples/h755_threadx/gen/trace-manifest.csv
 ```
 
