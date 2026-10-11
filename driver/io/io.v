@@ -18,7 +18,7 @@ pub const kind_pwm = 2
 fn C.blob_io_cfg(int, &char, &char, int, u32, int, int, u32) int
 fn C.blob_io_init() int
 fn C.blob_io_gpio_read(int) int
-fn C.blob_io_gpio_read_checked(int, &int) int
+fn C.blob_io_gpio_read_checked(int, &i32) int // C int: i32 on every target
 fn C.blob_io_gpio_write(int, int)
 fn C.blob_io_adc_read(int) u32
 fn C.blob_io_adc_read_checked(int, &u32) int
@@ -55,7 +55,8 @@ pub fn gpio_read(ch int) bool {
 // an initial sample (docs/io.md startup ordering; the periodic reads keep
 // gpio_read's last-good semantics).
 pub fn gpio_read_checked(ch int) ?bool {
-	v := 0
+	// mut: C writes it, and V3 folds a comparison of an immutable local the backend wrote
+	mut v := i32(0)
 	if C.blob_io_gpio_read_checked(ch, &v) != 0 {
 		return none
 	}
@@ -77,7 +78,7 @@ pub fn adc_read(ch int) u32 {
 // none before the first DMA scan completes: the boot publish must not fabricate
 // a zero sample (the analog twin of gpio_read_checked; REQ-IO-018).
 pub fn adc_read_checked(ch int) ?u32 {
-	v := u32(0)
+	mut v := u32(0)
 	if C.blob_io_adc_read_checked(ch, &v) != 0 {
 		return none
 	}

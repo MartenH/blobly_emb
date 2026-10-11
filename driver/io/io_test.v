@@ -32,6 +32,8 @@ fn test_init_creates_output_files_only() {
 	assert !os.exists('io/UserButton')
 	assert gpio_read_checked(1) == none // absent: checked read reports failure
 	assert gpio_read(1) == false // periodic read serves last-good (cfg init)
+	os.write_file('io/UserButton', '1\n')!
+	assert gpio_read_checked(1) or { false } // a real value is returned, not just "present"
 	teardown(dir)
 }
 
@@ -114,6 +116,7 @@ fn test_adc_read_u16_and_last_good() {
 	assert start()
 	os.write_file('io/PotVolt', '3000\n') or { assert false }
 	assert adc_read(0) == 3000
+	assert (adc_read_checked(0) or { 0 }) == 3000
 	os.write_file('io/PotVolt', '65000\n') or { assert false } // full u16 range
 	assert adc_read(0) == 65000
 	// garbage -> last-good (3000..65000 was 65000)
