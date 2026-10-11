@@ -1,6 +1,8 @@
 module main
 
 import toml
+import comm.diagroute
+import comm.doip
 import tools.doipcfg
 import tools.netcfg
 
@@ -12,6 +14,15 @@ import tools.netcfg
 // The entity's ISO 13400-2 transport policy rides beside it (tools/doipcfg reads and checks it,
 // comm/doip policy.v holds the bounds and defaults): which testers may activate routing and with
 // which activation types, the two TCP inactivity timers, and the boot announcements.
+// DoipRoute: one node behind a DoIP gateway (REQ-NET-019) — [[doip.route]], lowered by sysgen
+struct DoipRoute {
+	node    string
+	logical int
+	bus     string // the gateway's [bus.*] the node is on
+	tx_id   int    // the node's physical request id: what the gateway sends on
+	rx_id   int    // its response id: what the gateway receives on
+}
+
 struct DoipCfg {
 	on         bool
 	address    string // the node's static IPv4 address
@@ -21,6 +32,7 @@ struct DoipCfg {
 	functional int    // 0 = comm/doip's default (0xE400)
 	policy     doipcfg.Policy
 	not_int    []string // policy keys authored as something other than integers
+	routes     []DoipRoute // a gateway's: the nodes behind it diagnostics are routed to
 }
 
 const doip_vin_did = 0xF190
@@ -32,6 +44,17 @@ fn parse_doip(doc toml.Doc) DoipCfg {
 	dv := doc.value_opt('doip') or { return DoipCfg{} }
 	dm := dv.as_map()
 	policy, not_int := doipcfg.parse(dm)
+	mut routes := []DoipRoute{}
+	for rv in (dm['route'] or { toml.Any([]toml.Any{}) }).array() {
+		r := rv.as_map()
+		routes << DoipRoute{
+			node:    (r['node'] or { toml.Any('') }).string()
+			logical: toml_int(r, 'logical', 0, 0, 0xFFFF, '[[doip.route]]')
+			bus:     (r['bus'] or { toml.Any('') }).string()
+			tx_id:   toml_int(r, 'tx_id', 0, 0, 0x7FF, '[[doip.route]]')
+			rx_id:   toml_int(r, 'rx_id', 0, 0, 0x7FF, '[[doip.route]]')
+		}
+	}
 	return DoipCfg{
 		on:         true
 		address:    (dm['address'] or { toml.Any('') }).string()
@@ -41,7 +64,169 @@ fn parse_doip(doc toml.Doc) DoipCfg {
 		functional: toml_int(dm, 'functional_address', 0, 0, 0xFFFF, '[doip]')
 		policy:     policy
 		not_int:    not_int
+		routes:     routes
 	}
+}
+
+// routes_on: the node is a DoIP gateway (routes diagnostics to nodes behind it)
+fn routes_on(m Model) bool {
+	return m.doip.on && m.doip.routes.len > 0
+}
+
+// route_bus_index: the router's index of a bus — its FDCAN index, which is also what the comm
+// thread opened the bus's channel on (one channel per FDCAN)
+fn route_bus_index(bus string) int {
+	return fdcan_index_of(bus).int()
+}
+
+// validate_doip_routes refuses routes the gateway could not serve (REQ-NET-019/020): more than the
+// runtime holds, a bus that is not one of its CAN buses, an address that is not an entity address
+// or is this entity's own, one routed twice, request and response on one id, ids that are this
+// node's own diagnostic ids on that bus, and a route_level its [uds] does not serve.
+fn validate_doip_routes(m Model) {
+	d := m.doip
+	if d.routes.len == 0 {
+		return
+	}
+	if d.routes.len > doip.max_routes || d.routes.len > diagroute.max_routes {
+		panic('loom2v: [doip] routes ${d.routes.len} nodes — a gateway routes to at most ${doip.max_routes}')
+	}
+	mut seen := map[int]string{}
+	for r in d.routes {
+		where := 'loom2v: [[doip.route]] "${r.node}"'
+		if r.node == '' {
+			panic('loom2v: [[doip.route]] needs `node` — the routed node\'s name')
+		}
+		if !(m.buses[r.bus] or { false }) || (m.bus_kind[r.bus] or { 'can' }) != 'can' {
+			panic('${where}: bus "${r.bus}" is not one of this node\'s CAN buses')
+		}
+		if m.target.threadx && !fdcan_bus_name_ok(r.bus) {
+			panic('${where}: bus "${r.bus}" must be named exactly "can0" or "can1" — the comm thread opens a bus by that one-digit FDCAN index')
+		}
+		// the comm thread opens a route bus beside its own: under another name for the same
+		// controller it would open that FDCAN twice, and its own drain would take the routed answers
+		if m.target.threadx && r.bus != m.telem.bus && fdcan_index(r.bus) == fdcan_index(m.telem.bus) {
+			panic('${where}: bus "${r.bus}" is FDCAN index ${fdcan_index(r.bus)}, the controller of this node\'s own bus "${m.telem.bus}" under another name — name the bus the same, or route on another controller')
+		}
+		// ... and drives it from its own core: a bus assigned to another core's owner is not routed
+		if (m.bus_core[r.bus] or { 0 }) != (m.bus_core[m.telem.bus] or { 0 }) {
+			panic('${where}: bus "${r.bus}" is on core ${m.bus_core[r.bus] or { 0 }}, the comm thread routing on core ${m.bus_core[m.telem.bus] or { 0 }} — routing through another core\'s bus owner is not supported')
+		}
+		if !((r.logical >= 0x0001 && r.logical <= 0x0DFF) || (r.logical >= 0x1000 && r.logical <= 0x7FFF)) {
+			panic('${where}: logical 0x${r.logical.hex()} is not an entity address (0x0001..0x0DFF or 0x1000..0x7FFF)')
+		}
+		func_addr := if d.functional != 0 { d.functional } else { int(doip.default_functional_addr) }
+		if r.logical == d.logical || r.logical == func_addr {
+			panic('${where}: logical 0x${r.logical.hex()} is this entity\'s own address')
+		}
+		if prev := seen[r.logical] {
+			panic('${where}: logical 0x${r.logical.hex()} is "${prev}"\'s route too')
+		}
+		seen[r.logical] = r.node
+		if r.tx_id == r.rx_id {
+			panic('${where}: tx_id and rx_id are one id 0x${r.tx_id.hex()} — a request would be read as its own answer')
+		}
+		for c in m.isotp_conns {
+			mut own := [c.rx_id, c.tx_id]
+			if c.functional_id != 0 { // 0: no functional id (no listener on 0)
+				own << c.functional_id
+			}
+			if c.bus == r.bus && (r.tx_id in own || r.rx_id in own) {
+				panic('${where}: its ids 0x${r.tx_id.hex()} / 0x${r.rx_id.hex()} are this node\'s own [isotp] ids on bus "${r.bus}"')
+			}
+		}
+		// a routed exchange neither holds the network awake nor wakes it, and would transmit on a
+		// bus NM has put to sleep: not supported on the bus this node runs NM on
+		nm_bus := if m.target.threadx || m.nm.bus == '' { m.telem.bus } else { m.nm.bus }
+		if m.nm.on && r.bus == nm_bus {
+			panic('${where}: bus "${r.bus}" is the bus this node runs NM on — a routed exchange would neither hold nor wake the network; route to nodes on a bus without NM')
+		}
+	}
+	// two routes on one bus are two nodes: they must not share a diagnostic id there
+	for i, a in d.routes {
+		for b in d.routes[i + 1..] {
+			if a.bus == b.bus && (a.tx_id in [b.tx_id, b.rx_id] || a.rx_id in [b.tx_id, b.rx_id]) {
+				panic('loom2v: [[doip.route]] "${a.node}" and "${b.node}" share a diagnostic id on bus "${a.bus}" (0x${a.tx_id.hex()} / 0x${a.rx_id.hex()} and 0x${b.tx_id.hex()} / 0x${b.rx_id.hex()}) — one request would reach both')
+			}
+		}
+	}
+	level := int(d.policy.int_of('route_level'))
+	if level < 1 || level > 8 || sa_levels(m) & (u8(1) << (level - 1)) == 0 {
+		panic('loom2v: [doip] route_level ${level} is not a security level this node\'s [uds] serves — a tester could never earn the unlock routing needs (REQ-NET-020)')
+	}
+}
+
+// doip_route_init: on the comm thread before its loop — the router (comm/diagroute), its routes and
+// the level a tester must hold (REQ-NET-020). bs 8: the gateway drains a bus's 8-deep receive FIFO
+// every pass, so a routed node never sends it more consecutive frames in a burst than that.
+fn doip_route_init(m Model) []string {
+	if !routes_on(m) {
+		return []string{}
+	}
+	mut g := ['\tg_droute.init(u8(${m.doip.policy.int_of('route_level')}), u8(8)) // REQ-NET-019/020: the gateway\'s router']
+	for r in m.doip.routes {
+		g << '\tg_droute.add(diagroute.Route{ // ${r.node}, on ${r.bus}'
+		g << '\t\tlogical: u16(0x${r.logical.hex()})'
+		g << '\t\tbus:     u8(${route_bus_index(r.bus)})'
+		g << '\t\ttx_id:   u32(0x${r.tx_id.hex()})'
+		g << '\t\trx_id:   u32(0x${r.rx_id.hex()})'
+		g << '\t})'
+	}
+	return g
+}
+
+// doip_route_serve: after the mailbox (a dropped connection has ended its unlock first), the unlock
+// the network tester holds on this node now — kept by the router for its connection once it is the
+// route level — judges a routed request waiting, and the router's answers go into the route channel
+fn doip_route_serve(m Model) []string {
+	if !routes_on(m) {
+		return []string{}
+	}
+	return ['\t\tdoipnet.serve_routes(mut g_droute, g_diag.remote_unlocked(), &g_rt_req[0], C.board_now_us())']
+}
+
+// doip_route_gate: the bus the routed exchange is on is drained while the router has room for
+// another answer — with its queue full the bus's frames wait in the FIFO for the doip thread to
+// take one, but only briefly (diagroute.gate_hold_us: the gateway's own traffic on that bus must
+// not stall behind a tester that does not read). Another route bus carries no frame of the
+// exchange and is drained as ever.
+fn doip_route_gate(m Model, bus string) string {
+	if !routes_on(m) || !m.doip.routes.any(it.bus == bus) {
+		return ''
+	}
+	return '(g_droute.active_bus() != ${route_bus_index(bus)} || g_droute.room(C.board_now_us())) && '
+}
+
+// doip_route_arm: in the drain of bus `bus`, a frame of the routed exchange is the router's
+fn doip_route_arm(m Model, bus string) []string {
+	if !routes_on(m) || !m.doip.routes.any(it.bus == bus) {
+		return []string{}
+	}
+	return [
+		'\t\t\tif g_droute.on_frame(u8(${route_bus_index(bus)}), &rx, C.board_now_us()) {',
+		'\t\t\t\tcontinue',
+		'\t\t\t}',
+	]
+}
+
+// doip_route_produce: the router's timers, then the routed exchange's frames onto its bus — ahead
+// of the periodic producers, like the server's answer (a tester is timing it)
+fn doip_route_produce(m Model) []string {
+	if !routes_on(m) {
+		return []string{}
+	}
+	mut g := ['\t\tg_droute.step(t1)', '\t\tmatch g_droute.active_bus() {']
+	mut done := map[string]bool{}
+	for r in m.doip.routes {
+		if done[r.bus] {
+			continue
+		}
+		done[r.bus] = true
+		g << '\t\t\t${route_bus_index(r.bus)} { g_droute.pump(t1, mut ${gw_var(r.bus, m.telem.bus)}) }'
+	}
+	g << '\t\t\telse {}'
+	g << '\t\t}'
+	return g
 }
 
 // opt_str: a key's value as written, none when absent (ecucheck has judged its type)
@@ -218,6 +403,7 @@ fn validate_doip(m Model) {
 	if why != '' {
 		panic('loom2v: [doip] ${why}')
 	}
+	validate_doip_routes(m)
 }
 
 // doip_target_fns: the C seam and the doip threads' entry points. The loop itself is
@@ -235,6 +421,9 @@ fn doip_target_fns(m Model) []string {
 		'fn C.doip_net_tcb(int) voidptr',
 		'fn C.doip_mb_init(&u8, &u8)',
 	]
+	if routes_on(m) {
+		g << 'fn C.doip_rt_init(&u8, &u8)'
+	}
 	if sa_levels(m) == 0 {
 		// the TCP sequence-number seed comes from the board TRNG (declared with 0x27 otherwise)
 		g << 'fn C.diag_sa_init() int'
@@ -246,7 +435,11 @@ fn doip_target_fns(m Model) []string {
 	g << '// announce_count / announce_interval_ms); the server is the comm thread\'s, across the mailbox'
 	g << "@[export: 'blobly_doip_run']"
 	g << 'fn doip_run() {'
-	g << '\tdoipnet.run(mut g_doip, ${p.int_of('announce_count')}, ${p.int_of('announce_interval_ms')}, &g_doip_in[0], &g_doip_out[0])'
+	if routes_on(m) {
+		g << '\tdoipnet.run_gateway(mut g_doip, ${p.int_of('announce_count')}, ${p.int_of('announce_interval_ms')}, &g_doip_in[0], &g_doip_out[0], &g_rt_ans[0])'
+	} else {
+		g << '\tdoipnet.run(mut g_doip, ${p.int_of('announce_count')}, ${p.int_of('announce_interval_ms')}, &g_doip_in[0], &g_doip_out[0])'
+	}
 	g << '}'
 	g << ''
 	g << '// doip_udp: a request on UDP 13400 (the doip-svc thread) — identification, entity status, power'
@@ -264,13 +457,19 @@ fn doip_target_globals(m Model) []string {
 	if !m.doip.on {
 		return []string{}
 	}
-	return [
+	mut g := [
 		'\tg_doip      doip.Server // DoIP framing on the doip thread; the server is g_diag\'s',
 		'\tg_doip_in   [doip.max_msg]u8',
 		'\tg_doip_out  [doip.max_resp]u8',
 		'\tg_doip_req  [doip.max_msg]u8 // the mailbox: a request on its way to the comm thread',
 		'\tg_doip_resp [doip.max_uds]u8 // ... and its answer on the way back',
 	]
+	if routes_on(m) {
+		g << '\tg_droute   diagroute.Router // the gateway\'s routes (REQ-NET-019), on the comm thread'
+		g << '\tg_rt_req   [doip.max_uds]u8 // the route channel: a routed request on its way to it'
+		g << '\tg_rt_ans   [doip.max_uds]u8 // ... and a routed node\'s answer on the way back'
+	}
+	return g
 }
 
 // doip_net_prio: the network runs below every application thread of this image (a bigger number is a
@@ -320,6 +519,15 @@ fn doip_target_create(m Model) []string {
 	}
 	g << '\tg_doip.serve.answer = doipnet.answer // the comm thread\'s server, across the mailbox'
 	g << '\tC.doip_mb_init(&g_doip_req[0], &g_doip_resp[0])'
+	if routes_on(m) {
+		// a gateway: the nodes behind it, and the hook to the comm thread's router
+		for i, r in d.routes {
+			g << '\tg_doip.routes[${i}] = u16(0x${r.logical.hex()}) // ${r.node}'
+		}
+		g << '\tg_doip.n_routes = ${d.routes.len}'
+		g << '\tg_doip.serve.route = doipnet.route // the comm thread\'s router, across the route channel'
+		g << '\tC.doip_rt_init(&g_rt_req[0], &g_rt_ans[0])'
+	}
 	g << '\tC.doip_net_timers(u32(${p.int_of('initial_inactivity_ms')}), u32(${p.int_of('general_inactivity_ms')})) // T_TCP_Initial / T_TCP_General_Inactivity'
 	// below every application thread (doip_net_prio): the IP thread, then the doip threads
 	g << "\tC.doip_net_create(c'${d.address}', u32(${np}), u32(${np + 1})) // -1: DoIP stays down, the node runs on"

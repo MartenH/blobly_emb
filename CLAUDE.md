@@ -43,7 +43,10 @@ comm/   comms stack: com (tx modes; encode_raw, the ONE send encode — emitted 
         diag (the UDS server on its ISO-TP
         connection and the order a pass runs it — the host bridge calls it; the ThreadX comm
         thread from R2; its transport step — intake, busy guard, pump/abort, S3 hold, wire
-        drain — is step.v, which the bootloader runs whole as serve_step)
+        drain — is step.v, which the bootloader runs whole as serve_step), diagroute (a DoIP
+        gateway's tester on its buses: a diagnostic message for a node behind it forwarded on the
+        node's ids and its answers returned from its logical address — REQ-NET-019, only for a
+        tester holding the gateway's own unlock for its connection, REQ-NET-020; docs/net.md)
 driver/ driver port: can — SocketCAN (host) / ST FDCAN HAL / AUTOSAR CanIf (CDD); see docs/porting.md
 osal/   OS abstraction: time, cores, IOC (sim=POSIX, target=ThreadX AMP)
 tools/  BUILD-TIME only (heap OK): dbc2cfg, cfg2v, loom2v, sigmap, benches, candb

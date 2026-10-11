@@ -527,6 +527,13 @@ fn fd_len_ok(n int) bool {
 	return n <= 8 || n == 12 || n == 16 || n == 20 || n == 24 || n == 32 || n == 48 || n == 64
 }
 
+// fdcan_bus_name_ok: a bus a ThreadX gateway's comm thread can open by name — exactly "can0" or
+// "can1" (fdcan_index_of reads the one digit; FDCAN3 exists only on the 3-FDCAN parts, which this
+// generator cannot tell from the 2-FDCAN ones). The one rule for [[route]] and [[doip.route]] buses.
+fn fdcan_bus_name_ok(b string) bool {
+	return b == 'can0' || b == 'can1'
+}
+
 fn fdcan_index_of(bus string) string {
 	for c in bus {
 		if c >= `0` && c <= `9` {
@@ -554,6 +561,15 @@ fn gateway_extra_buses(m Model) []string {
 			if !seen[b] {
 				seen[b] = true
 				out << b
+			}
+		}
+	}
+	// a DoIP gateway's routed nodes (REQ-NET-019): their buses are driven by the comm thread too
+	if m.doip.on {
+		for r in m.doip.routes {
+			if !seen[r.bus] {
+				seen[r.bus] = true
+				out << r.bus
 			}
 		}
 	}
@@ -1789,13 +1805,7 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 			// (FDCAN3) is wired on the 3-FDCAN parts (boards/common/vectors_h72x.S, #360) but not
 			// on the H74x/H75x, and this generator does not know the part, so it stays refused.
 			for b in [r.from_bus, r.to_bus] {
-				mut digits := ''
-				for c in b {
-					if c >= `0` && c <= `9` {
-						digits += c.ascii_str()
-					}
-				}
-				if digits.len != 1 || digits[0] < `0` || digits[0] > `1` || b != 'can${digits}' {
+				if !fdcan_bus_name_ok(b) {
 					panic('route: bus "${b}" on a [target] kind="threadx" gateway must be named exactly ' +
 						'"can0" or "can1" — the comm thread opens buses by that one-digit FDCAN index ' +
 						'(a name like "aux0" would map to the wrong instance), and FDCAN3/idx 2 exists only ' +
@@ -2469,8 +2479,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// that comm_rx_wait blocks on, so the comm thread wakes on rx instead of polling.
 				// comm_rx_irq_enable arms the Rx interrupt (called once, after the channel opens).
 				glue << 'fn C.comm_rx_irq_enable()'
-				if m.routes.len > 0 {
-					// gateway: arm FDCAN1/2/3 Rx interrupts per route bus (all wake one semaphore)
+				if gateway_extra_buses(m).len > 0 {
+					// gateway: arm FDCAN1/2/3 Rx interrupts per route bus — a [[route]]'s or a
+					// [[doip.route]]'s (all wake one semaphore)
 					glue << 'fn C.comm_rx_irq_enable_idx(int)'
 				}
 				glue << 'fn C.comm_rx_wait(u32) u32 // block up to N ticks; returns 0 if woken by rx'
@@ -2993,6 +3004,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << fault_target_init(m)
 				glue << rx_target_init(m)
 				glue << doip_target_init(m)
+				glue << doip_route_init(m)
 				glue << param_bind_lines(m)
 				glue << nm_shell_register(m)
 				glue << stat_shell_register(m)
@@ -3019,6 +3031,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				if m.isotp_conns.len > 0 {
 					streaming << 'g_diag.link.busy()'
 				}
+				if routes_on(m) {
+					streaming << 'g_droute.busy()' // a routed exchange (REQ-NET-019)
+				}
 				if streaming.len > 0 {
 					glue << '\t\twait_ticks := if ${streaming.join(' || ')} { u32(1) } else { u32(10) }'
 					glue << '\t\tC.comm_rx_wait(wait_ticks) // the FDCAN Rx ISR wakes us early on a new frame'
@@ -3042,6 +3057,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 						}
 						.remote {
 							glue << doip_target_serve(m)
+							glue << doip_route_serve(m)
 							if m.doip.on {
 								glue << rx_target_resample(m, '\t\t')
 							}
@@ -3049,7 +3065,8 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 						.drain {
 							glue << comm_nm_seen(m)
 						glue << '\t\t// CONSUMER: drain the Rx FIFO (non-blocking); account each external rx frame'
-						glue << '\t\tfor ch.recv(mut rx) {'
+						glue << '\t\tfor ${doip_route_gate(m, m.telem.bus)}ch.recv(mut rx) {'
+						glue << doip_route_arm(m, m.telem.bus)
 						for si in rx_sigs {
 							// Gate on the DBC DLC too: recv reuses the frame and copies only the bytes that
 							// arrived, so a short same-id frame would leave stale high bytes in the decode.
@@ -3086,7 +3103,8 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 						// GATEWAY: drain each OTHER route bus and forward its routes. Same wake
 						// semaphore, so one comm_rx_wait covers every bus; recv is non-blocking.
 						for b in gw_extra {
-							glue << '\t\tfor ch_${snake(b)}.recv(mut rx) { // route bus ${b}'
+							glue << '\t\tfor ${doip_route_gate(m, b)}ch_${snake(b)}.recv(mut rx) { // route bus ${b}'
+							glue << doip_route_arm(m, b)
 							glue << gateway_forward_arms(m, b)
 							glue << '\t\t}'
 						}
@@ -3123,6 +3141,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\tnm_up := g_nm.awake() // NM-gated COM tx (REQ-COM-007, post-tick)'
 				}
 				glue << diag_target_produce(m) // ahead of every periodic producer: a tester is timing it
+				glue << doip_route_produce(m) // so is a routed node's (REQ-NET-019)
 				glue << diag_target_reset(m, ioc_idx)
 				for p in producers {
 					glue << p.bus_tick(BusCtx{
@@ -3985,6 +4004,9 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 	if m.doip.on {
 		glue << 'import comm.doip' // the diagnostic server over DoIP too (gen_doip.v)
 		glue << 'import driver.doipnet' // its network loop, shared with the node's bootloader
+		if routes_on(m) {
+			glue << 'import comm.diagroute' // a gateway's router (REQ-NET-019)
+		}
 	}
 	if m.isotp_conns.len > 0 {
 		glue << 'import comm.diag' // the diagnostic server on its ISO-TP connection
@@ -4136,57 +4158,21 @@ fn main() {
 	// sessions), or two producers would transmit one id. Refuse the collision here — standalone
 	// images get no syscheck.
 	for c in m.isotp_conns {
-		// only what is handled on THIS bus can collide (CAN ids are bus-local): the DBC messages
-		// its signals ride, the frames routed onto or off it, and the module frames that use it
-		mut on_bus := map[string]bool{}
-		for _, si in m.sig_of {
-			if si.external && si.bus == c.bus && si.dbc_msg != '' {
-				on_bus[si.dbc_msg] = true
-			}
-		}
-		db := candb.load_dbc_file(dbc) or { candb.Database{} }
-		fn_trace_bus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
-		shell_bus := if m.shell.bus != '' { m.shell.bus } else { m.telem.bus }
-		// on a ThreadX owner NM runs on the comm thread's channel whatever [nm].bus says (a manifest
-		// label there, gateway_test.v)
-		nm_bus := if m.target.threadx || m.nm.bus == '' { m.telem.bus } else { m.nm.bus }
 		mut ids := [][]string{} // [field, id]
 		ids << ['rx_id', c.rx_id.str()]
 		ids << ['tx_id', c.tx_id.str()]
 		if c.functional_id != 0 {
 			ids << ['functional_id', c.functional_id.str()]
 		}
-		for e in ids {
-			field := e[0]
-			id := u32(e[1].int())
-			what := 'loom2v: [isotp] ${field} 0x${id.hex()} is also'
-			for msg in db.messages {
-				if on_bus[snake(msg.name)] && u32(msg.id) == id && !msg.ext {
-					panic('${what} DBC message "${msg.name}" on bus "${c.bus}"')
-				}
-			}
-			for r in m.routes {
-				// the diagnostic ids are STANDARD frames: only a standard-width route can collide
-				if (r.from_bus == c.bus && !r.from_ext && u32(r.from_id) == id)
-					|| (r.to_bus == c.bus && !r.to_ext && u32(r.to_id) == id) {
-					panic('${what} a routed frame on bus "${c.bus}"')
-				}
-			}
-			if m.telem.on && m.telem.bus == c.bus && (id == m.telem.id || (m.telem.detail_id != 0 && id == m.telem.detail_id)) {
-				panic('${what} a [telemetry] frame id on bus "${c.bus}"')
-			}
-			if m.trace.on && fn_trace_bus == c.bus && (id == m.trace.cmd_id || id == m.trace.rsp_id
-				|| id == m.trace.record_id || (m.trace.dump_fc_bound && id == m.trace.dump_fc_id)) {
-				panic('${what} a [trace] endpoint id on bus "${c.bus}"')
-			}
-			if m.nm.on && nm_bus == c.bus && ((id >= m.nm.peers_lo && id <= m.nm.peers_hi) || id == m.nm.alive_id) {
-				panic('${what} in the [nm] peer range / alive id on bus "${c.bus}"')
-			}
-			if m.shell.on && !shell_on_eth(m) && shell_bus == c.bus
-				&& (id == m.shell.in_id || id == m.shell.fc_id || id == m.shell.out_id) {
-				panic('${what} a [shell] endpoint id on bus "${c.bus}"')
-			}
-		}
+		diag_ids_refused(m, dbc, c.bus, '[isotp]', ids)
+	}
+	// a gateway's routes (REQ-NET-019): the routed node's ids are matched and sent on the route's
+	// bus, beside everything else there, by the same rule
+	for r in m.doip.routes {
+		diag_ids_refused(m, dbc, r.bus, '[[doip.route]] "${r.node}"', [
+			['tx_id', r.tx_id.str()],
+			['rx_id', r.rx_id.str()],
+		])
 	}
 
 	// Validate E2E byte positions against each frame's DLC (they index unsafe into
@@ -6097,4 +6083,57 @@ fn fdcan_index(bus string) string {
 		return ''
 	}
 	return digits
+}
+
+// diag_ids_refused: a diagnostic connection's ids (`table`: whose — the node's [isotp], or a
+// gateway's route) against everything else handled on its bus: an application or module frame with
+// the same id would ALSO be dispatched as a diagnostic frame (a cyclic frame whose first byte looks
+// like a single-frame PCI could switch sessions), or two producers would transmit one id. Panics with
+// the refusal; standalone images get no syscheck.
+fn diag_ids_refused(m Model, dbc string, bus string, table string, ids [][]string) {
+	// only what is handled on THIS bus can collide (CAN ids are bus-local): the DBC messages
+	// its signals ride, the frames routed onto or off it, and the module frames that use it
+	mut on_bus := map[string]bool{}
+	for _, si in m.sig_of {
+		if si.external && si.bus == bus && si.dbc_msg != '' {
+			on_bus[si.dbc_msg] = true
+		}
+	}
+	db := candb.load_dbc_file(dbc) or { candb.Database{} }
+	fn_trace_bus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
+	shell_bus := if m.shell.bus != '' { m.shell.bus } else { m.telem.bus }
+	// on a ThreadX owner NM runs on the comm thread's channel whatever [nm].bus says (a manifest
+	// label there, gateway_test.v)
+	nm_bus := if m.target.threadx || m.nm.bus == '' { m.telem.bus } else { m.nm.bus }
+	for e in ids {
+		field := e[0]
+		id := u32(e[1].int())
+		what := 'loom2v: ${table} ${field} 0x${id.hex()} is also'
+		for msg in db.messages {
+			if on_bus[snake(msg.name)] && u32(msg.id) == id && !msg.ext {
+				panic('${what} DBC message "${msg.name}" on bus "${bus}"')
+			}
+		}
+		for r in m.routes {
+			// the diagnostic ids are STANDARD frames: only a standard-width route can collide
+			if (r.from_bus == bus && !r.from_ext && u32(r.from_id) == id)
+				|| (r.to_bus == bus && !r.to_ext && u32(r.to_id) == id) {
+				panic('${what} a routed frame on bus "${bus}"')
+			}
+		}
+		if m.telem.on && m.telem.bus == bus && (id == m.telem.id || (m.telem.detail_id != 0 && id == m.telem.detail_id)) {
+			panic('${what} a [telemetry] frame id on bus "${bus}"')
+		}
+		if m.trace.on && fn_trace_bus == bus && (id == m.trace.cmd_id || id == m.trace.rsp_id
+			|| id == m.trace.record_id || (m.trace.dump_fc_bound && id == m.trace.dump_fc_id)) {
+			panic('${what} a [trace] endpoint id on bus "${bus}"')
+		}
+		if m.nm.on && nm_bus == bus && ((id >= m.nm.peers_lo && id <= m.nm.peers_hi) || id == m.nm.alive_id) {
+			panic('${what} in the [nm] peer range / alive id on bus "${bus}"')
+		}
+		if m.shell.on && !shell_on_eth(m) && shell_bus == bus
+			&& (id == m.shell.in_id || id == m.shell.fc_id || id == m.shell.out_id) {
+			panic('${what} a [shell] endpoint id on bus "${bus}"')
+		}
+	}
 }

@@ -138,6 +138,13 @@ static inline int doip_mb_push_sent_take(doip_mb_t *m, uint32_t state, uint32_t 
 	return 1;
 }
 
+/* server thread: 1 while a dropped connection has not been taken yet (doip_mb_dropped_take) — a
+ * gateway's router judges no routed request meanwhile: the unlock it reads is still the dropped
+ * tester's until the server has heard of the drop (REQ-NET-020) */
+static inline int doip_mb_drop_pending(const doip_mb_t *m) {
+	return m->drops != m->drops_seen;
+}
+
 /* server thread: 1 once a connection has dropped that the request it served last came over — a
  * drop before that request was posted belongs to a tester whose state is already superseded */
 static inline int doip_mb_dropped_take(doip_mb_t *m) {

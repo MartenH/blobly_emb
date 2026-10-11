@@ -22,6 +22,11 @@ import comm.uds
 // The UDS server answering is either the embedded one or, when `serve.answer` is
 // set, one the owner keeps elsewhere — a node with ONE diagnostic server reachable
 // over both ISO-TP and DoIP (docs/diagnostics.md) hands DoIP a hook to it.
+//
+// A gateway (REQ-NET-019) also serves the logical addresses of nodes BEHIND it (`routes`): a
+// diagnostic message to one is handed to `serve.route` (comm/diagroute on the thread that owns the
+// buses), acknowledged from the routed node's address, and its answers come back later, one at a
+// time, as routed_message frames them — the request is not answered within feed.
 
 pub const header_len = 8
 
@@ -48,6 +53,9 @@ pub const max_resp = header_len + 5 + header_len + 4 + max_uds
 // 13400-2's functional group range starts here)
 pub const default_functional_addr = u16(0xE400)
 
+// the most logical addresses a gateway routes to (Server.routes)
+pub const max_routes = 8
+
 // Serve is a UDS server DoIP does not own. `answer` handles one request and
 // writes at most resp_cap bytes to resp, returning the response length (0 = no
 // response). It runs on the caller of feed: a server another thread also drives
@@ -56,6 +64,10 @@ pub struct Serve {
 pub mut:
 	ctx    voidptr
 	answer fn (ctx voidptr, req &u8, req_len int, functional bool, resp &u8, resp_cap int) int = unsafe { nil }
+	// route forwards a request to the node behind the gateway at Server.routes[idx], for the
+	// tester on connection `conn`, numbered `ticket` (its answers carry it back): 0 = forwarded,
+	// else the diagnostic-message NACK code to answer with. nil = a node that routes nothing.
+	route fn (ctx voidptr, idx int, req &u8, req_len int, conn u32, ticket u32) int = unsafe { nil }
 }
 
 const proto_ver = u8(0x02) // ISO 13400-2:2012
@@ -91,7 +103,9 @@ const ra_source_differs = u8(0x02) // this socket is already registered to anoth
 const ra_unsupported_type = u8(0x06) // an activation type this entity does not serve
 const ra_ok = u8(0x10)
 
-// entity status: node type "DoIP node" (not a gateway); power mode "ready"
+// entity status: node type "DoIP gateway" (it routes to nodes behind it) or "DoIP node"; power
+// mode "ready"
+const node_type_gateway = u8(0x00)
 const node_type_node = u8(0x01)
 const power_ready = u8(0x01)
 
@@ -101,9 +115,11 @@ const power_ready = u8(0x01)
 pub const max_data_size = max_msg - header_len
 
 // diagnostic-message NACK codes
-const dnack_invalid_source = u8(0x02)
-const dnack_unknown_target = u8(0x03)
-const dnack_transport_error = u8(0x08)
+pub const dnack_invalid_source = u8(0x02)
+pub const dnack_unknown_target = u8(0x03)
+pub const dnack_out_of_memory = u8(0x05) // a gateway still sending the previous routed request
+pub const dnack_unreachable = u8(0x06) // a routed target the tester may not reach (REQ-NET-020)
+pub const dnack_transport_error = u8(0x08)
 
 pub struct Server {
 pub mut:
@@ -129,6 +145,16 @@ pub mut:
 	// assembly buffer: TCP chunks accumulate here until a message completes
 	buf     [max_msg]u8
 	buf_len int
+	// a gateway's routes (REQ-NET-019): the logical addresses of the nodes behind it, set at boot
+	routes   [max_routes]u16
+	n_routes int
+	// the tester connection: a number the transport moves on with every connection (end), so a
+	// router's grant and answers belong to the connection they were made on
+	conn u32
+	// the latest routed request's number, and whether an answer to it is still to come (the
+	// transport then polls for it at its fastest)
+	ticket     u32
+	route_open bool
 }
 
 fn put_header(resp &u8, at int, ptype u16, plen u32) int {
@@ -161,6 +187,37 @@ fn nack_if_room(resp &u8, at int, code u8, resp_max int) int {
 		return at
 	}
 	return gen_nack(resp, at, code)
+}
+
+// routed_message frames an answer of a node behind the gateway (`from`, its logical address) to
+// the activated tester: a diagnostic message, `n` UDS bytes. Returns its length; out holds
+// header_len + 4 + n bytes. An answer that is not responsePending is the request's last: no
+// further one is expected (route_open).
+pub fn (mut s Server) routed_message(from u16, uds_resp &u8, n int, out &u8) int {
+	o := put_header(out, 0, pt_diag, u32(4 + n))
+	unsafe {
+		out[o] = u8(from >> 8)
+		out[o + 1] = u8(from)
+		out[o + 2] = u8(s.tester_addr >> 8)
+		out[o + 3] = u8(s.tester_addr)
+		for i in 0 .. n {
+			out[o + 4 + i] = uds_resp[i]
+		}
+		if !(n >= 3 && uds_resp[0] == 0x7F && uds_resp[2] == 0x78) {
+			s.route_open = false
+		}
+	}
+	return o + 4 + n
+}
+
+// route_index: the route to logical address `ta`, or -1.
+pub fn (s &Server) route_index(ta u16) int {
+	for i in 0 .. s.n_routes {
+		if s.routes[i] == ta {
+			return i
+		}
+	}
+	return -1
 }
 
 // response_message frames a further response to the activated tester — one its server sends after
@@ -410,7 +467,7 @@ fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
 			}
 			functional := ta == func_addr
 			if ta != s.entity_addr && !functional {
-				return s.diag_nack(resp, at, sa, dnack_unknown_target)
+				return s.route(ta, plen, resp, at, sa)
 			}
 			// the server writes its response straight to where it is framed,
 			// within the room feed reserved; the ack and header go in front after
@@ -454,6 +511,35 @@ fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
 			return gen_nack(resp, at, nack_unknown_type)
 		}
 	}
+}
+
+// route hands a diagnostic message for a node behind the gateway to the router: acknowledged from
+// that node's address when forwarded (its answers follow, routed_message), NACKed from it when not.
+// A target that is not routed is unknown, as on a plain node.
+fn (mut s Server) route(ta u16, plen int, resp &u8, at int, sa u16) int {
+	idx := s.route_index(ta)
+	if idx < 0 || s.serve.route == unsafe { nil } {
+		return s.diag_nack(resp, at, sa, dnack_unknown_target)
+	}
+	// the request's ticket — the latest only once forwarded: a refused one leaves the request in
+	// flight its own, so its answers still go out
+	ticket := s.ticket + 1
+	code := s.serve.route(s.serve.ctx, idx, unsafe { &s.buf[header_len + 4] }, plen - 4, s.conn,
+		ticket)
+	if code != 0 {
+		return s.diag_nack_from(resp, at, ta, sa, u8(code))
+	}
+	s.ticket = ticket
+	s.route_open = true
+	o := put_header(resp, at, pt_diag_ack, 5)
+	unsafe {
+		resp[o] = u8(ta >> 8)
+		resp[o + 1] = u8(ta)
+		resp[o + 2] = u8(sa >> 8)
+		resp[o + 3] = u8(sa)
+		resp[o + 4] = 0x00 // ack
+	}
+	return o + 5
 }
 
 // activation_code: the routing activation handler's answer for one request on this socket, in
@@ -516,7 +602,7 @@ fn (s &Server) info_response(ptype u16, open int, resp &u8, at int) int {
 			// node type, max concurrent TCP_DATA sockets, currently open ones, max data size
 			o := put_header(resp, at, pt_status_resp, 7)
 			unsafe {
-				resp[o] = node_type_node
+				resp[o] = if s.n_routes > 0 { node_type_gateway } else { node_type_node }
 				resp[o + 1] = u8(max_sockets)
 				resp[o + 2] = u8(open)
 				resp[o + 3] = u8(u32(max_data_size) >> 24)
@@ -545,10 +631,16 @@ fn (mut s Server) bad_length(resp &u8, at int) int {
 }
 
 fn (mut s Server) diag_nack(resp &u8, at int, sa u16, code u8) int {
+	return s.diag_nack_from(resp, at, s.entity_addr, sa, code)
+}
+
+// diag_nack_from: a diagnostic-message NACK from `from` — this entity, or the routed node the
+// message was for
+fn (mut s Server) diag_nack_from(resp &u8, at int, from u16, sa u16, code u8) int {
 	o := put_header(resp, at, pt_diag_nack, 5)
 	unsafe {
-		resp[o] = u8(s.entity_addr >> 8)
-		resp[o + 1] = u8(s.entity_addr)
+		resp[o] = u8(from >> 8)
+		resp[o + 1] = u8(from)
 		resp[o + 2] = u8(sa >> 8)
 		resp[o + 3] = u8(sa)
 		resp[o + 4] = code

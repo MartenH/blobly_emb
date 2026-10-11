@@ -41,6 +41,11 @@ pub const announce_interval_min_ms = 10
 pub const announce_interval_max_ms = 10000
 pub const announce_total_max_ms = 10000
 
+// route_level: the gateway's own security level a network tester must have unlocked before the
+// gateway routes its diagnostic messages to the nodes behind it (REQ-NET-020) — one of the levels
+// its server serves (1..uds.max_security_level)
+pub const route_level = 1
+
 // tester_address_ok: a source address a tester may use (the range a `testers` entry must lie in)
 pub fn tester_address_ok(a i64) bool {
 	return a >= tester_first && a <= tester_last

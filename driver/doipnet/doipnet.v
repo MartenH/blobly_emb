@@ -1,5 +1,6 @@
 module doipnet
 
+import comm.diagroute
 import comm.doip
 
 // The DoIP entity's network loop: the vehicle announcements, then one tester connection at a
@@ -66,10 +67,40 @@ pub fn push[S](mut st S, mut s doip.Server, resp &u8, n int, out &u8) bool {
 	return true
 }
 
-// end resets the framing state for the next connection, which starts unactivated.
+// routed sends an answer of a node behind the gateway (`from`) to the request numbered `ticket`:
+// only to the latest routed request, and only while its tester is still connected — an answer that
+// came after the tester gave up, or after its connection ended, is no one's.
+pub fn routed[S](mut st S, mut s doip.Server, from u16, ticket u32, ans &u8, n int, out &u8) bool {
+	if !s.activated || ticket != s.ticket || n <= 0 {
+		return false
+	}
+	if st.send(out, s.routed_message(from, ans, n, out)) < 0 {
+		end(mut st, mut s) // the C side recycled the connection
+		return false
+	}
+	return true
+}
+
+// verdict_code: the diagnostic-message NACK code for the router's verdict (0 = forwarded)
+pub fn verdict_code(v diagroute.Verdict) int {
+	return match v {
+		.accepted { 0 }
+		.unknown_target { int(doip.dnack_unknown_target) }
+		.locked { int(doip.dnack_unreachable) }
+		.busy { int(doip.dnack_out_of_memory) }
+		.refused { int(doip.dnack_transport_error) }
+	}
+}
+
+// end resets the framing state for the next connection, which starts unactivated — and under a new
+// connection number: a router's grant, and answers to requests of the connection that ended, do
+// not carry over.
 pub fn end[S](mut st S, mut s doip.Server) {
 	s.activated = false
 	s.fatal = false
 	s.buf_len = 0
+	s.conn++
+	s.ticket++ // an answer still due belongs to the tester that went: no ticket of it matches now
+	s.route_open = false
 	st.activated(false)
 }

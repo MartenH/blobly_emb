@@ -48,6 +48,7 @@ static volatile UINT sockets_up;
 volatile ULONG doip_rx_bytes;
 volatile ULONG doip_tx_bytes;
 volatile ULONG doip_mb_timeouts;
+volatile ULONG doip_rt_timeouts; /* routed requests the comm thread did not take in time */
 volatile ULONG doip_setup_failed; /* the sockets could not be made: DoIP is down */
 volatile ULONG doip_arp_gleaned;  /* requesters whose MAC was taken from their request (#368) */
 
@@ -178,6 +179,14 @@ int doip_mb_take_push_sent(void) {
 	return doip_mb_push_sent_take(&mb, state, unacked);
 }
 
+/* comm thread: 1 while a dropped connection is not yet taken (a gateway's router waits for it) */
+int doip_mb_drop_is_pending(void) {
+	tx_mutex_get(&mb_mutex, TX_WAIT_FOREVER);
+	int r = doip_mb_drop_pending(&mb);
+	tx_mutex_put(&mb_mutex);
+	return r;
+}
+
 /* comm thread: 1 once a connection has dropped that the request it served last came over */
 int doip_mb_take_dropped(void) {
 	tx_mutex_get(&mb_mutex, TX_WAIT_FOREVER); /* it may discard a push the doip thread is taking */
@@ -227,6 +236,155 @@ int doip_mb_push_get(unsigned char *resp, int cap) {
 	return n;
 }
 
+/* ---- the route channel (a gateway, REQ-NET-019) --------------------------------------------- *
+ * A diagnostic message for a node behind the gateway goes to the comm thread's router
+ * (comm/diagroute), which forwards it on that node's bus and answers here at once whether it did;
+ * the node's answers come back later, one at a time, through the answer slot. Its own mutex and
+ * sequence (the mailbox's post / take / serve / withdraw / collect rules, doip_mb.h, on a second
+ * state): a routed request never stands in for the answer a pending reset waits on. */
+
+static TX_MUTEX rt_mutex;
+static TX_SEMAPHORE rt_done;
+static doip_mb_t rt;
+static unsigned char *rt_req; /* the generated global, sized by the V constants; NULL = no routes */
+static int rt_req_len;
+static int rt_idx;
+static uint32_t rt_conn;
+static uint32_t rt_ticket;
+static int rt_code;
+/* the answer slot: one answer of a routed node on its way to the doip thread (len -1 = empty) */
+static unsigned char *rt_ans;
+static int rt_ans_len = -1;
+static uint16_t rt_ans_from;
+static uint32_t rt_ans_ticket;
+/* connections ended (stream_recycle), and the router's last reading: the comm thread cancels the
+ * exchange of a tester that went — its answers must not wait for nobody (the doip thread may sit in
+ * the next accept for as long as no tester comes) */
+static volatile uint32_t rt_ends;
+static uint32_t rt_ends_seen;
+
+void doip_rt_init(unsigned char *req_buf, unsigned char *ans_buf) {
+	rt_req = req_buf;
+	rt_ans = ans_buf;
+	tx_mutex_create(&rt_mutex, "doip-rt", TX_INHERIT);
+	tx_semaphore_create(&rt_done, "doip-rt-done", 0);
+}
+
+/* doip thread: hand a routed request to the router and wait for its verdict (0 = forwarded, else
+ * the NACK code); -1 when the comm thread did not take it in time (withdrawn, never forwarded). */
+int doip_rt_call(int idx, const unsigned char *req, int len, uint32_t conn, uint32_t ticket) {
+	if (rt_req == NX_NULL) {
+		return -1;
+	}
+	tx_mutex_get(&rt_mutex, TX_WAIT_FOREVER);
+	for (int i = 0; i < len; i++) {
+		rt_req[i] = req[i];
+	}
+	rt_req_len = len;
+	rt_idx = idx;
+	rt_conn = conn;
+	rt_ticket = ticket;
+	uint32_t seq = doip_mb_post(&rt);
+	tx_mutex_put(&rt_mutex);
+	comm_wake();
+	ULONG deadline = tx_time_get() + MS_TICKS(MB_TIMEOUT_MS);
+	for (;;) {
+		ULONG left = deadline - tx_time_get();
+		UINT got = (left == 0u || left > MS_TICKS(MB_TIMEOUT_MS))
+			? TX_NO_INSTANCE : tx_semaphore_get(&rt_done, left);
+		tx_mutex_get(&rt_mutex, TX_WAIT_FOREVER);
+		if (doip_mb_collect(&rt, seq)) {
+			int code = rt_code;
+			tx_mutex_put(&rt_mutex);
+			return code;
+		}
+		if (got != TX_SUCCESS) {
+			doip_mb_withdraw(&rt, seq); /* the router never saw it: settled, not forwarded */
+			tx_mutex_put(&rt_mutex);
+			doip_rt_timeouts++;
+			return -1;
+		}
+		tx_mutex_put(&rt_mutex); /* a stale put from an earlier verdict: wait on */
+	}
+}
+
+/* comm thread: a routed request waiting (copied to the request buffer), with the channel HELD until
+ * doip_rt_answer; its length, or -1 = none waiting (or the doip thread is mid-copy: next pass). */
+int doip_rt_take(int *idx, uint32_t *conn, uint32_t *ticket) {
+	if (rt_req == NX_NULL || tx_mutex_get(&rt_mutex, TX_NO_WAIT) != TX_SUCCESS) {
+		return -1;
+	}
+	if (!doip_mb_waiting(&rt)) {
+		tx_mutex_put(&rt_mutex);
+		return -1;
+	}
+	*idx = rt_idx;
+	*conn = rt_conn;
+	*ticket = rt_ticket;
+	return rt_req_len;
+}
+
+/* comm thread: the router's verdict on the request doip_rt_take returned. Releases the channel. */
+void doip_rt_answer(int code) {
+	rt_code = code;
+	doip_mb_serve(&rt);
+	tx_mutex_put(&rt_mutex);
+	tx_semaphore_put(&rt_done);
+}
+
+/* comm thread: an answer of routed node `from` to request `ticket` into the slot; 0 = the slot is
+ * still full (try again next pass) */
+int doip_rt_put(uint16_t from, uint32_t ticket, const unsigned char *data, int n) {
+	if (rt_ans == NX_NULL || n < 0) {
+		return 0;
+	}
+	tx_mutex_get(&rt_mutex, TX_WAIT_FOREVER);
+	if (rt_ans_len >= 0) {
+		tx_mutex_put(&rt_mutex);
+		return 0;
+	}
+	for (int i = 0; i < n; i++) {
+		rt_ans[i] = data[i];
+	}
+	rt_ans_from = from;
+	rt_ans_ticket = ticket;
+	rt_ans_len = n;
+	tx_mutex_put(&rt_mutex);
+	return 1;
+}
+
+/* doip thread: the answer in the slot, emptying it — its length (the bytes stay in the answer
+ * buffer until the next put, which the empty slot now allows only after this thread sent them:
+ * the doip thread frames them before it takes again), or -1 = none */
+int doip_rt_get(uint16_t *from, uint32_t *ticket) {
+	int n = -1;
+	tx_mutex_get(&rt_mutex, TX_WAIT_FOREVER);
+	if (rt_ans_len >= 0) {
+		n = rt_ans_len;
+		*from = rt_ans_from;
+		*ticket = rt_ans_ticket;
+	}
+	tx_mutex_put(&rt_mutex);
+	return n;
+}
+
+/* comm thread: 1 once a connection has ended since it last asked (reported once) */
+int doip_rt_take_ended(void) {
+	uint32_t e = rt_ends;
+	if (e == rt_ends_seen) {
+		return 0;
+	}
+	rt_ends_seen = e;
+	return 1;
+}
+
+/* doip thread: the answer it got has been framed and sent (or dropped): the slot is free */
+void doip_rt_done(void) {
+	tx_mutex_get(&rt_mutex, TX_WAIT_FOREVER);
+	rt_ans_len = -1;
+	tx_mutex_put(&rt_mutex);
+}
+
 /* ---- the TCP byte pipe -------------------------------------------------------------------- */
 
 static NX_PACKET *rx_pending; /* partially consumed receive (packet > caller's buf) */
@@ -263,6 +421,7 @@ static int stream_recycle(void) {
 	tx_mutex_get(&mb_mutex, TX_WAIT_FOREVER); /* the push slot is the server thread's too */
 	doip_mb_drop(&mb);
 	tx_mutex_put(&mb_mutex);
+	rt_ends = rt_ends + 1u; /* a gateway's router cancels the exchange of the tester that went */
 	comm_wake();
 	return -1;
 }
