@@ -284,11 +284,11 @@ fn trace_rx_arms(m Model, part string) []string {
 	g << '\t\t\t\t\ttr_n := C.trace_snapshot(&g_${part}_trace[0], ${m.trace.buffer_records})'
 	g << '\t\t\t\t\tg_tm.load_snapshot(&g_${part}_trace[0][0], tr_n)'
 	g << '\t\t\t\t}'
-	g << '\t\t\t\tg_tm.on_cmd(rx)'
+	g << '\t\t\t\tg_tm.on_cmd(*rx)'
 	g << '\t\t\t}'
 	if m.trace.dump_fc_bound {
 		g << '\t\t\tif rx.id == u32(0x${m.trace.dump_fc_id.hex()}) && !rx.ext { // trace.dump_fc -> ISO-TP FC'
-		g << '\t\t\t\tg_tm.on_dump_fc(C.board_now_us(), rx)'
+		g << '\t\t\t\tg_tm.on_dump_fc(C.board_now_us(), *rx)'
 		g << '\t\t\t}'
 	}
 	return g
@@ -359,7 +359,7 @@ fn emit_run_trace_host(m Model, all_regs map[string][]string, telem_iface string
 	// instead let the label, the manifest and the actual execution core disagree (codex #282 r2).
 	g << '\tosal.pin_to_core(${single_trace_core(m)})'
 	g << '\tmut ch := chp'
-	g << '\tmut st := Partition_${part}_state{}'
+	g << '\tmut st := &Partition_${part}_state{} // the scheduler keeps this address: one allocation'
 	g << '\tmut sched := loom.Scheduler{}'
 	for r in all_regs[part] or { []string{} } {
 		g << r
@@ -791,7 +791,7 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << '// touches the bus. The owner reads that ring only while it is frozen.'
 	g << 'pub fn partition_${sat}(cap_ptr &trace.Capture) {'
 	g << '	osal.pin_to_core(${sat_core})'
-	g << '	mut st := Partition_${sat}_state{}'
+	g << '	mut st := &Partition_${sat}_state{} // the scheduler keeps this address: one allocation'
 	g << '	mut sched := loom.Scheduler{}'
 	for r in all_regs[sat] or { []string{} } {
 		g << r
@@ -816,7 +816,7 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << '	osal.pin_to_core(${owner_core})'
 	g << '	mut ch := chp'
 	g << '	mut sat := unsafe { sat_buf }'
-	g << '	mut st := Partition_${owner}_state{}'
+	g << '	mut st := &Partition_${owner}_state{} // the scheduler keeps this address: one allocation'
 	g << '	mut sched := loom.Scheduler{}'
 	for r in all_regs[owner] or { []string{} } {
 		g << r
@@ -1048,7 +1048,7 @@ fn validate_trace_bridge_owner(m Model, tctx TraceHostCtx) {
 // the satellite's ring + import staging, the shared capture origin and the freeze cell. Appended
 // to the bridge's own COM signature, so run() hands it both buses.
 fn trace_bridge_params() string {
-	return ', trace_ch can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record, origin_us u64, freeze &trace.FreezeSync'
+	return ', trace_chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record, origin_us u64, freeze &trace.FreezeSync'
 }
 
 // trace_bridge_preamble: the owner's ring, module and capture, built once before its loop.

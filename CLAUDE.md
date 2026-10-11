@@ -239,17 +239,36 @@ holds its persisted fault memory and its `SteerLimit` parameter: `make flash` ne
 and coded parameters survive a reflash — clear DTCs with 0x14, recode a parameter with 0x2E
 (`test/param_zone_a.lua` leaves it at 360).
 
-**CI pins the V compiler** to the release tag in `.v-version` (currently `0.5.2`), installed as the
-**prebuilt** `v_linux.zip` release asset in both jobs. It used to install master HEAD, so an upstream
-V commit that does not compile stopped every merge here — that happened on 2026-09-08 (`unknown
-module builder`), failing both jobs in the *install* step with nothing to do with the PR under test.
-Note `vlang/setup-v` does not solve this on its own: given a tag or SHA it downloads the SOURCE and
-self-hosts it, and that build is what breaks (0.5.2 from source dies on a duplicate `C.open`; master
-`8631b280` on an empty `builder error:`). The release asset is already built. Bump `.v-version`
-deliberately, and re-run the full local gate on the new compiler — the host suite AND the 16 cross
-images, since the bare-metal path is the one that historically needed a specific V (#27564).
-Your local V does **not** have to match the pin (working against master is often deliberate), but it
-usually explains a local/CI disagreement — `make v-pin` prints both and says whether they differ.
+**CI pins the V compiler, and it is V3**: the commit in `.v-version`, built from source with the
+vlang/vc bootstrap pinned in `.vc-version` — the SAME pair as blobly_net, so one `~/v` builds both
+repos (`.github/actions/setup-v`, `scripts/v_toolchain.sh`, both from blobly_net, tested by
+`scripts/v_toolchain_test.sh`). CI sets `V_MACOS_V3_NO_FALLBACK=1`: without it a program V3 cannot
+build is silently rebuilt by a downloaded V1 compiler. Source builds broke before (2026-09-08,
+master's own `unknown module builder`) because `make` cloned vc's default branch; with the
+bootstrap pinned and `make local=1` nothing moves under it. Bump both pins together, and re-run the
+full local gate on the new compiler — the host suite AND the 16 cross images. Your local V does
+**not** have to match the pin, but it usually explains a local/CI disagreement — `make v-pin`
+compares the commit.
+
+**What V3 needs from a bare-metal image** (each pinned by a test or a gate):
+- every freestanding transpile passes **`-arch arm32`** — V3 sizes `int` by the target it writes C
+  for, the 64-bit host's without it — and **`-target-libc-headers`**, or any `#include "x.h"` pulls
+  V3's hosted preamble (`dlfcn.h`, `pthread.h`) that newlib does not have
+  (`tools/loom2v/no_v_run_makefiles_test.v`);
+- the image enters at **`blob_entry`**, exported from its `main.v` (`@[export: 'blob_entry'] fn
+  entry()`): V3 emits no `main__main` and wraps `fn main` in a hosted C main (a `VEXE` setenv,
+  `_vinit`), which `crt0.S` must not call;
+- **`osal/vrt`** supplies the hooks V3's freestanding builtin declares and nobody defines
+  (`bare_print`/`bare_eprint`/`bare_panic`/`bare_backtrace`/`__malloc`, and a nil `malloc` family
+  so newlib's heap is never linked); each `main.v` imports it as `import osal.vrt as _`;
+  `boards/common/board.h` defines `_Thread_local` away (no thread pointer on target);
+- **no allocation is reachable** (`scripts/check_no_heap.sh`, every ELF in the cross job): V3 moves
+  a local to the heap when its address reaches a call it cannot see through, and copies a fixed
+  array into a dynamic one for `.any()`. Thread-lifetime state the scheduler or a callback keeps a
+  pointer to lives in bss (`g_st_<owner>`, `g_sched_<owner>`, `g_comm_rx`), and
+  `can.Channel.recv` copies out of its own locals, never handing C an address into the caller's
+  frame. `-warn-about-allocs` on a transpile names each local V3 moved;
+- a C struct V declares (`struct C.bulk_t`) has a TAG in its header: V3 emits `typedef struct x x;`.
 
 **Not gated — verify these yourself:**
 

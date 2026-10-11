@@ -40,11 +40,11 @@ fn handler_app_slow_work_on_20ms(ctx voidptr) {
 pub fn run(chp can.Channel) {
 	osal.pin_to_core(0)
 	mut ch := chp
-	mut st := Partition_app_state{}
+	mut st := &Partition_app_state{} // the scheduler keeps this address: one allocation
 	mut sched := loom.Scheduler{}
-	sched.every(5000, handler_app_fast_work_on_5ms, &st)
-	sched.every(10000, handler_app_med_work_on_10ms, &st)
-	sched.every(20000, handler_app_slow_work_on_20ms, &st)
+	sched.every(5000, handler_app_fast_work_on_5ms, st)
+	sched.every(10000, handler_app_med_work_on_10ms, st)
+	sched.every(20000, handler_app_slow_work_on_20ms, st)
 	// trace: the ring + module (comm/trace) — the platform serves the protocol, this loop
 	// only feeds it: fb_hook records each dispatched handler, on_cmd applies routed commands,
 	// produce yields the response + dump stream.

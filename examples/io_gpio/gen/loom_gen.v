@@ -23,11 +23,11 @@ fn handler_app_button_lamp_on_10ms(ctx voidptr) {
 	osal.ioc_publish(led_green_ch, &outp.led_green, u8(sizeof(outp.led_green)))
 }
 
-pub fn partition_app(core int, arg voidptr) {
+pub fn partition_app(core i32, arg voidptr) {
 	osal.pin_to_core(0)
-	mut st := Partition_app_state{}
+	mut st := &Partition_app_state{} // the scheduler keeps this address: one allocation, for the loop's life
 	mut sched := loom.Scheduler{}
-	sched.every(10000, handler_app_button_lamp_on_10ms, &st)
+	sched.every(10000, handler_app_button_lamp_on_10ms, st)
 	for {
 		loom_t0 := osal.now_us()
 		sched.run(loom_t0)
@@ -92,7 +92,7 @@ pub fn run() {
 	if !io.cfg(1, 'LedGreen', 'PB0', true, 1, 0, 0, u32(0)) {
 		panic('io cfg failed: LedGreen')
 	}
-	if !io.init() {
+	if !io.start() {
 		panic('io init failed')
 	}
 	if boot_user_button_v := io.gpio_read_checked(0) {

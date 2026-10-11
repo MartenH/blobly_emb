@@ -75,15 +75,18 @@ __global (
 	g_m4_app_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned
 	g_m4_app_stack [4096]u8
 	g_sched_m4_app loom.Scheduler // bss, never an entry-frame local
+	g_st_m4_app Thread_m4_app_state // bss; its field defaults are set at thread entry
 	g_m4_stress_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned
 	g_m4_stress_stack [4096]u8
 	g_sched_m4_stress loom.Scheduler // bss, never an entry-frame local
+	g_st_m4_stress Thread_m4_stress_state // bss; its field defaults are set at thread entry
 )
 
 fn run_m4_app() {
-	mut st := Thread_m4_app_state{} // small + carries the FB field defaults: stack is right
+	g_st_m4_app = Thread_m4_app_state{} // the FB field defaults, at entry: bss is all zero
+	mut st := &g_st_m4_app
 	mut sched := &g_sched_m4_app // module-sized: lives in bss, not this lifetime frame
-	sched.every(10000, handler_m4_m4_load_on_10ms, &st)
+	sched.every(10000, handler_m4_m4_load_on_10ms, st)
 	tick_us := u64(1000)
 	sched.set_trace_hook(trace_fb_hook_m4_app, unsafe { nil })
 	for {
@@ -104,9 +107,10 @@ fn run_m4_app() {
 }
 
 fn run_m4_stress() {
-	mut st := Thread_m4_stress_state{} // small + carries the FB field defaults: stack is right
+	g_st_m4_stress = Thread_m4_stress_state{} // the FB field defaults, at entry: bss is all zero
+	mut st := &g_st_m4_stress
 	mut sched := &g_sched_m4_stress // module-sized: lives in bss, not this lifetime frame
-	sched.every(2000, handler_m4_m4_churn_on_2ms, &st)
+	sched.every(2000, handler_m4_m4_churn_on_2ms, st)
 	tick_us := u64(1000)
 	sched.set_trace_hook(trace_fb_hook_m4_stress, unsafe { nil })
 	for {

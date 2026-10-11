@@ -1145,6 +1145,10 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			psig += trace_bridge_params()
 		}
 		glue << 'pub fn partition_${bb}(${psig}) {'
+		if owns_trace {
+			// a mutable copy: recv/send take `mut`, and V3 refuses them on a value parameter
+			glue << '\tmut trace_ch := trace_chp'
+		}
 		glue << '\tosal.pin_to_core(${m.bus_core[bname] or { 0 }})'
 		glue << '\tmut st := Bridge_${bb}_state{'
 		glue << '\t\tchan: ch'

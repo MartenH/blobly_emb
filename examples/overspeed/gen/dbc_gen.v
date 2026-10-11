@@ -116,7 +116,7 @@ pub fn powertrain_coolant_temp_set_raw(mut data [64]u8, raw u64) {
 	}
 }
 pub fn powertrain_coolant_temp_set(mut data [64]u8, phys f64) bool {
-	raw_x := (phys - -40.0) / 1.0
+	raw_x := (phys - (-40.0)) / 1.0
 	raw, saturated := com.encode_raw(raw_x, 0.0, 255.0, u64(0), u64(255), u64(0), u64(0xff))
 	powertrain_coolant_temp_set_raw(mut data, raw)
 	return saturated
@@ -748,7 +748,7 @@ pub fn body_status_interior_temp_set_raw(mut data [64]u8, raw u64) {
 	}
 }
 pub fn body_status_interior_temp_set(mut data [64]u8, phys f64) bool {
-	raw_x := (phys - -40.0) / 0.5
+	raw_x := (phys - (-40.0)) / 0.5
 	raw, saturated := com.encode_raw(raw_x, 0.0, 255.0, u64(0), u64(255), u64(0), u64(0xff))
 	body_status_interior_temp_set_raw(mut data, raw)
 	return saturated
@@ -1380,7 +1380,7 @@ pub fn battery_status_pack_temp_set_raw(mut data [64]u8, raw u64) {
 	}
 }
 pub fn battery_status_pack_temp_set(mut data [64]u8, phys f64) bool {
-	raw_x := (phys - -40.0) / 1.0
+	raw_x := (phys - (-40.0)) / 1.0
 	raw, saturated := com.encode_raw(raw_x, 0.0, 255.0, u64(0), u64(255), u64(0), u64(0xff))
 	battery_status_pack_temp_set_raw(mut data, raw)
 	return saturated

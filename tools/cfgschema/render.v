@@ -181,7 +181,9 @@ fn (s Schema) object_body(t Table, mut b strings.Builder, ind string) {
 		b.write_string('${ind}  ${jstr(key.name)}: ${key_json(key)}')
 	}
 	b.write_string('\n${ind}}')
-	reqd := t.keys.filter(it.required).map(jstr(it.name))
+	// `== true`: Key also has a `required()` builder method, and V3 reads a bare `it.required`
+	// in a filter as that method (vlang/v: the generated C names an undeclared `it`)
+	reqd := t.keys.filter(it.required == true).map(jstr(it.name))
 	if reqd.len > 0 {
 		b.write_string(',\n${ind}"required": [${reqd.join(', ')}]')
 	}

@@ -53,10 +53,10 @@ fn handler_ctrl_slow_ctrl_on_20ms(ctx voidptr) {
 // touches the bus. The owner reads that ring only while it is frozen.
 pub fn partition_ctrl(cap_ptr &trace.Capture) {
 	osal.pin_to_core(1)
-	mut st := Partition_ctrl_state{}
+	mut st := &Partition_ctrl_state{} // the scheduler keeps this address: one allocation
 	mut sched := loom.Scheduler{}
-	sched.every(10000, handler_ctrl_ctrl_work_on_10ms, &st)
-	sched.every(20000, handler_ctrl_slow_ctrl_on_20ms, &st)
+	sched.every(10000, handler_ctrl_ctrl_work_on_10ms, st)
+	sched.every(20000, handler_ctrl_slow_ctrl_on_20ms, st)
 	sched.set_trace_hook(trace.fb_hook, voidptr(cap_ptr))
 	for {
 		sched.run_profiled(osal.now_us)
@@ -75,10 +75,10 @@ pub fn partition_sense(chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &
 	osal.pin_to_core(0)
 	mut ch := chp
 	mut sat := unsafe { sat_buf }
-	mut st := Partition_sense_state{}
+	mut st := &Partition_sense_state{} // the scheduler keeps this address: one allocation
 	mut sched := loom.Scheduler{}
-	sched.every(5000, handler_sense_fast_sense_on_5ms, &st)
-	sched.every(10000, handler_sense_med_sense_on_10ms, &st)
+	sched.every(5000, handler_sense_fast_sense_on_5ms, st)
+	sched.every(10000, handler_sense_med_sense_on_10ms, st)
 	mut ring := [64]trace.Record{}
 	mut tm := trace.new_module(u32(0x7e3), u32(0x7e5), 0, true,
 		trace.new_buffer(&ring[0], 64, .ring, 50))

@@ -24,11 +24,11 @@ fn handler_app_speed_work_on_10ms(ctx voidptr) {
 	st.speed_work.on_10ms(inp, mut outp)
 }
 
-pub fn partition_app(core int, arg voidptr) {
+pub fn partition_app(core i32, arg voidptr) {
 	osal.pin_to_core(1)
-	mut st := Partition_app_state{}
+	mut st := &Partition_app_state{} // the scheduler keeps this address: one allocation, for the loop's life
 	mut sched := loom.Scheduler{}
-	sched.every(10000, handler_app_speed_work_on_10ms, &st)
+	sched.every(10000, handler_app_speed_work_on_10ms, st)
 	sched.set_trace_hook(trace.fb_hook, arg)
 	for {
 		sched.run_profiled(osal.now_us)
@@ -67,7 +67,8 @@ fn io_can0_10ms(ctx voidptr) {
 	}
 }
 
-pub fn partition_can0(ch can.Channel, trace_ch can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record, origin_us u64, freeze &trace.FreezeSync) {
+pub fn partition_can0(ch can.Channel, trace_chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record, origin_us u64, freeze &trace.FreezeSync) {
+	mut trace_ch := trace_chp
 	osal.pin_to_core(0)
 	mut st := Bridge_can0_state{
 		chan: ch

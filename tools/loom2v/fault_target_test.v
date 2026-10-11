@@ -117,7 +117,7 @@ fn test_the_comm_thread_owns_the_fault_memory_and_nm_moves_its_cycle() {
 	])
 	assert !glue.contains('fault_rep_load_slow_ch'), 'a target FB published through osal'
 	// the debouncer is configured when the FB thread starts
-	in_order(glue, ['pub fn run() {', 'mut st := Partition_app_state{}', 'st.fdeb_load_slow[0] = fault.Debounce{',
+	in_order(glue, ['pub fn run() {', 'g_st_app = Partition_app_state{}', 'mut st := &g_st_app', 'st.fdeb_load_slow[0] = fault.Debounce{',
 		'fail_thr: 3', 'for {'])
 	// the comm thread: the memory in bss, configured after the connection, consumed at the pass
 	// top (before the drain serves a request), its cycle moved by NM after the NM tick

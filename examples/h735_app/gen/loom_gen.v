@@ -53,13 +53,19 @@ fn trace_clock() u64 {
 	return C.board_now_us()
 }
 
+__global (
+	g_st_app    Partition_app_state // bss; its field defaults are set at run() entry
+	g_sched_app loom.Scheduler // bss-zero == Scheduler{} (its only field default is a nil hook)
+)
+
 pub fn run(can0 can.Channel) {
 	mut ch := can0
-	mut st := Partition_app_state{}
-	mut sched := loom.Scheduler{}
-	sched.every(100000, handler_app_governor_on_100ms, &st)
-	sched.every(1000, handler_app_load_on_1ms, &st)
-	sched.every(100000, handler_app_heartbeat_on_100ms, &st)
+	g_st_app = Partition_app_state{} // the FB field defaults, at entry: bss is all zero
+	mut st := &g_st_app
+	mut sched := &g_sched_app // bss (declared above run()): V3 would move a local to the heap
+	sched.every(100000, handler_app_governor_on_100ms, st)
+	sched.every(1000, handler_app_load_on_1ms, st)
+	sched.every(100000, handler_app_heartbeat_on_100ms, st)
 	mut load := [8]u16{}
 	telem_period_us := u64(500000)
 	mut last_telem := u64(0)

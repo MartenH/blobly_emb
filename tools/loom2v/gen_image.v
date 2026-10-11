@@ -107,6 +107,9 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 			g << '\tg_${thr}_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned'
 			g << '\tg_${thr}_stack [4096]u8'
 			g << '\tg_sched_${thr} loom.Scheduler // bss, never an entry-frame local'
+			// the FB state: the scheduler keeps its address for the thread's lifetime (gen.v)
+			gsname := if threads.len > 1 { 'Thread_${thr}_state' } else { 'Partition_${part}_state' }
+			g << '\tg_st_${thr} ${gsname} // bss; its field defaults are set at thread entry'
 		}
 		g << ')'
 		for ti, thr in threads {
@@ -116,7 +119,8 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 			// partition-wide name (Partition_<part>_state), only a multi-thread one is per-thread. A
 			// single-thread satellite (e.g. system_full's domain_m4) hit the mismatch otherwise.
 			sname := if threads.len > 1 { 'Thread_${thr}_state' } else { 'Partition_${part}_state' }
-			g << '\tmut st := ${sname}{} // small + carries the FB field defaults: stack is right'
+			g << '\tg_st_${thr} = ${sname}{} // the FB field defaults, at entry: bss is all zero'
+			g << '\tmut st := &g_st_${thr}'
 			g << '\tmut sched := &g_sched_${thr} // module-sized: lives in bss, not this lifetime frame'
 			// emit_handlers keys registrations by part/thread only for a MULTI-thread partition;
 			// a single-thread one stores them under the bare part (gen.v all_regs[part]). The owner

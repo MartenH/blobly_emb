@@ -11,7 +11,10 @@ module osal
 #include <time.h>
 #include "osal_native.h"
 
-struct C.timespec {
+// public: a program declares the C struct once (V3 keeps one declaration of it per program,
+// so a second, module-private copy elsewhere takes these fields away from osal)
+pub struct C.timespec {
+pub mut:
 	tv_sec  i64
 	tv_nsec i64
 }
@@ -21,9 +24,9 @@ fn C.nanosleep(&C.timespec, &C.timespec) int
 fn C.blob_pin_to_cpu(int)
 fn C.blob_ioc_shared_init()
 fn C.blob_shared_scratch() voidptr
-fn C.blob_start_core(int, fn (int, voidptr), voidptr) int
+fn C.blob_start_core(int, fn (i32, voidptr), voidptr) int
 fn C.blob_wait_core(int) int
-fn C.blob_tx_start_core(int, fn (int, voidptr), voidptr) int // ThreadX backend
+fn C.blob_tx_start_core(int, fn (i32, voidptr), voidptr) int // ThreadX backend
 fn C.blob_tx_sleep_us(u64)
 fn C.blob_ioc_write(int, &u8, u8)
 fn C.blob_ioc_read(int, &u8, u8) int
@@ -61,7 +64,9 @@ pub fn pin_to_core(core int) {
 
 // --- Multi-process AMP: one process per core, sharing only the IOC region ---
 
-pub type CoreEntry = fn (core int, arg voidptr)
+// The core id is i32: C calls entry as `void (*)(int, void *)`, and V's int is 64-bit on a
+// 64-bit host.
+pub type CoreEntry = fn (core i32, arg voidptr)
 
 // ioc_shared_init places the IOC region in shared memory. Call ONCE, before any
 // start_core, so every per-core process sees the same channels.

@@ -23,11 +23,11 @@ fn handler_mon_speed_monitor_on_10ms(ctx voidptr) {
 	osal.ioc_publish2(warn_lamp_ch, &outp.warn_lamp, u8(sizeof(outp.warn_lamp)))
 }
 
-pub fn partition_mon(core int, arg voidptr) {
+pub fn partition_mon(core i32, arg voidptr) {
 	osal.pin_to_core(1)
-	mut st := Partition_mon_state{}
+	mut st := &Partition_mon_state{} // the scheduler keeps this address: one allocation, for the loop's life
 	mut sched := loom.Scheduler{}
-	sched.every(10000, handler_mon_speed_monitor_on_10ms, &st)
+	sched.every(10000, handler_mon_speed_monitor_on_10ms, st)
 	for {
 		loom_t0 := osal.now_us()
 		sched.run(loom_t0)

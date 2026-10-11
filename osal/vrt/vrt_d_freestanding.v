@@ -32,3 +32,27 @@ fn bare_backtrace() string {
 fn bare_malloc(n usize) voidptr {
 	return unsafe { nil }
 }
+
+// The C library's allocator, with no heap behind it. V3's panic path names malloc, realloc and
+// free (it records a panic for `recover`, which a target never reaches: v_panic goes to
+// bare_panic when no recover frame is open), and newlib's own malloc would pull in _sbrk and a
+// heap the linker script does not give. Defined here, the image links without newlib's
+// allocator; anything that does call them gets nil and V's out-of-memory panic.
+@[export: 'malloc']
+fn libc_malloc(n usize) voidptr {
+	return unsafe { nil }
+}
+
+@[export: 'calloc']
+fn libc_calloc(n usize, size usize) voidptr {
+	return unsafe { nil }
+}
+
+@[export: 'realloc']
+fn libc_realloc(p voidptr, n usize) voidptr {
+	return unsafe { nil }
+}
+
+@[export: 'free']
+fn libc_free(p voidptr) {
+}

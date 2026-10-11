@@ -73,9 +73,21 @@ pub fn (c Channel) tx_idle() bool {
 }
 
 // recv returns true and fills `f` when a frame is available; false if none.
+// The backend writes this function's own locals, which are then copied into `f`:
+// V3 cannot see what C does with a pointer, so an address INTO `f` handed to C reads
+// as retained, and every caller's frame would be moved to the heap — which a target
+// does not have (docs/no-alloc.md). The copy is one frame's bytes.
 pub fn (mut c Channel) recv(mut f Frame) bool {
+	mut id := u32(0)
+	mut len := u8(0)
+	mut data := [64]u8{}
 	mut flags := 0
-	ok := C.blob_can_recv(c.sock, &f.id, &f.data[0], &f.len, &flags) == 0
+	ok := C.blob_can_recv(c.sock, &id, &data[0], &len, &flags) == 0
+	if ok {
+		f.id = id
+		f.len = len
+		f.data = data
+	}
 	f.ext = (flags & flag_ext) != 0
 	return ok
 }

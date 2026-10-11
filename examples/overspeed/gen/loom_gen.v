@@ -39,12 +39,12 @@ fn handler_sense_overspeed_detector_on_10ms(ctx voidptr) {
 	osal.ioc_publish2(overspeed_ch, &outp.overspeed, u8(sizeof(outp.overspeed)))
 }
 
-pub fn partition_sense(core int, arg voidptr) {
+pub fn partition_sense(core i32, arg voidptr) {
 	osal.pin_to_core(0)
-	mut st := Partition_sense_state{}
+	mut st := &Partition_sense_state{} // the scheduler keeps this address: one allocation, for the loop's life
 	mut sched := loom.Scheduler{}
-	sched.every(10000, handler_sense_speed_filter_on_10ms, &st)
-	sched.every(10000, handler_sense_overspeed_detector_on_10ms, &st)
+	sched.every(10000, handler_sense_speed_filter_on_10ms, st)
+	sched.every(10000, handler_sense_overspeed_detector_on_10ms, st)
 	for {
 		loom_t0 := osal.now_us()
 		sched.run(loom_t0)
@@ -105,9 +105,9 @@ fn handler_ctrl_lamp_controller_on_10ms(ctx voidptr) {
 	osal.ioc_publish2(secure_status_ch, &outp.secure_status, u8(sizeof(outp.secure_status)))
 }
 
-pub fn partition_ctrl(core int, arg voidptr) {
+pub fn partition_ctrl(core i32, arg voidptr) {
 	osal.pin_to_core(1)
-	mut st := Partition_ctrl_state{}
+	mut st := &Partition_ctrl_state{} // the scheduler keeps this address: one allocation, for the loop's life
 	st.fdeb_engine_monitor[0] = fault.Debounce{
 		fail_thr: 6
 		pass_thr: 3
@@ -118,9 +118,9 @@ pub fn partition_ctrl(core int, arg voidptr) {
 		pass_thr: 3
 	}
 	mut sched := loom.Scheduler{}
-	sched.every(10000, handler_ctrl_engine_monitor_on_10ms, &st)
-	sched.every(10000, handler_ctrl_brake_monitor_on_10ms, &st)
-	sched.every(10000, handler_ctrl_lamp_controller_on_10ms, &st)
+	sched.every(10000, handler_ctrl_engine_monitor_on_10ms, st)
+	sched.every(10000, handler_ctrl_brake_monitor_on_10ms, st)
+	sched.every(10000, handler_ctrl_lamp_controller_on_10ms, st)
 	for {
 		loom_t0 := osal.now_us()
 		sched.run(loom_t0)

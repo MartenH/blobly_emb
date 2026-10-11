@@ -23,11 +23,11 @@ fn handler_app_meter_on_10ms(ctx voidptr) {
 	osal.ioc_publish(led_hi_ch, &outp.led_hi, u8(sizeof(outp.led_hi)))
 }
 
-pub fn partition_app(core int, arg voidptr) {
+pub fn partition_app(core i32, arg voidptr) {
 	osal.pin_to_core(0)
-	mut st := Partition_app_state{}
+	mut st := &Partition_app_state{} // the scheduler keeps this address: one allocation, for the loop's life
 	mut sched := loom.Scheduler{}
-	sched.every(10000, handler_app_meter_on_10ms, &st)
+	sched.every(10000, handler_app_meter_on_10ms, st)
 	for {
 		loom_t0 := osal.now_us()
 		sched.run(loom_t0)
@@ -92,7 +92,7 @@ pub fn run() {
 	if !io.cfg(1, 'PotVolt', 'PA3', false, 0, 0, 1, u32(65535)) {
 		panic('io cfg failed: PotVolt')
 	}
-	if !io.init() {
+	if !io.start() {
 		panic('io init failed')
 	}
 	if boot_pot_volt_v := io.adc_read_checked(1) {

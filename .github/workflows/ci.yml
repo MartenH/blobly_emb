@@ -105,6 +105,10 @@ jobs:
       - name: V toolchain rules (scripts/v_toolchain_test.sh)
         run: bash scripts/v_toolchain_test.sh
 
+      # what the cross job's no-heap gate refuses and passes, on a fake nm
+      - name: No-heap gate tests (scripts/check_no_heap_test.sh)
+        run: bash scripts/check_no_heap_test.sh
+
       # The no-alloc + isolation lint. AGENTS.md calls this MUST pass, and it guards the defining
       # constraint of the whole stack — no dynamic allocation — so it belongs in the gate, not in
       # a habit of remembering to run it.
@@ -257,6 +261,11 @@ jobs:
             LC_ALL=C make -C "$d" 2>&1 | tee /tmp/build.log; [ "${PIPESTATUS[0]}" = 0 ] || exit 1
             # a wide C return with no prototype is silently truncated to int (board_now_us was)
             scripts/check_implicit_wide.sh /tmp/build.log || exit 1
+            # no allocator survives the link: what the entry reaches allocates nothing (no-alloc.md)
+            for elf in "$d"build/*.elf "$d"build/boot/*.elf; do
+              [ -f "$elf" ] || continue
+              scripts/check_no_heap.sh "$elf" || exit 1
+            done
           done
 
       # A shape no committed image has: a multi-thread GATEWAY (sysnode + a second app thread),

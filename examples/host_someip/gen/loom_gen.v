@@ -30,11 +30,11 @@ fn handler_app_bench_on_100ms(ctx voidptr) {
 	osal.ioc_publish2(echo_val_ch, &outp.echo_val, u8(sizeof(outp.echo_val)))
 }
 
-pub fn partition_app(core int, arg voidptr) {
+pub fn partition_app(core i32, arg voidptr) {
 	osal.pin_to_core(0)
-	mut st := Partition_app_state{}
+	mut st := &Partition_app_state{} // the scheduler keeps this address: one allocation, for the loop's life
 	mut sched := loom.Scheduler{}
-	sched.every(100000, handler_app_bench_on_100ms, &st)
+	sched.every(100000, handler_app_bench_on_100ms, st)
 	for {
 		loom_t0 := osal.now_us()
 		sched.run(loom_t0)

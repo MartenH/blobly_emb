@@ -56,7 +56,8 @@
  *   line 2: CONSUMER-owned cursors (r_tail, f_head)
  * Cross-side fields are volatile: on Arm the seams are plain accesses, and a non-
  * volatile cursor could be cached across a service loop's polls (codex #213). */
-typedef struct __attribute__((aligned(32))) {
+/* tagged: V3 declares a V `struct C.bulk_t` as `typedef struct bulk_t bulk_t;` */
+typedef struct __attribute__((aligned(32))) bulk_t {
 	volatile uint32_t magic; /* BULK_MAGIC once geometry + free ring are visible */
 	uint32_t nbuf;           /* buffers in the pool (= each ring's capacity) */
 	uint32_t bufsz;          /* bytes per buffer, multiple of 32 */
