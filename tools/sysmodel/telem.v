@@ -317,13 +317,27 @@ struct RouteTx {
 	id     u32
 }
 
-// check_route_request_ids: a DoIP gateway sends a routed node's requests on that node's request id
+// serves_on: node `t` has an [isotp] on system bus `bus` that listens on `rx` and answers on `tx`
+fn serves_on(s System, t Node, bus string, rx u32, tx u32) bool {
+	for c in t.view.isotp_conns {
+		b := node_can_bus(s, t, c.iface) or { continue }
+		if b.name == bus && c.rx_id == rx && c.tx_id == tx {
+			return true
+		}
+	}
+	return false
+}
+
+// check_route_ids: a DoIP gateway sends a routed node's requests on that node's request id
 // (REQ-NET-019) — a transmitter module_frames does not list, so check_telemetry_frames never sees
 // it. Any OTHER node that receives that id on the routed bus (an [isotp] rx or functional id, a
 // trace or shell receive id) would take the routed requests as its own: a routed 10 03 would
 // change its session too. Only the routed node listens on it. The routes are the system's doip
-// `routes` in a dissolved system and the gateways' own [[doip.route]] in a composed one.
-fn check_route_request_ids(s System) []Issue {
+// `routes` in a dissolved system (check_doip_routes holds them to the node's diag and [isotp]) and
+// the gateways' own [[doip.route]] in a composed one — held here to the node they name: an
+// [isotp] of it on that bus that listens on tx_id and answers on rx_id, or every routed request
+// goes unanswered.
+fn check_route_ids(s System) []Issue {
 	mut issues := []Issue{}
 	mut routes := []RouteTx{}
 	for gw in s.nodes {
@@ -336,16 +350,24 @@ fn check_route_request_ids(s System) []Issue {
 			routes << RouteTx{gw.name, t.name, bus.name, t.diag.req}
 		}
 		for r in gw.view.doip_routes {
+			where := 'node "${gw.name}": its [[doip.route]] to "${r.node}"'
 			bus := node_can_bus(s, gw, r.bus) or { continue } // the node gate checks its own buses
-			if _ := s.node_by_name(r.node) {
-				routes << RouteTx{gw.name, r.node, bus.name, r.tx_id}
-			} else {
+			t := s.node_by_name(r.node) or {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-NET-019'
-					msg:      'node "${gw.name}": its [[doip.route]] to "${r.node}" names no node of this system — the system tells the routed node from the others that must not listen on its request id by that name'
+					msg:      '${where} names no node of this system — the system tells the routed node from the others that must not listen on its request id by that name'
+				}
+				continue
+			}
+			if !serves_on(s, t, bus.name, r.tx_id, r.rx_id) {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-NET-019'
+					msg:      '${where} sends on 0x${r.tx_id.hex()} and listens on 0x${r.rx_id.hex()} on bus "${bus.name}", but no [isotp] of "${t.name}" there listens and answers on those ids — every routed request would go unanswered'
 				}
 			}
+			routes << RouteTx{gw.name, t.name, bus.name, r.tx_id}
 		}
 	}
 	dbs := bus_dbcs(s)

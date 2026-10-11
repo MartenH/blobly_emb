@@ -940,3 +940,34 @@ fn test_the_obd_record_selector_takes_any_obd_record() {
 	assert !judged([u8(0x59), 0x04, 0x12, 0x34, 0x56, 0x09, 0x90, 0x01], [u8(0x19), 0x04, 0x12,
 		0x34, 0x56, 0xFE])
 }
+
+// the owner asks room() only while the exchange is on its bus, so the queue may empty without it
+// asking: a queue that fills again is held anew, not counted from the hold that ran out before
+fn test_a_queue_that_fills_again_is_held_anew() {
+	mut r := new_router()
+	req := [u8(0x31), 0x01, 0xFF, 0x00]
+	assert r.accept(0, &req[0], req.len, 1, 1, 1, 0) == .accepted
+	mut ch := Chan{}
+	r.pump(100, mut ch)
+	mut f := can.Frame{
+		id:  rsp_id
+		len: 8
+	}
+	f.data[0] = 0x03
+	f.data[1] = 0x7F
+	f.data[2] = 0x31
+	f.data[3] = 0x78 // responsePending: the exchange stays open
+	for _ in 0 .. queue_len {
+		assert r.on_frame(edge, &f, 1000)
+	}
+	assert !r.room(1000)
+	assert r.room(1000 + gate_hold_us) // the hold ran out
+	r.pop()
+	r.pop() // taken, with no room() asked in between
+	t := 1000 + 10 * gate_hold_us
+	for _ in 0 .. queue_len {
+		assert r.on_frame(edge, &f, t)
+	}
+	assert !r.room(t), 'a queue full again is held anew'
+	assert r.room(t + gate_hold_us)
+}

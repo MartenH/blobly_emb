@@ -253,6 +253,7 @@ pub fn (mut r Router) accept(idx int, req &u8, n int, conn u32, ticket u32, unlo
 	// whatever the previous exchange left, half received or queued, is not this request's answer
 	r.end_exchange()
 	r.q_len = 0
+	r.full_held = false
 	if !r.link.send(req, n) {
 		return .refused
 	}
@@ -425,9 +426,11 @@ pub fn (mut r Router) cancel() {
 	r.bound = false
 }
 
-// room: whether a bus a route is on may be drained now — while the answer queue has room, or once it
-// has been full for gate_hold_us (then an answer that finds it full is lost, counted: the
-// gateway's own traffic on that bus does not stall behind a tester that does not read).
+// room: whether the bus the exchange is on (active_bus — another route bus is drained as ever)
+// may be drained now — while the answer queue has room, or once it has been full for
+// gate_hold_us (then an answer that finds it full is lost, counted: the gateway's own traffic on
+// that bus does not stall behind a tester that does not read). Each time the queue fills it is
+// held anew, whether or not the owner asked in between.
 pub fn (mut r Router) room(now u64) bool {
 	if r.q_len < queue_len {
 		r.full_held = false
@@ -476,6 +479,7 @@ pub fn (mut r Router) pop() {
 	}
 	r.q_head = (r.q_head + 1) % queue_len
 	r.q_len--
+	r.full_held = false // room again: a queue that fills later is held anew (room)
 }
 
 fn (mut r Router) end_exchange() {
