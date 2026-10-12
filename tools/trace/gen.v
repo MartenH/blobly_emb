@@ -36,6 +36,31 @@ fn arr(a toml.Any) []toml.Any {
 	return a.array()
 }
 
+// v_test_results runs the V test files in one `v test` and reads each one's result from the
+// runner's own line for it: OK or SKIP is a pass, FAIL or no line at all a failure. The SAME V
+// that runs this generator (@VEXE), so `make V=/path/to/v trace` stays consistent; -enable-globals
+// because some deterministic unit tests record call order in a test-only global.
+fn v_test_results(files []string) map[string]string {
+	mut res := map[string]string{}
+	if files.len == 0 {
+		return res
+	}
+	out := os.execute('${@VEXE} -enable-globals test ${files.map(os.quoted_path(it)).join(' ')}').output
+	for ln in out.split_into_lines() {
+		t := ln.trim_space()
+		word := t.all_before(' ')
+		if word !in ['OK', 'SKIP', 'FAIL'] {
+			continue
+		}
+		for f in files {
+			if t.ends_with(' ${os.real_path(f)}') || t.ends_with(' ${f}') {
+				res[f] = if word == 'FAIL' { 'fail' } else { 'pass' }
+			}
+		}
+	}
+	return res
+}
+
 fn main() {
 	check_mode := '--check' in os.args
 
@@ -128,6 +153,9 @@ fn main() {
 			}
 		}
 	}
+	// the ids each file verifies, then the V files' results from ONE parallel `v test` run (run a
+	// process at a time they were most of trace-check's time under V3, #409)
+	mut file_ids := map[string][]string{}
 	for f in tfiles {
 		lines := os.read_lines(f) or { continue }
 		mut ids := []string{}
@@ -142,26 +170,18 @@ fn main() {
 				}
 			}
 		}
-		if ids.len == 0 {
-			continue
+		if ids.len > 0 {
+			file_ids[f] = ids
 		}
+	}
+	v_results := v_test_results(tfiles.filter(it in file_ids && !it.ends_with('.lua')))
+	for f in tfiles {
+		ids := file_ids[f] or { continue }
 		is_lua := f.ends_with('.lua')
 		// V unit tests run here for a live result; lua integration tests need the
 		// vcan + blobly_net harness, so they stay linked (pending) until run.
 		ctx := if is_lua { 'host/SocketCAN' } else { 'host/unit' }
-		result := if is_lua {
-			'pending'
-		} else {
-			// Reuse the SAME V binary that is running this generator (@VEXE), not a
-			// plain `v` on PATH, so `make V=/path/to/v trace` stays consistent.
-			// -enable-globals: some deterministic unit tests record call order in a
-			// test-only global (fn-pointer tables can't capture state).
-			if os.execute('${@VEXE} -enable-globals test ${f}').exit_code == 0 {
-				'pass'
-			} else {
-				'fail'
-			}
-		}
+		result := if is_lua { 'pending' } else { v_results[f] or { 'fail' } }
 		ctxset[ctx] = true
 		for id in ids {
 			vmap[id] << Verif{
