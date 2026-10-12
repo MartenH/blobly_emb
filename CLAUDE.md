@@ -245,7 +245,9 @@ that has it), built from source with the
 vlang/vc bootstrap pinned in `.vc-version` — keep it the pair blobly_net pins, moved in both repos
 together, so one `~/v` builds both (`.github/actions/setup-v`, `scripts/v_toolchain.sh`, both from blobly_net, tested by
 `scripts/v_toolchain_test.sh`). CI sets `V_MACOS_V3_NO_FALLBACK=1`: without it a program V3 cannot
-build is silently rebuilt by a downloaded V1 compiler. Source builds broke before (2026-09-08,
+build is silently rebuilt by a downloaded V1 compiler; and `VFLAGS=-nocache`, because V3's module
+cache (on by default since `ea5156d`) makes our compiles slower, not faster — set both locally too.
+Source builds broke before (2026-09-08,
 master's own `unknown module builder`) because `make` cloned vc's default branch; with the
 bootstrap pinned and `make local=1` nothing moves under it. Bump both pins together, here and in
 blobly_net, and re-run the

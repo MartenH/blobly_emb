@@ -11,9 +11,11 @@
 // "the transport ladder"). A node's local bus name is matched to a system bus
 // by that bus's `interface` (the H735's `[bus.can0]` == system `[bus.compute]`
 // when compute.interface == "can0").
+@[has_globals]
 module sysmodel
 
 import os
+import sync
 import rand
 import toml
 import tools.candb
@@ -1433,16 +1435,51 @@ pub fn build_tool(src string, globals bool, dir string) !string {
 	return bin
 }
 
-// run_tool builds a tool into a fresh private directory, runs it there and removes it. A
-// tool that does not BUILD is an error, kept apart from what the tool says about the config.
+// run_tool runs a repo tool, built once per process (cached_tool). A tool that does not BUILD is
+// an error, kept apart from what the tool says about the config.
 pub fn run_tool(src string, globals bool, args []string) !(string, int) {
-	dir := private_temp_dir('blobly_tool')!
-	defer {
-		os.rmdir_all(dir) or {}
-	}
-	bin := build_tool(src, globals, dir)!
+	bin := cached_tool(src, globals)!
 	out, code := run_capture(bin, args)
 	return out, code
+}
+
+// ToolCache: the tools this process has built. A build costs seconds under V3 and the system
+// checks run the same few tools node after node, so each is built once, into its own private
+// directory (two tools may share a file name: cfg2v/gen.v, ecucheck/gen.v), removed at exit.
+struct ToolCache {
+mut:
+	mu   sync.Mutex
+	dirs []string
+	bins map[string]string
+}
+
+__global tool_cache = ToolCache{}
+
+fn cached_tool(src string, globals bool) !string {
+	tool_cache.mu.lock()
+	defer {
+		tool_cache.mu.unlock()
+	}
+	key := '${globals} ${src}'
+	if bin := tool_cache.bins[key] {
+		if os.exists(bin) {
+			return bin
+		}
+	}
+	dir := private_temp_dir('blobly_tool')!
+	if tool_cache.dirs.len == 0 {
+		at_exit(remove_tool_dirs) or {}
+	}
+	tool_cache.dirs << dir
+	bin := build_tool(src, globals, dir)!
+	tool_cache.bins[key] = bin
+	return bin
+}
+
+fn remove_tool_dirs() {
+	for dir in tool_cache.dirs {
+		os.rmdir_all(dir) or {}
+	}
 }
 
 pub fn ecucheck_errors(node_path string) []string {

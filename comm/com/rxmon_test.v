@@ -293,7 +293,11 @@ fn run(cfg Cfg, seed u64, passes int) ([]Pub, u32) {
 		}
 		ref.after(now, rx_on, awake)
 		im.after(now, rx_on, awake)
-		assert im.pubs == ref.pubs, 'cfg ${cfg} seed ${seed}: pass ${p} differs\nref  ${ref.pubs}\nimpl ${im.pubs}'
+		// the message only on a difference: V3 builds an assert's message even when it holds,
+		// and this one prints both growing histories every pass
+		if im.pubs != ref.pubs {
+			assert false, 'cfg ${cfg} seed ${seed}: pass ${p} differs\nref  ${ref.pubs}\nimpl ${im.pubs}'
+		}
 	}
 	assert im.mon.hidden <= im.mon.e2e.lost_frames
 	return im.pubs, im.mon.hidden
