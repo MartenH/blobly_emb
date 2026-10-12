@@ -199,6 +199,13 @@ jobs:
             exit 1
           fi
 
+      # The host twin of the cross job's no-heap gate: what loom2v generates runs for the
+      # program's life under -gc none, and V3 moves a local whose address reaches a call it cannot
+      # see through to the heap, so the compiler is asked (-warn-about-allocs) for every host
+      # example's gen/ (docs/no-alloc.md).
+      - name: Generated host code allocates nothing (scripts/check_host_allocs.sh)
+        run: scripts/check_host_allocs.sh
+
   cross:
     name: cross • bare-metal STM32H7 images (+ the _vinit gate)
     runs-on: ubuntu-latest

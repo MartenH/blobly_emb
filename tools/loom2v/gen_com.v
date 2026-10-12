@@ -799,7 +799,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			}
 		}
 		if rx_by_msg.len > 0 || conns.len > 0 || my_routes.len > 0 {
-			glue << '\tmut rx := can.Frame{}'
+			glue << '\tmut rx := &g_rx_br_${bb}'
 			glue << '\tfor st.chan.recv(mut rx) {'
 			for r in my_routes {
 				if r.signal != '' {
@@ -889,7 +889,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				// in the FIFO must gate the application frames that follow it, not only the next
 				// pass's. A functional request is served on arrival, so the receive gate is re-sampled
 				// right after it.
-				glue << '\t\tmatch st.conn_${snake(c.name)}.on_frame(now, &rx) {'
+				glue << '\t\tmatch st.conn_${snake(c.name)}.on_frame(now, rx) {'
 				glue << '\t\t\t.request { break }'
 				if c.functional_id != 0 {
 					glue << '\t\t\t.served {'
@@ -1144,15 +1144,22 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 		if owns_trace {
 			psig += trace_bridge_params()
 		}
+		mut statics := ['g_br_${bb} Bridge_${bb}_state', 'g_sched_br_${bb} loom.Scheduler',
+			'g_rx_br_${bb} can.Frame']
+		if owns_trace {
+			statics << 'g_bridge_trace_ring [${m.trace.buffer_records}]trace.Record'
+		}
+		glue << thread_globals(statics)
 		glue << 'pub fn partition_${bb}(${psig}) {'
 		if owns_trace {
 			// a mutable copy: recv/send take `mut`, and V3 refuses them on a value parameter
 			glue << '\tmut trace_ch := trace_chp'
 		}
 		glue << '\tosal.pin_to_core(${m.bus_core[bname] or { 0 }})'
-		glue << '\tmut st := Bridge_${bb}_state{'
+		glue << '\tg_br_${bb} = Bridge_${bb}_state{'
 		glue << '\t\tchan: ch'
 		glue << '\t}'
+		glue << '\tmut st := &g_br_${bb}'
 		for d in dests {
 			glue << '\tst.route_${snake(d)} = route_${snake(d)}'
 		}
@@ -1255,9 +1262,9 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 		// accounting would report 0% forever while draining a busy diagnostic bus — under-
 		// reporting the core it runs on. What a module-host bus does NOT get is a 10 ms tick
 		// and an empty handler: that was only an unused-variable warning on every build.
-		glue << '\tmut sched := loom.Scheduler{}'
+		glue << '\tmut sched := &g_sched_br_${bb}'
 		if !module_host {
-			glue << '\tsched.every(10_000, io_${bb}_10ms, &st)'
+			glue << '\tsched.every(10_000, io_${bb}_10ms, st)'
 		}
 		if owns_trace {
 			glue << trace_bridge_preamble(m, tctx)
@@ -1269,7 +1276,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			glue << '\t\tloom_t0 := osal.now_us()'
 		}
 		if module_host {
-			glue << '\t\tmut rx := can.Frame{}'
+			glue << '\t\tmut rx := &g_rx_br_${bb}'
 			glue << '\t\tfor st.chan.recv(mut rx) {'
 			glue << '\t\t\t// no consumer yet: the trace module that serves this bus is not'
 			glue << '\t\t\t// generated for this shape (#191). Draining keeps the queue clear —'

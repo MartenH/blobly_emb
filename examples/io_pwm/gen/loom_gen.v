@@ -23,10 +23,15 @@ fn handler_app_dimmer_on_10ms(ctx voidptr) {
 	osal.ioc_publish(fan_duty_ch, &outp.fan_duty, u8(sizeof(outp.fan_duty)))
 }
 
+__global (
+	g_st_app Partition_app_state
+	g_sched_app loom.Scheduler
+)
 pub fn partition_app(core i32, arg voidptr) {
 	osal.pin_to_core(0)
-	mut st := &Partition_app_state{} // the scheduler keeps this address: one allocation, for the loop's life
-	mut sched := loom.Scheduler{}
+	g_st_app = Partition_app_state{} // the FB field defaults
+	mut st := &g_st_app
+	mut sched := &g_sched_app
 	sched.every(10000, handler_app_dimmer_on_10ms, st)
 	for {
 		loom_t0 := osal.now_us()
