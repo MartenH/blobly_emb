@@ -36,6 +36,7 @@ fail=0
 # c_archive as tools/tools.mk defines it, with one more (harmless) step: another archive rule
 other_archive='c_archive=$(call c_signed,$(1))$(1) $@ $(filter-out %.sig,$^) && :'
 tmpf=$(mktemp) || exit 1
+tref=$(mktemp) || exit 1
 # A what-if with another flag rewrites the signatures make reads (tools/tools.mk c_sign writes one
 # whenever it differs), and writing the old text back would make it NEWER than what it signs: keep
 # them, with their times, and put them back after asking — on any exit too, so an interrupted run
@@ -52,7 +53,26 @@ sigs_back() {
 	find "$kept/build" -name '*.sig.keep' | while read -r k; do mv -f "$k" "${k%.keep}"; done
 	kept=
 }
-trap 'sigs_back; rm -f "$tmpf"' EXIT
+trap 'sigs_back; rm -f "$tmpf" "$tref"' EXIT
+# settle <dir> <target>: the target current again once what a probe changed is put back — rebuilt
+# only if it is not, since under V3 each rebuild is a transpile of a whole image
+settle() {
+	make -C "$1" -q "$2" >/dev/null 2>&1 || make -C "$1" "$2" >/dev/null 2>&1 \
+		|| { echo "app_deps_check: $1/$2 rebuild failed"; fail=1; }
+}
+# touch_asks <dir> <target> <file>: <file> made newer leaves <target> out of date; the file's time
+# is then put back, which leaves make where it was
+touch_asks() {
+	local d=$1 t=$2 f=$3
+	touch -r "$f" "$tref"
+	touch "$f"
+	if make -C "$d" -q "$t" >/dev/null 2>&1; then
+		echo "app_deps_check: touching $f leaves $d/$t up to date — a dependency is missing"
+		fail=1
+	fi
+	touch -r "$tref" "$f"
+	settle "$d" "$t"
+}
 # make's answer for <dir> <target> with the extra make arguments: stale, current, or (reported) none
 ask() {
 	local d=$1 t=$2; shift 2
@@ -134,12 +154,15 @@ for mk in examples/*/Makefile examples/*/nodes/*/Makefile; do
 			fail=1
 		fi
 		make -C "$d" "$rel" >/dev/null 2>&1 && [ -f "$c.d" ] || { echo "app_deps_check: $c did not rebuild its record"; fail=1; continue; }
-		# how V runs is an input: another define leaves the C out of date
+		# how V runs is an input: another define leaves the C out of date (asking rewrites the
+		# signature, which is put back after)
+		sigs_keep "$d"
 		if make -C "$d" -q "$rel" LOOM_VDEFS="-d app_deps_check" VDBG="-d app_deps_check" BOOT_VDEFS="-d app_deps_check" >/dev/null 2>&1; then
 			echo "app_deps_check: $c ignores a change of V flags"
 			fail=1
 		fi
-		make -C "$d" "$rel" >/dev/null 2>&1 || { echo "app_deps_check: $c rebuild failed"; fail=1; }
+		sigs_back
+		settle "$d" "$rel"
 		# and its signature is compared as written: a define's whitespace leaves the C out of date
 		sigs_keep "$d"
 		quoted_ws "$d" "$rel" "$c.sig" '-d app_deps_check="a b"' '-d app_deps_check="a  b"' "LOOM_VDEFS VDBG BOOT_VDEFS"
@@ -148,20 +171,10 @@ for mk in examples/*/Makefile examples/*/nodes/*/Makefile; do
 		# (V3 lists a file by absolute path, older V relative to where it ran)
 		src=$(grep -m1 'driver/doipnet/doipnet.v' "$c.files" || grep -m1 -E "^(\./|$PWD/)(comm|loom|driver|boot|bcrypto|nvm)/" "$c.files")
 		[ -n "$src" ] || { echo "app_deps_check: $c compiles in no repo module?"; fail=1; continue; }
-		touch "${src#./}"
-		if make -C "$d" -q "$rel" >/dev/null 2>&1; then
-			echo "app_deps_check: touching ${src#./} leaves $c up to date — a dependency is missing"
-			fail=1
-		fi
-		make -C "$d" "$rel" >/dev/null 2>&1 || { echo "app_deps_check: $c rebuild failed"; fail=1; }
+		touch_asks "$d" "$rel" "${src#./}"
 		# and the rule that records the dependencies
 		for rule in scripts/vdeps.sh tools/tools.mk; do
-			touch "$rule"
-			if make -C "$d" -q "$rel" >/dev/null 2>&1; then
-				echo "app_deps_check: touching $rule leaves $c up to date"
-				fail=1
-			fi
-			make -C "$d" "$rel" >/dev/null 2>&1 || { echo "app_deps_check: $c rebuild failed"; fail=1; }
+			touch_asks "$d" "$rel" "$rule"
 		done
 		echo "app_deps_check: $c ok (${src#./}, the rule, quoted whitespace)"
 	done

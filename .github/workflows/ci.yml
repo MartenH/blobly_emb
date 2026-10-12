@@ -46,7 +46,7 @@ jobs:
   test:
     name: linux • host unit tests + check + trace
     runs-on: ubuntu-latest
-    timeout-minutes: 75 # ~45 min on V3 (unit tests and trace-check's rerun of them ~11 each); a hung job otherwise holds an account-wide slot for 6 h
+    timeout-minutes: 40 # ~20 min on V3; a hung job otherwise holds an account-wide slot for 6 h
     steps:
       - uses: actions/checkout@v4
 
@@ -216,7 +216,7 @@ jobs:
   cross:
     name: cross • bare-metal STM32H7 images (+ the _vinit gate)
     runs-on: ubuntu-latest
-    timeout-minutes: 120 # ~80 min on V3 (the cross builds ~17, the dependency checks most of the rest), more when apt is slow; a hung job otherwise holds an account-wide slot for 6 h
+    timeout-minutes: 75 # ~40 min on V3 (the cross builds and the dependency checks most of it), more when apt is slow; a hung job otherwise holds an account-wide slot for 6 h
     steps:
       - uses: actions/checkout@v4
 
