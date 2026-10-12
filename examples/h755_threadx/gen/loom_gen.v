@@ -234,7 +234,6 @@ __global (
 	g_sched_ctrl_slow loom.Scheduler // bss, never an entry-frame local
 	g_st_ctrl_slow Thread_ctrl_slow_state // bss; its field defaults are set at thread entry
 	g_app_trace [256][8]u8 // scratch snapshot of the trace ring (owner streams it)
-	g_trace_ring [256]trace.Record
 	g_tm trace.TraceModule
 	g_sh shell.ShellModule
 	g_xcore_trace_ring [257]trace.Record // the satellite core's imported dump window (+1 = its offset record)
@@ -244,10 +243,14 @@ __global (
 	g_nm nm_can.NmModule
 	g_comm_tcb   [32]u64  // the bus-owning comm thread
 	g_comm_stack [8192]u8
-	g_rx_count u32
 	g_comm_rx  can.Frame
-	g_rx_last  u32
 )
+@[export: 'g_rx_count']
+__global g_rx_count u32
+@[export: 'g_rx_last']
+__global g_rx_last u32
+@[export: 'g_trace_ring']
+__global g_trace_ring [256]trace.Record
 
 fn run_load_fast() {
 	g_st_load_fast = Thread_load_fast_state{} // the FB field defaults, at entry: bss is all zero

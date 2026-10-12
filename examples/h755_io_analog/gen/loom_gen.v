@@ -62,14 +62,17 @@ __global (
 	g_st_app Partition_app_state // bss; its field defaults are set at thread entry
 	g_comm_tcb   [32]u64  // the bus-owning comm thread
 	g_comm_stack [4096]u8
-	g_rx_count u32
 	g_comm_rx  can.Frame
-	g_rx_last  u32
 	g_io_tcb   [32]u64  // the platform io thread (docs/io.md)
 	g_io_stack [2048]u8 // gpio serve loop only: no modules, shallow frames
 	g_sched_io loom.Scheduler // io serve-time accounting for the CpuLoad seam
-	io_startup_faults u32
 )
+@[export: 'g_rx_count']
+__global g_rx_count u32
+@[export: 'g_rx_last']
+__global g_rx_last u32
+@[export: 'io_startup_faults']
+__global io_startup_faults u32
 
 pub fn run() {
 	g_st_app = Partition_app_state{} // the FB field defaults, at entry: bss is all zero

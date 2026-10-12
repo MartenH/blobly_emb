@@ -269,7 +269,11 @@ compares the commit.
   pointer to lives in bss (`g_st_<owner>`, `g_sched_<owner>`, `g_comm_rx`), and
   `can.Channel.recv` copies out of its own locals, never handing C an address into the caller's
   frame. `-warn-about-allocs` on a transpile names each local V3 moved;
-- a C struct V declares (`struct C.bulk_t`) has a TAG in its header: V3 emits `typedef struct x x;`.
+- a C struct V declares (`struct C.bulk_t`) has a TAG in its header: V3 emits `typedef struct x x;`;
+- a generated global read by NAME over SWD (`g_trace_ring`, `io_startup_faults`, the comm thread's
+  counters — `swd_names` in `tools/loom2v/gen_trace.v`) is declared through `exported_global`, on
+  its own line under `@[export]`: V3 calls a module's global `gen__<name>`, which no bench script
+  or debugger asks for (`tools/loom2v/swd_names_test.v`).
 
 **Not gated — verify these yourself:**
 

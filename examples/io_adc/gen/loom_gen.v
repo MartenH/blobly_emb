@@ -81,9 +81,8 @@ fn partition_io() {
 
 // inputs whose initial boot sample could not be read — nothing was published
 // for them (no fabricated sample); consumers hold their declared default
-__global (
-	io_startup_faults u32
-)
+@[export: 'io_startup_faults']
+__global io_startup_faults u32
 
 pub fn run() {
 	if !io.cfg(0, 'LedHi', 'PB0', true, 0, 0, 0, u32(0)) {

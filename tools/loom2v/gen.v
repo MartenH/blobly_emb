@@ -2547,6 +2547,8 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			// aligned [256]u8 could fault. The stack stays a byte buffer (ThreadX aligns the SP
 			// internally in tx_thread_stack_build).
 			glue << rx_target_struct(m)
+			// what a debugger or bench reads by name (the SWD-observable rule): after the block
+			mut swd := []string{}
 			glue << '__global ('
 			for thr in app_threads {
 				own := if multi { thr } else { part }
@@ -2586,15 +2588,15 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// (The load cell is the volatile C scratch in comm_glue.c, via load_pub/load_*.)
 				// Rx accounting: the comm thread counts received frames + keeps the last value, so a
 				// host cansend is observable. The rx CONSUMER of the lean cut (comm-thread-local).
-				glue << '\tg_rx_count u32'
+				swd << exported_global('g_rx_count', 'u32')
 				// the frame the comm thread receives into: its address reaches the UDS server's
 				// callbacks, which V3 cannot see through, so it lives in bss and never this frame
 				glue << '\tg_comm_rx  can.Frame'
-				glue << '\tg_rx_last  u32'
+				swd << exported_global('g_rx_last', 'u32')
 				if m.routes.len > 0 {
 					// gateway: frames forwarded bus->bus (raw copy + id remap). Exported so a
 					// bench can confirm the ThreadX gateway is routing (the SWD-observable rule).
-					glue << '\tg_fwd_count u32'
+					swd << exported_global('g_fwd_count', 'u32')
 				}
 			}
 			if eth_thread_on(m) {
@@ -2602,8 +2604,8 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << '\tg_eth_stack [4096]u8 // someip codec + TxState/E2E frames: comm-thread-class depth'
 				// drop/ok counters as exported globals: SWD-observable (the
 				// semihosting-never rule) — the host bridge prints, silicon counts
-				glue << '\tg_eth_rx_ok u32'
-				glue << '\tg_eth_rx_drops u32'
+				swd << exported_global('g_eth_rx_ok', 'u32')
+				swd << exported_global('g_eth_rx_drops', 'u32')
 			}
 			if m.io_points.len > 0 {
 				glue << '\tg_io_tcb   [32]u64  // the platform io thread (docs/io.md)'
@@ -2614,11 +2616,15 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					// producer counts io too, not just the comm thread's sums).
 					glue << '\tg_sched_io loom.Scheduler // io serve-time accounting for the CpuLoad seam'
 				}
-				// the startup-fault counter is an exported symbol (docs/io.md observability
-				// rule): SWD/bench readable even with no service on
-				glue << '\tio_startup_faults u32'
 			}
 			glue << ')'
+			glue << swd
+			glue << trace_ring_global(m)
+			if m.io_points.len > 0 {
+				// the startup-fault counter is an exported symbol (docs/io.md observability
+				// rule): SWD/bench readable even with no service on
+				glue << exported_global('io_startup_faults', 'u32')
+			}
 		}
 		glue << ''
 		if multi {
@@ -3374,9 +3380,7 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 		glue << ''
 		glue << '// inputs whose initial boot sample could not be read — nothing was published'
 		glue << '// for them (no fabricated sample); consumers hold their declared default'
-		glue << '__global ('
-		glue << '\tio_startup_faults u32'
-		glue << ')'
+		glue << exported_global('io_startup_faults', 'u32')
 	}
 		// --- host run(): launch every bus bridge + app partition, then wait. One
 		//     Channel param per bus (sorted for a stable signature main.v can rely

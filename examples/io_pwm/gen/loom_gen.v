@@ -81,9 +81,8 @@ fn partition_io() {
 
 // inputs whose initial boot sample could not be read — nothing was published
 // for them (no fabricated sample); consumers hold their declared default
-__global (
-	io_startup_faults u32
-)
+@[export: 'io_startup_faults']
+__global io_startup_faults u32
 
 pub fn run() {
 	if !io.cfg(0, 'Pot', 'PA3', false, 0, 0, 1, u32(65535)) {

@@ -44,9 +44,10 @@ fn handler_app_heartbeat_on_100ms(ctx voidptr) {
 
 fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)
 
+@[export: 'g_trace_ring']
+__global g_trace_ring [64]trace.Record
 __global (
-	g_trace_ring [64]trace.Record
-	g_tm         trace.TraceModule
+	g_tm trace.TraceModule
 )
 
 fn trace_clock() u64 {

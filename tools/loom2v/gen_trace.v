@@ -241,16 +241,36 @@ fn trace_scratch_fields(m Model, part string) []string {
 	]
 }
 
-// trace_module_globals: the module + its ring live in __global (the ISO-TP link alone is ~1 KB
-// — keep it off the 4 KB comm stack). Initialised at comm-thread start (trace_module_init).
+// trace_module_globals: the module lives in __global (the ISO-TP link alone is ~1 KB — keep it
+// off the 4 KB comm stack). Initialised at comm-thread start (trace_module_init). Its ring is
+// trace_ring_global, outside the block, since it keeps its C name.
 fn trace_module_globals(m Model) []string {
 	if !m.trace.on {
 		return []string{}
 	}
-	return [
-		'\tg_trace_ring [${m.trace.buffer_records}]trace.Record',
-		'\tg_tm trace.TraceModule',
-	]
+	return ['\tg_tm trace.TraceModule']
+}
+
+// trace_ring_global: the trace ring, read out of RAM by name over SWD (h735_app's bench_test.sh)
+fn trace_ring_global(m Model) []string {
+	if !m.trace.on {
+		return []string{}
+	}
+	return exported_global('g_trace_ring', '[${m.trace.buffer_records}]trace.Record')
+}
+
+// swd_names: the generated globals a debugger or bench reads by name (the SWD-observable rule)
+const swd_names = ['g_trace_ring', 'io_startup_faults', 'g_rx_count', 'g_rx_last', 'g_fwd_count',
+	'g_eth_rx_ok', 'g_eth_rx_drops']
+
+// exported_global: a __global that keeps its own name in C, so it can be read by that name. V3
+// names a module's global `<module>__<name>`, and only one declared on its own line can carry the
+// attribute.
+fn exported_global(name string, typ string) []string {
+	if name !in swd_names {
+		panic('loom2v: ${name} is exported by name but not in swd_names')
+	}
+	return ["@[export: '${name}']", '__global ${name} ${typ}']
 }
 
 // trace_module_init: construct the TraceModule from the bindings — the platform serves the
@@ -428,11 +448,12 @@ fn baremetal_trace_globals(m Model) []string {
 	if !baremetal_trace_on(m) {
 		return []string{}
 	}
+	mut out := ['']
+	out << trace_ring_global(m)
 	return [
-		'',
+		...out,
 		'__global (',
-		'\tg_trace_ring [${m.trace.buffer_records}]trace.Record',
-		'\tg_tm         trace.TraceModule',
+		'\tg_tm trace.TraceModule',
 		')',
 		'',
 		'fn trace_clock() u64 {',
