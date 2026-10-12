@@ -239,7 +239,9 @@ holds its persisted fault memory and its `SteerLimit` parameter: `make flash` ne
 and coded parameters survive a reflash — clear DTCs with 0x14, recode a parameter with 0x2E
 (`test/param_zone_a.lua` leaves it at 360).
 
-**CI pins the V compiler, and it is V3**: the commit in `.v-version`, built from source with the
+**CI pins the V compiler, and it is V3**: the commit in `.v-version` (today the head of vlang/v#30204,
+`ea5156d` plus the fixed-array borrow fix master carries as `7858acc`, since no vc builds a master commit
+that has it), built from source with the
 vlang/vc bootstrap pinned in `.vc-version` — keep it the pair blobly_net pins, moved in both repos
 together, so one `~/v` builds both (`.github/actions/setup-v`, `scripts/v_toolchain.sh`, both from blobly_net, tested by
 `scripts/v_toolchain_test.sh`). CI sets `V_MACOS_V3_NO_FALLBACK=1`: without it a program V3 cannot
