@@ -45,6 +45,8 @@ fn v_test_results(files []string) map[string]string {
 	if files.len == 0 {
 		return res
 	}
+	// the runner hides its OK lines under CI unless told not to, and a file with no line fails
+	os.setenv('VTEST_HIDE_OK', '0', true)
 	out := os.execute('${@VEXE} -enable-globals test ${files.map(os.quoted_path(it)).join(' ')}').output
 	for ln in out.split_into_lines() {
 		t := ln.trim_space()
