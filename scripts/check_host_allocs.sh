@@ -13,21 +13,23 @@ tmp=$(mktemp -d) || exit 2
 trap 'rm -rf "$tmp"' EXIT
 fail=0
 n_checked=0
-for d in examples/*/; do
-	n=$(basename "$d")
-	[ -f "$d/main.v" ] && [ -d "$d/gen" ] || continue
+# the directories CI's host-build loop builds: every example and every system node with a
+# Makefile, a host one being one whose Makefiles name no ARM toolchain
+for d in examples/*/ examples/*/nodes/*/; do
+	ex=${d%/}
+	[ -f "$ex/Makefile" ] && [ -f "$ex/main.v" ] && [ -d "$ex/gen" ] || continue
 	# a cross example's gen/ is transpiled freestanding; check_no_heap.sh gates its image
-	grep -rq arm-none-eabi "$d" --include='Makefile*' && continue
+	grep -rq arm-none-eabi "$ex" --include='Makefile*' && continue
 	n_checked=$((n_checked + 1))
-	if ! out=$("$v" -gc none -warn-about-allocs -path "@vlib|@vmodules|.|examples/$n" -o "$tmp/$n.c" "examples/$n" 2>&1); then
-		echo "check_host_allocs: examples/$n does not compile:" >&2
+	if ! out=$("$v" -gc none -warn-about-allocs -path "@vlib|@vmodules|.|$ex" -o "$tmp/${ex//\//_}.c" "$ex" 2>&1); then
+		echo "check_host_allocs: $ex does not compile:" >&2
 		printf '%s\n' "$out" | tail -5 >&2
 		fail=1
 		continue
 	fi
-	hits=$(printf '%s\n' "$out" | grep -E "^examples/$n/gen/[^:]+:[0-9]+:[0-9]+: warning: allocation" || true)
+	hits=$(printf '%s\n' "$out" | grep -E "^$ex/gen/[^:]+:[0-9]+:[0-9]+: warning: allocation" || true)
 	if [ -n "$hits" ]; then
-		echo "check_host_allocs: examples/$n allocates in its generated code:" >&2
+		echo "check_host_allocs: $ex allocates in its generated code:" >&2
 		printf '%s\n' "$hits" | sed 's/^/  /' >&2
 		fail=1
 	fi
