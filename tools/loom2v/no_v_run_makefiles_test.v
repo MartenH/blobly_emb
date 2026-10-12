@@ -266,7 +266,7 @@ fn test_a_tool_is_rebuilt_when_any_input_changes() {
 		panic(err)
 	}
 	os.write_file(hdr, '#define PROBE 1\n') or { panic(err) }
-	os.write_file(os.join_path(d, 'Makefile'), 'REPO := ${@VMODROOT}\nTOOL_SRC_probe := ${src}\ninclude \$(REPO)/tools/tools.mk\nall: \$(TOOL_probe)\n') or {
+	os.write_file(os.join_path(d, 'Makefile'), 'REPO := ${@VMODROOT}\nTOOL_DIR := \$(CURDIR)/bin\nTOOL_SRC_probe := ${src}\ninclude \$(REPO)/tools/tools.mk\nall: \$(TOOL_probe)\n') or {
 		panic(err)
 	}
 	fake := os.join_path(d, 'fakev.sh')
