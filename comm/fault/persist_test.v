@@ -525,7 +525,7 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 				flips++
 				// the first pass after the update — completed, cut half-way (both schemas' blocks
 				// left whole), or never reached before the next update (a rollback)
-				match (rng >> 26) % 3 {
+				match ((rng >> 26) % 3) {
 					0 {
 						r.m.persist(now, true)
 					}
@@ -1208,7 +1208,7 @@ fn test_traffic_stays_inside_the_write_budget() {
 			op := rng % 100
 			if op < 85 {
 				k := int((rng >> 8) % 4)
-				res := match (rng >> 11) % 3 {
+				res := match ((rng >> 11) % 3) {
 					0 { TestResult.failed }
 					1 { TestResult.passed }
 					else { TestResult.not_tested }

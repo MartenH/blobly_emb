@@ -9,6 +9,8 @@
 *.so
 /v
 vls.log
+# V3's C build directory beside the output binary; `v run` leaves it behind with its cache_plan.c
+.*.v3cc.*/
 
 # Editor / OS
 .DS_Store

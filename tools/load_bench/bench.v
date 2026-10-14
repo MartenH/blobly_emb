@@ -40,13 +40,6 @@ mut:
 	v2  u32
 }
 
-struct C.timespec {
-	tv_sec  i64
-	tv_nsec i64
-}
-
-fn C.clock_gettime(int, &C.timespec) int
-
 // cpu_ns returns this process's consumed CPU time (not wall) in nanoseconds.
 fn cpu_ns() u64 {
 	ts := C.timespec{}
@@ -122,7 +115,7 @@ fn fb_work(core int, fb int) {
 	}
 }
 
-fn core_entry(core int, _ voidptr) {
+fn core_entry(core i32, _ voidptr) {
 	wall0 := osal.now_us()
 	cpu0 := cpu_ns()
 	deadline := wall0 + run_s * 1_000_000

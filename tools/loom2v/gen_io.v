@@ -325,7 +325,7 @@ fn emit_io_target_entry(m Model, doc toml.Doc, ioc_idx map[string]int, with_load
 // emit_io_target_boot emits the io cfg + init + one synchronous boot publish, injected at
 // the TOP of tx_application_define — before any thread is created, so it runs to completion
 // before application dispatch can begin (REQ-IO-009: platform first, app after). Outputs
-// hold their configured init from io.init() on; each input gets ONE boot sample so the
+// hold their configured init from io.start() on; each input gets ONE boot sample so the
 // first activation never reads an empty cell. An INPUT failure bumps the exported
 // io_startup_faults counter (degraded, observable start); an OUTPUT cfg/init failure
 // HALTS before app dispatch — REQ-IO-009 has no safe-start exception for an actuator
@@ -361,7 +361,7 @@ fn emit_io_target_boot(m Model, ioc_idx map[string]int) []string {
 		}
 		g << '\t}'
 	}
-	g << '\tif !io.init() {'
+	g << '\tif !io.start() {'
 	g << '\t\tio_startup_faults++'
 	if has_output {
 		g << '\t\tio_out_fault = true'

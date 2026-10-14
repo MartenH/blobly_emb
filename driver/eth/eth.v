@@ -37,7 +37,12 @@ pub fn (s Socket) send(ip [4]u8, port u16, data &u8, len int) bool {
 // static-peer filter, REQ-NET-017). -1 = none pending; 0 is a real EMPTY
 // datagram (a counted short drop for the caller, not an idle socket).
 pub fn (s Socket) recv(mut ip [4]u8, port &u16, buf &u8, max int) int {
-	return C.blob_eth_recv(s.fd, &ip[0], port, buf, max)
+	// C writes this function's own array, copied out after: handed the caller's, V3 reads it as
+	// kept by C and moves every caller's to the heap (docs/no-alloc.md)
+	mut from := [4]u8{}
+	n := C.blob_eth_recv(s.fd, &from[0], port, buf, max)
+	ip = from
+	return n
 }
 
 pub fn (mut s Socket) close() {

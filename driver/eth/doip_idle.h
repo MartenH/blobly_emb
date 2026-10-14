@@ -15,7 +15,7 @@
 
 #include <stdint.h>
 
-typedef struct {
+typedef struct doip_idle_t { /* tagged: V3 declares `struct C.doip_idle_t` as `typedef struct doip_idle_t doip_idle_t;` */
 	uint32_t initial;       /* T_TCP_Initial_Inactivity, ticks */
 	uint32_t general;       /* T_TCP_General_Inactivity, ticks */
 	uint32_t conn_start;    /* accept */

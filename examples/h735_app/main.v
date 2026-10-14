@@ -5,17 +5,22 @@ module main
 // the single-core Loom superloop (FBs + CpuLoad telemetry + the [trace] module).
 // Everything below the board glue is generated; this file is just the platform seam.
 //
-// Entry is main__main() called directly from startup.c (no V _vinit), the bare-metal
+// Entry is blob_entry() called directly from startup.c (no V _vinit), the bare-metal
 // pattern the retired h735_blinky / h735_canecho bring-ups proved (#344).
 
 import gen
 import driver.can
+import osal.vrt as _ // V's builtin hooks on target
 
 fn C.board_clock_init()
 fn C.board_timebase_init()
 fn C.board_can_clock_pins_init()
 
-fn main() {
+// entry is the image's entry point: crt0.S jumps to it by its exported C name (BOARD_ENTRY)
+// after bss/data init. Not V's `fn main`, which V3 wraps in a hosted C main (VEXE env setup,
+// _vinit); the image enters by a name it owns, never by V's mangling of `main`.
+@[export: 'blob_entry']
+fn entry() {
 	C.board_clock_init()          // M7 -> 550 MHz (Direct SMPS + VOS0)
 	C.board_timebase_init()       // DWT cycle counter -> board_now_us()
 	C.board_can_clock_pins_init() // FDCAN1 kernel clock + PH13/PH14 AF9
@@ -25,4 +30,9 @@ fn main() {
 		for {} // open/init failed (kernel clock?) — halt so a debugger stops here
 	}
 	gen.run(ch) // generated single-core superloop: CpuLoad tx + trace on this channel
+}
+
+// main is never called on target (crt0 enters at `entry`); V requires one in module main
+fn main() {
+	entry()
 }

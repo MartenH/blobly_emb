@@ -23,11 +23,16 @@ fn handler_app_dimmer_on_10ms(ctx voidptr) {
 	osal.ioc_publish(fan_duty_ch, &outp.fan_duty, u8(sizeof(outp.fan_duty)))
 }
 
-pub fn partition_app(core int, arg voidptr) {
+__global (
+	g_st_app Partition_app_state
+	g_sched_app loom.Scheduler
+)
+pub fn partition_app(core i32, arg voidptr) {
 	osal.pin_to_core(0)
-	mut st := Partition_app_state{}
-	mut sched := loom.Scheduler{}
-	sched.every(10000, handler_app_dimmer_on_10ms, &st)
+	g_st_app = Partition_app_state{} // the FB field defaults
+	mut st := &g_st_app
+	mut sched := &g_sched_app
+	sched.every(10000, handler_app_dimmer_on_10ms, st)
 	for {
 		loom_t0 := osal.now_us()
 		sched.run(loom_t0)
@@ -81,9 +86,8 @@ fn partition_io() {
 
 // inputs whose initial boot sample could not be read — nothing was published
 // for them (no fabricated sample); consumers hold their declared default
-__global (
-	io_startup_faults u32
-)
+@[export: 'io_startup_faults']
+__global io_startup_faults u32
 
 pub fn run() {
 	if !io.cfg(0, 'Pot', 'PA3', false, 0, 0, 1, u32(65535)) {
@@ -92,7 +96,7 @@ pub fn run() {
 	if !io.cfg(1, 'FanDuty', 'PE9', true, 0, 0, 2, u32(20000)) {
 		panic('io cfg failed: FanDuty')
 	}
-	if !io.init() {
+	if !io.start() {
 		panic('io init failed')
 	}
 	if boot_pot_v := io.adc_read_checked(0) {

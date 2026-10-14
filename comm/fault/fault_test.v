@@ -803,7 +803,7 @@ fn stored_rs(st &RamStore) []u8 {
 fn model_memory(st &RamStore) Memory {
 	mut m := memory([u32(0xC40100), u32(0xC40200)])
 	m.store = Store{
-		ctx: st
+		ctx: unsafe { st } // the caller keeps the store alive for the memory's life
 		put: rs_put
 		get: rs_get
 		id:  0x0F00
@@ -997,7 +997,7 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 			} else if op == 98 {
 				// an operation cycle boundary: while off it changes no status
 				before := [m.slots[0].status, m.slots[1].status]
-				match (rng >> 8) % 3 {
+				match ((rng >> 8) % 3) {
 					0 { m.cycle_start() }
 					1 { m.cycle_end() }
 					else { m.end_cycle_after(now, 30) } // NM's sleep: the end waits for the barrier

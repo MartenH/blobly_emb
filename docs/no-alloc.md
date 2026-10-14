@@ -24,6 +24,16 @@ would not. See the longer rationale in the project discussion / git history.
   the MPU rule that an app partition has no peripheral access (see
   [memory-protection.md](memory-protection.md)).
 - `tools/` is deliberately **not** scanned: build-time code may allocate freely.
+- The lint reads SOURCE, and V3 allocates out of code that never looks like it does: a local whose
+  address reaches a call it cannot see through (a callback, a C function, a pointer the callee
+  keeps) is moved to the heap, and `.any()` on a fixed array copies it into a dynamic one. So the
+  cross job also checks every linked image: `scripts/check_no_heap.sh` fails it when any allocator
+  survives `--gc-sections`, i.e. when the entry can reach one. `-warn-about-allocs` on the
+  transpile names each moved local. On target an allocation is nil from `osal/vrt` and a halt.
+  What a thread keeps for its life (its state, scheduler, trace ring, the frame it receives into)
+  is a `__global` on host and target alike (loom2v's `thread_globals`, `g_st_<owner>`,
+  `g_sched_<part>`), and `scripts/check_host_allocs.sh` holds every host example's generated code
+  to no allocation the way `check_no_heap.sh` holds the target images.
 
 ## DBC example of the split
 

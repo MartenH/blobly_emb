@@ -7,7 +7,17 @@ module main
 // example keeps only what every example owns: the FBs (app/), the board/platform glue C
 // (m4_glue.c), the Makefile, and this shim.
 import gen
+import osal.vrt as _ // V's builtin hooks on target
 
-fn main() {
+// entry is the image's entry point: crt0.S jumps to it by its exported C name (BOARD_ENTRY)
+// after bss/data init. Not V's `fn main`, which V3 wraps in a hosted C main (VEXE env setup,
+// _vinit); the image enters by a name it owns, never by V's mangling of `main`.
+@[export: 'blob_entry']
+fn entry() {
 	gen.boot() // park on clocks-ready -> timebase -> xioc pool -> trace arm -> kernel
+}
+
+// main is never called on target (crt0 enters at `entry`); V requires one in module main
+fn main() {
+	entry()
 }

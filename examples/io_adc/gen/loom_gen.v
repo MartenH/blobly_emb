@@ -23,11 +23,16 @@ fn handler_app_meter_on_10ms(ctx voidptr) {
 	osal.ioc_publish(led_hi_ch, &outp.led_hi, u8(sizeof(outp.led_hi)))
 }
 
-pub fn partition_app(core int, arg voidptr) {
+__global (
+	g_st_app Partition_app_state
+	g_sched_app loom.Scheduler
+)
+pub fn partition_app(core i32, arg voidptr) {
 	osal.pin_to_core(0)
-	mut st := Partition_app_state{}
-	mut sched := loom.Scheduler{}
-	sched.every(10000, handler_app_meter_on_10ms, &st)
+	g_st_app = Partition_app_state{} // the FB field defaults
+	mut st := &g_st_app
+	mut sched := &g_sched_app
+	sched.every(10000, handler_app_meter_on_10ms, st)
 	for {
 		loom_t0 := osal.now_us()
 		sched.run(loom_t0)
@@ -81,9 +86,8 @@ fn partition_io() {
 
 // inputs whose initial boot sample could not be read — nothing was published
 // for them (no fabricated sample); consumers hold their declared default
-__global (
-	io_startup_faults u32
-)
+@[export: 'io_startup_faults']
+__global io_startup_faults u32
 
 pub fn run() {
 	if !io.cfg(0, 'LedHi', 'PB0', true, 0, 0, 0, u32(0)) {
@@ -92,7 +96,7 @@ pub fn run() {
 	if !io.cfg(1, 'PotVolt', 'PA3', false, 0, 0, 1, u32(65535)) {
 		panic('io cfg failed: PotVolt')
 	}
-	if !io.init() {
+	if !io.start() {
 		panic('io init failed')
 	}
 	if boot_pot_volt_v := io.adc_read_checked(1) {

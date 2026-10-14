@@ -61,7 +61,7 @@ gen/.stamp: ecu.toml bus.dbc $(wildcard app/*.v) $(TOOL_ecucheck) $(TOOL_loom2v)
 #    the repo root so `import loom/comm.telem/driver.can` resolve via `.` and the local
 #    `import gen/app/ports/sig` via examples/$(NAME).
 # how V is run for it — also its signature (tools/tools.mk v_sign)
-TRANSPILE_FLAGS = $(VDBG) -freestanding -gc none -no-bounds-checking -enable-globals -path "@vlib|@vmodules|.|examples/$(NAME)"
+TRANSPILE_FLAGS = $(VDBG) -freestanding -arch arm32 -target-libc-headers -gc none -no-bounds-checking -enable-globals -path "@vlib|@vmodules|.|examples/$(NAME)"
 $(BUILD)/app.c: main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) $(call v_sign,$(BUILD)/app.c,$(TRANSPILE_FLAGS)) | $(BUILD)
 	cd $(REPO) && $(V) $(TRANSPILE_FLAGS) $(call v_dump,$@) -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
 	$(call v_deps,$@)
@@ -95,7 +95,7 @@ gdbserver:
 	openocd $(OOCD_CFG)
 
 gdb: $(BUILD)/app.elf
-	$(GDB) $< -ex "target extended-remote :3333" -ex "load" -ex "break main__main" -ex "continue"
+	$(GDB) $< -ex "target extended-remote :3333" -ex "load" -ex "break blob_entry" -ex "continue"
 
 clean:
 	rm -rf $(BUILD) gen ports sig bin

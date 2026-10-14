@@ -2547,6 +2547,8 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			// aligned [256]u8 could fault. The stack stays a byte buffer (ThreadX aligns the SP
 			// internally in tx_thread_stack_build).
 			glue << rx_target_struct(m)
+			// what a debugger or bench reads by name (the SWD-observable rule): after the block
+			mut swd := []string{}
 			glue << '__global ('
 			for thr in app_threads {
 				own := if multi { thr } else { part }
@@ -2557,6 +2559,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// gen/loom_build.mk right-sizes it, but the placement rule doesn't depend on that).
 				// bss-zero == Scheduler{} (its only field default is a nil hook), so no init needed.
 				glue << '\tg_sched_${own} loom.Scheduler // bss, never an entry-frame local'
+				// the FB state: the scheduler keeps its address for the thread's lifetime, which
+				// V3 would otherwise satisfy by moving an entry-frame local to the heap
+				stype := if multi { 'Thread_${thr}_state' } else { 'Partition_${part}_state' }
+				glue << '\tg_st_${own} ${stype} // bss; its field defaults are set at thread entry'
 			}
 			glue << trace_scratch_fields(m, part)
 			glue << trace_module_globals(m)
@@ -2582,12 +2588,15 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// (The load cell is the volatile C scratch in comm_glue.c, via load_pub/load_*.)
 				// Rx accounting: the comm thread counts received frames + keeps the last value, so a
 				// host cansend is observable. The rx CONSUMER of the lean cut (comm-thread-local).
-				glue << '\tg_rx_count u32'
-				glue << '\tg_rx_last  u32'
+				swd << exported_global('g_rx_count', 'u32')
+				// the frame the comm thread receives into: its address reaches the UDS server's
+				// callbacks, which V3 cannot see through, so it lives in bss and never this frame
+				glue << '\tg_comm_rx  can.Frame'
+				swd << exported_global('g_rx_last', 'u32')
 				if m.routes.len > 0 {
 					// gateway: frames forwarded bus->bus (raw copy + id remap). Exported so a
 					// bench can confirm the ThreadX gateway is routing (the SWD-observable rule).
-					glue << '\tg_fwd_count u32'
+					swd << exported_global('g_fwd_count', 'u32')
 				}
 			}
 			if eth_thread_on(m) {
@@ -2595,8 +2604,8 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << '\tg_eth_stack [4096]u8 // someip codec + TxState/E2E frames: comm-thread-class depth'
 				// drop/ok counters as exported globals: SWD-observable (the
 				// semihosting-never rule) — the host bridge prints, silicon counts
-				glue << '\tg_eth_rx_ok u32'
-				glue << '\tg_eth_rx_drops u32'
+				swd << exported_global('g_eth_rx_ok', 'u32')
+				swd << exported_global('g_eth_rx_drops', 'u32')
 			}
 			if m.io_points.len > 0 {
 				glue << '\tg_io_tcb   [32]u64  // the platform io thread (docs/io.md)'
@@ -2607,11 +2616,15 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					// producer counts io too, not just the comm thread's sums).
 					glue << '\tg_sched_io loom.Scheduler // io serve-time accounting for the CpuLoad seam'
 				}
-				// the startup-fault counter is an exported symbol (docs/io.md observability
-				// rule): SWD/bench readable even with no service on
-				glue << '\tio_startup_faults u32'
 			}
 			glue << ')'
+			glue << swd
+			glue << trace_ring_global(m)
+			if m.io_points.len > 0 {
+				// the startup-fault counter is an exported symbol (docs/io.md observability
+				// rule): SWD/bench readable even with no service on
+				glue << exported_global('io_startup_faults', 'u32')
+			}
 		}
 		glue << ''
 		if multi {
@@ -2621,7 +2634,8 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			// exactly what the trace's swimlane is for.
 			for ti, thr in app_threads {
 				glue << 'fn run_${thr}() {'
-				glue << '\tmut st := Thread_${thr}_state{} // small + carries the FB field defaults: stack is right'
+				glue << '\tg_st_${thr} = Thread_${thr}_state{} // the FB field defaults, at entry: bss is all zero'
+				glue << '\tmut st := &g_st_${thr}'
 				glue << nvm_restore_lines(m, nvm_writer_thr(m, doc), thr, true)
 				glue << '\tmut sched := &g_sched_${thr} // module-sized: lives in bss, not this lifetime frame'
 				for r in all_regs['${part}/${thr}'] or { []string{} } {
@@ -2691,6 +2705,16 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << 'struct Partition_${part}_state {}'
 			glue << ''
 		}
+		if !multi && !m.target.threadx {
+			// bare metal has no ThreadX global block (above): the partition's state and scheduler get
+			// their own. In bss, not run()'s frame: the scheduler keeps the state's address and its own
+			// handler tables, which V3 would move to the heap from a local
+			glue << '__global ('
+			glue << '\tg_st_${part}    Partition_${part}_state // bss; its field defaults are set at run() entry'
+			glue << '\tg_sched_${part} loom.Scheduler // bss-zero == Scheduler{} (its only field default is a nil hook)'
+			glue << ')'
+			glue << ''
+		}
 		if !multi && (comm_thread_on || m.buses.len == 0 || eth_only_img(m)) {
 			// The FB thread stays OFF CAN: with a comm thread it owns the bus, a
 			// bus-less [[io.gpio]]-only node has no channel at all (emb#150 r4),
@@ -2702,7 +2726,8 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << '\tmut ch := ${chp}'
 		}
 		if !multi {
-		glue << '\tmut st := Partition_${part}_state{}'
+		glue << '\tg_st_${part} = Partition_${part}_state{} // the FB field defaults, at entry: bss is all zero'
+		glue << '\tmut st := &g_st_${part}'
 		if m.target.threadx {
 			glue << nvm_restore_lines(m, nvm_writer_thr(m, doc), '', false)
 			for fb in fault_fbs(m) {
@@ -2710,11 +2735,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			}
 		}
 		if m.target.threadx {
-			// same rule as the multi-thread path: the FB thread has a 4 KB stack. Bare metal
-			// keeps the local — run() sits on the main stack, which owns the remaining RAM.
+			// same rule as the multi-thread path: the FB thread has a 4 KB stack
 			glue << '\tmut sched := &g_sched_${part} // module-sized: lives in bss, not this lifetime frame'
 		} else {
-			glue << '\tmut sched := loom.Scheduler{}'
+			glue << '\tmut sched := &g_sched_${part} // bss (declared above run()): V3 would move a local to the heap'
 		}
 		for r in all_regs[part] or { []string{} } {
 			glue << r
@@ -3007,7 +3031,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				if target_encodes(m) {
 					glue << '\tmut tx_sat := com.TxSaturations{} // sent values com.encode_raw saturated (docs/communication.md)'
 				}
-				glue << '\tmut rx := can.Frame{}'
+				glue << '\tmut rx := &g_comm_rx // bss: see the __global block'
 				glue << '\tfor {'
 				// While a stream is in flight — a trace dump, a diagnostic answer — wake every tick:
 				// the Tx FIFO holds ~3 frames, so a 10-tick pace stretches a 75-frame block to
@@ -3356,9 +3380,7 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 		glue << ''
 		glue << '// inputs whose initial boot sample could not be read — nothing was published'
 		glue << '// for them (no fabricated sample); consumers hold their declared default'
-		glue << '__global ('
-		glue << '\tio_startup_faults u32'
-		glue << ')'
+		glue << exported_global('io_startup_faults', 'u32')
 	}
 		// --- host run(): launch every bus bridge + app partition, then wait. One
 		//     Channel param per bus (sorted for a stable signature main.v can rely
@@ -3376,6 +3398,9 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 		}
 		if eth_on {
 			params << '${snake(m.eth)}_sock eth.Socket' // the eth comm thread's UDP seam
+		}
+		if tctx.on() {
+			glue << trace_run_globals(m)
 		}
 		if params.len == 0 {
 			glue << 'pub fn run() {'
@@ -3398,7 +3423,7 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 				glue << "\t\tpanic('io cfg failed: ${pt.name}')"
 				glue << '\t}'
 			}
-			glue << '\tif !io.init() {'
+			glue << '\tif !io.start() {'
 			glue << "\t\tpanic('io init failed')"
 			glue << '\t}'
 			for pt in m.io_points {
@@ -3790,9 +3815,9 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 				glue << fault_step_lines(m, cname, hname)
 				glue << '}'
 				if multi {
-					all_regs['${part}/${fb_thr[cname]}'] << '\tsched.every(${period_us}, ${gname}, &st)'
+					all_regs['${part}/${fb_thr[cname]}'] << '\tsched.every(${period_us}, ${gname}, st)'
 				} else {
-					regs << '\tsched.every(${period_us}, ${gname}, &st)'
+					regs << '\tsched.every(${period_us}, ${gname}, st)'
 				}
 			}
 		}
@@ -3805,13 +3830,15 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 		// so this emitter names no capability.
 		if !m.target.on && (!trace_owns_run || tctx.on()) {
 			glue << ''
-			glue << 'pub fn partition_${part}(core int, arg voidptr) {'
+			glue << thread_globals(['g_st_${part} Partition_${part}_state', 'g_sched_${part} loom.Scheduler'])
+			glue << 'pub fn partition_${part}(core i32, arg voidptr) {'
 			glue << '\tosal.pin_to_core(${m.part.core_of[part] or { 0 }})'
-			glue << '\tmut st := Partition_${part}_state{}'
+			glue << '\tg_st_${part} = Partition_${part}_state{} // the FB field defaults'
+			glue << '\tmut st := &g_st_${part}'
 			for c in clist {
 				glue << fault_init_lines(m, (c.as_map()['name'] or { toml.Any('') }).string())
 			}
-			glue << '\tmut sched := loom.Scheduler{}'
+			glue << '\tmut sched := &g_sched_${part}'
 			for r in regs {
 				glue << r
 			}
@@ -3892,8 +3919,8 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 
 	mut glue := []string{}
 	glue << '// Code generated by tools/loom2v from ${os.file_name(ecu)} — DO NOT EDIT.'
-	if !m.target.on && m.io_points.filter(!it.output).len > 0 {
-		// io_startup_faults: the host build has no -enable-globals flag
+	if !m.target.on {
+		// thread_globals and io_startup_faults: the host build has no -enable-globals flag
 		glue << '@[has_globals]'
 	}
 	glue << 'module gen'

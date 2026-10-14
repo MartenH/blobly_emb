@@ -10,14 +10,19 @@ module main
 // sockets 1 and 3 for power/ground; their edge RX/TX headers wire to the FDCAN
 // pins above (the socket UART pins aren't FDCAN-capable — see README).
 //
-// Entry is main__main() called directly from startup.c (no V _vinit), the same
+// Entry is blob_entry() called directly from startup.c (no V _vinit), the same
 // bare-metal pattern the retired h735_blinky / h735_canecho bring-ups proved (#344).
 
 import driver.can
+import osal.vrt as _ // V's builtin hooks on target
 
 fn C.board_can_clock_pins_init()
 
-fn main() {
+// entry is the image's entry point: crt0.S jumps to it by its exported C name (BOARD_ENTRY)
+// after bss/data init. Not V's `fn main`, which V3 wraps in a hosted C main (VEXE env setup,
+// _vinit); the image enters by a name it owns, never by V's mangling of `main`.
+@[export: 'blob_entry']
+fn entry() {
 	C.board_can_clock_pins_init()
 
 	mut ch1 := can.Channel{} // bus 0 = FDCAN1
@@ -54,4 +59,9 @@ fn echo(f can.Frame) can.Frame {
 		out.data[i] = f.data[i]
 	}
 	return out
+}
+
+// main is never called on target (crt0 enters at `entry`); V requires one in module main
+fn main() {
+	entry()
 }

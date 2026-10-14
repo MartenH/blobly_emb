@@ -241,16 +241,52 @@ fn trace_scratch_fields(m Model, part string) []string {
 	]
 }
 
-// trace_module_globals: the module + its ring live in __global (the ISO-TP link alone is ~1 KB
-// — keep it off the 4 KB comm stack). Initialised at comm-thread start (trace_module_init).
+// trace_module_globals: the module lives in __global (the ISO-TP link alone is ~1 KB — keep it
+// off the 4 KB comm stack). Initialised at comm-thread start (trace_module_init). Its ring is
+// trace_ring_global, outside the block, since it keeps its C name.
 fn trace_module_globals(m Model) []string {
 	if !m.trace.on {
 		return []string{}
 	}
-	return [
-		'\tg_trace_ring [${m.trace.buffer_records}]trace.Record',
-		'\tg_tm trace.TraceModule',
-	]
+	return ['\tg_tm trace.TraceModule']
+}
+
+// trace_ring_global: the trace ring, read out of RAM by name over SWD (h735_app's bench_test.sh)
+fn trace_ring_global(m Model) []string {
+	if !m.trace.on {
+		return []string{}
+	}
+	return exported_global('g_trace_ring', '[${m.trace.buffer_records}]trace.Record')
+}
+
+// thread_globals: what a host thread keeps for its whole life and something else holds the address
+// of — its scheduler, its state, a trace ring, the frame it receives into. V3 moves such a local to
+// the heap, and the examples run with -gc none, so it is a __global; the thread takes a pointer
+// (or, for an array, names the global) in place of the local.
+fn thread_globals(decls []string) []string {
+	if decls.len == 0 {
+		return []string{}
+	}
+	mut out := ['__global (']
+	for d in decls {
+		out << '\t${d}'
+	}
+	out << ')'
+	return out
+}
+
+// swd_names: the generated globals a debugger or bench reads by name (the SWD-observable rule)
+const swd_names = ['g_trace_ring', 'io_startup_faults', 'g_rx_count', 'g_rx_last', 'g_fwd_count',
+	'g_eth_rx_ok', 'g_eth_rx_drops']
+
+// exported_global: a __global that keeps its own name in C, so it can be read by that name. V3
+// names a module's global `<module>__<name>`, and only one declared on its own line can carry the
+// attribute.
+fn exported_global(name string, typ string) []string {
+	if name !in swd_names {
+		panic('loom2v: ${name} is exported by name but not in swd_names')
+	}
+	return ["@[export: '${name}']", '__global ${name} ${typ}']
 }
 
 // trace_module_init: construct the TraceModule from the bindings — the platform serves the
@@ -284,11 +320,11 @@ fn trace_rx_arms(m Model, part string) []string {
 	g << '\t\t\t\t\ttr_n := C.trace_snapshot(&g_${part}_trace[0], ${m.trace.buffer_records})'
 	g << '\t\t\t\t\tg_tm.load_snapshot(&g_${part}_trace[0][0], tr_n)'
 	g << '\t\t\t\t}'
-	g << '\t\t\t\tg_tm.on_cmd(rx)'
+	g << '\t\t\t\tg_tm.on_cmd(*rx)'
 	g << '\t\t\t}'
 	if m.trace.dump_fc_bound {
 		g << '\t\t\tif rx.id == u32(0x${m.trace.dump_fc_id.hex()}) && !rx.ext { // trace.dump_fc -> ISO-TP FC'
-		g << '\t\t\t\tg_tm.on_dump_fc(C.board_now_us(), rx)'
+		g << '\t\t\t\tg_tm.on_dump_fc(C.board_now_us(), *rx)'
 		g << '\t\t\t}'
 	}
 	return g
@@ -353,23 +389,25 @@ fn emit_run_trace_host(m Model, all_regs map[string][]string, telem_iface string
 	telem_on := m.telem.on && telem_iface != ''
 	mut g := []string{}
 	g << ''
+	g << thread_globals(['g_st_${part} Partition_${part}_state', 'g_sched_${part} loom.Scheduler',
+		'g_run_ring [${m.trace.buffer_records}]trace.Record'])
 	g << 'pub fn run(chp can.Channel) {'
 	// ONE loop runs the handlers AND serves the bus, so it runs where the handlers are declared —
 	// the same core the module reports (single_trace_core). Pinning to the trace bus's core
 	// instead let the label, the manifest and the actual execution core disagree (codex #282 r2).
 	g << '\tosal.pin_to_core(${single_trace_core(m)})'
 	g << '\tmut ch := chp'
-	g << '\tmut st := Partition_${part}_state{}'
-	g << '\tmut sched := loom.Scheduler{}'
+	g << '\tg_st_${part} = Partition_${part}_state{} // the FB field defaults'
+	g << '\tmut st := &g_st_${part}'
+	g << '\tmut sched := &g_sched_${part}'
 	for r in all_regs[part] or { []string{} } {
 		g << r
 	}
 	g << '\t// trace: the ring + module (comm/trace) — the platform serves the protocol, this loop'
 	g << '\t// only feeds it: fb_hook records each dispatched handler, on_cmd applies routed commands,'
 	g << '\t// produce yields the response + dump stream.'
-	g << '\tmut ring := [${m.trace.buffer_records}]trace.Record{}'
 	g << '\tmut tm := trace.new_module(u32(0x${m.trace.rsp_id.hex()}), u32(0x${m.trace.record_id.hex()}), ${single_trace_core(m)}, ${m.trace.dump_fc_bound},'
-	g << '\t\ttrace.new_buffer(&ring[0], ${m.trace.buffer_records}, ${mode}, ${m.trace.pre_pct}))'
+	g << '\t\ttrace.new_buffer(&g_run_ring[0], ${m.trace.buffer_records}, ${mode}, ${m.trace.pre_pct}))'
 	g << '\tmut cap := tm.capture(0, ${m.trace.budget_us}, osal.now_us())'
 	g << '\tsched.set_trace_hook(trace.fb_hook, &cap)'
 	g << '\ttm.arm() // record from startup, like every other runner: a flight recorder that waits'
@@ -428,11 +466,12 @@ fn baremetal_trace_globals(m Model) []string {
 	if !baremetal_trace_on(m) {
 		return []string{}
 	}
+	mut out := ['']
+	out << trace_ring_global(m)
 	return [
-		'',
+		...out,
 		'__global (',
-		'\tg_trace_ring [${m.trace.buffer_records}]trace.Record',
-		'\tg_tm         trace.TraceModule',
+		'\tg_tm trace.TraceModule',
 		')',
 		'',
 		'fn trace_clock() u64 {',
@@ -789,10 +828,12 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << ''
 	g << '// The satellite core: it pushes FB records into the ring run() handed it, and never'
 	g << '// touches the bus. The owner reads that ring only while it is frozen.'
+	g << thread_globals(['g_st_${sat} Partition_${sat}_state', 'g_sched_${sat} loom.Scheduler'])
 	g << 'pub fn partition_${sat}(cap_ptr &trace.Capture) {'
 	g << '	osal.pin_to_core(${sat_core})'
-	g << '	mut st := Partition_${sat}_state{}'
-	g << '	mut sched := loom.Scheduler{}'
+	g << '	g_st_${sat} = Partition_${sat}_state{} // the FB field defaults'
+	g << '	mut st := &g_st_${sat}'
+	g << '	mut sched := &g_sched_${sat}'
 	for r in all_regs[sat] or { []string{} } {
 		g << r
 	}
@@ -812,18 +853,20 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << ''
 	g << '// The dump owner: an ordinary app partition that also owns the trace bus. Its ring is'
 	g << '// the module\'s OWN buffer, so commands and status apply to a real producing ring.'
+	g << thread_globals(['g_st_${owner} Partition_${owner}_state', 'g_sched_${owner} loom.Scheduler',
+		'g_owner_ring [${cap}]trace.Record'])
 	g << 'pub fn partition_${owner}(chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record, origin_us u64, freeze &trace.FreezeSync) {'
 	g << '	osal.pin_to_core(${owner_core})'
 	g << '	mut ch := chp'
 	g << '	mut sat := unsafe { sat_buf }'
-	g << '	mut st := Partition_${owner}_state{}'
-	g << '	mut sched := loom.Scheduler{}'
+	g << '	g_st_${owner} = Partition_${owner}_state{} // the FB field defaults'
+	g << '	mut st := &g_st_${owner}'
+	g << '	mut sched := &g_sched_${owner}'
 	for r in all_regs[owner] or { []string{} } {
 		g << r
 	}
-	g << '	mut ring := [${cap}]trace.Record{}'
 	g << '	mut tm := trace.new_module(u32(0x${m.trace.rsp_id.hex()}), u32(0x${m.trace.record_id.hex()}), ${owner_core}, ${m.trace.dump_fc_bound},'
-	g << '		trace.new_buffer(&ring[0], ${cap}, ${mode}, ${m.trace.pre_pct}))'
+	g << '		trace.new_buffer(&g_owner_ring[0], ${cap}, ${mode}, ${m.trace.pre_pct}))'
 	// ONE origin for both cores, taken in run() before either thread starts. Sampling it inside
 	// each thread instead made every record relative to a different zero, so the two lanes were
 	// skewed by the nondeterministic thread-start delay — and nothing reported it, because
@@ -895,10 +938,9 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 
 	// --- run(): own the shared ring, then spawn both cores ---
 	g << ''
+	g << trace_run_globals(m)
 	g << 'pub fn run(chp can.Channel) {'
-	g << '	// run() owns these and waits on both threads below, so they outlive every use.'
-	g << '	mut sat_ring := [${cap}]trace.Record{}'
-	g << '	mut sat_buf := trace.new_buffer(&sat_ring[0], ${cap}, ${mode}, ${m.trace.pre_pct})'
+	g << '	mut sat_buf := trace.new_buffer(&g_sat_ring[0], ${cap}, ${mode}, ${m.trace.pre_pct})'
 	g << '	sat_buf.start()'
 	g << '	// one capture origin for BOTH cores: a per-thread origin would skew the two lanes by'
 	g << '	// the thread-start delay, invisibly (a shared clock emits no core-offset record).'
@@ -907,16 +949,12 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << '	// whichever ring trips its budget raises it and the peer observes it inside its capture'
 	g << '	// hook — within one handler of the event. Generation-aware (#273): a raise counts only'
 	g << '	// for the window it was made in, and the satellite restarts its own ring on a re-arm.'
-	g << '	mut trace_freeze := trace.FreezeSync{}'
 	g << '	// the satellite restarts its own ring when the owner posts a re-arm (#273)'
 	g << '	mut sat_cap := trace.satellite_capture(&sat_buf, trace_origin, ${handler_id_base(m, doc, sat)}, ${m.trace.budget_us},'
-	g << '		unsafe { &trace_freeze })'
-	g << '	// staging for the imported window (caller-owned, per set_remote): +1 for the leading'
-	g << '	// core-offset record load_remote_buffer may prepend.'
-	g << '	mut import_ring := [${cap + 1}]trace.Record{}'
+	g << '		unsafe { &g_trace_freeze })'
 	g << '	t_${sat} := spawn partition_${sat}(&sat_cap)'
-	g << '	t_${owner} := spawn partition_${owner}(chp, &sat_buf, unsafe { &import_ring[0] }, trace_origin,'
-	g << '		unsafe { &trace_freeze })'
+	g << '	t_${owner} := spawn partition_${owner}(chp, &sat_buf, unsafe { &g_import_ring[0] }, trace_origin,'
+	g << '		unsafe { &g_trace_freeze })'
 	g << '	t_${sat}.wait()'
 	g << '	t_${owner}.wait()'
 	g << '}'
@@ -1048,7 +1086,7 @@ fn validate_trace_bridge_owner(m Model, tctx TraceHostCtx) {
 // the satellite's ring + import staging, the shared capture origin and the freeze cell. Appended
 // to the bridge's own COM signature, so run() hands it both buses.
 fn trace_bridge_params() string {
-	return ', trace_ch can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record, origin_us u64, freeze &trace.FreezeSync'
+	return ', trace_chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record, origin_us u64, freeze &trace.FreezeSync'
 }
 
 // trace_bridge_preamble: the owner's ring, module and capture, built once before its loop.
@@ -1061,9 +1099,8 @@ fn trace_bridge_preamble(m Model, tctx TraceHostCtx) []string {
 	owner_core := m.bus_core[tctx.trace_bus] or { 0 }
 	mut g := []string{}
 	g << '\tmut sat := unsafe { sat_buf }'
-	g << '\tmut trace_ring := [${cap}]trace.Record{}'
 	g << '\tmut tm := trace.new_module(u32(0x${m.trace.rsp_id.hex()}), u32(0x${m.trace.record_id.hex()}), ${owner_core}, ${m.trace.dump_fc_bound},'
-	g << '\t\ttrace.new_buffer(&trace_ring[0], ${cap}, .ring, ${m.trace.pre_pct}))'
+	g << '\t\ttrace.new_buffer(&g_bridge_trace_ring[0], ${cap}, .ring, ${m.trace.pre_pct}))'
 	// The bridge's lane id is its manifest comm_<bb> row (host_comm_tid) — note_thread stamps
 	// id_base directly, where an FB capture adds the handler index to it.
 	g << '\tmut cap := tm.capture(${host_comm_tid(m)}, ${m.trace.budget_us}, origin_us)'
@@ -1184,18 +1221,24 @@ fn trace_run_setup(m Model, sat string, doc toml.Doc) []string {
 	cap := m.trace.buffer_records
 	return [
 		'\ttrace_origin := osal.now_us()',
-		'\tmut trace_freeze := trace.FreezeSync{} // generation-aware (#273)',
-		'\tmut sat_ring := [${cap}]trace.Record{}',
-		'\tmut sat_buf := trace.new_buffer(&sat_ring[0], ${cap}, .ring, ${m.trace.pre_pct})',
+		'\tmut sat_buf := trace.new_buffer(&g_sat_ring[0], ${cap}, .ring, ${m.trace.pre_pct})',
 		'\tsat_buf.start()',
 		'\t// the satellite restarts its own ring when the owner posts a re-arm (#273)',
 		'\tmut sat_cap := trace.satellite_capture(&sat_buf, trace_origin, ${handler_id_base(m, doc, sat)}, ${m.trace.budget_us},',
-		'\t\tunsafe { &trace_freeze })',
-		'\tmut import_ring := [${cap + 1}]trace.Record{}',
+		'\t\tunsafe { &g_trace_freeze })',
 	]
+}
+
+// trace_run_globals: what run() keeps for both lanes while it waits on them — the satellite's ring,
+// the staging for the imported window (+1 for the core-offset record load_remote_buffer may
+// prepend) and the generation-aware freeze cell (#273) both captures point at (thread_globals).
+fn trace_run_globals(m Model) []string {
+	cap := m.trace.buffer_records
+	return thread_globals(['g_sat_ring [${cap}]trace.Record', 'g_import_ring [${cap + 1}]trace.Record',
+		'g_trace_freeze trace.FreezeSync'])
 }
 
 // trace_bridge_spawn_args: what run() hands the owner beyond its own COM channels.
 fn trace_bridge_spawn_args(trace_bus string) string {
-	return ', ${snake(trace_bus)}, &sat_buf, unsafe { &import_ring[0] }, trace_origin, unsafe { &trace_freeze }'
+	return ', ${snake(trace_bus)}, &sat_buf, unsafe { &g_import_ring[0] }, trace_origin, unsafe { &g_trace_freeze }'
 }

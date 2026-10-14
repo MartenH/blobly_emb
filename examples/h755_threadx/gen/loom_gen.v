@@ -224,14 +224,16 @@ __global (
 	g_load_fast_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned
 	g_load_fast_stack [4096]u8
 	g_sched_load_fast loom.Scheduler // bss, never an entry-frame local
+	g_st_load_fast Thread_load_fast_state // bss; its field defaults are set at thread entry
 	g_load_mid_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned
 	g_load_mid_stack [4096]u8
 	g_sched_load_mid loom.Scheduler // bss, never an entry-frame local
+	g_st_load_mid Thread_load_mid_state // bss; its field defaults are set at thread entry
 	g_ctrl_slow_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned
 	g_ctrl_slow_stack [4096]u8
 	g_sched_ctrl_slow loom.Scheduler // bss, never an entry-frame local
+	g_st_ctrl_slow Thread_ctrl_slow_state // bss; its field defaults are set at thread entry
 	g_app_trace [256][8]u8 // scratch snapshot of the trace ring (owner streams it)
-	g_trace_ring [256]trace.Record
 	g_tm trace.TraceModule
 	g_sh shell.ShellModule
 	g_xcore_trace_ring [257]trace.Record // the satellite core's imported dump window (+1 = its offset record)
@@ -241,14 +243,20 @@ __global (
 	g_nm nm_can.NmModule
 	g_comm_tcb   [32]u64  // the bus-owning comm thread
 	g_comm_stack [8192]u8
-	g_rx_count u32
-	g_rx_last  u32
+	g_comm_rx  can.Frame
 )
+@[export: 'g_rx_count']
+__global g_rx_count u32
+@[export: 'g_rx_last']
+__global g_rx_last u32
+@[export: 'g_trace_ring']
+__global g_trace_ring [256]trace.Record
 
 fn run_load_fast() {
-	mut st := Thread_load_fast_state{} // small + carries the FB field defaults: stack is right
+	g_st_load_fast = Thread_load_fast_state{} // the FB field defaults, at entry: bss is all zero
+	mut st := &g_st_load_fast
 	mut sched := &g_sched_load_fast // module-sized: lives in bss, not this lifetime frame
-	sched.every(10000, handler_app_load_fast_on_10ms, &st)
+	sched.every(10000, handler_app_load_fast_on_10ms, st)
 	tick_us := u64(1000)
 	sched.set_trace_hook(trace_fb_hook_load_fast, unsafe { nil })
 	for {
@@ -265,9 +273,10 @@ fn run_load_fast() {
 }
 
 fn run_load_mid() {
-	mut st := Thread_load_mid_state{} // small + carries the FB field defaults: stack is right
+	g_st_load_mid = Thread_load_mid_state{} // the FB field defaults, at entry: bss is all zero
+	mut st := &g_st_load_mid
 	mut sched := &g_sched_load_mid // module-sized: lives in bss, not this lifetime frame
-	sched.every(20000, handler_app_load_mid_on_20ms, &st)
+	sched.every(20000, handler_app_load_mid_on_20ms, st)
 	tick_us := u64(1000)
 	sched.set_trace_hook(trace_fb_hook_load_mid, unsafe { nil })
 	for {
@@ -284,13 +293,14 @@ fn run_load_mid() {
 }
 
 fn run_ctrl_slow() {
-	mut st := Thread_ctrl_slow_state{} // small + carries the FB field defaults: stack is right
+	g_st_ctrl_slow = Thread_ctrl_slow_state{} // the FB field defaults, at entry: bss is all zero
+	mut st := &g_st_ctrl_slow
 	if g_nvmres_load_cmd_n == 4 { // restored before first dispatch
 		st.cell_load_cmd.iters = u32(u32(g_nvmres_load_cmd[0]) | (u32(g_nvmres_load_cmd[1]) << 8) | (u32(g_nvmres_load_cmd[2]) << 16) | (u32(g_nvmres_load_cmd[3]) << 24))
 	}
 	mut sched := &g_sched_ctrl_slow // module-sized: lives in bss, not this lifetime frame
-	sched.every(100000, handler_app_governor_on_100ms, &st)
-	sched.every(100000, handler_app_load_slow_on_100ms, &st)
+	sched.every(100000, handler_app_governor_on_100ms, st)
+	sched.every(100000, handler_app_load_slow_on_100ms, st)
 	tick_us := u64(1000)
 	sched.set_trace_hook(trace_fb_hook_ctrl_slow, unsafe { nil })
 	for {
@@ -369,7 +379,7 @@ fn comm_thread_entry(input u32) {
 	mut xcore_trc_bound := u32(0) // half round-trip: that measurement's uncertainty
 	mut last_tx_workload := u64(0)
 	mut tx_sat := com.TxSaturations{} // sent values com.encode_raw saturated (docs/communication.md)
-	mut rx := can.Frame{}
+	mut rx := &g_comm_rx // bss: see the __global block
 	for {
 		wait_ticks := if g_tm.is_dumping() { u32(1) } else { u32(10) }
 		C.comm_rx_wait(wait_ticks) // the FDCAN Rx ISR wakes us early on a new frame
@@ -390,19 +400,19 @@ fn comm_thread_entry(input u32) {
 					tr_n := C.trace_snapshot(&g_app_trace[0], 256)
 					g_tm.load_snapshot(&g_app_trace[0][0], tr_n)
 				}
-				g_tm.on_cmd(rx)
+				g_tm.on_cmd(*rx)
 			}
 			if rx.id == u32(0x7e6) && !rx.ext { // trace.dump_fc -> ISO-TP FC
-				g_tm.on_dump_fc(C.board_now_us(), rx)
+				g_tm.on_dump_fc(C.board_now_us(), *rx)
 			}
 			if rx.id == u32(0x7f0) && !rx.ext { // shell.in -> one command line
-				g_sh.on_in(C.board_now_us(), rx)
+				g_sh.on_in(C.board_now_us(), *rx)
 			}
 			if rx.id == u32(0x7f2) && !rx.ext { // shell.fc -> ISO-TP FC
-				g_sh.on_fc(C.board_now_us(), rx)
+				g_sh.on_fc(C.board_now_us(), *rx)
 			}
 			if rx.id >= u32(0x500) && rx.id <= u32(0x53f) && !rx.ext { // nm.peers -> cluster NM
-				g_nm.on_peers(C.board_now_us(), rx)
+				g_nm.on_peers(C.board_now_us(), *rx)
 			}
 			if rx.id == u32(0x7e2) && rx.len == 8 && !rx.ext && rx.data[6] & 0x02 != 0 {
 				match rx.data[0] {

@@ -132,7 +132,7 @@ fn nm_rx_arms(m Model) []string {
 	}
 	return [
 		'\t\t\tif rx.id >= u32(0x${m.nm.peers_lo.hex()}) && rx.id <= u32(0x${m.nm.peers_hi.hex()}) && !rx.ext { // nm.peers -> cluster NM',
-		'\t\t\t\tg_nm.on_peers(C.board_now_us(), rx)',
+		'\t\t\t\tg_nm.on_peers(C.board_now_us(), *rx)',
 		'\t\t\t}',
 	]
 }

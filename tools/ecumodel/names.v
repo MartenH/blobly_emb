@@ -107,3 +107,28 @@ fn validate_signal_names(doc toml.Doc, bus_names map[string]bool) []string {
 	}
 	return errs
 }
+
+// validate_signal_field_types: a signal is the same bytes on every image that carries it. `int`,
+// `uint`, `isize` and `usize` are the word of whatever builds it — 32 bits on a core, 64 on the
+// host under V3 — so a payload inside the IOC's 64 bytes on target can be over them on the host,
+// where it is dropped. An array field makes V3 move each port snapshot holding it to the heap,
+// since the snapshot's address goes to C: a leak per handler run on the host, a halt on target.
+fn validate_signal_field_types(doc toml.Doc) []string {
+	mut errs := []string{}
+	for sg in toml_arr(doc, 'signal') {
+		sm := sg.as_map()
+		fields := (sm['fields'] or { continue }).as_map()
+		name := str_of(sm, 'name')
+		mut fnames := fields.keys()
+		fnames.sort()
+		for fname in fnames {
+			typ := (fields[fname] or { continue }).string().trim_space()
+			if typ in ['int', 'uint', 'isize', 'usize'] {
+				errs << 'signal "${name}" field "${fname}" is `${typ}`, which is 32 bits on a core and 64 on the host: give it a width (i32, u32, i64, u64)'
+			} else if typ.starts_with('[') {
+				errs << 'signal "${name}" field "${fname}" is an array (`${typ}`), which V3 moves to the heap in every port holding it: use scalar fields'
+			}
+		}
+	}
+	return errs
+}

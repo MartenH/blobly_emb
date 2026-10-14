@@ -860,7 +860,7 @@ fn diag_target_rx_arm(m Model) []string {
 	if m.nm.on {
 		out << '\t\t\tif g_nm.awake() {'
 	}
-	out << '${ind}match g_diag.on_frame(C.board_now_us(), &rx) {'
+	out << '${ind}match g_diag.on_frame(C.board_now_us(), rx) {'
 	out << '${ind}\t.request {'
 	out << '${ind}\t\tg_diag.serve()'
 	out << resample

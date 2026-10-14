@@ -62,7 +62,7 @@ The only thing an example needs from the main repo is the path back to it
 
 These build with `arm-none-eabi-gcc` (`make -C ../.. deps` for CMSIS) and flash to a
 real board — register-level drivers, no HAL, no RTOS. They transpile V `-freestanding`
-and enter `main__main()` from a minimal `startup.c`.
+and enter `blob_entry()` from a minimal `startup.c`.
 
 | Example | Board | What it shows |
 |---------|-------|---------------|

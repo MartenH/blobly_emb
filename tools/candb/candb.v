@@ -265,7 +265,10 @@ pub:
 pub fn (s Signal) encode_lines(phys string, raw string, sat string, ind string) ![]string {
 	r := s.raw_range()!
 	x := '${raw}_x'
-	mut g := ['${ind}${x} := (${phys} - ${f64lit(s.offset)}) / ${f64lit(s.factor)}']
+	// a negative literal in brackets (-0.0 included): V3 does not parse `x - -40.0`
+	off_lit := f64lit(s.offset)
+	off := if off_lit.starts_with('-') { '(${off_lit})' } else { off_lit }
+	mut g := ['${ind}${x} := (${phys} - ${off}) / ${f64lit(s.factor)}']
 	call := 'com.encode_raw(${x}, ${int_f64lit(r.lo)}, ${int_f64lit(r.hi)}, u64(${r.lo_raw}), u64(${r.hi_raw}), u64(${r.nan_raw}), u64(0x${r.mask.hex()}))'
 	if r.named.len == 0 {
 		g << '${ind}${raw}, ${sat} := ${call}'

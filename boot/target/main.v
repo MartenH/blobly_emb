@@ -15,6 +15,7 @@ import boot
 import comm.diag
 import comm.isotp
 import driver.can
+import osal.vrt as _ // V's builtin hooks on target
 
 fn C.board_clock_init()
 fn C.boot_park_satellite()
@@ -75,7 +76,11 @@ __global (
 	g_handoff   u32
 )
 
-fn main() {
+// entry is the image's entry point: crt0.S jumps to it by its exported C name (BOARD_ENTRY)
+// after bss/data init. Not V's `fn main`, which V3 wraps in a hosted C main (VEXE env setup,
+// _vinit); the image enters by a name it owns, never by V's mangling of `main`.
+@[export: 'blob_entry']
+fn entry() {
 	app_base := C.boot_app_base()
 	app_size := C.boot_app_size()
 	// a dual-core part's satellite release is retracted FIRST, on every path: a reset between a
@@ -179,4 +184,9 @@ fn serve_loop() {
 		// would starve DoIP. A tick bounds CAN polling far inside ISO-TP's N_Cr / N_Bs.
 		rest()
 	}
+}
+
+// main is never called on target (crt0 enters at `entry`); V requires one in module main
+fn main() {
+	entry()
 }

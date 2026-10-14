@@ -1,5 +1,5 @@
-# The ONE rule for running a repo tool from a Makefile: build it once, to a path of the including
-# directory's own, then run the binary. Never `$(V) run tools/...`: `v run` derives its binary's
+# The ONE rule for running a repo tool from a Makefile: build it once, into the repo's bin/, then
+# run the binary. Never `$(V) run tools/...`: `v run` derives its binary's
 # path from the TOOL's source path, so two makes running one tool at once write and exec the SAME
 # file, and one of them dies with `No such file or directory` or `Text file busy` (#313, #333).
 # tools/loom2v/no_v_run_makefiles_test.v pins that no Makefile does.
@@ -16,8 +16,10 @@
 #     	cd $(REPO) && $(TOOL_loom2v) examples/x/ecu.toml ...
 #
 # A tool is rebuilt when anything it was built from changes (the inputs are listed below, above
-# the rule), and a target depending on it is remade when it is. The binaries live in bin/ of the
-# including directory, which `make clean` removes.
+# the rule), and a target depending on it is remade when it is. The binaries live in the REPO's
+# bin/, shared by every example: a build costs seconds under V3, and each example building its own
+# copy of every tool was most of CI's host builds. Sharing is safe because scripts/build_tool.sh
+# compiles under a name of its own and renames into place, under a lock per tool.
 V ?= v
 
 # name -> what V compiles: one file for a single-file program, the directory for a multi-file one
@@ -60,7 +62,7 @@ TOOL_GOAL := $(.DEFAULT_GOAL)
 # scripts/vdeps.sh: never a hand list of module directories, which went stale the day a generated
 # image started importing one more (driver/doipnet). In the rule, V run from $(REPO):
 #
-#     TRANSPILE_FLAGS = -freestanding ... -path "..."
+#     TRANSPILE_FLAGS = -freestanding -arch arm32 -target-libc-headers ... -path "..."
 #     $(BUILD)/app.c: main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) \
 #                     $(call v_sign,$(BUILD)/app.c,$(TRANSPILE_FLAGS)) | $(BUILD)
 #     	cd $(REPO) && $(V) $(TRANSPILE_FLAGS) $(call v_dump,$@) -o .../$(BUILD)/app.c .../main.v
@@ -199,7 +201,7 @@ c_archive = $(call c_signed,$(1))$(1) $@ $(filter-out %.sig,$^)
 .SECONDEXPANSION:
 
 TOOL_REPO := $(abspath $(REPO))
-TOOL_DIR  := $(CURDIR)/bin
+TOOL_DIR  ?= $(TOOL_REPO)/bin
 TOOLS     := $(patsubst TOOL_SRC_%,%,$(filter TOOL_SRC_%,$(.VARIABLES)))
 $(foreach t,$(TOOLS),$(eval TOOL_$(t) := $(TOOL_DIR)/.tool-$(t)))
 # a source path is relative to the repo root, or absolute

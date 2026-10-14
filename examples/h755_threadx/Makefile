@@ -32,9 +32,9 @@ include $(REPO)/tools/tools.mk
 
 # TX_ENABLE_EXECUTION_CHANGE_NOTIFY makes the ThreadX port's context-switch + SysTick asm call
 # the four _tx_execution_* hooks (trace_hooks.c) — the source of the real thread/ISR trace.
-# BOARD_ENTRY: crt0 jumps into the generated V image's main__main.
+# BOARD_ENTRY: crt0 jumps into the generated V image's blob_entry.
 CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
-          $(BOARD_DEFS) -DTX_ENABLE_EXECUTION_CHANGE_NOTIFY -DBOARD_ENTRY=main__main $(CAN_DEFS) \
+          $(BOARD_DEFS) -DTX_ENABLE_EXECUTION_CHANGE_NOTIFY -DBOARD_ENTRY=blob_entry $(CAN_DEFS) \
           -I. -Igen $(BOARD_INCS) -I$(REPO)/driver/can -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
 LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
           --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/app.map
@@ -88,7 +88,7 @@ gen/loom_build.mk: gen/.stamp ;
 
 # 1) transpile the V stack to freestanding C (-enable-globals for the ThreadX TCB/stack statics).
 # how V is run for it — also its signature (tools/tools.mk v_sign)
-TRANSPILE_FLAGS = -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) -path "@vlib|@vmodules|.|examples/$(NAME)"
+TRANSPILE_FLAGS = -freestanding -arch arm32 -target-libc-headers -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) -path "@vlib|@vmodules|.|examples/$(NAME)"
 $(BUILD)/app.c: main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) $(call v_sign,$(BUILD)/app.c,$(TRANSPILE_FLAGS)) | $(BUILD)
 	cd $(REPO) && $(V) $(TRANSPILE_FLAGS) $(call v_dump,$@) -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
 	$(call v_deps,$@)

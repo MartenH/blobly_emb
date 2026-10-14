@@ -988,8 +988,11 @@ trace = 1
 	assert sys.nodes[0].diag.rsp == 0x7a8
 	load_errs := sys.load_nodes()
 	assert load_errs.len == 0, load_errs.str()
-	assert sys.nodes[0].view.produces['can0'] == ['Speed']
-	assert sys.nodes[0].view.consumes['can0'] == ['Rpm']
+	// no array literal: V3 built `== ['Speed']` here as an int array (invalid C)
+	produced := sys.nodes[0].view.produces['can0']
+	consumed := sys.nodes[0].view.consumes['can0']
+	assert produced.len == 1 && produced[0] == 'Speed'
+	assert consumed.len == 1 && consumed[0] == 'Rpm'
 	assert sys.nodes[0].view.has_nm
 	assert sys.nodes[0].view.peers_lo == 0x500
 	assert sys.nodes[0].view.peers_hi == 0x53f

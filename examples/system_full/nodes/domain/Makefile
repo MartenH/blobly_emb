@@ -15,7 +15,7 @@ include $(REPO)/boards/$(BOARD)/board.mk
 include $(REPO)/tools/tools.mk
 
 CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
-          $(BOARD_DEFS) -DBOARD_ENTRY=main__main -DTX_ENABLE_EXECUTION_CHANGE_NOTIFY $(CAN_DEFS) -DBLOB_IO_STM32 \
+          $(BOARD_DEFS) -DBOARD_ENTRY=blob_entry -DTX_ENABLE_EXECUTION_CHANGE_NOTIFY $(CAN_DEFS) -DBLOB_IO_STM32 \
           -I. -Igen $(BOARD_INCS) -I$(REPO)/driver/can -I$(REPO)/driver/io \
           -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
 LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
@@ -58,7 +58,7 @@ endif
 gen/loom_build.mk: gen/.stamp ;
 
 # how V is run for it — also its signature (tools/tools.mk v_sign)
-TRANSPILE_FLAGS = -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) -path "@vlib|@vmodules|.|examples/system_full/nodes/$(NAME)"
+TRANSPILE_FLAGS = -freestanding -arch arm32 -target-libc-headers -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) -path "@vlib|@vmodules|.|examples/system_full/nodes/$(NAME)"
 $(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) $(call v_sign,$(BUILD)/app.c,$(TRANSPILE_FLAGS)) | $(BUILD)
 	cd $(REPO) && $(V) $(TRANSPILE_FLAGS) $(call v_dump,$@) -o examples/system_full/nodes/$(NAME)/$(BUILD)/app.c examples/system_full/main.v
 	$(call v_deps,$@)

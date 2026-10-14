@@ -3,12 +3,12 @@
 #include <stdint.h>
 
 extern uint32_t _sidata, _sdata, _edata, _sbss, _ebss, _estack;
-/* BOARD_ENTRY defaults to V's `fn main` body (main__main) called directly, NOT V's
+/* BOARD_ENTRY defaults to blob_entry, the V image's exported entry (main.v), NOT V's
  * `int main(int,char**)` wrapper — that wrapper runs _vinit (arg/global setup for a
  * hosted OS) and pulls in the heap runtime, which faults bare-metal. A plain-C image
  * (e.g. the CM4 heartbeat) overrides with -DBOARD_ENTRY=<fn>. */
 #ifndef BOARD_ENTRY
-#define BOARD_ENTRY main__main
+#define BOARD_ENTRY blob_entry
 #endif
 extern void BOARD_ENTRY(void);
 

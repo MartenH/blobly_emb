@@ -34,7 +34,7 @@
 #define DOIP_MB_TCP_ESTABLISHED 5u
 #define DOIP_MB_TCP_CLOSE_WAIT 6u
 
-typedef struct {
+typedef struct doip_mb_t { /* tagged: V3 declares `struct C.doip_mb_t` as `typedef struct doip_mb_t doip_mb_t;` */
 	volatile uint32_t posted;     /* the request posted last */
 	volatile uint32_t settled;    /* the request settled last: served, or withdrawn */
 	volatile uint32_t served;     /* the request the server answered last (never a withdrawn one) */

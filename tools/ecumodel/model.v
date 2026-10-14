@@ -168,6 +168,7 @@ pub fn validate(doc toml.Doc) []string {
 		}
 	}
 	errs << validate_signal_names(doc, bus_names)
+	errs << validate_signal_field_types(doc)
 	for reserved_holder in ['partition', 'thread', 'bus'] {
 		names := match reserved_holder {
 			'partition' { part_names.keys() }

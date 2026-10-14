@@ -25,7 +25,7 @@ fn test_the_generated_diagnostic_pass_runs_in_order() {
 	steps := [
 		'st.conn_diag.housekeep(now)',
 		'if st.rxg.sample(st.conn_diag.server.rx_enabled(), true)',
-		'match st.conn_diag.on_frame(now, &rx) {',
+		'match st.conn_diag.on_frame(now, rx) {',
 		'.request { break }',
 		'.served {',
 		'if st.rxg.sample(st.conn_diag.server.rx_enabled(), true)',

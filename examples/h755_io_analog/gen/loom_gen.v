@@ -59,20 +59,26 @@ __global (
 	g_app_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned
 	g_app_stack [4096]u8
 	g_sched_app loom.Scheduler // bss, never an entry-frame local
+	g_st_app Partition_app_state // bss; its field defaults are set at thread entry
 	g_comm_tcb   [32]u64  // the bus-owning comm thread
 	g_comm_stack [4096]u8
-	g_rx_count u32
-	g_rx_last  u32
+	g_comm_rx  can.Frame
 	g_io_tcb   [32]u64  // the platform io thread (docs/io.md)
 	g_io_stack [2048]u8 // gpio serve loop only: no modules, shallow frames
 	g_sched_io loom.Scheduler // io serve-time accounting for the CpuLoad seam
-	io_startup_faults u32
 )
+@[export: 'g_rx_count']
+__global g_rx_count u32
+@[export: 'g_rx_last']
+__global g_rx_last u32
+@[export: 'io_startup_faults']
+__global io_startup_faults u32
 
 pub fn run() {
-	mut st := Partition_app_state{}
+	g_st_app = Partition_app_state{} // the FB field defaults, at entry: bss is all zero
+	mut st := &g_st_app
 	mut sched := &g_sched_app // module-sized: lives in bss, not this lifetime frame
-	sched.every(10000, handler_app_sweep_on_10ms, &st)
+	sched.every(10000, handler_app_sweep_on_10ms, st)
 	tick_us := u64(1000)
 	for {
 		t0 := C.board_now_us()
@@ -171,7 +177,7 @@ fn comm_thread_entry(input u32) {
 	telem_period_us := u64(1000000)
 	mut last_tx_pot_level := u64(0)
 	mut tx_sat := com.TxSaturations{} // sent values com.encode_raw saturated (docs/communication.md)
-	mut rx := can.Frame{}
+	mut rx := &g_comm_rx // bss: see the __global block
 	for {
 		C.comm_rx_wait(10) // block up to 10 ticks; the FDCAN Rx ISR wakes us on a new frame
 		// pass: drain
@@ -249,7 +255,7 @@ fn tx_application_define(first_unused voidptr) {
 		io_startup_faults++
 		io_out_fault = true // halt LATER: first let the valid outputs init
 	}
-	if !io.init() {
+	if !io.start() {
 		io_startup_faults++
 		io_out_fault = true
 	}
