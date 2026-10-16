@@ -457,30 +457,16 @@ fn check_route_ids(s System) []Issue {
 				}
 			}
 		}
-		// the gateway is the one transmitter of the request id on that bus: an application frame or
-		// another module's transmission there would contend for the id, and reach the target as a
-		// request
+		// the gateway is the one transmitter of the request id on that bus: an application frame of
+		// that id would contend for it, and reach the target as a request (another module's
+		// transmission there lands on the target's [isotp] rx id, which check_telemetry_frames and
+		// check_identity_alloc already refuse)
 		if db := dbs[rt.bus] {
 			if m := db.lookup_frame(rt.id, false) {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-NET-019'
 					msg:      'node "${rt.gw}": doip route to "${rt.target}" sends its requests on 0x${rt.id.hex()} on bus "${rt.bus}", which is DBC application frame "${m.name}" there — two transmitters of one id, and its payloads would reach "${rt.target}" as requests'
-				}
-			}
-		}
-		for n in s.nodes {
-			if rt.bus !in n.buses {
-				continue
-			}
-			for f in module_frames(n, s, dbs) {
-				b := node_can_bus(s, n, f.iface) or { continue }
-				if b.name == rt.bus && f.id == rt.id {
-					issues << Issue{
-						severity: .error
-						req:      'REQ-NET-019'
-						msg:      'node "${rt.gw}": doip route to "${rt.target}" sends its requests on 0x${f.id.hex()} on bus "${rt.bus}", which is also the ${f.label} of "${n.name}" — two transmitters of one id'
-					}
 				}
 			}
 		}

@@ -1172,7 +1172,7 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 	if dv := doc.value_opt('doip') {
 		v.has_doip = true
 		dm := dv.as_map()
-		if m_is_int(dm, 'logical_address') {
+		if 'logical_address' in dm && m_is_int(dm, 'logical_address') {
 			v.doip_logical = m_u32(dm, 'logical_address')
 			v.has_doip_logical = true
 		}
@@ -1186,7 +1186,7 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 						tx_id:       m_u32(rm, 'tx_id')
 						rx_id:       m_u32(rm, 'rx_id')
 						logical:     m_u32(rm, 'logical')
-						has_logical: m_is_int(rm, 'logical')
+						has_logical: 'logical' in rm && m_is_int(rm, 'logical')
 					}
 				}
 			}

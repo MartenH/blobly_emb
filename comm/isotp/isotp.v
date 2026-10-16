@@ -247,7 +247,11 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 				l.rx_pos += n
 				l.rx_sn = (l.rx_sn + 1) & 0x0F
 				l.rx_count++
-				l.progress++
+				// progress only once our flow control has gone: a sender running ahead of it (and
+				// restarting with a first frame) advances nothing an owner's stall bound should see
+				if !l.fc_send {
+					l.progress++
+				}
 				if l.rx_pos >= l.rx_len {
 					l.ready = true
 					l.ready_len = l.rx_len

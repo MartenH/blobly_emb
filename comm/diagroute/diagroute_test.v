@@ -825,6 +825,36 @@ fn test_no_frame_that_moves_nothing_keeps_a_stalled_exchange_alive() {
 		r.step(start + stall_us)
 		assert !r.busy(), 'kept alive by ${j}'
 	}
+	// a target that restarts its answer, first frame and the next, while our flow control cannot
+	// leave, advances nothing either
+	mut r := new_router()
+	mut n := new_node()
+	mut ch := Chan{}
+	mut now := u64(0)
+	req := [u8(0x22), 0xF1, 0x00]
+	assert r.accept(0, &req[0], req.len, 1, 1, 1, now) == .accepted
+	run(mut r, mut n, mut ch, mut &now, 2)
+	ch.stalled = true
+	start := now
+	for t := start + 100_000; t < start + stall_us; t += 100_000 {
+		mut ff := can.Frame{
+			id:  rsp_id
+			len: 8
+		}
+		for i, b in [u8(0x10), 43, 0x62, 0xF1, 0x00, 0, 1, 2] {
+			ff.data[i] = b
+		}
+		r.on_frame(edge, &ff, t)
+		mut cf := can.Frame{
+			id:  rsp_id
+			len: 8
+		}
+		cf.data[0] = 0x21
+		r.on_frame(edge, &cf, t + 50_000)
+		r.step(t + 50_000)
+	}
+	r.step(start + 100_000 + stall_us) // the stall bound from the first first frame, the one that moved
+	assert !r.busy()
 }
 
 // a target that answers our first frame with flow control WAITs, each within N_Bs and fewer than

@@ -1679,20 +1679,22 @@ fn test_an_authored_route_is_held_to_the_system_routes_rules() {
 	}]
 	assert errs(sys).any(it.contains('logical address 0x7a0 is "')), errs(sys).str()
 	sys.nodes[0].view.doip_routes = view.doip_routes
-	// another node on the bus transmits the request id
-	sys.nodes << sysmodel.Node{
-		name:  'chassis'
-		ecu:   'chassis.toml'
-		buses: ['edge']
-		view:  sysmodel.NodeView{
-			isotp_conns: [sysmodel.IsotpConn{
-				iface: 'can0'
-				rx_id: 0x700
-				tx_id: 0x7C0
-			}]
-		}
+	// a route with no `logical` names no address, and claims none
+	no_logical := toml.parse_text('[doip]\n[[doip.route]]\nnode = "zone"\nbus = "can1"\ntx_id = 0x7C0\nrx_id = 0x7C8\n') or {
+		panic(err)
 	}
-	assert errs(sys).any(it.contains('isotp tx id of "chassis" — two transmitters of one id')), errs(sys).str()
+	bare := sysmodel.parse_node_view(no_logical)
+	assert !bare.has_doip_logical && !bare.doip_routes[0].has_logical
+	// the request id is an application frame of the bus's DBC
+	root := os.join_path(os.temp_dir(), 'route_dbc_${os.getpid()}_${rand.u32()}')
+	os.mkdir_all(root) or { panic(err) }
+	defer {
+		os.rmdir_all(root) or {}
+	}
+	os.write_file(os.join_path(root, 'edge.dbc'), 'BO_ 1984 Diag: 8 Vector__XXX\n') or { panic(err) }
+	sys.dir = root
+	sys.buses.last().dbc = 'edge.dbc'
+	assert errs(sys).any(it.contains('which is DBC application frame "Diag" there')), errs(sys).str()
 }
 
 fn test_a_single_bus_gateway_routes_on_its_can0() {
