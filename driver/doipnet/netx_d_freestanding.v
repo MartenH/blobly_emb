@@ -34,17 +34,19 @@ fn C.doip_rt_get(&u16, &u32) int
 fn C.doip_rt_done()
 fn C.doip_mb_drop_is_pending() int
 fn C.doip_rt_take_ended() int
+fn C.doip_rt_live(u32)
+fn C.doip_rt_is_live(u32) int
 
 // how long one receive waits before the loop comes round again, ThreadX ticks — one tick while a
 // routed node's answer is due, so it leaves within a tick of arriving rather than with the next
 // tester message (a reprogramming is hundreds of request-answer turns)
 const recv_ticks = u32(100)
 const recv_ticks_routed = u32(1)
-// ... but no longer than this many ticks without an answer (7 s: the router's own answer wait and
-// then some) — an answer that never comes must not keep the loop polling at 1 kHz, and one that
-// comes after it is no one's (routed: the tester's P6*, from the request's acknowledgement or its
-// last responsePending, has long run out). Measured in ticks, not turns: a turn with tester
-// traffic waiting takes no tick at all.
+// ... but no longer than this many ticks without an answer once the router has let the exchange go
+// (doip_rt_is_live: a slow transfer still moving is the router's to bound, stall_us per frame) —
+// an answer that never comes must not keep the loop polling at 1 kHz, and one that comes after it
+// is no one's (routed). Measured in ticks, not turns: a turn with tester traffic waiting takes no
+// tick at all.
 const routed_poll_ticks = u32(7000)
 
 // Netx is the stream of the one TCP_DATA socket doip_netx.c serves.
@@ -118,6 +120,9 @@ pub fn run_gateway(mut s doip.Server, count int, interval_ms int, inb &u8, out &
 			fast_ticket = s.ticket // a new routed request: its own fast-poll budget
 			fast_since = C._tx_time_get()
 		}
+		if s.route_open && C.doip_rt_is_live(s.ticket) != 0 {
+			fast_since = C._tx_time_get() // the router still holds it: the budget runs from its end
+		}
 		if s.route_open && C._tx_time_get() - fast_since > routed_poll_ticks {
 			s.route_open = false // given up on: the tester's own P2* has long told it
 		}
@@ -177,6 +182,7 @@ pub fn serve_routes(mut r diagroute.Router, unlocked u8, req &u8, now u64) {
 		}
 		r.pop()
 	}
+	C.doip_rt_live(r.live_ticket())
 }
 
 // serve_mailbox is the server thread's share of a pass — the application's comm thread

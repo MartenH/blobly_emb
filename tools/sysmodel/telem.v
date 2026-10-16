@@ -340,6 +340,16 @@ fn serves_on(s System, t Node, bus string, rx u32, tx u32) bool {
 fn check_route_ids(s System) []Issue {
 	mut issues := []Issue{}
 	mut routes := []RouteTx{}
+	// routed node -> the gateway routing to it: one gateway per node, or two testers' requests
+	// interleave on its one ISO-TP connection (check_doip_routes holds the system's routes to it)
+	mut routed_by := map[string]string{}
+	for gw in s.nodes {
+		for name in gw.doip_routes {
+			if name !in routed_by {
+				routed_by[name] = gw.name
+			}
+		}
+	}
 	for gw in s.nodes {
 		for name in gw.doip_routes {
 			t := s.node_by_name(name) or { continue } // check_doip_routes reports it
@@ -360,6 +370,15 @@ fn check_route_ids(s System) []Issue {
 				}
 				continue
 			}
+			if prev := routed_by[t.name] {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-NET-019'
+					msg:      '${where}: "${prev}" routes to it already — one gateway per node, or two testers\' requests interleave on its one ISO-TP connection'
+				}
+				continue
+			}
+			routed_by[t.name] = gw.name
 			if !serves_on(s, t, bus.name, r.tx_id, r.rx_id) {
 				issues << Issue{
 					severity: .error

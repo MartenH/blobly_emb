@@ -457,9 +457,10 @@ exchange and its answers with it (the router is told, `doip_rt_take_ended`), whe
 another tester comes. Every routed request carries a ticket and its answers carry it back —
 the latest only once forwarded, and a new one with every connection: an answer that comes after
 the tester gave up, or after its connection ended, is never sent to anyone. While an answer is
-due, the doip thread polls each tick instead of every 100, for at most 7 s of ticks from the
-request or its last answer — an answer later than that is dropped, the tester's P6* (from the
-request's acknowledgement, or the last responsePending) having run out long before.
+due, the doip thread polls each tick instead of every 100 — for as long as the router still holds
+the exchange (`doip_rt_live`: a slow transfer that keeps moving may outlast any fixed budget, and
+the router's own timers bound it), then for at most 7 s of ticks from the router letting it go,
+the request or its last answer — an answer later than that is dropped.
 
 **Access (REQ-NET-020).** Routing changes state on nodes that otherwise no network tester could
 reach, so a tester is routed only while it holds the gateway's own security level

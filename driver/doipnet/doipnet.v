@@ -69,7 +69,7 @@ pub fn push[S](mut st S, mut s doip.Server, resp &u8, n int, out &u8) bool {
 
 // routed sends an answer of a node behind the gateway (`from`) to the request numbered `ticket`:
 // only to the latest routed request, only while an answer to it is still taken (route_open: not
-// past the transport's poll budget, which outlasts the tester's own P6*), and only while its tester
+// past the transport's poll budget, which runs once the router has let the exchange go), and only while its tester
 // is still connected — an answer that came after the tester gave up, or after its connection
 // ended, is no one's.
 pub fn routed[S](mut st S, mut s doip.Server, from u16, ticket u32, ans &u8, n int, out &u8) bool {

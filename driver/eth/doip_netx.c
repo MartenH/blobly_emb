@@ -263,6 +263,20 @@ static uint32_t rt_ans_ticket;
 static volatile uint32_t rt_ends;
 static uint32_t rt_ends_seen;
 
+/* the ticket of the exchange the router still holds, 0 = none: written by the comm thread each pass,
+ * read by the doip thread (one aligned word) */
+static volatile uint32_t rt_live;
+
+/* comm thread: the router's live exchange (diagroute.Router.live_ticket) */
+void doip_rt_live(uint32_t ticket) {
+	rt_live = ticket;
+}
+
+/* doip thread: 1 while the router still holds the exchange of request `ticket` */
+int doip_rt_is_live(uint32_t ticket) {
+	return ticket != 0u && rt_live == ticket;
+}
+
 void doip_rt_init(unsigned char *req_buf, unsigned char *ans_buf) {
 	rt_req = req_buf;
 	rt_ans = ans_buf;

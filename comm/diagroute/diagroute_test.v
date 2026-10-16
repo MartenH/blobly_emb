@@ -231,10 +231,12 @@ fn test_an_unanswered_exchange_ends_after_the_answer_wait() {
 	req := [u8(0x22), 0xF1, 0x95]
 	assert r.accept(0, &req[0], req.len, 1, 1, 1, now) == .accepted
 	run(mut r, mut n, mut ch, mut &now, 2)
+	assert r.live_ticket() == 1 // waiting for the answer
 	now += answer_wait_us
 	run(mut r, mut n, mut ch, mut &now, 1)
 	assert r.timeouts == 1
 	assert !r.busy()
+	assert r.live_ticket() == 0 // let go: the transport's own budget runs from here
 	// an answer after the exchange ended is no one's
 	answer(mut n, [u8(0x62), 0xF1, 0x95, 0x01])
 	run(mut r, mut n, mut ch, mut &now, 2)
@@ -489,9 +491,11 @@ fn test_a_slow_transfer_that_keeps_moving_is_not_cut_off() {
 	for i in 0 .. 512 {
 		block << u8(i)
 	}
-	assert r.accept(0, unsafe { &block[0] }, block.len, 1, 1, 1, now) == .accepted
-	// 74 consecutive frames 127 ms apart: about 9.4 s, longer than stall_us
+	assert r.accept(0, unsafe { &block[0] }, block.len, 1, 7, 1, now) == .accepted
+	// 74 consecutive frames 127 ms apart: about 9.4 s, longer than stall_us — and live throughout,
+	// so the transport keeps waiting for the answer past its own fixed budget
 	for _ in 0 .. 400 {
+		assert r.live_ticket() == 7
 		now += 30_000
 		pass(mut r, mut n, mut ch, now)
 		if n.requests.len > 0 {
@@ -501,6 +505,11 @@ fn test_a_slow_transfer_that_keeps_moving_is_not_cut_off() {
 	assert n.requests.len == 1 && n.requests[0] == block
 	assert now > stall_us
 	assert r.timeouts == 0 && r.failed == 0
+	assert r.live_ticket() == 7 // its answer is still to come
+	answer(mut n, [u8(0x76), 0x01])
+	pass(mut r, mut n, mut ch, now + 1000)
+	assert take(mut r) == [u8(0x76), 0x01]
+	assert r.live_ticket() == 0 // answered: the exchange is over
 }
 
 fn test_flow_control_that_cannot_leave_ends_the_exchange() {

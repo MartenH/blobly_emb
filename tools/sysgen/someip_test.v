@@ -1623,6 +1623,19 @@ fn test_an_authored_route_in_a_composed_system_is_checked_for_other_listeners() 
 		sys.nodes[0].view.doip_routes = [bad]
 		assert unanswered(sys).len == 1, '${bad}: ${unanswered(sys)}'
 	}
+	// one gateway per routed node: a second route to it, from this gateway or another, is refused
+	twice := fn (s sysmodel.System) []string {
+		return sysmodel.validate_system(s).filter(it.severity == .error).map(it.msg).filter(it.contains('routes to it already'))
+	}
+	sys.nodes[0].view.doip_routes = view.doip_routes
+	assert twice(sys).len == 0, twice(sys).str()
+	sys.nodes[0].view.doip_routes = [view.doip_routes[0], view.doip_routes[0]]
+	assert twice(sys).len == 1, twice(sys).str()
+	sys.nodes[0].view.doip_routes = view.doip_routes
+	mut gw2 := sys.nodes[0]
+	gw2.name = 'gw2'
+	sys.nodes << gw2
+	assert twice(sys).len == 1 && twice(sys)[0].contains('"gw2"'), twice(sys).str()
 }
 
 fn test_a_single_bus_gateway_routes_on_its_can0() {
