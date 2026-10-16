@@ -359,6 +359,7 @@ fn check_route_ids(s System) []Issue {
 			}
 			routes << RouteTx{gw.name, t.name, bus.name, t.diag.req}
 		}
+		mut authored := []string{} // this gateway's [[doip.route]] targets so far
 		for r in gw.view.doip_routes {
 			where := 'node "${gw.name}": its [[doip.route]] to "${r.node}"'
 			bus := node_can_bus(s, gw, r.bus) or { continue } // the node gate checks its own buses
@@ -370,13 +371,24 @@ fn check_route_ids(s System) []Issue {
 				}
 				continue
 			}
-			if prev := routed_by[t.name] {
+			if t.name in authored {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-NET-019'
-					msg:      '${where}: "${prev}" routes to it already — one gateway per node, or two testers\' requests interleave on its one ISO-TP connection'
+					msg:      '${where} is listed twice'
 				}
 				continue
+			}
+			authored << t.name
+			if prev := routed_by[t.name] {
+				if prev != gw.name {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-NET-019'
+						msg:      '${where}: "${prev}" routes to it already — one gateway per node, or two testers\' requests interleave on its one ISO-TP connection'
+					}
+					continue
+				}
 			}
 			routed_by[t.name] = gw.name
 			if !serves_on(s, t, bus.name, r.tx_id, r.rx_id) {

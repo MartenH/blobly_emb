@@ -263,18 +263,26 @@ static uint32_t rt_ans_ticket;
 static volatile uint32_t rt_ends;
 static uint32_t rt_ends_seen;
 
-/* the ticket of the exchange the router still holds, 0 = none: written by the comm thread each pass,
- * read by the doip thread (one aligned word) */
+/* the ticket of the exchange the router still holds, 0 = none, and when the comm thread last said so:
+ * written by the comm thread each pass, read by the doip thread (aligned words; a torn pair is one
+ * pass's misreading, put right by the next) */
 static volatile uint32_t rt_live;
+static volatile ULONG rt_live_at;
+/* a reading older than this is not believed: a comm thread that stopped passing runs no router
+ * timer either, and must not keep the doip thread polling at its fastest for ever */
+#define RT_LIVE_FRESH_MS 1000u
 
 /* comm thread: the router's live exchange (diagroute.Router.live_ticket) */
 void doip_rt_live(uint32_t ticket) {
+	rt_live_at = tx_time_get();
 	rt_live = ticket;
 }
 
-/* doip thread: 1 while the router still holds the exchange of request `ticket` */
+/* doip thread: 1 while the router still holds the exchange of request `ticket`, as the comm thread
+ * said within RT_LIVE_FRESH_MS */
 int doip_rt_is_live(uint32_t ticket) {
-	return ticket != 0u && rt_live == ticket;
+	return ticket != 0u && rt_live == ticket
+		&& tx_time_get() - rt_live_at <= MS_TICKS(RT_LIVE_FRESH_MS);
 }
 
 void doip_rt_init(unsigned char *req_buf, unsigned char *ans_buf) {

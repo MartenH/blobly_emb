@@ -257,6 +257,7 @@ fn test_the_next_request_supersedes_a_wait_and_drops_its_queued_answers() {
 	b := [u8(0x3E), 0x00]
 	assert r.accept(0, &b[0], b.len, 1, 2, 1, now) == .accepted
 	assert r.waiting() == 0
+	assert r.live_ticket() == 2 // the new request's, never the superseded one's
 	run(mut r, mut n, mut ch, mut &now, 2)
 	answer(mut n, [u8(0x7E), 0x00])
 	run(mut r, mut n, mut ch, mut &now, 2)
@@ -403,6 +404,7 @@ fn test_a_request_that_cannot_leave_ends_after_the_stall_bound() {
 	r.step(stall_us)
 	assert !r.busy()
 	assert r.timeouts == 1
+	assert r.live_ticket() == 0
 }
 
 fn test_an_answer_begun_in_time_may_run_past_the_answer_wait() {
@@ -546,6 +548,7 @@ fn test_a_send_iso_tp_gave_up_on_ends_the_exchange() {
 	r.step(2_000_000) // N_Bs ran out: ISO-TP gave up
 	assert r.failed == 1
 	assert r.active_bus() == -1 // not waiting for an answer to a request never received whole
+	assert r.live_ticket() == 0
 	mut f := can.Frame{
 		id:  rsp_id
 		len: 8
@@ -606,8 +609,10 @@ fn test_a_tester_that_went_leaves_no_exchange_and_no_answers() {
 	answer(mut n, [u8(0x7F), 0x31, 0x78])
 	run(mut r, mut n, mut ch, mut &now, 2)
 	assert r.waiting() == 1
+	assert r.live_ticket() == 1 // a responsePending: the final answer is still to come
 	r.cancel()
 	assert r.waiting() == 0 && !r.busy() && r.active_bus() == -1
+	assert r.live_ticket() == 0
 	// and the next connection starts unrouted
 	assert r.accept(0, &req[0], req.len, 1, 2, 0, now) == .locked
 }

@@ -462,7 +462,6 @@ pub fn (r &Router) full() bool {
 	return r.q_len >= queue_len
 }
 
-// waiting: answers queued for the doip thread.
 // live_ticket: the ticket of the request whose exchange the router still holds (sending it,
 // waiting for its answer or taking it in), 0 = none. Bounded by the router's own timers, so the
 // transport may wait for an answer as long as this names the request (a slow transfer outlasts any
@@ -471,6 +470,7 @@ pub fn (r &Router) live_ticket() u32 {
 	return if r.active >= 0 { r.ticket } else { u32(0) }
 }
 
+// waiting: answers queued for the doip thread.
 pub fn (r &Router) waiting() int {
 	return r.q_len
 }

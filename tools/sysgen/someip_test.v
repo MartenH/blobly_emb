@@ -1630,7 +1630,12 @@ fn test_an_authored_route_in_a_composed_system_is_checked_for_other_listeners() 
 	sys.nodes[0].view.doip_routes = view.doip_routes
 	assert twice(sys).len == 0, twice(sys).str()
 	sys.nodes[0].view.doip_routes = [view.doip_routes[0], view.doip_routes[0]]
-	assert twice(sys).len == 1, twice(sys).str()
+	assert listens(sys).any(it.contains('is listed twice')), listens(sys).str()
+	assert twice(sys).len == 0, twice(sys).str()
+	sys.nodes[0].doip_routes = ['zone'] // the system's route, lowered into the same gateway's table
+	sys.nodes[0].view.doip_routes = view.doip_routes
+	assert twice(sys).len == 0, twice(sys).str()
+	sys.nodes[0].doip_routes = []
 	sys.nodes[0].view.doip_routes = view.doip_routes
 	mut gw2 := sys.nodes[0]
 	gw2.name = 'gw2'
