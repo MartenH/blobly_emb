@@ -430,6 +430,7 @@ The diagnostic server over DoIP (ISO 13400) too — ThreadX target; one parser f
 | `address` | string | yes | — |  | the node's static IPv4 address — a host of its subnet (not its network, broadcast or gateway address — on the default /24: not .0, .1 or .255) |
 | `netmask` | string |  | `"255.255.255.0"` | dotted IPv4 | the subnet mask the node is brought up on, application and bootloader alike; contiguous, /1../30 (equal to the eth bus's, where the node has one) |
 | `gateway` | string |  | — | dotted IPv4 | the default gateway; inside address/netmask and not its network or broadcast address. Absent = the subnet's first host, (address & netmask) \| 1 |
+| `route` | array of tables → [`[[doip.route]]`](#ecu-doip-route) |  | — |  | a gateway's routes: the nodes behind it diagnostic messages are forwarded to (at most 8) |
 | `logical_address` | integer | yes | — |  | the entity's logical address (0x0001..0x0DFF or 0x1000..0x7FFF); unique |
 | `functional_address` | integer |  | `0xE400` | 0, or 0xE400..0xEFFF | the functional address it also answers |
 | `testers` | array of integers |  | — | 0xE00..0xFFF | tester addresses allowed to activate routing (at most 8); absent = any 0x0E00..0x0FFF |
@@ -438,7 +439,22 @@ The diagnostic server over DoIP (ISO 13400) too — ThreadX target; one parser f
 | `general_inactivity_ms` | integer |  | `300000` | 1000..3600000 | T_TCP_General_Inactivity: idle timeout once activated (ms) |
 | `announce_count` | integer |  | `3` | 0..10 | A_DoIP_Announce_Num: vehicle announcements at start-up |
 | `announce_interval_ms` | integer |  | `500` | 10..10000 | A_DoIP_Announce_Interval (ms); count x interval at most 10000 ms |
+| `route_level` | integer |  | `1` | 1..8 | a gateway's: the security level of its own server a tester must have unlocked over the network before it routes to the nodes behind it (REQ-NET-020); one its [uds] serves |
 | `allow_bench_key` | boolean |  | `false` |  | answer 0x27 with blobly_net's PUBLIC reference key over the network — a bench posture, opted into by name; required (true) when [uds] security_key = "reference" |
+
+<a id="ecu-doip-route"></a>
+
+### `[[doip.route]]`
+
+A node behind this DoIP gateway that diagnostic messages to its logical address are routed to (REQ-NET-019) — sysgen lowers them from system.toml (a gateway's doip `routes`, each routed node's diag).
+
+| key | type | required | default | allowed | description |
+|---|---|---|---|---|---|
+| `node` | string | yes | — |  | the routed node (named in refusals and the generated code) |
+| `logical` | integer | yes | — |  | its DoIP logical address (0x0001..0x0DFF or 0x1000..0x7FFF); not this entity's own or its functional address |
+| `bus` | string | yes | — |  | the CAN bus ([bus.*] name) it is on |
+| `tx_id` | integer | yes | — | 0x0..0x7FF | its physical request id: what the gateway sends on (11-bit) |
+| `rx_id` | integer | yes | — | 0x0..0x7FF | its response id: what the gateway receives on (11-bit) |
 
 <a id="ecu-boot"></a>
 
@@ -742,6 +758,7 @@ A member ECU and its system-owned identities.
 |---|---|---|---|---|---|
 | `req` | integer |  | — |  | the diagnostic request CAN id |
 | `rsp` | integer |  | — |  | the diagnostic response CAN id |
+| `logical` | integer |  | — |  | its DoIP logical address behind a DoIP gateway that routes to it (a gateway's doip `routes`; 0x0001..0x0DFF or 0x1000..0x7FFF; unique among every logical address); needs `req` and `rsp` |
 
 <a id="system-sys-endpoint"></a>
 
@@ -762,6 +779,7 @@ The DoIP entity and its ISO 13400-2 transport policy (one parser for both files:
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
+| `routes` | array of strings |  | — |  | the nodes behind this gateway its DoIP routes diagnostics to (REQ-NET-019), at most 8: each a CAN node on a bus this node sits on, with a diag `logical`; lowered into [[doip.route]] |
 | `logical` | integer | yes | — |  | the entity's logical address (0x0001..0x0DFF or 0x1000..0x7FFF); unique |
 | `functional` | integer |  | `0xE400` | 0xE400..0xEFFF | the functional address it also answers |
 | `testers` | array of integers |  | — | 0xE00..0xFFF | tester addresses allowed to activate routing (at most 8); absent = any 0x0E00..0x0FFF |
@@ -770,6 +788,7 @@ The DoIP entity and its ISO 13400-2 transport policy (one parser for both files:
 | `general_inactivity_ms` | integer |  | `300000` | 1000..3600000 | T_TCP_General_Inactivity: idle timeout once activated (ms) |
 | `announce_count` | integer |  | `3` | 0..10 | A_DoIP_Announce_Num: vehicle announcements at start-up |
 | `announce_interval_ms` | integer |  | `500` | 10..10000 | A_DoIP_Announce_Interval (ms); count x interval at most 10000 ms |
+| `route_level` | integer |  | `1` | 1..8 | a gateway's: the security level of its own server a tester must have unlocked over the network before it routes to the nodes behind it (REQ-NET-020); one its [uds] serves |
 | `allow_bench_key` | boolean |  | `false` |  | answer 0x27 with blobly_net's PUBLIC reference key over the network — a bench posture, opted into by name; required (true) when [uds] security_key = "reference" |
 
 <a id="system-sys-signal"></a>

@@ -284,16 +284,199 @@ fn tbus_name(s System, iface string) string {
 	return iface
 }
 
-fn check_telemetry_frames(s System) []Issue {
-	mut issues := []Issue{}
+// bus_dbcs: each bus's DBC that loads, by bus name (load errors are check_bus_dbcs' to report)
+fn bus_dbcs(s System) map[string]candb.Database {
 	mut dbs := map[string]candb.Database{}
 	for bus in s.buses {
 		if bus.dbc == '' {
 			continue
 		}
 		path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(s.dir, bus.dbc) }
-		dbs[bus.name] = candb.load_dbc_file(path) or { continue } // load errors already reported
+		dbs[bus.name] = candb.load_dbc_file(path) or { continue }
 	}
+	return dbs
+}
+
+// node_can_bus: the system CAN bus a node's own config names `iface` — by local_can_iface (a node
+// on one bus calls it can0), or by the bus's interface
+fn node_can_bus(s System, n Node, iface string) ?Bus {
+	for name in n.buses {
+		bus := s.bus_by_name(name) or { continue }
+		if bus.kind == 'can' && (local_can_iface(n, bus) == iface || bus.interface == iface) {
+			return bus
+		}
+	}
+	return none
+}
+
+// RouteTx — a DoIP gateway's route as a transmitter: it sends the routed node's requests on `id`
+struct RouteTx {
+	gw     string
+	target string
+	bus    string // the system bus
+	id     u32
+}
+
+// serves_on: node `t` has an [isotp] on system bus `bus` that listens on `rx` and answers on `tx`
+fn serves_on(s System, t Node, bus string, rx u32, tx u32) bool {
+	for c in t.view.isotp_conns {
+		b := node_can_bus(s, t, c.iface) or { continue }
+		if b.name == bus && c.rx_id == rx && c.tx_id == tx {
+			return true
+		}
+	}
+	return false
+}
+
+// check_route_ids: a DoIP gateway sends a routed node's requests on that node's request id
+// (REQ-NET-019) — a transmitter module_frames does not list, so check_telemetry_frames never sees
+// it. Any OTHER node that receives that id on the routed bus (an [isotp] rx or functional id, a
+// trace or shell receive id) would take the routed requests as its own: a routed 10 03 would
+// change its session too. Only the routed node listens on it. The routes are the system's doip
+// `routes` in a dissolved system (check_doip_routes holds them to the node's diag and [isotp]) and
+// the gateways' own [[doip.route]] in a composed one — held here to the node they name: an
+// [isotp] of it on that bus that listens on tx_id and answers on rx_id, or every routed request
+// goes unanswered.
+fn check_route_ids(s System) []Issue {
+	mut issues := []Issue{}
+	mut routes := []RouteTx{}
+	// routed node -> the gateway routing to it: one gateway per node, or two testers' requests
+	// interleave on its one ISO-TP connection (check_doip_routes holds the system's routes to it)
+	mut routed_by := map[string]string{}
+	// every entity's and routed node's logical address -> the node it names: an authored route's
+	// is held to it as a system's route is (check_doip_routes)
+	mut logical_of := map[u32]string{}
+	for n in s.nodes {
+		if n.has_doip && n.has_doip_logical && n.doip_logical_int {
+			logical_of[n.doip_logical] = n.name
+		}
+		if n.view.has_doip_logical && n.view.doip_logical !in logical_of {
+			logical_of[n.view.doip_logical] = n.name
+		}
+	}
+	for gw in s.nodes {
+		for name in gw.doip_routes {
+			if name !in routed_by {
+				routed_by[name] = gw.name
+			}
+			t := s.node_by_name(name) or { continue }
+			if t.diag.has_logical && t.diag.logical_int && t.diag.logical !in logical_of {
+				logical_of[t.diag.logical] = t.name
+			}
+		}
+	}
+	for gw in s.nodes {
+		for name in gw.doip_routes {
+			t := s.node_by_name(name) or { continue } // check_doip_routes reports it
+			bus := s.routed_bus(gw, t) or { continue }
+			if t.diag.req == 0 && t.diag.rsp == 0 {
+				continue // no diag allocation (check_doip_routes); CAN id 0 alone is an id like any
+			}
+			routes << RouteTx{gw.name, t.name, bus.name, t.diag.req}
+		}
+		mut authored := []string{} // this gateway's [[doip.route]] targets so far
+		for r in gw.view.doip_routes {
+			where := 'node "${gw.name}": its [[doip.route]] to "${r.node}"'
+			bus := node_can_bus(s, gw, r.bus) or { continue } // the node gate checks its own buses
+			t := s.node_by_name(r.node) or {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-NET-019'
+					msg:      '${where} names no node of this system — the system tells the routed node from the others that must not listen on its request id by that name'
+				}
+				continue
+			}
+			if t.name in authored {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-NET-019'
+					msg:      '${where} is listed twice'
+				}
+				continue
+			}
+			authored << t.name
+			if prev := routed_by[t.name] {
+				if prev != gw.name {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-NET-019'
+						msg:      '${where}: "${prev}" routes to it already — one gateway per node, or two testers\' requests interleave on its one ISO-TP connection'
+					}
+					continue
+				}
+			}
+			routed_by[t.name] = gw.name
+			if t.has_doip || t.view.has_doip {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-NET-019'
+					msg:      '${where}: it is a DoIP entity itself — a tester reaches it at its own endpoint'
+				}
+				continue
+			}
+			if r.has_logical {
+				if prev := logical_of[r.logical] {
+					if prev != t.name {
+						issues << Issue{
+							severity: .error
+							req:      'REQ-TOPO-002'
+							msg:      '${where}: logical address 0x${r.logical.hex()} is "${prev}"\'s too — a tester routes by it, so it names one node'
+						}
+					}
+				} else {
+					logical_of[r.logical] = t.name
+				}
+			}
+			if !serves_on(s, t, bus.name, r.tx_id, r.rx_id) {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-NET-019'
+					msg:      '${where} sends on 0x${r.tx_id.hex()} and listens on 0x${r.rx_id.hex()} on bus "${bus.name}", but no [isotp] of "${t.name}" there listens and answers on those ids — every routed request would go unanswered'
+				}
+			}
+			routes << RouteTx{gw.name, t.name, bus.name, r.tx_id}
+		}
+	}
+	if routes.len == 0 {
+		return issues // no gateway routes: no DBC to read
+	}
+	dbs := bus_dbcs(s)
+	for rt in routes {
+		for n in s.nodes {
+			if n.name == rt.target || rt.bus !in n.buses {
+				continue
+			}
+			for f in module_rx_frames(n, s, dbs) {
+				b := node_can_bus(s, n, f.iface) or { continue }
+				if b.name == rt.bus && f.id == rt.id {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-NET-019'
+						msg:      'node "${rt.gw}": doip route to "${rt.target}" sends its requests on 0x${f.id.hex()} on bus "${rt.bus}", which is also the ${f.label} of "${n.name}" — it would take the routed requests as its own'
+					}
+				}
+			}
+		}
+		// the gateway is the one transmitter of the request id on that bus: an application frame of
+		// that id would contend for it, and reach the target as a request (another module's
+		// transmission there lands on the target's [isotp] rx id, which check_telemetry_frames and
+		// check_identity_alloc already refuse)
+		if db := dbs[rt.bus] {
+			if m := db.lookup_frame(rt.id, false) {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-NET-019'
+					msg:      'node "${rt.gw}": doip route to "${rt.target}" sends its requests on 0x${rt.id.hex()} on bus "${rt.bus}", which is DBC application frame "${m.name}" there — two transmitters of one id, and its payloads would reach "${rt.target}" as requests'
+				}
+			}
+		}
+	}
+	return issues
+}
+
+fn check_telemetry_frames(s System) []Issue {
+	mut issues := []Issue{}
+	dbs := bus_dbcs(s)
 	mut owner := map[string]string{} // "<busname>#<id>" -> a phrase naming the owner
 	// module RECEIVE + TRANSMIT reservations only (NOT alive/app frames): a produced
 	// application frame landing on one is misrouted into that module or contends for

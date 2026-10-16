@@ -176,3 +176,25 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-NET-002"
+
+# 019..020: diagnostics routed through a gateway — refining SYS-REQ-NET-001 like 007..012: a node
+# with no network of its own is diagnosed and reprogrammed over the network through the gateway
+# on its bus (DoIP: ISO 13400-2 diagnostic message routing, comm/diagroute).
+
+[[req]]
+id = "REQ-NET-019"
+title = "Diagnostic routing to nodes behind a gateway"
+text = "A gateway shall forward a diagnostic message addressed to the logical address of a node behind it to that node's physical request id on its bus, and return each of the node's answers — a response-pending answer and the final one alike — to the requesting tester as a diagnostic message from the node's logical address, so a node with no network of its own is diagnosed and reprogrammed over the network with the same services as on its bus."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NET-001"
+
+[[req]]
+id = "REQ-NET-020"
+title = "Routed diagnostic access requires the gateway's own authentication"
+text = "A gateway shall forward a tester's diagnostic messages to the nodes behind it only while that tester holds the configured security level of the gateway's own diagnostic server, earned over the network on the same connection; the authorisation shall last for that connection and not lapse with the gateway's diagnostic session, and a new connection shall start without it."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NET-001"

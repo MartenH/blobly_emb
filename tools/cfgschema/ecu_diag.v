@@ -1,5 +1,6 @@
 module cfgschema
 
+import comm.doip
 import comm.uds
 import comm.fault
 import comm.param
@@ -28,6 +29,13 @@ fn ecu_diag_tables() []Table {
 			k('security', .int).d('0').range(0, uds.max_security_level).doc('the 0x27 level that must be unlocked first (0 = none)'),
 		]),
 		tbl('doip', '[doip]', "The diagnostic server over DoIP (ISO 13400) too — ThreadX target; one parser for this and a system node's `doip` (tools/doipcfg).", doip_ecu_keys()),
+		tbl('doip_route', '[[doip.route]]', 'A node behind this DoIP gateway that diagnostic messages to its logical address are routed to (REQ-NET-019) — sysgen lowers them from system.toml (a gateway\'s doip `routes`, each routed node\'s diag).', [
+			req('node', .str).doc('the routed node (named in refusals and the generated code)'),
+			req('logical', .int).hex().doc('its DoIP logical address (0x0001..0x0DFF or 0x1000..0x7FFF); not this entity\'s own or its functional address'),
+			req('bus', .str).doc('the CAN bus ([bus.*] name) it is on'),
+			req('tx_id', .int).range(0, 0x7FF).hex().doc('its physical request id: what the gateway sends on (11-bit)'),
+			req('rx_id', .int).range(0, 0x7FF).hex().doc('its response id: what the gateway receives on (11-bit)'),
+		]),
 		tbl('did', '[[did]]', 'A data identifier the server reads (0x22) and may write (0x2E). Its value is ONE of: `ascii` / `bytes` (a constant), `signal` (live), `param` (a coded [[param]]), `param_status`, `tx_saturations`.', [
 			req('id', .int).range(0, 0xFFFF).hex().doc('the 16-bit data identifier (0 is skipped)'),
 			k('ascii', .str).doc('a constant value as an ASCII string (at most ${uds.max_did_data} bytes)'),
@@ -102,6 +110,7 @@ fn doip_ecu_keys() []Key {
 		k('netmask', .str).ipv4().d('"255.255.255.0"').doc('the subnet mask the node is brought up on, application and bootloader alike; contiguous, /1../30 (equal to the eth bus\'s, where the node has one)'),
 		k('gateway', .str).ipv4().doc('the default gateway; inside address/netmask and not its network or broadcast address. Absent = the subnet\'s first host, (address & netmask) | 1'),
 	]
+	keys << sub('route', .arr, 'doip_route').doc('a gateway\'s routes: the nodes behind it diagnostic messages are forwarded to (at most ${doip.max_routes})')
 	for key in doip_entity_keys('logical_address', 'functional_address') {
 		keys << match key.name {
 			'logical_address' { key.required() }
