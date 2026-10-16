@@ -7,10 +7,8 @@ fn errs_of(text string) []string {
 	return validate(doc)
 }
 
-// The structurally valid tail every fixture appends AFTER its bare tables — a single
-// partition/thread + fb, the shape every example uses. (Bare tables must precede the
-// array-of-tables blocks: V's TOML parser mis-parses a bare [table] that follows a
-// [[array.of.tables]] — the same ordering the real ecu.toml files use.)
+// The structurally valid tail most fixtures append after their bare tables — a single
+// partition/thread + fb, the shape every example uses.
 const app = '
 [[partition]]
 name = "app"
@@ -28,6 +26,35 @@ thread = "app_main"
 
 fn test_good_config_has_no_errors() {
 	assert errs_of(app) == []
+}
+
+// A bare [table] after an array-of-tables block is a new top-level table, wherever it sits —
+// straight after a dotted [[partition.thread]] or after the [[fb.handler]] tail. The order in
+// an ecu.toml is the author's choice, not a parser constraint.
+fn test_bare_table_after_array_of_tables_reads_the_same() {
+	bare := '
+[bus.can0]
+interface = "vcan0"
+
+[trace]
+bus = "can0"
+level = "thread+fb"
+mode = "ring"
+pre_pct = 50
+buffer_records = 64
+'
+	thread_then_bare := app.replace('  name = "app_main"\n', '  name = "app_main"\n\n[bus.can1]\ninterface = "vcan1"\n')
+	assert thread_then_bare != app
+	for text in [bare + app, app + bare, thread_then_bare + bare] {
+		doc := toml.parse_text(text) or { panic('bad test toml: ${err}') }
+		assert doc.value('bus.can0.interface').string() == 'vcan0'
+		assert doc.value('trace.bus').string() == 'can0'
+		assert doc.value('partition[0].thread[0]').as_map().keys() == ['name']
+		assert doc.value('fb[0].handler[0]').as_map().keys() == ['name', 'period_ms']
+		assert validate(doc) == []
+	}
+	doc := toml.parse_text(thread_then_bare) or { panic('bad test toml: ${err}') }
+	assert doc.value('bus.can1.interface').string() == 'vcan1'
 }
 
 fn test_partition_needs_core_and_thread() {
@@ -87,7 +114,7 @@ thread = "app_main"
 	assert e.any(it.contains('irq-triggered handlers are not generated yet'))
 }
 
-// --- [trace] block validation (bare tables first, then the app tail) ---
+// --- [trace] block validation ---
 
 fn test_trace_valid_block_ok() {
 	assert errs_of(
@@ -717,8 +744,6 @@ thread = "far_main"
 // requirement also demands enforcement on RECEPTION (the source filter), which
 // arrives with the rx rung; config-time fixing alone does not verify it.
 
-// bare tables ([bus.eth0], [someip]) must precede the array-of-tables blocks —
-// the same ordering rule the real ecu.toml files follow.
 const eth_head = '
 [bus.eth0]
 kind      = "eth"
