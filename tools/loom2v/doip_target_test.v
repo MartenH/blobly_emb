@@ -528,7 +528,7 @@ fn test_a_gateway_routes_from_the_comm_thread() {
 		// for another answer
 		'for ch.recv(mut rx) {', // the node's own bus: no route there, drained as ever
 		'for (g_droute.active_bus() != 1 || g_droute.room(C.board_now_us())) && ch_can1.recv(mut rx) {',
-		'if g_droute.on_frame(u8(1), &rx, C.board_now_us()) {',
+		'if g_droute.on_frame(u8(1), rx, C.board_now_us()) {',
 		'g_diag.pump(',
 		'g_droute.step(t1)',
 		'1 { g_droute.pump(t1, mut ch_can1) }',

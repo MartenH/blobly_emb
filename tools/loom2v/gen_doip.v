@@ -203,7 +203,7 @@ fn doip_route_arm(m Model, bus string) []string {
 		return []string{}
 	}
 	return [
-		'\t\t\tif g_droute.on_frame(u8(${route_bus_index(bus)}), &rx, C.board_now_us()) {',
+		'\t\t\tif g_droute.on_frame(u8(${route_bus_index(bus)}), rx, C.board_now_us()) { // rx: &g_comm_rx',
 		'\t\t\t\tcontinue',
 		'\t\t\t}',
 	]
