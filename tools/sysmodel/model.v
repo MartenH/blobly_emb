@@ -744,7 +744,6 @@ fn (mut s System) note_unknown(m map[string]toml.Any, ctx string, where string) 
 	}
 }
 
-// bus_by_name returns the Bus with the given system name, or none.
 // node_by_name returns the node with the given name, or none.
 pub fn (s System) node_by_name(name string) ?Node {
 	for n in s.nodes {
@@ -791,6 +790,7 @@ pub fn (s System) routed_bus(gw Node, target Node) ?Bus {
 	return if bus.name in gw.buses { bus } else { none }
 }
 
+// bus_by_name returns the Bus with the given system name, or none.
 pub fn (s System) bus_by_name(name string) ?Bus {
 	for b in s.buses {
 		if b.name == name {

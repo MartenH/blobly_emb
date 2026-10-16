@@ -872,8 +872,6 @@ fn subnet_lines(node sysmodel.Node, mask_key string, gw_key string) []string {
 	return b
 }
 
-// doip_section: the node's [doip], lowered from its `doip` and its endpoint — one address per
-// node, declared once in system.toml (check_doip has refused every shape this cannot carry).
 // doip_route_section: a DoIP gateway's routes (REQ-NET-019), lowered from its doip `routes` — one
 // [[doip.route]] per routed node: its diag `logical`, the gateway's interface on the CAN bus the
 // two share, the node's diag request id (what the gateway sends on) and response id (what it
@@ -897,6 +895,8 @@ fn doip_route_section(sys sysmodel.System, node sysmodel.Node) []string {
 	return b
 }
 
+// doip_section: the node's [doip], lowered from its `doip` and its endpoint — one address per
+// node, declared once in system.toml (check_doip has refused every shape this cannot carry).
 fn doip_section(node sysmodel.Node) []string {
 	if !node.has_doip {
 		return []string{}

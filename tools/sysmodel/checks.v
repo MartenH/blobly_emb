@@ -1209,8 +1209,8 @@ fn check_someip_bus(s System, bus Bus) []Issue {
 		cnodes := cons[sig] or { continue }
 		for pn in pnodes {
 			for cn in cnodes {
-				p := node_named(s, pn) or { continue }
-				c := node_named(s, cn) or { continue }
+				p := s.node_by_name(pn) or { continue }
+				c := s.node_by_name(cn) or { continue }
 				pid := p.view.sig_frame_id['${p.view.someip_iface}|${sig}'] or {
 					issues << Issue{
 						severity: .error
@@ -1310,15 +1310,6 @@ fn canon_endpoint(e string) string {
 		}
 	}
 	return if digits { '${addr}:${port.u32()}' } else { '${addr}:${port}' }
-}
-
-fn node_named(s System, name string) ?Node {
-	for n in s.nodes {
-		if n.name == name {
-			return n
-		}
-	}
-	return none
 }
 
 // someip_endpoint_of returns the node's local SOME/IP endpoint interface IF it

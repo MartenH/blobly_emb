@@ -370,6 +370,9 @@ fn check_route_ids(s System) []Issue {
 			routes << RouteTx{gw.name, t.name, bus.name, r.tx_id}
 		}
 	}
+	if routes.len == 0 {
+		return issues // no gateway routes: no DBC to read
+	}
 	dbs := bus_dbcs(s)
 	for rt in routes {
 		for n in s.nodes {
