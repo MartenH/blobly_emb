@@ -236,13 +236,16 @@ pub mut:
 
 // AuthoredRoute — a [[doip.route]] a composed system's gateway authors itself (a dissolved
 // system's are lowered from its doip `routes`): the system reads which node it names, the
-// gateway's bus it is on and the ids it sends and listens on (REQ-NET-019, check_route_ids).
+// address a tester names it by, the gateway's bus it is on and the ids it sends and listens on
+// (REQ-NET-019, check_route_ids).
 pub struct AuthoredRoute {
 pub:
-	node  string
-	bus   string // the gateway's own name for the bus
-	tx_id u32
-	rx_id u32
+	node        string
+	bus         string // the gateway's own name for the bus
+	tx_id       u32
+	rx_id       u32
+	logical     u32
+	has_logical bool // an integer `logical` was given (loom2v refuses the rest)
 }
 
 // NodeView — the system-relevant slice of a node's ecu.toml: what it produces
@@ -297,6 +300,10 @@ pub mut:
 	someip_port int    // [someip].port — the port THIS endpoint listens on
 	has_doip    bool   // an authored [doip] — the system owns it in the dissolution model
 	doip_routes []AuthoredRoute // ... and its [[doip.route]]
+	// ... and its logical_address, when an integer: an entity's address is vehicle-wide unique,
+	// against the routed nodes' too (REQ-TOPO-002)
+	doip_logical     u32
+	has_doip_logical bool
 	// the node's [uds] as the network-reachability rule reads it (doipcfg.service_refusals /
 	// bench_key_refusal): a `services` table declared, its rows, and the 0x27 key it names
 	uds_table        bool
@@ -1164,15 +1171,22 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 	}
 	if dv := doc.value_opt('doip') {
 		v.has_doip = true
-		if routes := dv.as_map()['route'] {
+		dm := dv.as_map()
+		if m_is_int(dm, 'logical_address') {
+			v.doip_logical = m_u32(dm, 'logical_address')
+			v.has_doip_logical = true
+		}
+		if routes := dm['route'] {
 			if routes is []toml.Any {
 				for r in routes {
 					rm := r.as_map()
 					v.doip_routes << AuthoredRoute{
 						node:  m_str(rm, 'node')
 						bus:   m_str(rm, 'bus')
-						tx_id: m_u32(rm, 'tx_id')
-						rx_id: m_u32(rm, 'rx_id')
+						tx_id:       m_u32(rm, 'tx_id')
+						rx_id:       m_u32(rm, 'rx_id')
+						logical:     m_u32(rm, 'logical')
+						has_logical: m_is_int(rm, 'logical')
 					}
 				}
 			}

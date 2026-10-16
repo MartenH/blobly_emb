@@ -1616,9 +1616,9 @@ fn test_an_authored_route_in_a_composed_system_is_checked_for_other_listeners() 
 	sys.nodes[0].view.doip_routes = view.doip_routes
 	assert unanswered(sys).len == 0, unanswered(sys).str()
 	for bad in [
-		sysmodel.AuthoredRoute{'zone', 'can1', 0x7C1, 0x7C8}, // another request id
-		sysmodel.AuthoredRoute{'zone', 'can1', 0x7C0, 0x7C9}, // another response id
-		sysmodel.AuthoredRoute{'chassis', 'can1', 0x7C0, 0x7C8}, // a node that does not serve there
+		sysmodel.AuthoredRoute{node: 'zone', bus: 'can1', tx_id: 0x7C1, rx_id: 0x7C8}, // another request id
+		sysmodel.AuthoredRoute{node: 'zone', bus: 'can1', tx_id: 0x7C0, rx_id: 0x7C9}, // another response id
+		sysmodel.AuthoredRoute{node: 'chassis', bus: 'can1', tx_id: 0x7C0, rx_id: 0x7C8}, // a node that does not serve there
 	] {
 		sys.nodes[0].view.doip_routes = [bad]
 		assert unanswered(sys).len == 1, '${bad}: ${unanswered(sys)}'
@@ -1641,6 +1641,58 @@ fn test_an_authored_route_in_a_composed_system_is_checked_for_other_listeners() 
 	gw2.name = 'gw2'
 	sys.nodes << gw2
 	assert twice(sys).len == 1 && twice(sys)[0].contains('"gw2"'), twice(sys).str()
+}
+
+// an authored route is held to what a system's route is: its node no DoIP entity of its own, its
+// address no other node's, and its request id transmitted by the gateway alone (codex #405 r4)
+fn test_an_authored_route_is_held_to_the_system_routes_rules() {
+	doc := toml.parse_text('[doip]\nlogical_address = 0x07A0\n\n[[doip.route]]\nnode = "zone"\nlogical = 0x07C0\nbus = "can1"\ntx_id = 0x7C0\nrx_id = 0x7C8\n') or {
+		panic(err)
+	}
+	view := sysmodel.parse_node_view(doc)
+	assert view.has_doip_logical && view.doip_logical == 0x07A0
+	assert view.doip_routes[0].has_logical && view.doip_routes[0].logical == 0x07C0
+	mut sys := route_system()
+	sys.nodes[0].doip_routes = []
+	sys.nodes[0].view.has_doip = true
+	sys.nodes[0].view.has_doip_logical = true
+	sys.nodes[0].view.doip_logical = 0x07A0
+	sys.nodes[0].view.doip_routes = view.doip_routes
+	sys.nodes.last().diag.has_logical = false
+	errs := fn (s sysmodel.System) []string {
+		return sysmodel.validate_system(s).filter(it.severity == .error).map(it.msg).filter(it.contains('[[doip.route]]')
+			|| it.contains('doip route to'))
+	}
+	assert errs(sys).len == 0, errs(sys).str()
+	// the routed node is a DoIP entity itself
+	sys.nodes.last().view.has_doip = true
+	assert errs(sys).any(it.contains('is a DoIP entity itself')), errs(sys).str()
+	sys.nodes.last().view.has_doip = false
+	// its address is the gateway's own
+	sys.nodes[0].view.doip_routes = [sysmodel.AuthoredRoute{
+		node:        'zone'
+		bus:         'can1'
+		tx_id:       0x7C0
+		rx_id:       0x7C8
+		logical:     0x07A0
+		has_logical: true
+	}]
+	assert errs(sys).any(it.contains('logical address 0x7a0 is "')), errs(sys).str()
+	sys.nodes[0].view.doip_routes = view.doip_routes
+	// another node on the bus transmits the request id
+	sys.nodes << sysmodel.Node{
+		name:  'chassis'
+		ecu:   'chassis.toml'
+		buses: ['edge']
+		view:  sysmodel.NodeView{
+			isotp_conns: [sysmodel.IsotpConn{
+				iface: 'can0'
+				rx_id: 0x700
+				tx_id: 0x7C0
+			}]
+		}
+	}
+	assert errs(sys).any(it.contains('isotp tx id of "chassis" — two transmitters of one id')), errs(sys).str()
 }
 
 fn test_a_single_bus_gateway_routes_on_its_can0() {

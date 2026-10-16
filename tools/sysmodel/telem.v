@@ -343,10 +343,25 @@ fn check_route_ids(s System) []Issue {
 	// routed node -> the gateway routing to it: one gateway per node, or two testers' requests
 	// interleave on its one ISO-TP connection (check_doip_routes holds the system's routes to it)
 	mut routed_by := map[string]string{}
+	// every entity's and routed node's logical address -> the node it names: an authored route's
+	// is held to it as a system's route is (check_doip_routes)
+	mut logical_of := map[u32]string{}
+	for n in s.nodes {
+		if n.has_doip && n.has_doip_logical && n.doip_logical_int {
+			logical_of[n.doip_logical] = n.name
+		}
+		if n.view.has_doip_logical && n.view.doip_logical !in logical_of {
+			logical_of[n.view.doip_logical] = n.name
+		}
+	}
 	for gw in s.nodes {
 		for name in gw.doip_routes {
 			if name !in routed_by {
 				routed_by[name] = gw.name
+			}
+			t := s.node_by_name(name) or { continue }
+			if t.diag.has_logical && t.diag.logical_int && t.diag.logical !in logical_of {
+				logical_of[t.diag.logical] = t.name
 			}
 		}
 	}
@@ -391,6 +406,27 @@ fn check_route_ids(s System) []Issue {
 				}
 			}
 			routed_by[t.name] = gw.name
+			if t.has_doip || t.view.has_doip {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-NET-019'
+					msg:      '${where}: it is a DoIP entity itself — a tester reaches it at its own endpoint'
+				}
+				continue
+			}
+			if r.has_logical {
+				if prev := logical_of[r.logical] {
+					if prev != t.name {
+						issues << Issue{
+							severity: .error
+							req:      'REQ-TOPO-002'
+							msg:      '${where}: logical address 0x${r.logical.hex()} is "${prev}"\'s too — a tester routes by it, so it names one node'
+						}
+					}
+				} else {
+					logical_of[r.logical] = t.name
+				}
+			}
 			if !serves_on(s, t, bus.name, r.tx_id, r.rx_id) {
 				issues << Issue{
 					severity: .error
@@ -417,6 +453,33 @@ fn check_route_ids(s System) []Issue {
 						severity: .error
 						req:      'REQ-NET-019'
 						msg:      'node "${rt.gw}": doip route to "${rt.target}" sends its requests on 0x${f.id.hex()} on bus "${rt.bus}", which is also the ${f.label} of "${n.name}" — it would take the routed requests as its own'
+					}
+				}
+			}
+		}
+		// the gateway is the one transmitter of the request id on that bus: an application frame or
+		// another module's transmission there would contend for the id, and reach the target as a
+		// request
+		if db := dbs[rt.bus] {
+			if m := db.lookup_frame(rt.id, false) {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-NET-019'
+					msg:      'node "${rt.gw}": doip route to "${rt.target}" sends its requests on 0x${rt.id.hex()} on bus "${rt.bus}", which is DBC application frame "${m.name}" there — two transmitters of one id, and its payloads would reach "${rt.target}" as requests'
+				}
+			}
+		}
+		for n in s.nodes {
+			if rt.bus !in n.buses {
+				continue
+			}
+			for f in module_frames(n, s, dbs) {
+				b := node_can_bus(s, n, f.iface) or { continue }
+				if b.name == rt.bus && f.id == rt.id {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-NET-019'
+						msg:      'node "${rt.gw}": doip route to "${rt.target}" sends its requests on 0x${f.id.hex()} on bus "${rt.bus}", which is also the ${f.label} of "${n.name}" — two transmitters of one id'
 					}
 				}
 			}

@@ -209,6 +209,9 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 		0x10 { // first frame
 			total := int((u32(low) << 8) | u32(p.data[1]))
 			if total > 7 && total <= max_payload {
+				// a first frame that replaces a reception in progress restarts it, and moves
+				// nothing: a sender repeating its first frame is not a transfer advancing
+				fresh := l.rx != .receiving
 				for i in 0 .. 6 {
 					l.rx_buf[i] = p.data[2 + i]
 				}
@@ -222,7 +225,9 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 				l.fc_send = true // answer with FC (CTS); N_Cr is armed when the CTS is
 				// actually emitted (poll), not here — a backpressured bridge may hold the
 				// CTS for a while and the sender is correctly waiting for it
-				l.progress++
+				if fresh {
+					l.progress++
+				}
 			}
 		}
 		0x20 { // consecutive frame

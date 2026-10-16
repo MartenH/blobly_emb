@@ -793,6 +793,7 @@ fn test_no_frame_that_moves_nothing_keeps_a_stalled_exchange_alive() {
 		[u8(0x10)], // a truncated first frame (rejected before the link)
 		[u8(0x05), 0x62], // a truncated single frame
 		[u8(0x2F), 1, 2, 3, 4, 5, 6, 7], // a consecutive frame out of sequence
+		[u8(0x10), 43, 0x62, 0xF1, 0x00, 0, 1, 2], // the answer's first frame, repeated
 	]
 	for j in junk {
 		mut r := new_router()

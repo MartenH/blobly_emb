@@ -460,9 +460,14 @@ fn test_only_frames_that_advance_a_reception_count_as_progress() {
 	p.data[1] = 20
 	l.on_frame(0, p)
 	assert l.progress == 1
+	l.on_frame(0, p) // the same first frame again, its flow control still owed: a restart
+	assert l.progress == 1 && l.rx == .receiving
 	p.data[0] = 0x23 // out of sequence: aborts, no progress
 	l.on_frame(0, p)
 	assert l.progress == 1
+	p.data[0] = 0x10 // a first frame after the abort starts a reception anew
+	l.on_frame(0, p)
+	assert l.progress == 2
 }
 
 // a flow control the transmission waits for is progress too — a WAIT within WFTmax as much as a
