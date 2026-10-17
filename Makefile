@@ -3,7 +3,7 @@ REPO := .
 # every repo tool a target runs is built once into bin/ (tools/tools.mk), never `v run` (#333)
 include tools/tools.mk
 
-.PHONY: example run-example list check deps deps-cmsis deps-lvgl trace trace-check lint vcan clean demo demo-threadx bench v-pin
+.PHONY: example run-example list check deps deps-cmsis deps-lvgl trace trace-check lint vcan clean demo demo-threadx bench v-pin unit
 
 # ---- Examples ---------------------------------------------------------------
 # Each example is a self-contained app under examples/<NAME>/ with its own
@@ -150,6 +150,13 @@ bench: $(TOOL_ioc_bench) $(TOOL_ioc_bench_mp) $(TOOL_loom_bench) $(TOOL_bulk_ben
 bench-scale:
 	cd examples/scale && $(MAKE) all
 	./scripts/scale-bench.sh
+
+# The host unit suite, as CI's host job runs it. V3's test runner allows one parallel job
+# per 8 GB of memory (three on 32 GB) while a compile here peaks near 1 GB, so the suite runs
+# one job per core unless VJOBS says otherwise.
+UNIT_DIRS := comm driver tools ecu loom nvm wdg bcrypto boot
+unit:
+	VJOBS=$${VJOBS:-$$(nproc)} v -enable-globals test $(UNIT_DIRS)
 
 # On-target regression tests — the "special tests run on target" group. Each
 # bench_test.sh flashes its image to the attached board and asserts the

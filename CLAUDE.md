@@ -242,10 +242,12 @@ holds its persisted fault memory and its `SteerLimit` parameter: `make flash` ne
 and coded parameters survive a reflash — clear DTCs with 0x14, recode a parameter with 0x2E
 (`test/param_zone_a.lua` leaves it at 360).
 
-**CI pins the V compiler, and it is V3**: the commit in `.v-version` (today the head of vlang/v#30204,
-`ea5156d` plus the fixed-array borrow fix master carries as `7858acc`, since no vc builds a master commit
-that has it), built from source with the
-vlang/vc bootstrap pinned in `.vc-version` — keep it the pair blobly_net pins, moved in both repos
+**CI pins the V compiler, and it is V3**: the commit in `.v-version` (today master `0535623`, the first
+commit with a vc bootstrap after vlang/v#30552 merged — that PR leaves the errno accessor to a
+`-target-libc-headers` target, where every master commit since vlang/v#30215 had declared it beside
+newlib's `int *` and none built the firmware), built from source with
+the vlang/vc bootstrap pinned in `.vc-version` (a vc at or before the pin that
+`scripts/v_toolchain.sh` has built it with) — keep it the pair blobly_net pins, moved in both repos
 together, so one `~/v` builds both (`.github/actions/setup-v`, `scripts/v_toolchain.sh`, both from blobly_net, tested by
 `scripts/v_toolchain_test.sh`). CI sets `V_MACOS_V3_NO_FALLBACK=1`: without it a program V3 cannot
 build is silently rebuilt by a downloaded V1 compiler; and `VFLAGS=-nocache`, because V3's module
@@ -254,7 +256,9 @@ Source builds broke before (2026-09-08,
 master's own `unknown module builder`) because `make` cloned vc's default branch; with the
 bootstrap pinned and `make local=1` nothing moves under it. Bump both pins together, here and in
 blobly_net, and re-run the
-full local gate on the new compiler — the host suite AND the 16 cross images. Your local V does
+full local gate on the new compiler — the host suite AND the 16 cross images. Run the host suite with
+`make unit`: V3's test runner allows one parallel job per 8 GB, three on a 32 GB machine, while a
+compile here peaks near 1 GB, so `make unit` sets `VJOBS` to the core count (CI sets 4). Your local V does
 **not** have to match the pin, but it usually explains a local/CI disagreement — `make v-pin`
 compares the commit.
 
