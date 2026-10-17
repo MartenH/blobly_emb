@@ -33,11 +33,13 @@ buses:
     databases:
       - ../edge.dbc
 
-  # sysnode's DoIP entity (system.toml: 192.168.0.50, logical 0x07A0, tester 0x0E00) — its
-  # application's and, after a handoff over DoIP, its bootloader's (boot_handoff.lua sysnode-doip)
+  # sysnode's DoIP entity (system.toml: host 50 of the tel subnet, logical 0x07A0, tester 0x0E00) —
+  # its application's and, after a handoff over DoIP, its bootloader's (boot_handoff.lua
+  # sysnode-doip). The address is a COPY of SYSNODE_ADDR (gen-net.env): a bench on another subnet
+  # (BLOB_NET_SUBNET) edits it here too — a project cannot read the system's addresses yet.
   - name: sysnode_ip
     network: system_full
     adapter: doip
-    address: 192.168.0.50:13400
+    address: 192.168.77.50:13400
     tester_address: "0x0E00"
     ecu_address: "0x07A0"

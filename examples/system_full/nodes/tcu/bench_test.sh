@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # On-target regression test for tcu, system_full's SOME/IP node (docs/someip.md target + P3
-# routing rungs) on the NUCLEO-H723 at 192.168.0.51 — the eth twin of the io hwtest scripts.
+# routing rungs) on the NUCLEO-H723 at tcu's address (TCU_ADDR, ../../test/net_env.sh) — the eth
+# twin of the io hwtest scripts.
 #
 # Probed FROM THE WINDOWS HOST via powershell.exe (WSL NAT delivers neither subnet broadcasts nor
 # unsolicited inbound UDP — the bench recipe of emb#158): the probe binds the bench tester's
@@ -20,28 +21,31 @@
 #
 # The E2E-protected receive path on the same node is ../../test/tcu_e2e.lua (blobly_net).
 #
-# The probe targets BLOB_SOMEIP_IP (default 192.168.0.51 = tcu). Any node offering the same
+# The probe targets BLOB_SOMEIP_IP (default TCU_ADDR = tcu). Any node offering the same
 # service and shell method answers the same legs at its own address, read-only.
 #
 # Exit: 0 = pass, 1 = FAILED, 2 = SKIP (no board/probe host). Flashing requires an explicit
 # BLOB_TCU_SERIAL — a TCU-specific variable, not a chip one: an H723 and an H735 report the same
 # chip id, and the bench H723 is usually zone_a's board, so `make hwtest` (which passes --flash
 # to every script) must not replace zone_a with tcu unless the bench asked for a tcu.
-# Every received datagram is filtered by source == the board's address: sysnode (.50) sends its
+# Every received datagram is filtered by source == the board's address: sysnode sends its
 # GwStatus to the same tester port.
 #
 # Usage: BLOB_TCU_SERIAL=<serial> ./bench_test.sh [--flash]
 set -uo pipefail
 cd "$(dirname "$0")"
 FLASH=0; [ "${1:-}" = "--flash" ] && FLASH=1
-BOARD_IP="${BLOB_SOMEIP_IP:-192.168.0.51}"
+# --flash builds the image, which regenerates the addresses: read them as that build will
+if [ "$FLASH" = 1 ]; then make -s -C ../.. gen >/dev/null || { echo "FAIL: make gen"; exit 1; }; fi
+. ../../test/net_env.sh
+BOARD_IP="${BLOB_SOMEIP_IP:-$TCU_ADDR}"
 
 command -v powershell.exe >/dev/null 2>&1 || { echo "SKIP: no powershell.exe (not a WSL bench host)"; exit 2; }
 
 if [ "$FLASH" = 1 ]; then
   # --flash builds and writes tcu's image, which is the node at the default address. Flashing it
   # while probing another node's address would report on an image this script never wrote.
-  [ "$BOARD_IP" = "192.168.0.51" ] || { echo "SKIP: --flash builds tcu (192.168.0.51), not the node at $BOARD_IP"; exit 2; }
+  [ "$BOARD_IP" = "$TCU_ADDR" ] || { echo "SKIP: --flash builds tcu ($TCU_ADDR), not the node at $BOARD_IP"; exit 2; }
   [ -n "${BLOB_TCU_SERIAL:-}" ] || { echo "SKIP: flash requested without BLOB_TCU_SERIAL (the H723 that runs tcu)"; exit 2; }
   st-info --probe 2>/dev/null | grep -q "$BLOB_TCU_SERIAL" || { echo "SKIP: probe $BLOB_TCU_SERIAL not attached"; exit 2; }
   make >/dev/null || { echo "FAIL: build error"; exit 1; }
@@ -52,7 +56,7 @@ fi
 PS=$(mktemp --suffix=.ps1)
 trap 'rm -f "$PS"' EXIT
 cat > "$PS" <<'EOF'
-param([string]$BoardIp = '192.168.0.51')
+param([Parameter(Mandatory)][string]$BoardIp)
 $ErrorActionPreference = 'Stop'
 try { $udp = New-Object System.Net.Sockets.UdpClient(30491) } catch { Write-Output 'SKIP: peer port busy'; exit }
 $udp.Client.ReceiveTimeout = 2000

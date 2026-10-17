@@ -29,6 +29,7 @@ fn system_schema() Schema {
 				k('dbc', .str).doc("the bus's frame contract, relative to system.toml; required on a CAN bus carrying a [[signal]], refused on someip"),
 				k('service', .int).range(0, 0xFFFF).hex().doc('someip: the SOME/IP service id (required on a someip bus, refused on CAN)'),
 				k('version', .int).range(0, 0xFF).doc('someip: the interface version byte (required on a someip bus of a dissolved system, refused on CAN)'),
+				k('subnet', .str).doc('someip: the segment\'s network, "<network>/<prefix>" (e.g. "192.168.77.0/24"); its members then give their endpoint `host`, not `address`, and the environment variable BLOB_NET_SUBNET replaces it per bench (docs/net.md); refused on CAN'),
 				sub('nm', .tbl, 'sys_bus_nm').doc("the bus's NM cluster (CAN only); without it a node's nm id generates a disabled [nm]"),
 			]),
 			tbl('sys_bus_nm', '[bus.*.nm]', "An NM cluster: the alive-id range and the timings every member shares. A timing absent (or <= 0) is not lowered, so the node takes loom2v's default.", [
@@ -62,9 +63,10 @@ fn system_schema() Schema {
 				k('logical', .int).hex().doc('its DoIP logical address behind a DoIP gateway that routes to it (a gateway\'s doip `routes`; 0x0001..0x0DFF or 0x1000..0x7FFF; unique among every logical address); needs `req` and `rsp`'),
 			]),
 			tbl('sys_endpoint', '[[node]] endpoint', '', [
-				k('address', .str).required_by_model().doc('IPv4 dotted quad; unique per segment; a DoIP node needs a host address of its subnet (not its network, broadcast or gateway address — on the default /24: not .0, .1 or .255)'),
+				k('address', .str).doc('IPv4 dotted quad; unique per segment; a DoIP node needs a host address of its subnet (not its network, broadcast or gateway address — on the default /24: not .0, .1 or .255). Exactly one of `address` / `host`; refused on a segment with a `subnet`'),
+				k('host', .int).range(1, 0xFFFFFE).doc('the host number on its someip segment\'s `subnet` (50 on 192.168.77.0/24 is 192.168.77.50) — what follows the subnet when it moves; exactly one of `address` / `host`'),
 				k('port', .int).range(1, 0xFFFF).doc('the SOME/IP listen port (required on a someip bus; not 13400 on a DoIP node)'),
-				k('netmask', .str).ipv4().d('"255.255.255.0"').doc('the subnet mask the node is brought up on (application and bootloader alike); contiguous, /1../30'),
+				k('netmask', .str).ipv4().d('"255.255.255.0"').doc('the subnet mask the node is brought up on (application and bootloader alike); contiguous, /1../30. With `host` it is the segment subnet\'s, and refused here'),
 				k('gateway', .str).ipv4().doc('the default gateway; inside address/netmask and not its network or broadcast address. Absent = the subnet\'s first host, (address & netmask) | 1'),
 			]),
 			tbl('sys_doip', '[[node]] doip', 'The DoIP entity and its ISO 13400-2 transport policy (one parser for both files: tools/doipcfg; bounds: comm/doip policy.v).', sys_doip_keys()),

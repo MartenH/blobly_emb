@@ -73,7 +73,7 @@ GENSRC = $(wildcard $(REPO)/tools/ecucheck/*.v) $(wildcard $(REPO)/tools/sysgen/
 # table bounds — so a change there must regenerate, not only recompile)
 # Every node's ecu.toml: gen-system validates them all, and a segment peer is derived from who
 # reads which event — so the bench tool's ecu.toml decides where GwStatus goes.
-gen/.stamp: $(SYSDIR)/system.toml $(wildcard $(SYSDIR)/nodes/*/ecu.toml) $(wildcard app/*.v) $(SYSDIR)/compute.dbc $(SYSDIR)/edge.dbc $(GENSRC) $(TOOL_dbc2cfg) $(TOOL_dbcmerge) $(TOOL_loom2v)
+gen/.stamp: $(SYSDIR)/system.toml $(call net_sign,gen/net) $(wildcard $(SYSDIR)/nodes/*/ecu.toml) $(wildcard app/*.v) $(SYSDIR)/compute.dbc $(SYSDIR)/edge.dbc $(GENSRC) $(TOOL_dbc2cfg) $(TOOL_dbcmerge) $(TOOL_loom2v)
 	@mkdir -p gen ports sig
 	$(MAKE) -C $(REPO) gen-system SYSTEM=examples/system_full/system.toml
 	cd $(REPO) && $(TOOL_dbcmerge) $(GW)/gen/merged.dbc examples/system_full/compute.dbc examples/system_full/edge.dbc

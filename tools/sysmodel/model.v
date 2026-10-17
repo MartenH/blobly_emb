@@ -38,6 +38,11 @@ pub mut:
 	fd        bool
 	bitrate   int
 	dbc       string
+	// someip only: the segment's network ("192.168.77.0/24"). Its members then give only their
+	// `host` number and the address is derived (resolve_hosts), so the segment moves to another
+	// network by this one value — or by BLOB_NET_SUBNET, without editing the file.
+	subnet     string
+	has_subnet bool
 	// someip only: the service this endpoint offers. A signal on a someip bus rides an
 	// EVENT of this service rather than a DBC frame; a method is a request/response.
 	// has_service records PRESENCE, not a nonzero value: 0x0000 is a legal service id
@@ -112,6 +117,15 @@ pub mut:
 	endpoint_netmask ?string
 	endpoint_gateway ?string
 	endpoint_not_str []string
+	// `host = 50`: the endpoint's address is that host of its segment's subnet (resolve_hosts
+	// writes it into `endpoint`); `address` is the literal form. Exactly one is given.
+	has_address  bool
+	has_host     bool
+	host_raw     i64
+	host_int     bool = true
+	// the netmask came from the segment's subnet, not from the node: it is lowered like an
+	// authored one, but a host member is not refused for "configuring" it
+	netmask_from_subnet bool
 	// `doip = { logical = 0x07A0 }`: the node's diagnostic server is reachable over DoIP
 	// (ISO 13400) too, at its endpoint address. Lowered into the node's [doip] — the address is
 	// the endpoint's, so a node has ONE network identity and it is declared here, not per node.
@@ -434,6 +448,11 @@ pub mut:
 	// read as the key's absence (a `producr` meant no producer, an `interfce` no channel)
 	unknown_nested []string
 	dir          string   // directory of system.toml (node/dbc paths resolve against it)
+	// BLOB_NET_SUBNET as parse_system read it ('' = unset): it replaces the one segment
+	// `subnet`, so a bench moves the system onto its own network without editing system.toml
+	subnet_override string
+	// what resolve_hosts could not resolve, reported by check_subnets
+	subnet_errs []string
 }
 
 // signal_by_name returns the system signal with the given name, or none.
@@ -543,6 +562,8 @@ pub fn parse_system(path string) !System {
 				fd:        m_bool(m, 'fd')
 				bitrate:   m_int(m, 'bitrate')
 				dbc:       m_str(m, 'dbc')
+				subnet:     m_str(m, 'subnet')
+				has_subnet: 'subnet' in m
 				service:     u32(m_int(m, 'service'))
 				has_service: 'service' in m
 				service_ok:  cfgschema.system.key('sys_bus', 'service').in_range(svc_raw)
@@ -611,6 +632,10 @@ pub fn parse_system(path string) !System {
 				em := ev.as_map()
 				sys.note_unknown(em, 'sys_endpoint', '${where} endpoint')
 				node.endpoint = m_str(em, 'address')
+				node.has_address = 'address' in em
+				node.has_host = 'host' in em
+				node.host_raw = (em['host'] or { toml.Any(0) }).i64()
+				node.host_int = m_is_int(em, 'host')
 				node.port = m_u32(em, 'port')
 				node.port_raw = (em['port'] or { toml.Any(0) }).i64()
 				node.has_port = 'port' in em
@@ -740,6 +765,7 @@ pub fn parse_system(path string) !System {
 			}
 		}
 	}
+	sys.resolve_hosts(os.getenv(subnet_env))
 	return sys
 }
 

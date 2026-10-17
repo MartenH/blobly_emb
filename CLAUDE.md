@@ -71,7 +71,12 @@ complete ecu.toml) and `**/system.toml` to the schemas, so Even Better TOML comp
 validates both files. Adding a key: add its row, then `make config-docs`. A string row may carry
 `.ipv4()` (a dotted quad, `tools/netcfg`'s rule); a node's subnet — `endpoint`'s `netmask` and
 `gateway`, lowered beside the address — is judged by `tools/netcfg` in both sysmodel and loom2v and
-reaches `driver/eth/netx_up.c` (application and bootloader) as `LOOM_NET_ADDR_DEFS` (docs/net.md).
+reaches `driver/eth/netx_up.c` (application and bootloader) as `LOOM_NET_ADDR_DEFS` (docs/net.md). A someip
+segment may state its `subnet` once and its members only a `host` number (`tools/sysmodel`
+subnet.v), which is how `system_full`'s bench network (192.168.77.0/24) is ONE value; the
+environment variable `BLOB_NET_SUBNET` replaces it per bench, the images that carry an address
+record it (`net_sign` in `tools/tools.mk`), and sysgen writes the result to `gen-net.env`, which the
+bench scripts read instead of keeping a copy (docs/net.md "Moving the bench network").
 
 ## Build & test
 

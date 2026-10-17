@@ -42,6 +42,7 @@ pub:
 pub fn validate_system(s System) []Issue {
 	mut issues := []Issue{}
 	issues << check_topology_wellformed(s)
+	issues << check_subnets(s)
 	issues << check_node_name_is_an_identifier(s)
 	issues << check_node_configs(s)
 	issues << check_node_generatable(s)
@@ -67,6 +68,7 @@ pub fn validate_system(s System) []Issue {
 pub fn validate_system_gen(s System) []Issue {
 	mut issues := []Issue{}
 	issues << check_topology_wellformed(s)
+	issues << check_subnets(s)
 	issues << check_node_name_is_an_identifier(s)
 	issues << check_identity_alloc(s)
 	issues << check_dissolved_nodes(s)
@@ -2645,6 +2647,9 @@ fn check_someip_segment(s System) []Issue {
 					msg:      'node "${n.name}": endpoint port ${n.port_raw} is outside ${port_key.min}..${port_key.max}'
 				}
 			}
+			if n.has_host && n.endpoint == '' {
+				continue // an unresolved `host`: check_subnets says why
+			}
 			if !n.has_endpoint || n.endpoint == '' {
 				issues << Issue{
 					severity: .error
@@ -2874,7 +2879,9 @@ fn check_doip(s System) []Issue {
 				}
 			}
 		}
-		if !n.has_endpoint || n.endpoint == '' {
+		if n.has_host && n.endpoint == '' {
+			// an unresolved `host`: check_subnets says why
+		} else if !n.has_endpoint || n.endpoint == '' {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-005'
@@ -3158,10 +3165,14 @@ fn check_endpoint_net(s System) []Issue {
 				msg:      'node "${n.name}": endpoint `${key}` must be a string — a dotted IPv4 address'
 			}
 		}
+		if n.has_host && n.endpoint == '' {
+			continue // an unresolved `host`: check_subnets says why
+		}
 		if n.endpoint_netmask == none && n.endpoint_gateway == none && !n.has_doip {
 			continue // nothing configured, nothing brought up as an entity: the defaults stand
 		}
-		if (n.endpoint_netmask != none || n.endpoint_gateway != none) && !n.view.is_threadx {
+		if ((n.endpoint_netmask != none && !n.netmask_from_subnet) || n.endpoint_gateway != none)
+			&& !n.view.is_threadx {
 			// the subnet is NetX's (driver/eth/netx_up.c); a host member binds on the host's network
 			issues << Issue{
 				severity: .error
