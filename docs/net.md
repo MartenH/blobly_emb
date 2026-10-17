@@ -307,7 +307,7 @@ broadcast address, and an address that is a host of it.
 A someip segment may state its network once — `subnet = "192.168.77.0/24"` on `[bus.tel]` — and
 then each member's `endpoint` gives only its `host` number (`host = 50` is 192.168.77.50); an
 `address` is refused there, since it would not move with the segment. The subnet's mask is the
-nodes' netmask and its `.1` their default gateway. `system_full` does this, so its whole bench
+nodes' netmask and its `.1` their default gateway (an endpoint with `host` gives neither). `system_full` does this, so its whole bench
 network is that one value: the default, 192.168.77.0/24, suits a dedicated router for the bench —
 a network of its own, which DoIP discovery's broadcast and SOME/IP need anyway, and which stays off
 an office or home LAN's usual 192.168.0.x/1.x.
@@ -322,7 +322,9 @@ it — so the host running blobly_net must be at the tester's host number on tha
 boards must be reflashed after a change.
 
 sysgen writes the result to `gen-net.env` beside system.toml (`SYSNODE_ADDR=…`, `TCU_ADDR=…`,
-`TESTER_ADDR=…`, each with its `_PORT`), and the bench scripts read it rather than keep a copy:
+`TESTER_ADDR=…`, each with its `_PORT`) on every generation — so it states the LAST one, which the
+flashed images match only if they were built since — and the bench scripts read it rather than
+keep a copy:
 `test/net_env.sh` for the shell, `test/tcu_e2e.lua` and `test/doip_entity.py` directly. The two
 `.blobnet` projects (`test/doip_bench.blobnet`, `test/diag_bench.blobnet`) still name sysnode's
 address literally — a project cannot read the system's yet — so a bench on another network edits

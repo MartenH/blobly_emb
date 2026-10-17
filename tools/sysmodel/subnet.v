@@ -15,23 +15,40 @@ pub fn (mut s System) resolve_hosts(override string) {
 	mut subnets := map[string]netcfg.Subnet{}
 	mut broken := []string{} // a bus whose subnet is refused: its members are not reported again
 	declared := s.buses.filter(it.has_subnet)
+	if override != '' && declared.len > 1 {
+		s.subnet_errs << '${subnet_env} replaces THE segment subnet, but buses ${declared.map('"${it.name}"').join(', ')} each declare one'
+		return
+	}
+	// the override, parsed once whichever bus it stands in for
+	mut moved := ?netcfg.Subnet(none)
+	if override != '' && declared.len == 1 {
+		// if/else, not an `or` yielding none: V3 (e2cdd9e) emits C that does not build for that
+		if m := netcfg.parse_subnet(override) {
+			moved = m
+		} else {
+			s.subnet_errs << '${subnet_env}: ' + err.msg()
+		}
+	}
 	for b in declared {
 		if b.kind != 'someip' {
 			s.subnet_errs << 'bus "${b.name}": `subnet` is a someip segment\'s; a CAN bus has no addresses'
 			broken << b.name
 			continue
 		}
-		text := if override != '' { override } else { b.subnet }
-		from := if override != '' { '${subnet_env}: ' } else { 'bus "${b.name}": ' }
-		subnets[b.name] = netcfg.parse_subnet(text) or {
-			s.subnet_errs << from + err.msg()
+		if override != '' {
+			if m := moved {
+				subnets[b.name] = m
+				s.subnet_applied = true
+			} else {
+				broken << b.name
+			}
+			continue
+		}
+		subnets[b.name] = netcfg.parse_subnet(b.subnet) or {
+			s.subnet_errs << 'bus "${b.name}": ' + err.msg()
 			broken << b.name
 			continue
 		}
-	}
-	if override != '' && declared.len > 1 {
-		s.subnet_errs << '${subnet_env} replaces THE segment subnet, but buses ${declared.map('"${it.name}"').join(', ')} each declare one'
-		return
 	}
 	for mut n in s.nodes {
 		if !n.has_endpoint {
@@ -67,8 +84,9 @@ pub fn (mut s System) resolve_hosts(override string) {
 			s.subnet_errs << 'node "${n.name}": endpoint `host` must be an integer 1..${sub.hosts()} on ${sub} (bus "${on[0]}")'
 			continue
 		}
-		if n.endpoint_netmask != none {
-			s.subnet_errs << 'node "${n.name}": endpoint `netmask` is the subnet\'s on bus "${on[0]}" (${sub}) — drop it'
+		if n.endpoint_netmask != none || n.endpoint_gateway != none {
+			// a literal would not move with the subnet: the mask is the subnet's, the gateway its .1
+			s.subnet_errs << 'node "${n.name}": endpoint `netmask` and `gateway` are the subnet\'s on bus "${on[0]}" (${sub}, gateway .1) — drop them'
 			continue
 		}
 		n.endpoint = netcfg.dotted(sub.network | u32(n.host_raw))

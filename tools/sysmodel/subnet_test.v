@@ -45,7 +45,7 @@ fn test_the_override_moves_every_host_and_carries_its_mask() {
 	mut s := tel_system('192.168.77.0/24')
 	s.resolve_hosts('10.20.0.0/16')
 	assert s.subnet_errs == []
-	assert s.subnet_override == '10.20.0.0/16'
+	assert s.subnet_override == '10.20.0.0/16' && s.subnet_applied
 	assert s.nodes.map(it.endpoint) == ['10.20.0.50', '10.20.0.51']
 	assert s.nodes[0].endpoint_netmask or { '' } == '255.255.0.0'
 	assert s.nodes[0].netmask_from_subnet
@@ -63,6 +63,7 @@ fn test_an_override_never_touches_a_system_without_a_subnet() {
 	s.nodes.delete(1)
 	s.resolve_hosts('10.20.0.0/16')
 	assert s.subnet_errs == []
+	assert !s.subnet_applied
 	assert s.nodes[0].endpoint == '192.168.0.50'
 }
 
@@ -87,7 +88,8 @@ fn test_what_cannot_be_resolved_is_said_once() {
 		subnet:     '192.168.78.0/24'
 		has_subnet: true
 	}
-	assert errs_of(mut two, '10.0.0.0/24').any(it.contains('each declare one'))
+	te := errs_of(mut two, 'bogus')
+	assert te.len == 1 && te[0].contains('each declare one'), '${te}'
 
 	mut can := tel_system('192.168.77.0/24')
 	can.buses[1].subnet = '10.0.0.0/24'
@@ -101,7 +103,8 @@ fn test_what_cannot_be_resolved_is_said_once() {
 		'states its subnet, so the endpoint gives `host`, not `address`',
 		'must be an integer 1..254',
 		'must be an integer 1..254',
-		'`netmask` is the subnet',
+		'`netmask` and `gateway` are the subnet',
+		'`netmask` and `gateway` are the subnet',
 		'needs a someip bus with a `subnet`',
 	] {
 		mut b := tel_system('192.168.77.0/24')
@@ -117,6 +120,7 @@ fn test_what_cannot_be_resolved_is_said_once() {
 			2 { b.nodes[1].host_raw = 255 }
 			3 { b.nodes[1].host_int = false }
 			4 { b.nodes[1].endpoint_netmask = '255.255.0.0' }
+			5 { b.nodes[1].endpoint_gateway = '192.168.77.254' }
 			else { b.nodes[1].buses = ['can'] }
 		}
 		e2 := errs_of(mut b, '')

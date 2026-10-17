@@ -1,8 +1,9 @@
 -- Bench suite for tcu's E2E-protected SOME/IP receive path (REQ-E2E-002 on eth, emb #299), driven
 -- by blobly_net over the LAN — tcu (the NUCLEO-H723) at TCU_ADDR, this host at the bench
 -- tester's endpoint TESTER_ADDR:TESTER_PORT, tcu's peer (it accepts and answers only that
--- endpoint). The addresses are sysgen's gen-net.env beside system.toml — what the images were
--- built with (the segment subnet, or BLOB_NET_SUBNET); `make -C examples/system_full gen` writes it:
+-- endpoint). The addresses are sysgen's gen-net.env beside system.toml — the last generation's
+-- (the segment subnet, or BLOB_NET_SUBNET), which the flashed images must match; `make -C
+-- examples/system_full gen` writes it:
 --
 --   BLOBLY_NET=/path/to/blobly_net; v -enable-globals \
 --     run $BLOBLY_NET/cmd/script/run.v examples/system_full/test/tcu_e2e.lua

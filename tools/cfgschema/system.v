@@ -67,7 +67,7 @@ fn system_schema() Schema {
 				k('host', .int).range(1, 0xFFFFFE).doc('the host number on its someip segment\'s `subnet` (50 on 192.168.77.0/24 is 192.168.77.50) — what follows the subnet when it moves; exactly one of `address` / `host`'),
 				k('port', .int).range(1, 0xFFFF).doc('the SOME/IP listen port (required on a someip bus; not 13400 on a DoIP node)'),
 				k('netmask', .str).ipv4().d('"255.255.255.0"').doc('the subnet mask the node is brought up on (application and bootloader alike); contiguous, /1../30. With `host` it is the segment subnet\'s, and refused here'),
-				k('gateway', .str).ipv4().doc('the default gateway; inside address/netmask and not its network or broadcast address. Absent = the subnet\'s first host, (address & netmask) | 1'),
+				k('gateway', .str).ipv4().doc('the default gateway; inside address/netmask and not its network or broadcast address. Absent = the subnet\'s first host, (address & netmask) | 1. Refused with `host` (the segment subnet\'s .1)'),
 			]),
 			tbl('sys_doip', '[[node]] doip', 'The DoIP entity and its ISO 13400-2 transport policy (one parser for both files: tools/doipcfg; bounds: comm/doip policy.v).', sys_doip_keys()),
 			tbl('sys_frame', '[[frame]]', 'A SOME/IP event on a someip bus: its id, its signals and how it is sent. Lowering copies only what it recognises, so an unknown key is refused.', [

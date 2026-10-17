@@ -2904,7 +2904,7 @@ fn check_doip(s System) []Issue {
 		// one address per node on the network DoIP answers on — a segment checks its own members,
 		// but a DoIP-only node is on no segment, so nothing else would see the clash
 		for oi, o in s.nodes {
-			if oi == ni || (o.has_doip && oi > ni) || !o.has_endpoint
+			if oi == ni || (o.has_doip && oi > ni) || !o.has_endpoint || n.endpoint == ''
 				|| canon_addr(o.endpoint) != canon_addr(n.endpoint)
 				|| n.buses.any(it in o.buses && is_someip_bus(s, it)) {
 				continue

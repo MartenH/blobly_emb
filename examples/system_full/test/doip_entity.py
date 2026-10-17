@@ -25,7 +25,10 @@ def sysnode_addr():
         with open(path) as f:
             env = dict(l.strip().split("=", 1) for l in f if "=" in l and not l.startswith("#"))
     except OSError:
-        sys.exit("no %s — run: make -C examples/system_full gen (or name the host)" % path)
+        env = {}
+    if "SYSNODE_ADDR" not in env:
+        print("SKIP: no SYSNODE_ADDR in %s — run: make -C examples/system_full gen (or name the host)" % path)
+        sys.exit(2)
     return env["SYSNODE_ADDR"]
 
 

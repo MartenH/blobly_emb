@@ -21,7 +21,7 @@
 #
 # The E2E-protected receive path on the same node is ../../test/tcu_e2e.lua (blobly_net).
 #
-# The probe targets BLOB_SOMEIP_IP (default TCU_ADDR = tcu). Any node offering the same
+# The probe targets BLOB_SOMEIP_IP (default TCU_ADDR = tcu, gen-net.env). Any node offering the same
 # service and shell method answers the same legs at its own address, read-only.
 #
 # Exit: 0 = pass, 1 = FAILED, 2 = SKIP (no board/probe host). Flashing requires an explicit
@@ -35,17 +35,12 @@
 set -uo pipefail
 cd "$(dirname "$0")"
 FLASH=0; [ "${1:-}" = "--flash" ] && FLASH=1
-# --flash builds the image, which regenerates the addresses: read them as that build will
-if [ "$FLASH" = 1 ]; then make -s -C ../.. gen >/dev/null || { echo "FAIL: make gen"; exit 1; }; fi
-. ../../test/net_env.sh
-BOARD_IP="${BLOB_SOMEIP_IP:-$TCU_ADDR}"
-
 command -v powershell.exe >/dev/null 2>&1 || { echo "SKIP: no powershell.exe (not a WSL bench host)"; exit 2; }
 
 if [ "$FLASH" = 1 ]; then
-  # --flash builds and writes tcu's image, which is the node at the default address. Flashing it
-  # while probing another node's address would report on an image this script never wrote.
-  [ "$BOARD_IP" = "$TCU_ADDR" ] || { echo "SKIP: --flash builds tcu ($TCU_ADDR), not the node at $BOARD_IP"; exit 2; }
+  # --flash builds and writes tcu's image and probes it there. Flashing it while probing another
+  # node's address would report on an image this script never wrote.
+  [ -z "${BLOB_SOMEIP_IP:-}" ] || { echo "SKIP: --flash builds and probes tcu, not the node at $BLOB_SOMEIP_IP"; exit 2; }
   [ -n "${BLOB_TCU_SERIAL:-}" ] || { echo "SKIP: flash requested without BLOB_TCU_SERIAL (the H723 that runs tcu)"; exit 2; }
   st-info --probe 2>/dev/null | grep -q "$BLOB_TCU_SERIAL" || { echo "SKIP: probe $BLOB_TCU_SERIAL not attached"; exit 2; }
   make >/dev/null || { echo "FAIL: build error"; exit 1; }
@@ -53,15 +48,27 @@ if [ "$FLASH" = 1 ]; then
   sleep 6 # PHY link + NetX bring-up
 fi
 
+# tcu as the system was last generated (the build above regenerates it), unless a target is named;
+# a named node offers the same service on the same ports
+if [ -n "${BLOB_SOMEIP_IP:-}" ]; then
+  BOARD_IP=$BLOB_SOMEIP_IP
+  [ -f ../../gen-net.env ] && . ../../test/net_env.sh
+else
+  . ../../test/net_env.sh
+  BOARD_IP=$TCU_ADDR
+fi
+PEER_PORT=${TESTER_PORT:-30491}
+BOARD_PORT=${TCU_PORT:-30490}
+
 PS=$(mktemp --suffix=.ps1)
 trap 'rm -f "$PS"' EXIT
 cat > "$PS" <<'EOF'
-param([Parameter(Mandatory)][string]$BoardIp)
+param([Parameter(Mandatory)][string]$BoardIp, [Parameter(Mandatory)][int]$PeerPort, [Parameter(Mandatory)][int]$BoardPort)
 $ErrorActionPreference = 'Stop'
-try { $udp = New-Object System.Net.Sockets.UdpClient(30491) } catch { Write-Output 'SKIP: peer port busy'; exit }
+try { $udp = New-Object System.Net.Sockets.UdpClient($PeerPort) } catch { Write-Output 'SKIP: peer port busy'; exit }
 $udp.Client.ReceiveTimeout = 2000
 $boardAddr = [System.Net.IPAddress]::Parse($BoardIp)
-$board = New-Object System.Net.IPEndPoint($boardAddr, 30490)
+$board = New-Object System.Net.IPEndPoint($boardAddr, $BoardPort)
 $txt = [System.Text.Encoding]::ASCII
 function Req([byte[]]$mid, [byte[]]$rid, [byte[]]$p) {
   $len = 8 + $p.Length
@@ -117,7 +124,7 @@ if (-not $saw) { Write-Output 'FAIL: events stopped during rpc'; exit }
 Write-Output 'PASS'
 $udp.Close()
 EOF
-OUT=$(powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(wslpath -w "$PS")" -BoardIp "$BOARD_IP" 2>&1 | tr -d '\r' | tail -1)
+OUT=$(powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(wslpath -w "$PS")" -BoardIp "$BOARD_IP" -PeerPort "$PEER_PORT" -BoardPort "$BOARD_PORT" 2>&1 | tr -d '\r' | tail -1)
 case "$OUT" in
   PASS) echo "PASS ($BOARD_IP): rpc correlation + error + gate + wide response + live events"; exit 0 ;;
   SKIP*) echo "$OUT"; exit 2 ;;

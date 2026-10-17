@@ -451,6 +451,7 @@ pub mut:
 	// BLOB_NET_SUBNET as parse_system read it ('' = unset): it replaces the one segment
 	// `subnet`, so a bench moves the system onto its own network without editing system.toml
 	subnet_override string
+	subnet_applied  bool // ...and a segment declared a subnet for it to replace
 	// what resolve_hosts could not resolve, reported by check_subnets
 	subnet_errs []string
 }
