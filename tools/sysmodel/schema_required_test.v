@@ -21,6 +21,8 @@ const conditional = {
 	'sys_node.nm':              'a threadx member of an NM bus'
 	'sys_node.diag':            'the node declares `doip`'
 	'sys_endpoint.port':        'the node is on a someip bus'
+	'sys_endpoint.host':        'the endpoint gives no `address`'
+	'sys_bus.subnet':           'a member gives its endpoint `host`'
 	'sys_doip.allow_bench_key': 'the node uses [uds] security_key = "reference"'
 	'sys_doip.routes':          'a node declares a diag `logical` (a gateway must route to it)'
 	'sys_node.doip':            'a node declares a diag `logical` (its gateway routes to it over DoIP)'
@@ -35,7 +37,7 @@ const absent = ['sys_bus.bitrate', 'sys_bus_nm.repeat_ms', 'sys_bus_nm.wait_slee
 	'sys_doip.functional', 'sys_doip.activation_types', 'sys_doip.initial_inactivity_ms',
 	'sys_doip.general_inactivity_ms', 'sys_doip.announce_count', 'sys_doip.announce_interval_ms',
 	'sys_doip.route_level',
-	'sys_route.frame', 'sys_endpoint.netmask', 'sys_endpoint.gateway']
+	'sys_route.frame', 'sys_endpoint.netmask', 'sys_endpoint.gateway', 'sys_endpoint.address']
 
 struct Drop {
 	row  string // ctx.key
@@ -105,7 +107,7 @@ fn test_a_required_row_is_exactly_a_key_sysmodel_refuses_to_miss() {
 	for k in ['interface', 'fd', 'dbc'] {
 		drops << line('sys_bus.${k}', '[bus.compute]', k, text)
 	}
-	for k in ['kind', 'service', 'version'] {
+	for k in ['kind', 'service', 'version', 'subnet'] {
 		drops << line('sys_bus.${k}', '[bus.tel]', k, text)
 	}
 	for k in ['peers', 'msg_cycle_ms', 'timeout_ms'] {
@@ -124,8 +126,8 @@ fn test_a_required_row_is_exactly_a_key_sysmodel_refuses_to_miss() {
 		drops << line('sys_route.${k}', '[[route]]', k, text)
 	}
 	// inline tables: the first node's endpoint / doip / diag, the first frame's tx / e2e
-	drops << Drop{'sys_endpoint.address', 'endpoint = { address = "192.168.0.50", port', 'endpoint = { port'}
-	drops << Drop{'sys_endpoint.port', 'address = "192.168.0.50", port = 30490 }', 'address = "192.168.0.50" }'}
+	drops << Drop{'sys_endpoint.host', 'endpoint = { host = 50, port', 'endpoint = { port'}
+	drops << Drop{'sys_endpoint.port', 'host = 50, port = 30490 }', 'host = 50 }'}
 	drops << Drop{'sys_doip.logical', 'doip     = { logical = 0x07A0, ', 'doip     = { '}
 	drops << Drop{'sys_doip.testers', 'testers = [0x0E00], ', ''}
 	drops << Drop{'sys_doip.allow_bench_key', ', allow_bench_key = true }', ' }'}
@@ -183,9 +185,11 @@ fn test_an_endpoint_subnet_is_read_and_checked() {
 	defer {
 		os.rmdir_all(dir) or {}
 	}
+	// the fixture in its literal-address form: no segment subnet, each `host` its address
 	text := os.read_file(os.join_path(@VMODROOT, 'examples', 'system_full', 'system.toml')) or {
 		panic(err)
-	}
+	}.replace_each(['subnet  = "192.168.77.0/24"\n', '', '{ host = 50,', '{ address = "192.168.0.50",',
+		'{ host = 51,', '{ address = "192.168.0.51",', '{ host = 190,', '{ address = "192.168.0.190",'])
 	ep := 'endpoint = { address = "192.168.0.50", port = 30490 }'
 	assert text.contains(ep)
 	with := fn [text, ep] (keys string) string {

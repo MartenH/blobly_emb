@@ -103,3 +103,30 @@ fn test_a_non_unicast_gateway_or_address_is_refused() {
 	assert host_problems(n) == ['address "239.1.2.3" is not a unicast address (0.x, 127.x and 224.0.0.0 and above are not)']
 	assert unicast(0x0A000001) && !unicast(0x00000001) && !unicast(0xE0000001) && !unicast(0xFFFFFFFF)
 }
+
+fn test_parse_subnet_is_a_network_and_a_prefix() {
+	s := parse_subnet('192.168.77.0/24')!
+	assert s.network == 0xC0A84D00 && s.prefix == 24
+	assert s.mask() == 0xFFFFFF00 && s.hosts() == 254
+	assert s.str() == '192.168.77.0/24'
+	assert parse_subnet('10.0.0.0/8')!.hosts() == 0xFFFFFE
+	for bad, why in {
+		'192.168.77.0':     'is not "<network>/<prefix length>"'
+		'192.168.77.0/':    'is not "<network>/<prefix length>"'
+		'192.168.77.0/2a':  'is not "<network>/<prefix length>"'
+		'192.168.77/24':    'is not a dotted IPv4 address'
+		'192.168.77.0/31':  'must be 1..30'
+		'192.168.77.0/0':   'must be 1..30'
+		'192.168.77.50/24': 'has host bits set — its network address is 192.168.77.0'
+		'127.0.0.0/24':     'is not a unicast network'
+		'0.0.0.0/24':       'is not a unicast network'
+		'224.0.0.0/24':     'is not a unicast network'
+		'192.0.0.0/2':      'is not a unicast network'
+	} {
+		parse_subnet(bad) or {
+			assert err.msg().contains(why), '${bad}: ${err}'
+			continue
+		}
+		assert false, '${bad} was accepted'
+	}
+}

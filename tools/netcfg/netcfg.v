@@ -51,6 +51,50 @@ pub fn default_gateway(address u32, mask u32) u32 {
 	return (address & mask) | 1
 }
 
+// Subnet is a segment's network as "a.b.c.d/n": a network address and its prefix length
+pub struct Subnet {
+pub:
+	network u32
+	prefix  int
+}
+
+pub fn (s Subnet) mask() u32 {
+	return u32(0xFFFFFFFF) << u32(32 - s.prefix)
+}
+
+// hosts: how many host numbers the subnet holds (1 .. hosts), less its network and broadcast
+pub fn (s Subnet) hosts() u32 {
+	return ~s.mask() - 1
+}
+
+pub fn (s Subnet) str() string {
+	return '${dotted(s.network)}/${s.prefix}'
+}
+
+// parse_subnet: "192.168.77.0/24" — a dotted network address with no host bits set and a prefix
+// that leaves room for a host, a gateway and a broadcast address (/1../30, as mask_ok)
+pub fn parse_subnet(s string) !Subnet {
+	addr := s.all_before('/')
+	len := s.all_after('/')
+	if !s.contains('/') || len.len == 0 || len.len > 2 || !len.bytes().all(it >= `0` && it <= `9`) {
+		return error('subnet "${s}" is not "<network>/<prefix length>", e.g. "192.168.77.0/24"')
+	}
+	n := parse(addr) or { return error('subnet "${s}": "${addr}" is not a dotted IPv4 address') }
+	p := len.int()
+	if p < 1 || p > 30 {
+		return error('subnet "${s}": the prefix length must be 1..30')
+	}
+	sub := Subnet{n, p}
+	if n & ~sub.mask() != 0 {
+		return error('subnet "${s}" has host bits set — its network address is ${dotted(n & sub.mask())}')
+	}
+	// every host it derives, and its .1 gateway, must be one a node can hold (unicast)
+	if !unicast(n | 1) || !unicast((n | ~sub.mask()) - 1) {
+		return error('subnet "${s}" is not a unicast network (0.x, 127.x and 224.0.0.0 and above are not)')
+	}
+	return sub
+}
+
 // Net is a node's network, resolved: every field set, defaults applied.
 pub struct Net {
 pub:

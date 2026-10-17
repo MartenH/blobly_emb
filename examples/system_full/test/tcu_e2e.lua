@@ -1,6 +1,9 @@
 -- Bench suite for tcu's E2E-protected SOME/IP receive path (REQ-E2E-002 on eth, emb #299), driven
--- by blobly_net over the LAN — tcu (the NUCLEO-H723) at 192.168.0.51, this host at the bench
--- tester's endpoint 192.168.0.190:30491, tcu's peer (it accepts and answers only that endpoint):
+-- by blobly_net over the LAN — tcu (the NUCLEO-H723) at TCU_ADDR, this host at the bench
+-- tester's endpoint TESTER_ADDR:TESTER_PORT, tcu's peer (it accepts and answers only that
+-- endpoint). The addresses are sysgen's gen-net.env beside system.toml — the last generation's
+-- (the segment subnet, or BLOB_NET_SUBNET), which the flashed images must match; `make -C
+-- examples/system_full gen` writes it:
 --
 --   BLOBLY_NET=/path/to/blobly_net; v -enable-globals \
 --     run $BLOBLY_NET/cmd/script/run.v examples/system_full/test/tcu_e2e.lua
@@ -14,7 +17,20 @@
 -- 0x22, AUTOSAR E2E Profile 1, 500 ms timeout. BenchSafeStatus 0x8005 carries back
 -- { level@0, missed@1 (u16 LE), verdict@3 }: verdict 1 ok, 2 timeout, 3 integrity; missed = the
 -- frames the E2E sequence showed missing.
-local to = "192.168.0.51:30490"
+local function net_env()
+  local dir = (debug.getinfo(1, "S").source:match("^@(.*)[/\\]") or ".") .. "/.."
+  local f = assert(io.open(dir .. "/gen-net.env"),
+    "no gen-net.env beside system.toml — run: make -C examples/system_full gen")
+  local env = {}
+  for line in f:lines() do
+    local k, v = line:match("^([%w_]+)=(.*)$")
+    if k then env[k] = v end
+  end
+  f:close()
+  return env
+end
+local net = net_env()
+local to = net.TCU_ADDR .. ":" .. net.TCU_PORT
 local ctr = 0
 local function safe(level, corrupt, skip)
   ctr = (ctr + 1 + (skip or 0)) % 15
@@ -37,7 +53,7 @@ local function status_after(msgs, window)
   if msgs then
     note(someip.send(to, msgs, { window_ms = window }))
   else
-    note(someip.listen(window, { port = 30491 })) -- silence: send nothing, just hear
+    note(someip.listen(window, { port = tonumber(net.TESTER_PORT) })) -- silence: send nothing, just hear
   end
   return cur_lvl, cur_st
 end

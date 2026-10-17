@@ -5,16 +5,34 @@ routing-activation policy sysnode is generated with (`testers = [0x0E00]`, activ
 and its refusals closing the socket, and T_TCP_Initial_Inactivity. Raw sockets, stdlib only —
 blobly_net's tester has no call for these payload types.
 
-    python3 examples/system_full/test/doip_entity.py [host]     # default 192.168.0.50
+    python3 examples/system_full/test/doip_entity.py [host]     # default SYSNODE_ADDR
+
+The default is sysnode's address as sysgen resolved it (gen-net.env beside system.toml: the segment
+subnet, or BLOB_NET_SUBNET); `make -C examples/system_full gen` writes it.
 
 Exit 0 = pass, 1 = a check failed, 2 = the entity is not reachable (SKIP).
 """
+import os
 import socket
 import struct
 import sys
 import time
 
-HOST = sys.argv[1] if len(sys.argv) > 1 else "192.168.0.50"
+
+def sysnode_addr():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gen-net.env")
+    try:
+        with open(path) as f:
+            env = dict(l.strip().split("=", 1) for l in f if "=" in l and not l.startswith("#"))
+    except OSError:
+        env = {}
+    if "SYSNODE_ADDR" not in env:
+        print("SKIP: no SYSNODE_ADDR in %s — run: make -C examples/system_full gen (or name the host)" % path)
+        sys.exit(2)
+    return env["SYSNODE_ADDR"]
+
+
+HOST = sys.argv[1] if len(sys.argv) > 1 else sysnode_addr()
 PORT = 13400
 ENTITY = 0x07A0
 TESTER = 0x0E00  # the one tester sysnode admits
