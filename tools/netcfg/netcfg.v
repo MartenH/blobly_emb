@@ -88,6 +88,10 @@ pub fn parse_subnet(s string) !Subnet {
 	if n & ~sub.mask() != 0 {
 		return error('subnet "${s}" has host bits set — its network address is ${dotted(n & sub.mask())}')
 	}
+	// every host it derives, and its .1 gateway, must be one a node can hold (unicast)
+	if !unicast(n | 1) || !unicast((n | ~sub.mask()) - 1) {
+		return error('subnet "${s}" is not a unicast network (0.x, 127.x and 224.0.0.0 and above are not)')
+	}
 	return sub
 }
 

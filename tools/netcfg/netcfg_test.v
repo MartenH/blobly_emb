@@ -118,6 +118,10 @@ fn test_parse_subnet_is_a_network_and_a_prefix() {
 		'192.168.77.0/31':  'must be 1..30'
 		'192.168.77.0/0':   'must be 1..30'
 		'192.168.77.50/24': 'has host bits set — its network address is 192.168.77.0'
+		'127.0.0.0/24':     'is not a unicast network'
+		'0.0.0.0/24':       'is not a unicast network'
+		'224.0.0.0/24':     'is not a unicast network'
+		'192.0.0.0/2':      'is not a unicast network'
 	} {
 		parse_subnet(bad) or {
 			assert err.msg().contains(why), '${bad}: ${err}'
