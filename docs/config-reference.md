@@ -768,7 +768,7 @@ A member ECU and its system-owned identities.
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
 | `address` | string |  | — |  | IPv4 dotted quad; unique per segment; a DoIP node needs a host address of its subnet (not its network, broadcast or gateway address — on the default /24: not .0, .1 or .255). Exactly one of `address` / `host`; refused on a segment with a `subnet` |
-| `host` | integer |  | — | 1..16777214 | the host number on its someip segment's `subnet` (50 on 192.168.77.0/24 is 192.168.77.50) — what follows the subnet when it moves; exactly one of `address` / `host` |
+| `host` | integer |  | — | 1..2147483646 | the host number on its someip segment's `subnet` (50 on 192.168.77.0/24 is 192.168.77.50) — what follows the subnet when it moves; exactly one of `address` / `host` |
 | `port` | integer |  | — | 1..65535 | the SOME/IP listen port (required on a someip bus; not 13400 on a DoIP node) |
 | `netmask` | string |  | `"255.255.255.0"` | dotted IPv4 | the subnet mask the node is brought up on (application and bootloader alike); contiguous, /1../30. With `host` it is the segment subnet's, and refused here |
 | `gateway` | string |  | — | dotted IPv4 | the default gateway; inside address/netmask and not its network or broadcast address. Absent = the subnet's first host, (address & netmask) \| 1. Refused with `host` (the segment subnet's .1) |

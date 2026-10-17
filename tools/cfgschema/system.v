@@ -64,7 +64,7 @@ fn system_schema() Schema {
 			]),
 			tbl('sys_endpoint', '[[node]] endpoint', '', [
 				k('address', .str).doc('IPv4 dotted quad; unique per segment; a DoIP node needs a host address of its subnet (not its network, broadcast or gateway address — on the default /24: not .0, .1 or .255). Exactly one of `address` / `host`; refused on a segment with a `subnet`'),
-				k('host', .int).range(1, 0xFFFFFE).doc('the host number on its someip segment\'s `subnet` (50 on 192.168.77.0/24 is 192.168.77.50) — what follows the subnet when it moves; exactly one of `address` / `host`'),
+				k('host', .int).range(1, 0x7FFFFFFE).doc('the host number on its someip segment\'s `subnet` (50 on 192.168.77.0/24 is 192.168.77.50) — what follows the subnet when it moves; exactly one of `address` / `host`'),
 				k('port', .int).range(1, 0xFFFF).doc('the SOME/IP listen port (required on a someip bus; not 13400 on a DoIP node)'),
 				k('netmask', .str).ipv4().d('"255.255.255.0"').doc('the subnet mask the node is brought up on (application and bootloader alike); contiguous, /1../30. With `host` it is the segment subnet\'s, and refused here'),
 				k('gateway', .str).ipv4().doc('the default gateway; inside address/netmask and not its network or broadcast address. Absent = the subnet\'s first host, (address & netmask) | 1. Refused with `host` (the segment subnet\'s .1)'),

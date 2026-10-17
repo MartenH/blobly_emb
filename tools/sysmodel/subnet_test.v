@@ -106,6 +106,7 @@ fn test_what_cannot_be_resolved_is_said_once() {
 		'`netmask` and `gateway` are the subnet',
 		'`netmask` and `gateway` are the subnet',
 		'needs a someip bus with a `subnet`',
+		'is the subnet\'s gateway',
 	] {
 		mut b := tel_system('192.168.77.0/24')
 		match i {
@@ -121,10 +122,22 @@ fn test_what_cannot_be_resolved_is_said_once() {
 			3 { b.nodes[1].host_int = false }
 			4 { b.nodes[1].endpoint_netmask = '255.255.0.0' }
 			5 { b.nodes[1].endpoint_gateway = '192.168.77.254' }
+			7 { b.nodes[1].host_raw = 1 }
 			else { b.nodes[1].buses = ['can'] }
 		}
 		e2 := errs_of(mut b, '')
 		assert e2.len == 1 && e2[0].contains(want), '${i}: ${e2}'
 		assert b.nodes[1].endpoint == '' || i == 1, '${i}: an unresolved host keeps no address'
 	}
+}
+
+fn test_a_subnet_no_member_reads_is_refused() {
+	mut s := tel_system('192.168.77.0/24')
+	for mut n in s.nodes {
+		n.has_endpoint = false
+		n.has_host = false
+	}
+	e := errs_of(mut s, '10.20.0.0/16')
+	assert e.len == 1 && e[0].contains('would move nothing'), '${e}'
+	assert !s.subnet_applied
 }

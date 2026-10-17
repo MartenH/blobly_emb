@@ -38,7 +38,6 @@ pub fn (mut s System) resolve_hosts(override string) {
 		if override != '' {
 			if m := moved {
 				subnets[b.name] = m
-				s.subnet_applied = true
 			} else {
 				broken << b.name
 			}
@@ -50,11 +49,17 @@ pub fn (mut s System) resolve_hosts(override string) {
 			continue
 		}
 	}
+	mut used := map[string]bool{} // a segment some member gives its `host` on
 	for mut n in s.nodes {
 		if !n.has_endpoint {
 			continue
 		}
 		on := n.buses.filter(it in subnets)
+		if n.has_host {
+			for b in on {
+				used[b] = true
+			}
+		}
 		if n.has_address && n.has_host {
 			s.subnet_errs << 'node "${n.name}": endpoint gives both `address` and `host` — one or the other'
 			continue
@@ -84,6 +89,10 @@ pub fn (mut s System) resolve_hosts(override string) {
 			s.subnet_errs << 'node "${n.name}": endpoint `host` must be an integer 1..${sub.hosts()} on ${sub} (bus "${on[0]}")'
 			continue
 		}
+		if n.host_raw == 1 {
+			s.subnet_errs << 'node "${n.name}": endpoint `host` 1 is the subnet\'s gateway on ${sub} (bus "${on[0]}") — every node is brought up with .1 as its gateway'
+			continue
+		}
 		if n.endpoint_netmask != none || n.endpoint_gateway != none {
 			// a literal would not move with the subnet: the mask is the subnet's, the gateway its .1
 			s.subnet_errs << 'node "${n.name}": endpoint `netmask` and `gateway` are the subnet\'s on bus "${on[0]}" (${sub}, gateway .1) — drop them'
@@ -94,6 +103,13 @@ pub fn (mut s System) resolve_hosts(override string) {
 			// the /24 is driver/eth's default; any other prefix is lowered like an authored netmask
 			n.endpoint_netmask = netcfg.dotted(sub.mask())
 			n.netmask_from_subnet = true
+		}
+		s.subnet_applied = override != ''
+	}
+	// a subnet nothing reads moves nothing: in a composed system, or beside `address` endpoints
+	for b in declared {
+		if b.name in subnets && b.name !in used {
+			s.subnet_errs << 'bus "${b.name}": states a `subnet`, but no member\'s endpoint gives a `host` on it — it (and ${subnet_env}) would move nothing'
 		}
 	}
 }
