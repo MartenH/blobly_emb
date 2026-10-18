@@ -51,6 +51,11 @@ fn test_intra_core_pool_uses_local_global_arena() {
 	assert a.contains('&C.bulk_t(&g_bulk_cam_arena[0])')
 	assert !a.contains('xcore_bulk_addr')
 	assert !a.contains('#include "xcore.h"')
+	// no C include at all in the generated module: one would stop V3 declaring the image's other
+	// C functions (the pool API is comm.bulk's, over bulk.h)
+	assert !a.contains('#include'), a
+	assert bulk_import(pools, pm, '') == ['import comm.bulk // the pool API over boards/common/bulk.h']
+	assert bulk_import([]BulkPoolCfg{}, pm, '') == []
 }
 
 fn test_cross_core_pool_lives_in_shared_window() {
@@ -73,7 +78,7 @@ fn test_cross_core_pool_lives_in_shared_window() {
 	assert a.contains('voidptr(C.xcore_bulk_base() + usize(0))')
 	// the public wrappers still exist and route through the shared ptr
 	assert a.contains('pub fn bulk_lidar_init()')
-	assert a.contains('C.bulk_init(bulk_lidar_ptr()')
+	assert a.contains('bulk.init(bulk_lidar_ptr()')
 }
 
 fn test_cross_core_pools_pack_32b_aligned_in_order() {

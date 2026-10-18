@@ -10,8 +10,7 @@ import time
 const eth_bin = os.join_path(os.temp_dir(), 'loom2v_eth_e2e_${os.getpid()}_${time.now().unix_nano()}')
 
 fn testsuite_begin() {
-	r := os.execute('${@VEXE} -enable-globals -o ${eth_bin} ${os.join_path(@VMODROOT, 'tools',
-		'loom2v')}')
+	r := os.exec([@VEXE, '-enable-globals', '-o', eth_bin, os.join_path(@VMODROOT, 'tools', 'loom2v')])
 	assert r.exit_code == 0, r.output
 }
 
@@ -31,8 +30,8 @@ fn host_someip_with(name string, edit fn (string) string) (int, string, string) 
 	ecu := os.join_path(tmp, 'ecu.toml')
 	os.write_file(ecu, edit(src)) or { panic(err) }
 	glue := os.join_path(tmp, 'gen.v')
-	r := os.execute('${eth_bin} ${ecu} ${os.join_path(tmp, 'bus.dbc')} ${os.join_path(tmp,
-		'sig.v')} ${os.join_path(tmp, 'ports.v')} ${glue} ${os.join_path(tmp, 'manifest.csv')}')
+	r := os.exec([eth_bin, ecu, os.join_path(tmp, 'bus.dbc'), os.join_path(tmp, 'sig.v'),
+		os.join_path(tmp, 'ports.v'), glue, os.join_path(tmp, 'manifest.csv')])
 	return r.exit_code, r.output, os.read_file(glue) or { '' }
 }
 

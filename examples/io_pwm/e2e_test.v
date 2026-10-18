@@ -16,7 +16,7 @@ fn read_duty(path string) int {
 
 fn test_pot_ramps_pwm_duty() {
 	dir := os.real_path(os.dir(@FILE))
-	build := os.execute('make -C ${dir} V=${os.quoted_path(@VEXE)}')
+	build := os.exec(['make', '-C', dir, 'V=${@VEXE}'])
 	assert build.exit_code == 0, build.output
 
 	work := os.join_path(os.temp_dir(), 'io_pwm_e2e_${os.getpid()}')

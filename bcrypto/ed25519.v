@@ -49,7 +49,7 @@ fn car25519(mut o Gf) {
 		} else {
 			o[0] += 38 * (c - 1)
 		}
-		o[i] -= c << 16
+		o[i] -= c * 65536
 	}
 }
 
@@ -195,7 +195,8 @@ fn add_pt(mut p [4]Gf, q [4]Gf) {
 	a_gf(mut t, q[0], q[1])
 	m_gf(mut b, b, t)
 	m_gf(mut c, p[3], q[3])
-	m_gf(mut c, c, gfd2)
+	d2 := gfd2 // a local: V emits a const as C const, which no `Gf` parameter takes
+	m_gf(mut c, c, d2)
 	m_gf(mut d, p[2], q[2])
 	a_gf(mut d, d, d)
 	z_gf(mut e, b, a)
@@ -215,10 +216,11 @@ fn cswap_pt(mut p [4]Gf, mut q [4]Gf, b u8) {
 }
 
 fn scalarmult(mut p [4]Gf, mut q [4]Gf, s &u8) {
-	set25519(mut p[0], gf0)
-	set25519(mut p[1], gf1)
-	set25519(mut p[2], gf1)
-	set25519(mut p[3], gf0)
+	zero, one := gf0, gf1
+	set25519(mut p[0], zero)
+	set25519(mut p[1], one)
+	set25519(mut p[2], one)
+	set25519(mut p[3], zero)
 	for i := 255; i >= 0; i-- {
 		b := u8((unsafe { s[i / 8] } >> u8(i & 7)) & 1)
 		cswap_pt(mut p, mut q, b)
@@ -230,10 +232,11 @@ fn scalarmult(mut p [4]Gf, mut q [4]Gf, s &u8) {
 
 fn scalarbase(mut p [4]Gf, s &u8) {
 	mut q := [4]Gf{}
-	set25519(mut q[0], gfx)
-	set25519(mut q[1], gfy)
-	set25519(mut q[2], gf1)
-	m_gf(mut q[3], gfx, gfy)
+	x, y, one := gfx, gfy, gf1
+	set25519(mut q[0], x)
+	set25519(mut q[1], y)
+	set25519(mut q[2], one)
+	m_gf(mut q[3], x, y)
 	scalarmult(mut p, mut q, s)
 }
 
@@ -245,10 +248,12 @@ fn unpackneg(mut r [4]Gf, pk &u8) int {
 	mut den2 := Gf([16]i64{})
 	mut den4 := Gf([16]i64{})
 	mut den6 := Gf([16]i64{})
-	set25519(mut r[2], gf1)
+	one := gf1
+	set25519(mut r[2], one)
 	unpack25519(mut r[1], pk)
 	s_gf(mut num, r[1])
-	m_gf(mut den, num, gfd)
+	d := gfd
+	m_gf(mut den, num, d)
 	z_gf(mut num, num, r[2])
 	a_gf(mut den, r[2], den)
 	s_gf(mut den2, den)
@@ -264,7 +269,8 @@ fn unpackneg(mut r [4]Gf, pk &u8) int {
 	s_gf(mut chk, r[0])
 	m_gf(mut chk, chk, den)
 	if neq25519(chk, num) != 0 {
-		m_gf(mut r[0], r[0], gfi)
+		i := gfi
+		m_gf(mut r[0], r[0], i)
 	}
 	s_gf(mut chk, r[0])
 	m_gf(mut chk, chk, den)
@@ -272,7 +278,8 @@ fn unpackneg(mut r [4]Gf, pk &u8) int {
 		return -1
 	}
 	if par25519(r[0]) == (unsafe { pk[31] } >> 7) {
-		z_gf(mut r[0], gf0, r[0])
+		zero := gf0
+		z_gf(mut r[0], zero, r[0])
 	}
 	m_gf(mut r[3], r[0], r[1])
 	return 0
@@ -289,7 +296,7 @@ fn modl(mut r [32]u8, mut x [64]i64) {
 		for ; j < i - 12; j++ {
 			x[j] += carry - 16 * x[i] * ed_l[j - (i - 32)]
 			carry = (x[j] + 128) >> 8
-			x[j] -= carry << 8
+			x[j] -= carry * 256
 		}
 		x[j] += carry
 		x[i] = 0

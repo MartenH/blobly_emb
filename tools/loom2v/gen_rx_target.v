@@ -307,8 +307,7 @@ fn rx_target_boot(m Model) []string {
 	mut names := idx.keys().filter(it !in eth)
 	names.sort()
 	for n in names {
-		out << '\tmut cfg_${snake(n)} := sig.${n}{}'
-		out << '\tC.iocb_cfg(${idx[n]}, u16(sizeof(cfg_${snake(n)}))) // ${n}: received, checked'
+		out << '\tC.iocb_cfg(${idx[n]}, u16(sizeof(sig.${n}))) // ${n}: received, checked'
 	}
 	return out
 }

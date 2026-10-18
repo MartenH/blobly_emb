@@ -89,21 +89,21 @@ fn (mut n Nm) set_pn(nid u8, mask u64, now u64) {
 	if nid == 0 {
 		return
 	}
-	mut free := -1
+	mut free_slot := -1
 	for i in 0 .. max_nm_nodes {
 		if n.pn_nid[i] == nid {
 			n.pn_mask[i] = mask
 			n.pn_seen[i] = now
 			return
 		}
-		if free < 0 && n.pn_nid[i] == 0 {
-			free = i
+		if free_slot < 0 && n.pn_nid[i] == 0 {
+			free_slot = i
 		}
 	}
-	if free >= 0 {
-		n.pn_nid[free] = nid
-		n.pn_mask[free] = mask
-		n.pn_seen[free] = now
+	if free_slot >= 0 {
+		n.pn_nid[free_slot] = nid
+		n.pn_mask[free_slot] = mask
+		n.pn_seen[free_slot] = now
 	}
 }
 

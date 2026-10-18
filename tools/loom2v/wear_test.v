@@ -67,7 +67,7 @@ fn testsuite_begin() {
 		wt_bin:    'loom2v'
 		wt_sysgen: 'sysgen'
 	} {
-		r := os.execute('${@VEXE} -enable-globals -o ${out} ${os.join_path(@VMODROOT, 'tools', tool)}')
+		r := os.exec([@VEXE, '-enable-globals', '-o', out, os.join_path(@VMODROOT, 'tools', tool)])
 		assert r.exit_code == 0, r.output
 	}
 }
@@ -102,7 +102,8 @@ fn wt_generate(name string, extra string) (int, string) {
 	os.write_file(ecu, one_thread(src) + extra) or { panic(err) }
 	dbc := os.join_path(tmp, 'bus.dbc')
 	os.cp(os.join_path(fixture_dir, 'bus.dbc'), dbc) or { panic(err) }
-	r := os.execute('${wt_bin} ${ecu} ${dbc} ${os.join_path(tmp, 'sig.v')} ' + '${os.join_path(tmp, 'ports.v')} ${os.join_path(tmp, 'gen.v')}')
+	r := os.exec([wt_bin, ecu, dbc, os.join_path(tmp, 'sig.v'), os.join_path(tmp, 'ports.v'),
+		os.join_path(tmp, 'gen.v')])
 	return r.exit_code, r.output
 }
 
@@ -185,7 +186,7 @@ fn system_full_reports() map[string][]string {
 	}
 	os.mkdir_all(tmp) or { panic(err) }
 	sys := os.join_path(@VMODROOT, 'examples', 'system_full', 'system.toml')
-	lower := os.execute('${wt_sysgen} ${sys} --out ${tmp}')
+	lower := os.exec([wt_sysgen, sys, '--out', tmp])
 	assert lower.exit_code == 0, lower.output
 	mut out := map[string][]string{}
 	for node, dbc in {
@@ -194,8 +195,8 @@ fn system_full_reports() map[string][]string {
 	} {
 		toml_path := os.join_path(tmp, 'gen-' + node + '.toml')
 		dbc_path := os.join_path(tmp, dbc + '.dbc')
-		outs := ['s.v', 'p.v', 'g.v'].map(os.join_path(tmp, it)).join(' ')
-		r := os.execute('${wt_bin} ${toml_path} ${dbc_path} ${outs}')
+		outs := ['s.v', 'p.v', 'g.v'].map(os.join_path(tmp, it))
+		r := os.exec([wt_bin, toml_path, dbc_path, ...outs])
 		assert r.exit_code == 0, '${node}: ${r.output}'
 		out[node] = wear_report(r.output)
 	}

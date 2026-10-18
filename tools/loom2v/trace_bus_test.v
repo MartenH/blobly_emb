@@ -12,15 +12,16 @@ fn built_tool(name string) string {
 	bin := os.join_path(tool_dir, name)
 	$if windows {
 		if os.exists(bin + '.exe') {
-			return os.quoted_path(bin + '.exe')
+			return bin + '.exe'
 		}
 	} $else {
 		if os.exists(bin) {
-			return os.quoted_path(bin)
+			return bin
 		}
 	}
-	return os.quoted_path(sysmodel.build_tool(os.join_path(@VMODROOT, 'tools', name), true,
-		tool_dir) or { panic(err) })
+	return sysmodel.build_tool(os.join_path(@VMODROOT, 'tools', name), true, tool_dir) or {
+		panic(err)
+	}
 }
 
 fn testsuite_end() {
@@ -544,9 +545,8 @@ fn test_an_extended_dbc_binding_is_refused_by_its_flag() {
 	os.write_file(dbc, 'VERSION ""\n\nNS_ :\n\nBS_:\n\nBU_: N\n\nBO_ 2147483904 TraceCmdX: 8 N\n') or {
 		panic(err)
 	}
-	r := os.execute('${built_tool('loom2v')} ${ecu} ${dbc} ' +
-		'${os.join_path(tmp, 'sig.v')} ${os.join_path(tmp, 'ports.v')} ${os.join_path(tmp, 'gen.v')} ' +
-		'${os.join_path(tmp, 'manifest.csv')}')
+	r := os.exec([built_tool('loom2v'), ecu, dbc, os.join_path(tmp, 'sig.v'), os.join_path(tmp,
+		'ports.v'), os.join_path(tmp, 'gen.v'), os.join_path(tmp, 'manifest.csv')])
 	assert r.exit_code != 0, 'loom2v accepted an extended DBC binding: ${r.output}'
 	// refused BY loom2v, not a launch that failed for another reason
 	assert r.output.contains('is an extended (29-bit) message'), r.output

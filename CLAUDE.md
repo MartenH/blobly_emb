@@ -40,7 +40,8 @@ comm/   comms stack: com (tx modes; encode_raw, the ONE send encode — emitted 
         fault (debounce + fault memory behind 0x19/0x14/0x85; snapshots, extended data, displacement
         and its persistence in the NvM journal — entry.v, persist.v), param (variant coding: read-only
         FB inputs coded with 0x2E on a bound DID, one NvM journal record each, docs/diagnostics.md §3.4),
-        diag (the UDS server on its ISO-TP
+        bulk (bulk.h's pool API for generated code — its own module because V3 stops declaring a
+        module's `fn C.` functions once a file in it includes a C header), diag (the UDS server on its ISO-TP
         connection and the order a pass runs it — the host bridge calls it; the ThreadX comm
         thread from R2; its transport step — intake, busy guard, pump/abort, S3 hold, wire
         drain — is step.v, which the bootloader runs whole as serve_step), diagroute (a DoIP
@@ -172,8 +173,8 @@ feature branch runs only `guard`, so a green tick there is the identity check, N
 gate. Open the PR to get one.
 
 It runs more than the four you would run by hand: host unit tests
-(`v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot`), `make lint`,
-`make check`, `make trace-check` (not `make trace`), `syscheck`, `v -enable-globals test
+(`v -cc cc -nocache -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot`), `make lint`,
+`make check`, `make trace-check` (not `make trace`), `syscheck`, `v -cc cc -nocache -enable-globals test
 examples`, per-example host builds with generation, and a repo-wide **"Generated outputs are
 fresh"** gate. The last one is the usual surprise: a stale committed `gen/` output passes every
 local command and fails CI. Re-run generation before opening the PR.
@@ -217,8 +218,9 @@ script existed, and nothing in CI ran it until now.
 And each build log goes through **`scripts/check_implicit_wide.sh`**: a C function the V code
 declares returning u64/i64/f32/f64 that gcc saw with no prototype is truncated to `int`, which is
 how `board_now_us()` made every target's `now` go negative 35.8 minutes after boot (the fix is the
-`-include board.h` in each `boards/*/board.mk`). Blind on the images compiled with `-w`, which is
-why the fix sits on the compile line and not in the check.
+`-include board.h` in each `boards/*/board.mk`). No image is compiled with `-w`: V3 declares every
+`fn C.` function itself unless the declaring module has a C `#include` (it then trusts the header),
+so a generated `gen` module carries none — bulk.h is `comm/bulk`'s.
 The job then links one shape no committed image has, a **multi-thread gateway**
 (`scripts/glue_link_check.sh`: sysnode plus a second app thread, in a scratch copy). Every
 ThreadX image links ONE generic glue, `boards/common/comm_glue.c`, through `gen/loom_build.mk`'s
@@ -277,7 +279,8 @@ compares the commit.
   `_vinit`), which `crt0.S` must not call;
 - **`osal/vrt`** supplies the hooks V3's freestanding builtin declares and nobody defines
   (`bare_print`/`bare_eprint`/`bare_panic`/`bare_backtrace`/`__malloc`, and a nil `malloc` family
-  so newlib's heap is never linked); each `main.v` imports it as `import osal.vrt as _`;
+  so newlib's heap is never linked; `libc_stubs.h` defines `exit` (a stop, like `bare_panic`),
+  `getenv` and `setenv`, whose newlib versions linked its stdio and allocator); each `main.v` imports it as `import osal.vrt as _`;
   `boards/common/board.h` defines `_Thread_local` away (no thread pointer on target);
 - **no allocation is reachable** (`scripts/check_no_heap.sh`, every ELF in the cross job): V3 moves
   a local to the heap when its address reaches a call it cannot see through, and copies a fixed
@@ -337,7 +340,7 @@ The two H755 scripts need no CAN adapter, but they need DIFFERENT SWD tooling, s
 
 Plain **`v test .` at the repo root looks broken** — it walks into `.claude/worktrees/` and runs
 duplicate copies of every example e2e test concurrently. Test the real tree instead
-(`make deps-cmsis && v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot examples`), which is
+(`make deps-cmsis && v -cc cc -nocache -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot examples`), which is
 what CI does.
 
 ### Commit identity (enforced)

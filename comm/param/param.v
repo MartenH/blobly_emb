@@ -76,8 +76,8 @@ pub const status_reverted = u8(2) // a stored value was refused at restore (anot
 pub struct Store {
 pub mut:
 	ctx voidptr
-	put fn (ctx voidptr, id u16, data &u8, len u16) bool
-	get fn (ctx voidptr, id u16, out &u8, cap u16) u16
+	put fn (ctx voidptr, id u16, data &u8, len u16) bool = unsafe { nil }
+	get fn (ctx voidptr, id u16, out &u8, cap u16) u16 = unsafe { nil }
 }
 
 // Field is one field of a parameter: its width on the wire (1, 2 or 4 bytes; a bool is 1), whether
@@ -116,7 +116,7 @@ pub mut:
 	store  Store
 	// publish puts parameter i's live value into its FBs' input cell (field 0 in a, 1 in b, each as
 	// its two's-complement 32 bits). Nil = no FB reads any.
-	publish fn (ctx voidptr, i int, a u32, b u32)
+	publish fn (ctx voidptr, i int, a u32, b u32) = unsafe { nil }
 	pub_ctx voidptr
 	// the server the DIDs live in (a &uds.Server, set by bind; nil before), and the status DID's
 	// index there (-1 = none declared)

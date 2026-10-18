@@ -30,7 +30,7 @@ pub mut:
 	// refresh writes the live-signal DIDs into the server it is handed. It runs right before every
 	// dispatch, physical or functional, so a read answers with the value current then. nil = the
 	// node has no live DIDs.
-	refresh fn (mut srv uds.Server)
+	refresh fn (mut srv uds.Server) = unsafe { nil }
 	// owner_resets: the owner performs an answered ECUReset itself (reset_due) — a target restarts
 	// the MCU once its controller has sent the answer. Otherwise the diagnostic state returns to
 	// power-on here, which is all a host bridge can do.

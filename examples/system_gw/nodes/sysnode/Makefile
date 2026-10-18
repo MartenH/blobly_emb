@@ -30,7 +30,7 @@ gen: $(TOOL_dbcmerge) $(TOOL_dbc2cfg) $(TOOL_cfg2v) $(TOOL_loom2v)
 
 build: gen
 	@mkdir -p bin
-	cd $(REPO) && $(V) -gc none -path "@vlib|@vmodules|.|$(GW)" -o $(GW)/bin/app $(GW)
+	cd $(REPO) && $(V) -cc $(HOST_CC) -gc none -path "@vlib|@vmodules|.|$(GW)" -o $(GW)/bin/app $(GW)
 
 run: build
 	./bin/app vcan0 vcan1

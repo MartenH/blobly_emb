@@ -28,7 +28,7 @@ __global (
 	g_st_app Partition_app_state
 	g_sched_app loom.Scheduler
 )
-pub fn partition_app(core i32, arg voidptr) {
+pub fn partition_app(core i32, _ voidptr) {
 	osal.pin_to_core(1)
 	g_st_app = Partition_app_state{} // the FB field defaults
 	mut st := &g_st_app

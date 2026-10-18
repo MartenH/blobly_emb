@@ -44,7 +44,7 @@ __global (
 	g_st_sense Partition_sense_state
 	g_sched_sense loom.Scheduler
 )
-pub fn partition_sense(core i32, arg voidptr) {
+pub fn partition_sense(core i32, _ voidptr) {
 	osal.pin_to_core(0)
 	g_st_sense = Partition_sense_state{} // the FB field defaults
 	mut st := &g_st_sense
@@ -115,7 +115,7 @@ __global (
 	g_st_ctrl Partition_ctrl_state
 	g_sched_ctrl loom.Scheduler
 )
-pub fn partition_ctrl(core i32, arg voidptr) {
+pub fn partition_ctrl(core i32, _ voidptr) {
 	osal.pin_to_core(1)
 	g_st_ctrl = Partition_ctrl_state{} // the FB field defaults
 	mut st := &g_st_ctrl

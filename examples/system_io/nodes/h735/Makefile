@@ -81,14 +81,7 @@ $(TX_A): $(TX_OBJ) $$(call c_sign,$$@,$$(AR_CMD))
 	$(call c_archive,$(AR_CMD))
 -include $(call c_records,$(TX_OBJ))
 
-# app.c is GENERATED V code, and its warnings are all V-codegen artifacts of a
-# freestanding build on a 32-bit target: calls to the C glue via `fn C.*` with no
-# prototype in this TU (implicit-declaration — V typed them, they link + type-check at
-# the definition), and V's dead hosted runtime (dlmalloc/mmap/mem*) casting/comparing
-# 32-bit pointers as u64 (never called no-alloc; --gc-sections drops it). None are our
-# code and none are fixable in a regenerated file, so compile THIS unit quiet (-w) — the
-# hand-written glue (comm_glue.c, board.c, drivers) keeps full warnings.
-APPO_CMD = $(CC) $(CFLAGS) -w -c $(BUILD)/app.c
+APPO_CMD = $(CC) $(CFLAGS) -c $(BUILD)/app.c
 $(BUILD)/app.o: $(BUILD)/app.c $(call c_unrecorded,$(BUILD)/app.o) $$(call c_sign,$$@,$$(APPO_CMD))
 	$(call c_build,$(APPO_CMD))
 -include $(BUILD)/app.o.d

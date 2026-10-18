@@ -18,7 +18,7 @@ pub const kind_pwm = 2
 fn C.blob_io_cfg(int, &char, &char, int, u32, int, int, u32) int
 fn C.blob_io_init() int
 fn C.blob_io_gpio_read(int) int
-fn C.blob_io_gpio_read_checked(int, &i32) int // C int: i32 on every target
+fn C.blob_io_gpio_read_checked(int, &i32) int // int32_t * (long * on newlib, so not int *)
 fn C.blob_io_gpio_write(int, int)
 fn C.blob_io_adc_read(int) u32
 fn C.blob_io_adc_read_checked(int, &u32) int

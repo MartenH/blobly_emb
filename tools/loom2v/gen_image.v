@@ -53,6 +53,7 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 		for im in imports {
 			g << 'import ${im}'
 		}
+		g << bulk_import(m.bulk, m.part, part)
 		g << sat_glue
 		g << ''
 		g << '// this image owns NO clocks, NO pins, NO bus — the owner core brings those up.'
@@ -174,13 +175,13 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 		}
 		g << ''
 		for thr in threads {
-			g << 'fn ${thr}_thread_entry(input u32) {'
+			g << 'fn ${thr}_thread_entry(_ u32) {'
 			g << '\trun_${thr}()'
 			g << '}'
 			g << ''
 		}
 		g << "@[export: 'tx_application_define']"
-		g << 'fn tx_application_define(first_unused voidptr) {'
+		g << 'fn tx_application_define(_ voidptr) {'
 		for thr in threads {
 			pr := m.part.thread_prio[thr] or { 10 }
 			g << '\tC._tx_thread_create(&g_${thr}_tcb[0], c\'${thr}\', ${thr}_thread_entry, u32(0),'
@@ -249,5 +250,8 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 }
 
 fn write_out(path string, lines []string) {
-	os.write_file(path, lines.join('\n') + '\n') or { panic('write ${path}: ${err}') }
+	text := if path.ends_with('.v') { blank_unused_params(lines) } else { lines }
+	os.write_file(path, text.join('\n') + '\n') or {
+		panic('write ${path}: ${err}')
+	}
 }

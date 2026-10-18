@@ -294,7 +294,7 @@ __global g_seen_functional bool
 
 // answers 0x22 with 300 bytes (more than the embedded server ever could) and
 // 0x3E 80 with nothing, like a suppressed positive response
-fn serve_big(ctx voidptr, req &u8, req_len int, functional bool, resp &u8, resp_cap int) int {
+fn serve_big(_ voidptr, req &u8, req_len int, functional bool, resp &u8, resp_cap int) int {
 	assert resp_cap == max_uds
 	g_seen_len = req_len
 	g_seen_functional = functional
@@ -373,7 +373,7 @@ fn test_serve_hook_needs_room_for_its_largest_response() {
 }
 
 // claims a longer response than it was allowed
-fn serve_overlong(ctx voidptr, req &u8, req_len int, functional bool, resp &u8, resp_cap int) int {
+fn serve_overlong(_ voidptr, _ &u8, _ int, _ bool, _ &u8, resp_cap int) int {
 	return resp_cap + 1
 }
 

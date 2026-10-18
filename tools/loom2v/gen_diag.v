@@ -679,7 +679,7 @@ fn diag_target_sa_fns(m Model) []string {
 		'fn C.diag_sa_init() int',
 		'fn C.diag_sa_seed(&u8, int) int',
 		'',
-		'fn diag_sa_seed_v(ctx voidptr, out &u8, n int) bool {',
+		'fn diag_sa_seed_v(_ voidptr, out &u8, n int) bool {',
 		'\treturn C.diag_sa_seed(out, n) != 0',
 		'}',
 	]

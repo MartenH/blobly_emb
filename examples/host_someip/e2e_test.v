@@ -147,7 +147,7 @@ fn median_gap_ms(rs []Rx) i64 {
 
 fn test_tx_modes_on_the_wire() {
 	dir := os.real_path(os.dir(@FILE))
-	build := os.execute('make -C ${dir} V=${os.quoted_path(@VEXE)}')
+	build := os.exec(['make', '-C', dir, 'V=${@VEXE}'])
 	assert build.exit_code == 0, build.output
 
 	held := take_endpoints()!
@@ -361,7 +361,7 @@ fn drain_echoes(mut c net.UdpConn, window time.Duration) []u8 {
 // @verifies REQ-NET-015 REQ-NET-017
 fn test_rx_gate_filter_router() {
 	dir := os.real_path(os.dir(@FILE))
-	build := os.execute('make -C ${dir} V=${os.quoted_path(@VEXE)}')
+	build := os.exec(['make', '-C', dir, 'V=${@VEXE}'])
 	assert build.exit_code == 0, build.output
 
 	held := take_endpoints()!

@@ -68,11 +68,11 @@ fn test_ed25519_rejects_tampering() {
 	assert verify(pkey, msg, sig) // baseline
 
 	// a flipped signature byte -> reject
-	mut bad_sig := sig
+	mut bad_sig := fix64(unhex(v.sig))
 	bad_sig[10] ^= 0x01
 	assert !verify(pkey, msg, bad_sig)
 	// flip a byte in the S half too
-	mut bad_sig2 := sig
+	mut bad_sig2 := fix64(unhex(v.sig))
 	bad_sig2[40] ^= 0x01
 	assert !verify(pkey, msg, bad_sig2)
 
@@ -82,7 +82,7 @@ fn test_ed25519_rejects_tampering() {
 	assert !verify(pkey, bad_msg, sig)
 
 	// a flipped public-key byte -> reject
-	mut bad_pub := pkey
+	mut bad_pub := fix32(unhex(v.pub))
 	bad_pub[0] ^= 0x01
 	assert !verify(bad_pub, msg, sig)
 
@@ -192,7 +192,7 @@ fn test_ed25519_rejects_noncanonical_s() {
 	l := [u8(0xed), 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde,
 		0xf9, 0xde, 0x14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10]!
 	// S' = S + L (byte-wise add with carry into the S half)
-	mut mal := sig
+	mut mal := fix64(unhex(v.sig))
 	mut carry := u16(0)
 	for i in 0 .. 32 {
 		s := u16(mal[32 + i]) + u16(l[i]) + carry

@@ -522,7 +522,7 @@ fn test_a_dropped_connection_ends_what_it_opened_and_never_resets_unanswered() {
 	assert c.server.session == uds.session_extended
 }
 
-fn seed_fixed(ctx voidptr, out &u8, n int) bool {
+fn seed_fixed(_ voidptr, out &u8, n int) bool {
 	for i in 0 .. n {
 		unsafe {
 			out[i] = u8(0x10 + i)

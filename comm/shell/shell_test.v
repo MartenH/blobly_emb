@@ -113,7 +113,7 @@ fn test_busy_drops_second_line() {
 // trace: the requirement verifies where a state-changing method is really
 // exposed over the network; this proves the enforcement mechanism) ---------
 
-fn poke_cmd(args &u8, args_len int, now u64, mut rsp Rsp) {
+fn poke_cmd(_ &u8, _ int, _ u64, mut rsp Rsp) {
 	rsp.write('poked')
 	rsp.nl()
 }

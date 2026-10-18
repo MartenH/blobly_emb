@@ -43,15 +43,15 @@ fn C.bflash_program(addr u32, data &u8, len u32) int
 fn C.bflash_read(addr u32, out &u8, len u32) int
 
 // FlashOps wrappers (the ctx is unused on target — the flash is the flash)
-fn fl_erase(ctx voidptr, addr u32, size u32) bool {
+fn fl_erase(_ voidptr, addr u32, size u32) bool {
 	return C.bflash_erase(addr, size) != 0
 }
 
-fn fl_program(ctx voidptr, addr u32, data &u8, len u32) bool {
+fn fl_program(_ voidptr, addr u32, data &u8, len u32) bool {
 	return C.bflash_program(addr, data, len) != 0
 }
 
-fn fl_read(ctx voidptr, addr u32, out &u8, len u32) bool {
+fn fl_read(_ voidptr, addr u32, out &u8, len u32) bool {
 	return C.bflash_read(addr, out, len) != 0
 }
 

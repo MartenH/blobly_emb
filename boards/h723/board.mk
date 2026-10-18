@@ -38,6 +38,6 @@ BOARD_FLASH       = $(BOARD_COMMON)/flash_h72x.c
 # board.h FORCED into every translation unit: the V program calls board_now_us() (u64) through an
 # FFI decl, and without the C prototype gcc assumes an int return — the value is cut to 32 bits
 # and sign-extended, so `now` went negative 35.8 min after boot (2^31 us) on every target. On
-# the compile line rather than per V file, so no image — generated, hand-written, or built
-# with -w — can miss it.
+# the compile line rather than per V file, so no image — generated or
+# hand-written — can miss it.
 BOARD_INCS        = -I$(BOARD_DIR) -I$(BOARD_COMMON) -include $(BOARD_COMMON)/board.h

@@ -89,14 +89,14 @@ NETXDUO_PIN ?= 473d192822babbd831dc5907b9e279b340a3925b
 
 # ---- Backend harness (POSIX / ThreadX), self-contained ----------------------
 demo:
-	$(V) -gc none -o blobly_demo cmd/threadx_demo
+	$(V) -cc $(HOST_CC) -gc none -o blobly_demo cmd/threadx_demo
 	./blobly_demo
 
 THREADX ?=
 TX_PORT = $(THREADX)/ports/linux/gnu
 demo-threadx:
 	@test -n "$(THREADX)" || { echo "set THREADX=/path/to/threadx (ports/linux/gnu/example_build/tx.a built)"; exit 1; }
-	$(V) -d threadx -gc none \
+	$(V) -cc $(HOST_CC) -d threadx -gc none \
 	  -cflags "-DBLOBLY_THREADX -D_GNU_SOURCE -DTX_LINUX_MULTI_CORE -DTX_ENABLE_EVENT_TRACE -DTX_LINUX_DEBUG_ENABLE -I$(THREADX)/common/inc -I$(TX_PORT)/inc" \
 	  -ldflags "$(TX_PORT)/example_build/tx.a -lrt" \
 	  -o blobly_demo_threadx cmd/threadx_demo
@@ -153,10 +153,13 @@ bench-scale:
 
 # The host unit suite, as CI's host job runs it. V3's test runner allows one parallel job
 # per 8 GB of memory (three on 32 GB) while a compile here peaks near 1 GB, so the suite runs
-# one job per core unless VJOBS says otherwise.
+# one job per core unless VJOBS says otherwise. With HOST_CC (tools/tools.mk), not V's default
+# tcc: the host OSAL's atomics (osal/osal_native.c) do not link under tcc, whose runtime forms are
+# not atomic against each other anyway, so V redid those builds with cc behind a warning.
+# -nocache: V3's module cache, with -cc named, emits a builtin module cc cannot compile.
 UNIT_DIRS := comm driver tools ecu loom nvm wdg bcrypto boot
 unit:
-	VJOBS=$${VJOBS:-$$(nproc)} v -enable-globals test $(UNIT_DIRS)
+	VJOBS=$${VJOBS:-$$(nproc)} v -cc $(HOST_CC) -nocache -enable-globals test $(UNIT_DIRS)
 
 # On-target regression tests — the "special tests run on target" group. Each
 # bench_test.sh flashes its image to the attached board and asserts the

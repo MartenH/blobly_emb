@@ -154,19 +154,19 @@ fn started() Server {
 
 // Every SID service_supported() admits must reach a handler: a SID listed there but missing
 // from dispatch()'s match would answer serviceNotSupported with no compile error.
-fn stub_count(ctx voidptr) int {
+fn stub_count(_ voidptr) int {
 	return 0
 }
 
-fn stub_entry(ctx voidptr, i int) u32 {
+fn stub_entry(_ voidptr, _ int) u32 {
 	return 0
 }
 
-fn stub_clear(ctx voidptr, group u32) u8 {
+fn stub_clear(_ voidptr, _ u32) u8 {
 	return 0
 }
 
-fn stub_setting(ctx voidptr, on bool) {}
+fn stub_setting(_ voidptr, _ bool) {}
 
 fn test_every_supported_service_dispatches() {
 	mut s := secured() // 0x27 is supported only with its ops injected
@@ -655,11 +655,11 @@ fn test_security_access_suppression_and_functional() {
 	assert s.unlocked == 1
 }
 
-fn seed_fails(ctx voidptr, out &u8, n int) bool {
+fn seed_fails(_ voidptr, _ &u8, _ int) bool {
 	return false
 }
 
-fn seed_zero(ctx voidptr, out &u8, n int) bool {
+fn seed_zero(_ voidptr, out &u8, n int) bool {
 	for i in 0 .. n {
 		unsafe {
 			out[i] = 0

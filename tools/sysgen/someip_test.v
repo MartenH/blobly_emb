@@ -836,7 +836,7 @@ fn test_a_private_temp_dir_is_unique_exclusive_and_0700() {
 	mut exclusive := false
 	os.mkdir(a, os.MkdirParams{ mode: 0o700 }) or { exclusive = true }
 	assert exclusive, 'mkdir on an existing scratch directory must fail — that is what makes creation the check'
-	perms := os.execute('stat -c %a ${a}').output.trim_space()
+	perms := os.exec(['stat', '-c', '%a', a]).output.trim_space()
 	assert perms == '700', 'scratch dir must be private (700), got ${perms}'
 }
 

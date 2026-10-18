@@ -116,7 +116,7 @@ $(NX_A): $(NX_OBJ) $$(call c_sign,$$@,$$(AR_CMD))
 	$(call c_archive,$(AR_CMD))
 -include $(call c_records,$(NX_OBJ))
 
-APPO_CMD = $(CC) $(CFLAGS) -w -c $(BUILD)/app.c
+APPO_CMD = $(CC) $(CFLAGS) -c $(BUILD)/app.c
 $(BUILD)/app.o: $(BUILD)/app.c $(call c_unrecorded,$(BUILD)/app.o) $$(call c_sign,$$@,$$(APPO_CMD))
 	$(call c_build,$(APPO_CMD))
 -include $(BUILD)/app.o.d

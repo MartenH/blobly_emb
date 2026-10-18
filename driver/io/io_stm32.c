@@ -217,7 +217,7 @@ int blob_io_gpio_read(int ch) {
 	return (((gpio(g_pt[ch].port)->IDR >> g_pt[ch].pin) & 1u) ^ g_pt[ch].al) ? 1 : 0;
 }
 
-int blob_io_gpio_read_checked(int ch, int *val) {
+int blob_io_gpio_read_checked(int ch, int32_t *val) {
 	if (ch < 0 || ch >= BLOB_IO_MAX || !g_pt[ch].configured || !val) return -1;
 	/* a real pad always samples: same IDR load, never a fabricated value */
 	*val = blob_io_gpio_read(ch);
@@ -354,7 +354,7 @@ unsigned int blob_io_adc_read(int ch) {
 	return (unsigned int)g_adc_dma[g_pt[ch].adc_slot];
 }
 
-int blob_io_adc_read_checked(int ch, unsigned int *val) {
+int blob_io_adc_read_checked(int ch, uint32_t *val) {
 	if (ch < 0 || ch >= BLOB_IO_MAX || !g_pt[ch].configured || g_pt[ch].adc_slot < 0 || !val)
 		return -1;
 	if (!g_adc_first_ready) {
@@ -364,7 +364,7 @@ int blob_io_adc_read_checked(int ch, unsigned int *val) {
 		if (!(DMA1->LISR & DMA_LISR_TCIF0)) return -1;
 		g_adc_first_ready = 1;
 	}
-	*val = (unsigned int)g_adc_dma[g_pt[ch].adc_slot];
+	*val = (uint32_t)g_adc_dma[g_pt[ch].adc_slot];
 	return 0;
 }
 

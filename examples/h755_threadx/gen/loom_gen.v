@@ -14,6 +14,7 @@ import nvm
 import boot as bootfl
 import driver.can
 import comm.com
+import comm.bulk // the pool API over boards/common/bulk.h
 
 struct Thread_load_fast_state {
 mut:
@@ -102,35 +103,35 @@ fn C.xcore_trace_offset(&i32, &u32) int // satellite clock - ours, + its error b
 fn C.xcore_bulk_consume() // platform consumer service (glue): poll+take+release
 fn C.xcore_load_get(int) u16 // a satellite core's per-mille load (xcore.h; weak 0)
 
-fn shell_ps_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
+fn shell_ps_cmd(_ &u8, _ int, _ u64, mut rsp shell.Rsp) {
 	n := C.shell_ps(&rsp.buf[0], 520)
 	if n > 0 {
 		rsp.len = n
 	}
 }
 
-fn shell_bmc_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
+fn shell_bmc_cmd(_ &u8, _ int, _ u64, mut rsp shell.Rsp) {
 	n := C.shell_bmc(&rsp.buf[0], 520)
 	if n > 0 {
 		rsp.len = n
 	}
 }
 
-fn shell_m4sig_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
+fn shell_m4sig_cmd(_ &u8, _ int, _ u64, mut rsp shell.Rsp) {
 	n := C.shell_m4sig(&rsp.buf[0], 520)
 	if n > 0 {
 		rsp.len = n
 	}
 }
 
-fn shell_iocx_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
+fn shell_iocx_cmd(_ &u8, _ int, _ u64, mut rsp shell.Rsp) {
 	n := C.shell_iocx(&rsp.buf[0], 520)
 	if n > 0 {
 		rsp.len = n
 	}
 }
 
-fn shell_boot_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
+fn shell_boot_cmd(_ &u8, _ int, _ u64, mut rsp shell.Rsp) {
 	n := C.shell_boot(&rsp.buf[0], 520)
 	if n > 0 {
 		rsp.len = n
@@ -161,7 +162,7 @@ fn stat_vals(mut rsp shell.Rsp, st loom.HandlerStat) {
 	rsp.nl()
 }
 
-fn shell_stat_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
+fn shell_stat_cmd(_ &u8, _ int, _ u64, mut rsp shell.Rsp) {
 	rsp.write('handler             last   max    mean   n (us)')
 	rsp.nl()
 	rsp.write_padded('LoadFast.on_10ms', 20)
@@ -178,7 +179,7 @@ fn trace_clock() u64 {
 	return C.board_now_us()
 }
 
-fn trace_fb_hook_load_fast(ctx voidptr, idx int, start_us u64, dt_us u64) {
+fn trace_fb_hook_load_fast(_ voidptr, idx int, start_us u64, dt_us u64) {
 	hid := match idx {
 		0 { u32(0) }
 		else { u32(0x3fff) } // unknown local idx — the 14-bit id space top
@@ -186,7 +187,7 @@ fn trace_fb_hook_load_fast(ctx voidptr, idx int, start_us u64, dt_us u64) {
 	C.trace_fb(hid, start_us, u32(dt_us))
 }
 
-fn trace_fb_hook_load_mid(ctx voidptr, idx int, start_us u64, dt_us u64) {
+fn trace_fb_hook_load_mid(_ voidptr, idx int, start_us u64, dt_us u64) {
 	hid := match idx {
 		0 { u32(1) }
 		else { u32(0x3fff) } // unknown local idx — the 14-bit id space top
@@ -194,7 +195,7 @@ fn trace_fb_hook_load_mid(ctx voidptr, idx int, start_us u64, dt_us u64) {
 	C.trace_fb(hid, start_us, u32(dt_us))
 }
 
-fn trace_fb_hook_ctrl_slow(ctx voidptr, idx int, start_us u64, dt_us u64) {
+fn trace_fb_hook_ctrl_slow(_ voidptr, idx int, start_us u64, dt_us u64) {
 	hid := match idx {
 		0 { u32(2) }
 		1 { u32(3) }
@@ -317,19 +318,19 @@ fn run_ctrl_slow() {
 }
 
 
-fn load_fast_thread_entry(input u32) {
+fn load_fast_thread_entry(_ u32) {
 	run_load_fast() // FB dispatch only — the comm thread owns the bus
 }
 
-fn load_mid_thread_entry(input u32) {
+fn load_mid_thread_entry(_ u32) {
 	run_load_mid() // FB dispatch only — the comm thread owns the bus
 }
 
-fn ctrl_slow_thread_entry(input u32) {
+fn ctrl_slow_thread_entry(_ u32) {
 	run_ctrl_slow() // FB dispatch only — the comm thread owns the bus
 }
 
-fn comm_thread_entry(input u32) {
+fn comm_thread_entry(_ u32) {
 	mut ch := can.Channel{}
 	if !ch.open('0', false) { // can0; board clocks/pins set by main.v
 		for { C._tx_thread_sleep(1000) } // dead channel — park, never own a bus we can't drive
@@ -659,7 +660,7 @@ fn comm_thread_entry(input u32) {
 }
 
 @[export: 'tx_application_define']
-fn tx_application_define(first_unused voidptr) {
+fn tx_application_define(_ voidptr) {
 	C._tx_thread_create(&g_load_fast_tcb[0], c'load_fast', load_fast_thread_entry, u32(0),
 		&g_load_fast_stack[0], u32(g_load_fast_stack.len), u32(11), u32(11), u32(0), u32(1))
 	C._tx_thread_create(&g_load_mid_tcb[0], c'load_mid', load_mid_thread_entry, u32(0),
@@ -678,19 +679,19 @@ fn tx_application_define(first_unused voidptr) {
 // tx_application_define above). main.v does the board bring-up then calls this —
 // referencing it also forces this module (incl. tx_application_define) to link.
 
-fn nvm_fl_erase(ctx voidptr, addr u32, size u32) bool {
+fn nvm_fl_erase(_ voidptr, addr u32, size u32) bool {
 	return C.bflash_erase(addr, size) != 0
 }
 
-fn nvm_fl_blank(ctx voidptr, addr u32, len u32) bool {
+fn nvm_fl_blank(_ voidptr, addr u32, len u32) bool {
 	return C.bflash_blank(addr, len) != 0
 }
 
-fn nvm_fl_program(ctx voidptr, addr u32, data &u8, len u32) bool {
+fn nvm_fl_program(_ voidptr, addr u32, data &u8, len u32) bool {
 	return C.bflash_program(addr, data, len) != 0
 }
 
-fn nvm_fl_read(ctx voidptr, addr u32, out &u8, len u32) bool {
+fn nvm_fl_read(_ voidptr, addr u32, out &u8, len u32) bool {
 	return C.bflash_read(addr, out, len) != 0
 }
 pub fn boot() {
@@ -730,19 +731,6 @@ pub fn boot() {
 }
 
 // --- Bulk Transport Pools (docs/bulk-transport.md) ---
-#flag -I @VMODROOT/boards/common
-#include "bulk.h"
-
-struct C.bulk_t {}
-fn C.bulk_init(b &C.bulk_t, nbuf u32, bufsz u32)
-fn C.bulk_valid(b &C.bulk_t) int
-fn C.bulk_loan(b &C.bulk_t) int
-fn C.bulk_publish(b &C.bulk_t, idx u32, len u32)
-fn C.bulk_ready(b &C.bulk_t) u32
-fn C.bulk_take(b &C.bulk_t, len &u32) int
-fn C.bulk_release(b &C.bulk_t, idx u32)
-fn C.bulk_buf(b &C.bulk_t, idx u32) &u8
-fn C.bulk_overflows(b &C.bulk_t) u32
 fn C.xcore_bulk_base() usize // cross-core bulk region base (board glue; H755 = XCORE_BULK_ADDR)
 
 // --- Bulk pool: xfer (4 x 256 B; m4 -> app; shared window @ base+0x0) ---
@@ -751,22 +739,22 @@ fn bulk_xfer_ptr() &C.bulk_t {
 }
 
 pub fn bulk_xfer_valid() bool {
-	return C.bulk_valid(bulk_xfer_ptr()) != 0
+	return bulk.valid(bulk_xfer_ptr())
 }
 
 pub fn bulk_xfer_ready() u32 {
-	return C.bulk_ready(bulk_xfer_ptr())
+	return bulk.ready(bulk_xfer_ptr())
 }
 
 pub fn bulk_xfer_take(len &u32) int {
-	return int(C.bulk_take(bulk_xfer_ptr(), len))
+	return bulk.take(bulk_xfer_ptr(), len)
 }
 
 pub fn bulk_xfer_release(idx int) bool {
 	if idx < 0 || idx >= 4 {
 		return false
 	}
-	C.bulk_release(bulk_xfer_ptr(), u32(idx))
+	bulk.release(bulk_xfer_ptr(), u32(idx))
 	return true
 }
 
@@ -774,6 +762,6 @@ pub fn bulk_xfer_buf(idx int) &u8 {
 	if idx < 0 || idx >= 4 {
 		return unsafe { nil }
 	}
-	return C.bulk_buf(bulk_xfer_ptr(), u32(idx))
+	return bulk.buf(bulk_xfer_ptr(), u32(idx))
 }
 

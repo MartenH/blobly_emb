@@ -799,7 +799,7 @@ fn (mut p Prog) transfer_data(req &u8, req_len int, resp &u8) int {
 
 // 0x37 RequestTransferExit: flush the staged tail (0xFF padding — erased-state
 // bytes, so a re-check of untouched space stays true).
-fn (mut p Prog) transfer_exit(req &u8, req_len int, resp &u8) int {
+fn (mut p Prog) transfer_exit(_ &u8, _ int, resp &u8) int {
 	if !p.downloading {
 		return negative(resp, 0x37, nrc_request_sequence_error)
 	}

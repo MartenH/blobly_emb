@@ -46,8 +46,7 @@ logical_address = 0x07B0
 fn doip_loom2v() string {
 	bin := os.join_path(os.temp_dir(), 'loom2v_doip_target_${os.getpid()}')
 	if !os.exists(bin) {
-		r := os.execute('${@VEXE} -enable-globals -o ${bin} ${os.join_path(@VMODROOT, 'tools',
-			'loom2v')}')
+		r := os.exec([@VEXE, '-enable-globals', '-o', bin, os.join_path(@VMODROOT, 'tools', 'loom2v')])
 		assert r.exit_code == 0, r.output
 	}
 	return bin
@@ -91,8 +90,8 @@ fn generate_src(name string, edit fn (string) string, extra string) (int, string
 	dbc := os.join_path(tmp, 'bus.dbc')
 	os.cp(os.join_path(ex, 'bus.dbc'), dbc) or { panic(err) }
 	glue := os.join_path(tmp, 'gen.v')
-	r := os.execute('${doip_loom2v()} ${ecu} ${dbc} ${os.join_path(tmp, 'sig.v')} ' +
-		'${os.join_path(tmp, 'ports.v')} ${glue} ${os.join_path(tmp, 'manifest.csv')}')
+	r := os.exec([doip_loom2v(), ecu, dbc, os.join_path(tmp, 'sig.v'), os.join_path(tmp, 'ports.v'),
+		glue, os.join_path(tmp, 'manifest.csv')])
 	return r.exit_code, r.output, os.read_file(glue) or { '' }, os.read_file(os.join_path(tmp,
 		'loom_build.mk')) or { '' }
 }
@@ -109,8 +108,8 @@ fn generate_ecu(name string, ecu_text string) (int, string, string, string) {
 	dbc := os.join_path(tmp, 'bus.dbc')
 	os.cp(os.join_path(fixture_dir, 'bus.dbc'), dbc) or { panic(err) }
 	glue := os.join_path(tmp, 'gen.v')
-	r := os.execute('${doip_loom2v()} ${ecu} ${dbc} ${os.join_path(tmp, 'sig.v')} ' +
-		'${os.join_path(tmp, 'ports.v')} ${glue} ${os.join_path(tmp, 'manifest.csv')}')
+	r := os.exec([doip_loom2v(), ecu, dbc, os.join_path(tmp, 'sig.v'), os.join_path(tmp, 'ports.v'),
+		glue, os.join_path(tmp, 'manifest.csv')])
 	return r.exit_code, r.output, os.read_file(glue) or { '' }, os.read_file(os.join_path(tmp,
 		'loom_build.mk')) or { '' }
 }
@@ -363,8 +362,8 @@ fn test_a_trace_past_the_recorders_thread_table_is_refused() {
 	os.cp(os.join_path(fixture_dir, 'bus.dbc'), os.join_path(tmp, 'bus.dbc')) or {
 		panic(err)
 	}
-	r := os.execute('${doip_loom2v()} ${os.join_path(tmp, 'ecu.toml')} ${os.join_path(tmp, 'bus.dbc')} ' +
-		'${os.join_path(tmp, 'sig.v')} ${os.join_path(tmp, 'ports.v')} ${os.join_path(tmp, 'gen.v')}')
+	r := os.exec([doip_loom2v(), os.join_path(tmp, 'ecu.toml'), os.join_path(tmp, 'bus.dbc'),
+		os.join_path(tmp, 'sig.v'), os.join_path(tmp, 'ports.v'), os.join_path(tmp, 'gen.v')])
 	assert r.exit_code != 0 && r.output.contains('MAX_THREADS'), r.output
 }
 

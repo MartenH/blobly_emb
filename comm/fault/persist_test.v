@@ -525,7 +525,8 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 				flips++
 				// the first pass after the update — completed, cut half-way (both schemas' blocks
 				// left whole), or never reached before the next update (a rollback)
-				match ((rng >> 26) % 3) {
+				pick := (rng >> 26) % 3
+				match pick {
 					0 {
 						r.m.persist(now, true)
 					}
@@ -608,8 +609,8 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 				// refused: a snapshot the store claimed may stop being claimed only when the DTC no
 				// longer holds a failure (healed, aged, cleared) or its replacement is claimed in the
 				// same image — never both sides of a displacement gone
-				lost := claimed(old).filter(it !in claimed(after))
-				gained := claimed(after).filter(it !in claimed(old))
+				lost := claimed_dtcs(old).filter(it !in claimed_dtcs(after))
+				gained := claimed_dtcs(after).filter(it !in claimed_dtcs(old))
 				for dtc in lost {
 					i := r.m.slot_of(dtc)
 					// freed: no failure held any more, or a claim of another schema (an update)
@@ -648,7 +649,7 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 }
 
 // claimed: the DTCs a status image claims a stored snapshot for.
-fn claimed(img []u8) []u32 {
+fn claimed_dtcs(img []u8) []u32 {
 	mut out := []u32{}
 	for o := 2; o + image_rec <= img.len; o += image_rec {
 		if img[o + 3] & img_snapshot != 0 {
@@ -898,7 +899,7 @@ fn test_a_claim_of_another_block_id_is_no_snapshot() {
 	assert r.slot(0).entry == 0 && r.slot(0).claim == 0 && !r.slot(0).claim_ok && r.m.pruned == 1
 	assert r.slot(0).status & confirmed != 0, 'the status went with the snapshot'
 	r.pass(-1, .not_tested, 0, 2)
-	assert claimed(stored_image(r)).len == 0, 'the next committed image kept the claim'
+	assert claimed_dtcs(stored_image(r)).len == 0, 'the next committed image kept the claim'
 	mut b := [4]u8{}
 	assert r.j.get(0x1000, &b[0], 4) == 1, 'the unclaimed block was not released'
 }
@@ -993,7 +994,7 @@ fn test_a_v4_image_keeps_status_and_counters_and_drops_its_snapshots() {
 	assert r.slot(1).entry != 0 && r.m.entries[r.slot(1).entry - 1].blk == 1
 	assert r.m.persist(5, true)
 	img2 := stored_image(r)
-	assert img2[0] == image_version && claimed(img2) == [rig_dtcs[1]]
+	assert img2[0] == image_version && claimed_dtcs(img2) == [rig_dtcs[1]]
 	r.reboot()
 	assert r.slot(1).entry != 0 && r.slot(1).claim_ok, 'the snapshot taken after the update did not survive'
 }
@@ -1071,7 +1072,7 @@ fn test_a_changed_structure_prunes_and_an_unchanged_one_keeps() {
 		assert r.slot(0).entry == 0 && !r.slot(0).claim_ok && r.m.pruned == 1, 'case ${c}: a snapshot of another structure was restored'
 		assert r.slot(0).status & confirmed != 0, 'case ${c}: the status went with the snapshot'
 		r.pass(-1, .not_tested, 0, 2)
-		assert claimed(stored_image(r)).len == 0, 'case ${c}: the claim survived'
+		assert claimed_dtcs(stored_image(r)).len == 0, 'case ${c}: the claim survived'
 		mut b := [4]u8{}
 		assert r.j.get(0x1000, &b[0], 4) == 1, 'case ${c}: the pruned block was not released'
 	}
@@ -1208,7 +1209,8 @@ fn test_traffic_stays_inside_the_write_budget() {
 			op := rng % 100
 			if op < 85 {
 				k := int((rng >> 8) % 4)
-				res := match ((rng >> 11) % 3) {
+				pick := (rng >> 11) % 3
+				res := match pick {
 					0 { TestResult.failed }
 					1 { TestResult.passed }
 					else { TestResult.not_tested }

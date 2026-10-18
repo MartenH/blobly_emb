@@ -25,7 +25,7 @@ fn lowered(node string) []ecumodel.EthLayoutCell {
 	}
 	sysgen := os.join_path(repo, 'tools', 'sysgen')
 	sys := os.join_path(repo, 'examples', 'system_full', 'system.toml')
-	r := os.execute('${os.quoted_path(@VEXE)} -enable-globals run ${os.quoted_path(sysgen)} ${os.quoted_path(sys)} --out ${os.quoted_path(out)}')
+	r := os.exec([@VEXE, '-enable-globals', 'run', sysgen, sys, '--out', out])
 	assert r.exit_code == 0, r.output
 	doc := toml.parse_file(os.join_path(out, 'gen-${node}.toml')) or { panic(err) }
 	return ecumodel.eth_layouts(doc)
