@@ -28,7 +28,7 @@ __global (
 	g_st_mon Partition_mon_state
 	g_sched_mon loom.Scheduler
 )
-pub fn partition_mon(core i32, arg voidptr) {
+pub fn partition_mon(core i32, _ voidptr) {
 	osal.pin_to_core(1)
 	g_st_mon = Partition_mon_state{} // the FB field defaults
 	mut st := &g_st_mon
