@@ -6,7 +6,7 @@
 // wiring + the generated [nm] identity, prepended to the authored internals —
 // which then feeds the existing ecucheck/loom2v unchanged.
 //
-//   make -s bin/.tool-sysgen   # built once by tools/tools.mk, rebuilt when its sources change
+//   make tool-sysgen   # built once by tools/tools.mk, rebuilt when its sources change
 //   bin/.tool-sysgen examples/system_bench/system.toml
 //
 // Generated files land in <node-dir>/gen-ecu.toml. The generator NEVER edits the

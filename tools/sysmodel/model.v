@@ -1562,11 +1562,10 @@ pub const tool_dir_env = 'BLOB_TOOL_DIR'
 // Under make, the binary make handed over (tool_dir_env); otherwise make is asked for
 // `bin/.tool-<name>`, which tools.mk rebuilds only when its sources, V or flags changed — with
 // make's own V, so a test and an ordinary make sign the tool alike and neither rebuilds the
-// other's. The ask holds a lock per tool (`.tool-<name>.use.lock`; build_tool.sh's own lock covers
-// only its rename, after the compile), so parallel callers that find a tool stale wait for one
-// build instead of each compiling it. Asked once per process: a check costs ~170 ms and the system
-// checks run a tool per node, while nothing a run does changes the tool's sources. Never `v run`,
-// whose shared binary is deleted on exit (#313).
+// other's. Parallel callers that find a tool stale wait for one compile: scripts/build_tool.sh
+// builds one tool at a time and skips a build another published meanwhile. Asked once per
+// process: a check costs ~170 ms and the system checks run a tool per node, while nothing a run
+// does changes the tool's sources. Never `v run`, whose shared binary is deleted on exit (#313).
 pub fn tool_binary(name string) !string {
 	if bin := prebuilt_tool(name) {
 		return bin
@@ -1580,40 +1579,21 @@ pub fn tool_binary(name string) !string {
 			return bin
 		}
 	}
-	bin := os.join_path(@VMODROOT, 'bin', '.tool-${name}')
-	os.mkdir_all(os.dir(bin)) or {}
-	mut lf := os.open_file('${bin}.use.lock', 'a') or {
-		return error('cannot lock tools/${name}: ${err}')
-	}
-	C.flock(lf.fd, lock_ex)
-	defer {
-		C.flock(lf.fd, lock_un)
-		lf.close()
-	}
-	before := inode_of(bin)
-	sw := time.new_stopwatch()
-	// a fresh top-level make: one started inside another must not inherit its jobserver
+	dir := os.join_path(@VMODROOT, 'bin')
+	bin := os.join_path(dir, '.tool-${name}')
+	// a fresh top-level make (one started inside another must not inherit its jobserver), told
+	// where the tools live: an exported TOOL_DIR would otherwise move its target away from `bin`
 	out, code := run_capture('env', ['-u', 'MAKEFLAGS', '-u', 'MFLAGS', '-u', 'MAKELEVEL', 'make',
-		'-s', '--no-print-directory', '-C', @VMODROOT, bin])
+		'-s', '--no-print-directory', '-C', @VMODROOT, 'TOOL_DIR=${dir}', bin])
 	if code != 0 || !os.is_file(bin) {
 		return error('cannot build tools/${name}: ${out.trim_space()}')
 	}
-	// a build renames a new file into place, so a new inode is a build that happened under our lock
-	if inode_of(bin) != before {
-		eprintln('  compiled tools/${name}: ${secs(sw)}')
+	// what build_tool.sh said: the tool it compiled and how long it took
+	if out.trim_space() != '' {
+		eprintln(out.trim_right('\n'))
 	}
 	tool_bins.bins[name] = bin
 	return bin
-}
-
-fn C.flock(fd int, op int) int
-
-const lock_ex = 2 // flock(2) LOCK_EX
-const lock_un = 8 // flock(2) LOCK_UN
-
-fn inode_of(path string) u64 {
-	st := os.stat(path) or { return 0 }
-	return st.inode
 }
 
 // ToolBins: the tool binaries this process has had from make (tool_binary)

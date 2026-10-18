@@ -348,7 +348,7 @@ layout — one config, as always.
 Build invocations:
 
 ```sh
-make -s bin/.tool-mkimage   # the tool, built once (tools/tools.mk)
+make tool-mkimage   # the tool, built once (tools/tools.mk)
 
 # field image — the boot verifies the signature and marks it valid itself
 bin/.tool-mkimage app.bin app.img <ver> --pad-vectors --sign examples/keys/mkimage.seed

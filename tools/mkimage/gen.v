@@ -4,7 +4,7 @@
 // factory image programmed whole over SWD — the field path leaves it unset
 // and the ECU's check routine marks after verifying).
 //
-//   make -s bin/.tool-mkimage   # built once by tools/tools.mk, rebuilt when its sources change
+//   make tool-mkimage   # built once by tools/tools.mk, rebuilt when its sources change
 //   bin/.tool-mkimage <app.bin> <out.img> <sw_version> [--valid] [--pad-vectors] [--sign <seed>]
 //
 // --pad-vectors: pad 0xFF between the header and the app so the app's vector

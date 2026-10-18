@@ -5,7 +5,7 @@
 // per-context matrix. Requirements carry NO pointer to code or tests; the
 // verification declares what it covers.
 //
-//   make -s bin/.tool-trace   # built once by tools/tools.mk, rebuilt when its sources change
+//   make tool-trace   # built once by tools/tools.mk, rebuilt when its sources change
 //   bin/.tool-trace           # write docs/traceability.md
 //   bin/.tool-trace --check   # also exit nonzero on a FAILED requirement
 module main

@@ -31,7 +31,7 @@ from   = "app"
 to     = "app"
 ```
 ```sh
-make -s bin/.tool-loom2v && bin/.tool-loom2v examples/h735_app/ecu.toml examples/h735_app/bus.dbc …   # no system.toml
+make tool-loom2v && bin/.tool-loom2v examples/h735_app/ecu.toml examples/h735_app/bus.dbc …   # no system.toml
 ```
 
 `system.toml` earns its keep only once **two ECUs share a signal**. Then that

@@ -4,7 +4,7 @@
 // Errors exit non-zero — the build gate for a system of ECUs, the way ecucheck
 // gates one node.
 //
-//   make -s bin/.tool-syscheck   # built once by tools/tools.mk, rebuilt when its sources change
+//   make tool-syscheck   # built once by tools/tools.mk, rebuilt when its sources change
 //   bin/.tool-syscheck examples/system_bench/system.toml
 module main
 
