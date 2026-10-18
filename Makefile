@@ -11,6 +11,10 @@ include tools/tools.mk
 # code from config and compiles it.
 # Each example is self-contained (examples/<name>/Makefile). These just delegate,
 # so `make example NAME=overspeed` == `cd examples/overspeed && make all`.
+# NAME is the root's parameter, not the example's: kept off the sub-make's command line, where it
+# would override every Makefile's own NAME below it (a system's nodes each set theirs). Every other
+# command-line override still passes through.
+example: MAKEOVERRIDES := $(filter-out NAME=%,$(MAKEOVERRIDES))
 example:
 	@test -n "$(NAME)" || { echo "usage: make example NAME=<dir under examples/>"; exit 1; }
 	$(MAKE) -C examples/$(NAME) all

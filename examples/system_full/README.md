@@ -112,7 +112,7 @@ cd examples/system_full
 
 make syscheck   # validate cross-node invariants, single-writer rules, identity, routing (CAN model)
 make gen        # dissolve system.toml into per-node gen-<node>.toml
-make nodes      # cross-build ALL node images + the CM4 satellite (needs arm-none-eabi + `make -C ../.. deps`)
+make nodes      # cross-build ALL node images + the CM4 satellite, one job per core (needs arm-none-eabi + `make -C ../.. deps`)
 ```
 
 `make nodes` builds every `NODES` image **and** the `domain_m4` satellite (after `domain`, whose gen emits it):

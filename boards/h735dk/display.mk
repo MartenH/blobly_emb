@@ -10,8 +10,28 @@ DISPLAY_CFLAGS = -DLV_CONF_INCLUDE_SIMPLE -I$(LVGL)
 DISPLAY_SRCS   = $(BOARD_DIR)/display.c $(BOARD_DIR)/lcd.c $(BOARD_DIR)/touch.c $(BOARD_DIR)/hyperram.c \
                  $(BOARD_DIR)/cpuprof.c
 LVGL_A         = $(BUILD)/lvgl.a
-LVGL_C        := $(shell find $(LVGL)/src -name '*.c' 2>/dev/null)
+# LVGL ships code for other platforms and for options this board's lv_conf.h turns off: host and OS
+# display drivers, other chips' GPU backends, the image/font decoder libraries, the alternative stdlib
+# and debugging tools. Nothing from them reaches the link, so they are left out (265 of LVGL
+# v9.6.0's 483 files, 218 compiled). Turning one of those options on in lv_conf.h
+# fails the link with its symbol undefined: take its directory off this list.
+LVGL_UNUSED    = drivers libs debugging others widgets/property image/svg \
+                 draw/vg_lite draw/nanovg draw/nema_gfx draw/nxp draw/renesas draw/sifli draw/eve \
+                 draw/espressif draw/dma2d draw/opengles draw/sdl \
+                 font/freetype font/tiny_ttf font/imgfont font/font_manager \
+                 stdlib/clib stdlib/rtthread stdlib/micropython stdlib/uefi
+LVGL_C        := $(filter-out $(foreach d,$(LVGL_UNUSED),$(LVGL)/src/$(d)/%),$(shell find $(LVGL)/src -name '*.c' 2>/dev/null))
 LVGL_OBJ       = $(patsubst $(LVGL)/src/%.c,$(BUILD)/lvgl/%.o,$(LVGL_C))
+# `ar -rc` replaces and adds members but never removes one, and a change to LVGL_OBJ can leave the
+# archive current either way (a member dropped, or one added whose object an earlier build left
+# behind), so an archive whose members are not exactly the listed objects is deleted here and
+# rebuilt from them
+ifneq ($(wildcard $(LVGL_A)),)
+LVGL_MEMBERS := $(shell $(AR) t $(LVGL_A) 2>/dev/null)
+ifneq ($(filter-out $(notdir $(LVGL_OBJ)),$(LVGL_MEMBERS))$(filter-out $(LVGL_MEMBERS),$(notdir $(LVGL_OBJ))),)
+$(shell rm -f $(LVGL_A))
+endif
+endif
 
 # LVGL at -O2: its software renderer is the display thread's whole cost; -O2 took the demonstrator
 # from ~21.5% to ~18.5% of the CPU for ~85 KB of flash. A pinned third-party archive, compiled

@@ -30,7 +30,17 @@ NODES := sysnode domain zone_a tcu
 # built AFTER domain (it links against ../domain/gen) and flashed to flash bank 2.
 SATELLITES := domain_m4
 
-all: gen syscheck nodes
+# `all` and `nodes` re-run make with a job count: the caller's (`make -j8`, `-j1` serialises), else
+# one per core, each command's output kept together. The build is ~2,500 independent third-party
+# compiles — serial it took 215 s cold, parallel 34 s. Decided at recipe time, where MAKEFLAGS is
+# complete: a make parsing this file as a sub-make (`make example NAME=system_full`) does not see
+# the -j it inherits, and forcing one there would reset the jobserver.
+JOBS = $(if $(filter -j%,$(MAKEFLAGS)),,-j$(shell nproc 2>/dev/null || echo 1)) --output-sync=target
+
+all:
+	@$(MAKE) --no-print-directory $(JOBS) all-images
+nodes:
+	@$(MAKE) --no-print-directory $(JOBS) images
 
 gen:
 	$(MAKE) -C ../.. gen-system SYSTEM=examples/system_full/system.toml
@@ -39,12 +49,21 @@ syscheck:
 	$(MAKE) -C ../.. syscheck SYSTEM=examples/system_full/system.toml
 
 # cross-build every node's ThreadX image (requires the arm toolchain + `make -C ../.. deps`),
-# then the CM4 satellite(s) — after their owner node so the owner's gen has emitted their image.
-nodes: gen
-	@for n in $(NODES); do echo "== building $$n"; $(MAKE) -C nodes/$$n all || exit 1; done
-	@for s in $(SATELLITES); do echo "== building satellite $$s"; $(MAKE) -C nodes/$$s all || exit 1; done
+# one target per node so the nodes build side by side (each node's own compiles share the
+# jobserver); a CM4 satellite after every node: each node's sysgen run regenerates the satellite's
+# sources in place (its gate emits the owner's satellite images), so none may still be running.
+# Under `make all` the nodes also wait for syscheck, which gates the build as it did serially.
+NODE_GATE := gen $(if $(filter all-images,$(MAKECMDGOALS)),syscheck)
+all-images: gen syscheck images
+images: $(addprefix node-,$(NODES) $(SATELLITES))
+$(addprefix node-,$(NODES)): node-%: $(NODE_GATE)
+	@echo "== building $*"
+	$(MAKE) -C nodes/$* all
+$(addprefix node-,$(SATELLITES)): node-%: $(NODE_GATE) $(addprefix node-,$(NODES))
+	@echo "== building satellite $*"
+	$(MAKE) -C nodes/$* all
 
 clean:
 	@for n in $(NODES) $(SATELLITES); do $(MAKE) -C nodes/$$n clean 2>/dev/null || true; done
 
-.PHONY: all gen syscheck nodes clean
+.PHONY: all nodes all-images images gen syscheck clean $(addprefix node-,$(NODES) $(SATELLITES))
