@@ -12,15 +12,16 @@ fn built_tool(name string) string {
 	bin := os.join_path(tool_dir, name)
 	$if windows {
 		if os.exists(bin + '.exe') {
-			return os.quoted_path(bin + '.exe')
+			return bin + '.exe'
 		}
 	} $else {
 		if os.exists(bin) {
-			return os.quoted_path(bin)
+			return bin
 		}
 	}
-	return os.quoted_path(sysmodel.build_tool(os.join_path(@VMODROOT, 'tools', name), true,
-		tool_dir) or { panic(err) })
+	return sysmodel.build_tool(os.join_path(@VMODROOT, 'tools', name), true, tool_dir) or {
+		panic(err)
+	}
 }
 
 fn testsuite_end() {
@@ -866,7 +867,7 @@ fn executable_lines(src string) []string {
 // SERVICE — rather than of the loop — is only observable by showing what precedes it: the sleep must
 // NOT be inside the measured pass. `sched` and the overrun mark appear only with load telemetry.
 fn io_prologue(with_load bool) []string {
-	mut out := ['fn io_thread_entry(input u32) {', '\tmut tick := u64(0)']
+	mut out := ['fn io_thread_entry(_ u32) {', '\tmut tick := u64(0)']
 	if with_load {
 		out << '\tmut sched := &g_sched_io'
 	}
@@ -988,12 +989,12 @@ fn test_the_fb_loop_subtracts_the_io_counter() {
 		os.rmdir_all(tmp) or {}
 	}
 	sys_toml := os.join_path(root, 'examples', 'system_full', 'system.toml')
-	lower := os.execute('${built_tool('sysgen')} ${sys_toml} --out ${tmp}')
+	lower := os.exec([built_tool('sysgen'), sys_toml, '--out', tmp])
 	assert lower.exit_code == 0, 'sysgen failed, so this test cannot assert on a real emitted loop: ${lower.output.trim_space()}'
 	glue := os.join_path(tmp, 'glue.v')
-	gen := os.execute('${built_tool('loom2v')} ${os.join_path(tmp,
-		'gen-domain.toml')} ${os.join_path(tmp, 'compute.dbc')} ${os.join_path(tmp, 'sig.v')} ${os.join_path(tmp,
-		'ports.v')} ${glue} ${os.join_path(tmp, 'manifest.csv')}')
+	gen := os.exec([built_tool('loom2v'), os.join_path(tmp, 'gen-domain.toml'), os.join_path(tmp,
+		'compute.dbc'), os.join_path(tmp, 'sig.v'), os.join_path(tmp, 'ports.v'), glue, os.join_path(tmp,
+		'manifest.csv')])
 	assert gen.exit_code == 0, 'loom2v failed on the lowered domain config: ${gen.output.trim_space()}'
 	src := os.read_file(glue) or {
 		assert false, 'loom2v wrote no glue at ${glue}: ${err}'
@@ -1015,9 +1016,9 @@ fn test_the_fb_loop_subtracts_the_io_counter() {
 	// read the dispatch it actually emits.
 	multi_toml := two_thread_variant(tmp)
 	glue_m := os.join_path(tmp, 'glue_multi.v')
-	gen_m := os.execute('${built_tool('loom2v')} ${multi_toml} ${os.join_path(tmp,
-		'compute.dbc')} ${os.join_path(tmp, 'sig_m.v')} ${os.join_path(tmp, 'ports_m.v')} ${glue_m} ${os.join_path(tmp,
-		'manifest_multi.csv')}')
+	gen_m := os.exec([built_tool('loom2v'), multi_toml, os.join_path(tmp, 'compute.dbc'),
+		os.join_path(tmp, 'sig_m.v'), os.join_path(tmp, 'ports_m.v'), glue_m, os.join_path(tmp,
+		'manifest_multi.csv')])
 	assert gen_m.exit_code == 0, 'loom2v failed on the two-thread variant: ${gen_m.output.trim_space()}'
 	src_m := os.read_file(glue_m) or {
 		assert false, 'loom2v wrote no glue at ${glue_m}: ${err}'

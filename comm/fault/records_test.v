@@ -381,19 +381,19 @@ mut:
 	says int // the length the provider returns (a liar says more than it wrote)
 }
 
-fn long_count(ctx voidptr) int {
+fn long_count(_ voidptr) int {
 	return 1
 }
 
-fn long_entry(ctx voidptr, i int) u32 {
+fn long_entry(_ voidptr, _ int) u32 {
 	return u32(0xC10000) << 8 | 0x09
 }
 
-fn long_clear(ctx voidptr, group u32) u8 {
+fn long_clear(_ voidptr, _ u32) u8 {
 	return 0
 }
 
-fn long_ext(ctx voidptr, i int, rec u8, out &u8, cap int) int {
+fn long_ext(ctx voidptr, _ int, rec u8, out &u8, cap int) int {
 	p := unsafe { &LongExt(ctx) }
 	if rec != 1 {
 		return 0

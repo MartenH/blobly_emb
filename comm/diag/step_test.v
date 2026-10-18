@@ -65,7 +65,7 @@ mut:
 	silent_s u64 = 5_000_000
 }
 
-fn (mut s FakeServer) handle(req &u8, n int, resp &u8) int {
+fn (mut s FakeServer) handle(req &u8, _ int, resp &u8) int {
 	s.handled++
 	sid := unsafe { req[0] }
 	if sid == 0x11 {
@@ -114,7 +114,7 @@ fn (mut s FakeServer) work_left() {}
 
 fn (mut s FakeServer) work_lost() {}
 
-fn (mut s FakeServer) work(now u64, resp &u8) int {
+fn (mut s FakeServer) work(_ u64, _ &u8) int {
 	return 0
 }
 
@@ -306,12 +306,12 @@ fn test_queued_requests_are_taken_one_at_a_time() {
 __global g_step_ch &FakeChan
 __global g_step_pending_at_erase []int
 
-fn ram_erase(ctx voidptr, addr u32, size u32) bool {
+fn ram_erase(_ voidptr, _ u32, _ u32) bool {
 	g_step_pending_at_erase << g_step_ch.pending
 	return true
 }
 
-fn ram_read(ctx voidptr, addr u32, out &u8, len u32) bool {
+fn ram_read(_ voidptr, _ u32, out &u8, len u32) bool {
 	for i in 0 .. len {
 		unsafe {
 			out[i] = 0xFF

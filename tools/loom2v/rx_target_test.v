@@ -76,7 +76,7 @@ min_write_ms = 1000
 '
 
 fn testsuite_begin() {
-	r := os.execute('${@VEXE} -enable-globals -o ${rt_bin} ${os.join_path(@VMODROOT, 'tools', 'loom2v')}')
+	r := os.exec([@VEXE, '-enable-globals', '-o', rt_bin, os.join_path(@VMODROOT, 'tools', 'loom2v')])
 	assert r.exit_code == 0, r.output
 }
 
@@ -114,7 +114,8 @@ fn rt_generate(name string, edit fn(string) string, extra string, e2e bool) (int
 	dbcp := os.join_path(tmp, 'bus.dbc')
 	os.write_file(dbcp, dbc) or { panic(err) }
 	glue := os.join_path(tmp, 'gen.v')
-	r := os.execute('${rt_bin} ${ecu} ${dbcp} ${os.join_path(tmp, 'sig.v')} ' + '${os.join_path(tmp, 'ports.v')} ${glue} ${os.join_path(tmp, 'manifest.csv')}')
+	r := os.exec([rt_bin, ecu, dbcp, os.join_path(tmp, 'sig.v'), os.join_path(tmp, 'ports.v'), glue,
+		os.join_path(tmp, 'manifest.csv')])
 	return r.exit_code, r.output, os.read_file(glue) or { '' }
 }
 
@@ -176,7 +177,7 @@ rx   = { timeout_ms = 200 }
 	])
 	// the FB reads the whole struct where the comm thread published it, and boot sized its cell
 	assert glue.contains('C.iocb_get(0, &inp.command)'), glue
-	assert glue.contains('C.iocb_cfg(0, u16(sizeof(cfg_command))) // Command: received, checked'), glue
+	assert glue.contains('C.iocb_cfg(0, u16(sizeof(sig.Command))) // Command: received, checked'), glue
 	assert !glue.contains('if rx.id == u32(0x123)'), 'the checked frame kept a lean arm too'
 	assert glue.contains('fn rx_status_of(p com.RxPublish) sig.RxStatus {')
 }
@@ -345,7 +346,7 @@ min_write_ms = 1000
 	for want in ['C.iocb_pub(0, &command)', 'C.iocb_get(0, &inp.command)',
 		'C.iocb_pub(1, &st.frep_load_slow)', 'C.iocb_get(1, &g_frep_load_slow)',
 		'C.iocb_get(2, &st.fctl_load_slow)', 'C.iocb_pub(2, &g_fctl_load_slow)',
-		'C.iocb_cfg(0, u16(sizeof(cfg_command)))', 'C.iocb_cfg(1, u16(sizeof(fcfg_rep)))'] {
+		'C.iocb_cfg(0, u16(sizeof(sig.Command)))', 'C.iocb_cfg(1, u16(sizeof(fault.Reports)))'] {
 		assert glue.contains(want), 'missing: ${want}'
 	}
 }
@@ -461,7 +462,8 @@ fn rt_generate_raw(name string, ecu string, dbc string) (int, string) {
 	os.mkdir_all(tmp) or { panic(err) }
 	os.write_file(os.join_path(tmp, 'ecu.toml'), ecu) or { panic(err) }
 	os.write_file(os.join_path(tmp, 'bus.dbc'), dbc) or { panic(err) }
-	r := os.execute('${rt_bin} ${os.join_path(tmp, 'ecu.toml')} ${os.join_path(tmp, 'bus.dbc')} ' + '${os.join_path(tmp, 'sig.v')} ${os.join_path(tmp, 'ports.v')} ${os.join_path(tmp, 'gen.v')}')
+	r := os.exec([rt_bin, os.join_path(tmp, 'ecu.toml'), os.join_path(tmp, 'bus.dbc'),
+		os.join_path(tmp, 'sig.v'), os.join_path(tmp, 'ports.v'), os.join_path(tmp, 'gen.v')])
 	return r.exit_code, r.output
 }
 

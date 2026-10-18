@@ -152,17 +152,17 @@ fn (j &Journal) find(id u16) int {
 
 // slot_for: existing pool row for id, or a free row (-1 = pool full).
 fn (j &Journal) slot_for(id u16) int {
-	mut free := -1
+	mut free_slot := -1
 	for i in 0 .. max_blocks {
 		if j.table[i].present {
 			if j.table[i].id == id {
 				return i
 			}
-		} else if free < 0 {
-			free = i
+		} else if free_slot < 0 {
+			free_slot = i
 		}
 	}
-	return free
+	return free_slot
 }
 
 // records_for: the records one value of `len` bytes occupies — plain up to data_max, chained

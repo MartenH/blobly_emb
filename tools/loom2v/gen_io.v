@@ -198,7 +198,7 @@ fn emit_io_target_entry(m Model, doc toml.Doc, ioc_idx map[string]int, with_load
 			fastest = pt.period_ms
 		}
 	}
-	g << 'fn io_thread_entry(input u32) {'
+	g << 'fn io_thread_entry(_ u32) {'
 	g << '\tmut tick := u64(0)'
 	if with_load {
 		g << '\tmut sched := &g_sched_io // load accounting only (no handlers): bss, not this frame'

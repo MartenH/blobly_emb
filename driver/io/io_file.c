@@ -151,21 +151,21 @@ int blob_io_gpio_read(int ch) {
 	return (int)v;
 }
 
-int blob_io_gpio_read_checked(int ch, int *val) {
+int blob_io_gpio_read_checked(int ch, int32_t *val) {
 	if (ch < 0 || ch >= BLOB_IO_MAX || !g_pt[ch].configured || !val) return -1;
 	unsigned long v;
 	if (pt_read_value(ch, 1, &v) < 0) return -1;
 	g_pt[ch].last = (unsigned int)v;
-	*val = (int)v;
+	*val = (int32_t)v;
 	return 0;
 }
 
-int blob_io_adc_read_checked(int ch, unsigned int *val) {
+int blob_io_adc_read_checked(int ch, uint32_t *val) {
 	if (ch < 0 || ch >= BLOB_IO_MAX || !g_pt[ch].configured || !val) return -1;
 	unsigned long v;
 	if (pt_read_value(ch, g_pt[ch].adc_max, &v) < 0) return -1; /* absent, garbage, or over-width */
 	g_pt[ch].last = (unsigned int)v;
-	*val = (unsigned int)v;
+	*val = (uint32_t)v;
 	return 0;
 }
 

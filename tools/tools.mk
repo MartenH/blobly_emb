@@ -21,6 +21,10 @@
 # copy of every tool was most of CI's host builds. Sharing is safe because scripts/build_tool.sh
 # compiles under a name of its own and renames into place, under a lock per tool.
 V ?= v
+# The C compiler a HOST program (an example's app, the demo) is built with. Named, not left to V:
+# V tries its bundled tcc first, and the host OSAL's GCC __atomic builtins (osal/osal_native.c)
+# do not link there, so every build failed once and was redone with cc behind a warning.
+HOST_CC ?= cc
 
 # name -> what V compiles: one file for a single-file program, the directory for a multi-file one
 TOOL_SRC_cfg2v       := tools/cfg2v/gen.v

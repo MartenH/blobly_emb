@@ -35,8 +35,7 @@ const ft_bin = os.join_path(os.temp_dir(), 'loom2v_fault_target_${os.getpid()}_$
 
 // the generator is built once per run, from the source under test, and removed after it
 fn testsuite_begin() {
-	r := os.execute('${@VEXE} -enable-globals -o ${ft_bin} ${os.join_path(@VMODROOT, 'tools',
-		'loom2v')}')
+	r := os.exec([@VEXE, '-enable-globals', '-o', ft_bin, os.join_path(@VMODROOT, 'tools', 'loom2v')])
 	assert r.exit_code == 0, r.output
 }
 
@@ -76,8 +75,8 @@ fn ft_generate(name string, edit fn (string) string, extra string) (int, string,
 	dbc := os.join_path(tmp, 'bus.dbc')
 	os.cp(os.join_path(ex, 'bus.dbc'), dbc) or { panic(err) }
 	glue := os.join_path(tmp, 'gen.v')
-	r := os.execute('${ft_loom2v()} ${ecu} ${dbc} ${os.join_path(tmp, 'sig.v')} ' +
-		'${os.join_path(tmp, 'ports.v')} ${glue} ${os.join_path(tmp, 'manifest.csv')}')
+	r := os.exec([ft_loom2v(), ecu, dbc, os.join_path(tmp, 'sig.v'), os.join_path(tmp, 'ports.v'),
+		glue, os.join_path(tmp, 'manifest.csv')])
 	return r.exit_code, r.output, os.read_file(glue) or { '' }, os.read_file(os.join_path(tmp,
 		'loom_build.mk')) or { '' }
 }
@@ -157,8 +156,8 @@ fn test_the_comm_thread_owns_the_fault_memory_and_nm_moves_its_cycle() {
 	])
 	assert !glue.contains('g_fmem.cycle_start() // [fault_memory] cycle = "power"')
 	// both cells' arenas exist before any thread runs
-	in_order(glue, ['fn tx_application_define(', 'C.iocb_cfg(0, u16(sizeof(fcfg_rep)))',
-		'C.iocb_cfg(1, u16(sizeof(fcfg_ctl)))', 'C._tx_initialize_kernel_enter()'])
+	in_order(glue, ['fn tx_application_define(', 'C.iocb_cfg(0, u16(sizeof(fault.Reports)))',
+		'C.iocb_cfg(1, u16(sizeof(fault.Control)))', 'C._tx_initialize_kernel_enter()'])
 	assert glue.contains('fn C.iocb_get(int, voidptr)')
 	// the image links the byte IOC
 	assert mk.contains('LOOM_FAULT_SRCS = $(REPO)/boards/common/iocb.c'), mk
@@ -228,7 +227,7 @@ fn test_the_fault_memory_is_persisted_in_the_journal() {
 		'g_fmem.consume(0, g_frep_load_slow.r[0])', 'if g_fmem.capture_due() {', 'g_diag.refresh_now()',
 		'g_fmem.capture(&g_diag.server)', 'g_fmem.persist(t1, false)',
 		'if g_diag.reset_due() != 0 {', 'g_fmem.consume(0, g_frep_load_slow.r[0])',
-		'if !g_fmem.persist(t1, true) {', 'C.diag_sys_reset()', 'fn fmem_put(ctx voidptr, id u16, data &u8, len u16) bool {',
+		'if !g_fmem.persist(t1, true) {', 'C.diag_sys_reset()', 'fn fmem_put(_ voidptr, id u16, data &u8, len u16) bool {',
 		'return g_nvm.put(id, data, len)', 'pub fn boot() {', 'if g_nvm.mounted {',
 		'keep := [', '/* the fault memory status */', 'g_nvm.prune(&keep[0], 3)',
 		'g_nvm.erase_pending() // the boot quiet point (no NM)',
@@ -389,8 +388,8 @@ fn test_the_host_bridge_takes_the_power_cycle_too() {
 	dbc := os.join_path(tmp, 'bus.dbc')
 	os.cp(os.join_path(ex, 'bus.dbc'), dbc) or { panic(err) }
 	glue := os.join_path(tmp, 'gen.v')
-	r := os.execute('${ft_loom2v()} ${ecu} ${dbc} ${os.join_path(tmp, 'sig.v')} ' +
-		'${os.join_path(tmp, 'ports.v')} ${glue} ${os.join_path(tmp, 'manifest.csv')}')
+	r := os.exec([ft_loom2v(), ecu, dbc, os.join_path(tmp, 'sig.v'), os.join_path(tmp, 'ports.v'),
+		glue, os.join_path(tmp, 'manifest.csv')])
 	assert r.exit_code == 0, r.output
 	g := os.read_file(glue) or { panic(err) }
 	in_order(g, ['st.fmem.init()', 'st.conn_diag.server.faults = st.fmem.uds_ops()',

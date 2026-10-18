@@ -6,6 +6,7 @@ module gen
 import ports
 import app
 import loom
+import comm.bulk // the pool API over boards/common/bulk.h
 
 struct Thread_m4_app_state {
 mut:
@@ -55,7 +56,7 @@ fn trace_clock() u64 {
 	return C.board_now_us()
 }
 
-fn trace_fb_hook_m4_app(ctx voidptr, idx int, start_us u64, dt_us u64) {
+fn trace_fb_hook_m4_app(_ voidptr, idx int, start_us u64, dt_us u64) {
 	hid := match idx {
 		0 { u32(4) }
 		else { u32(0x3fff) } // unknown local idx — the 14-bit id space top
@@ -63,7 +64,7 @@ fn trace_fb_hook_m4_app(ctx voidptr, idx int, start_us u64, dt_us u64) {
 	C.trace_fb(hid, start_us, u32(dt_us))
 }
 
-fn trace_fb_hook_m4_stress(ctx voidptr, idx int, start_us u64, dt_us u64) {
+fn trace_fb_hook_m4_stress(_ voidptr, idx int, start_us u64, dt_us u64) {
 	hid := match idx {
 		0 { u32(5) }
 		else { u32(0x3fff) } // unknown local idx — the 14-bit id space top
@@ -124,16 +125,16 @@ fn run_m4_stress() {
 	}
 }
 
-fn m4_app_thread_entry(input u32) {
+fn m4_app_thread_entry(_ u32) {
 	run_m4_app()
 }
 
-fn m4_stress_thread_entry(input u32) {
+fn m4_stress_thread_entry(_ u32) {
 	run_m4_stress()
 }
 
 @[export: 'tx_application_define']
-fn tx_application_define(first_unused voidptr) {
+fn tx_application_define(_ voidptr) {
 	C._tx_thread_create(&g_m4_app_tcb[0], c'm4_app', m4_app_thread_entry, u32(0),
 		&g_m4_app_stack[0], u32(g_m4_app_stack.len), u32(11), u32(11), u32(0), u32(1))
 	C.trace_bind_thread(&g_m4_app_tcb[0]) // deterministic thread ids, creation order
@@ -155,19 +156,6 @@ pub fn boot() {
 }
 
 // --- Bulk Transport Pools (docs/bulk-transport.md) ---
-#flag -I @VMODROOT/boards/common
-#include "bulk.h"
-
-struct C.bulk_t {}
-fn C.bulk_init(b &C.bulk_t, nbuf u32, bufsz u32)
-fn C.bulk_valid(b &C.bulk_t) int
-fn C.bulk_loan(b &C.bulk_t) int
-fn C.bulk_publish(b &C.bulk_t, idx u32, len u32)
-fn C.bulk_ready(b &C.bulk_t) u32
-fn C.bulk_take(b &C.bulk_t, len &u32) int
-fn C.bulk_release(b &C.bulk_t, idx u32)
-fn C.bulk_buf(b &C.bulk_t, idx u32) &u8
-fn C.bulk_overflows(b &C.bulk_t) u32
 fn C.xcore_bulk_base() usize // cross-core bulk region base (board glue; H755 = XCORE_BULK_ADDR)
 
 // --- Bulk pool: xfer (4 x 256 B; m4 -> app; shared window @ base+0x0) ---
@@ -176,29 +164,29 @@ fn bulk_xfer_ptr() &C.bulk_t {
 }
 
 pub fn bulk_xfer_init() {
-	C.bulk_init(bulk_xfer_ptr(), u32(4), u32(256))
+	bulk.init(bulk_xfer_ptr(), u32(4), u32(256))
 }
 
 pub fn bulk_xfer_loan() int {
-	return int(C.bulk_loan(bulk_xfer_ptr()))
+	return bulk.loan(bulk_xfer_ptr())
 }
 
 pub fn bulk_xfer_publish(idx int, len u32) bool {
 	if idx < 0 || idx >= 4 || len > u32(256) {
 		return false
 	}
-	C.bulk_publish(bulk_xfer_ptr(), u32(idx), len)
+	bulk.publish(bulk_xfer_ptr(), u32(idx), len)
 	return true
 }
 
 pub fn bulk_xfer_overflows() u32 {
-	return C.bulk_overflows(bulk_xfer_ptr())
+	return bulk.overflows(bulk_xfer_ptr())
 }
 
 pub fn bulk_xfer_buf(idx int) &u8 {
 	if idx < 0 || idx >= 4 {
 		return unsafe { nil }
 	}
-	return C.bulk_buf(bulk_xfer_ptr(), u32(idx))
+	return bulk.buf(bulk_xfer_ptr(), u32(idx))
 }
 

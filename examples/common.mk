@@ -29,7 +29,7 @@ gen: $(if $(wildcard bus.dbc),$(TOOL_dbc2cfg)) $(TOOL_ecucheck) $(TOOL_cfg2v) $(
 # Build: local modules (sig/app/ports/gen) + the repo framework, via V's -path.
 build:
 	@mkdir -p bin
-	cd $(REPO) && $(V) -gc none -path "@vlib|@vmodules|.|examples/$(NAME)" -o examples/$(NAME)/bin/app examples/$(NAME)
+	cd $(REPO) && $(V) -cc $(HOST_CC) -gc none -path "@vlib|@vmodules|.|examples/$(NAME)" -o examples/$(NAME)/bin/app examples/$(NAME)
 
 # depend on `all` (gen + build), not just build, so a config edit is regenerated before running.
 # RUN_IFACE is the interface arg(s); a multi-bus example (e.g. trace_comm) overrides it with its

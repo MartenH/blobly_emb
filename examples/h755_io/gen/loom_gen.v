@@ -107,7 +107,7 @@ pub fn run() {
 	}
 }
 
-fn io_thread_entry(input u32) {
+fn io_thread_entry(_ u32) {
 	mut tick := u64(0)
 	mut sched := &g_sched_io // load accounting only (no handlers): bss, not this frame
 	// monotonic deadline pacing: sleeping the remaining-to-deadline ticks (rounded
@@ -174,11 +174,11 @@ fn io_thread_entry(input u32) {
 	}
 }
 
-fn app_thread_entry(input u32) {
+fn app_thread_entry(_ u32) {
 	run() // FB dispatch only — the comm thread owns the bus
 }
 
-fn comm_thread_entry(input u32) {
+fn comm_thread_entry(_ u32) {
 	mut ch := can.Channel{}
 	if !ch.open('0', false) { // can0; board clocks/pins set by main.v
 		for { C._tx_thread_sleep(1000) } // dead channel — park, never own a bus we can't drive
@@ -247,7 +247,7 @@ fn comm_thread_entry(input u32) {
 }
 
 @[export: 'tx_application_define']
-fn tx_application_define(first_unused voidptr) {
+fn tx_application_define(_ voidptr) {
 	// io BEFORE the app threads exist (REQ-IO-009): declare + init the points —
 	// outputs hold their configured init from here — then publish ONE boot sample
 	// per input. Input failures count observably (degraded start); an output

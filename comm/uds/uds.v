@@ -87,8 +87,8 @@ pub const default_sa_delay_us = u64(10_000_000)
 pub struct SecurityOps {
 pub mut:
 	ctx    voidptr
-	seed   fn (ctx voidptr, out &u8, n int) bool
-	key_ok fn (ctx voidptr, level u8, seed &u8, key &u8, n int) bool
+	seed   fn (ctx voidptr, out &u8, n int) bool = unsafe { nil }
+	key_ok fn (ctx voidptr, level u8, seed &u8, key &u8, n int) bool = unsafe { nil }
 }
 
 // FaultOps is the fault-memory seam 0x19 / 0x14 / 0x85 are answered through (comm/fault builds
@@ -101,12 +101,12 @@ pub mut:
 pub struct FaultOps {
 pub mut:
 	ctx         voidptr
-	count       fn (ctx voidptr) int
-	entry       fn (ctx voidptr, i int) u32
-	clear       fn (ctx voidptr, group u32) u8 // the NRC, 0 = cleared
-	set_setting fn (ctx voidptr, on bool)
-	snapshot    fn (ctx voidptr, i int, out &u8, cap int) int
-	extended    fn (ctx voidptr, i int, rec u8, out &u8, cap int) int
+	count       fn (ctx voidptr) int = unsafe { nil }
+	entry       fn (ctx voidptr, i int) u32 = unsafe { nil }
+	clear       fn (ctx voidptr, group u32) u8 = unsafe { nil } // the NRC, 0 = cleared
+	set_setting fn (ctx voidptr, on bool) = unsafe { nil }
+	snapshot    fn (ctx voidptr, i int, out &u8, cap int) int = unsafe { nil }
+	extended    fn (ctx voidptr, i int, rec u8, out &u8, cap int) int = unsafe { nil }
 	ext_records u8 // extended data records 0x01 .. ext_records
 	avail       u8 // the status availability mask; 0 = not wired (the services stay unsupported)
 }
@@ -118,7 +118,7 @@ pub mut:
 pub struct DidWrite {
 pub mut:
 	ctx   voidptr
-	write fn (ctx voidptr, id u16, data &u8, n int) u8
+	write fn (ctx voidptr, id u16, data &u8, n int) u8 = unsafe { nil }
 }
 
 // The service table (Server.services): which services the server answers, in which sessions, and
@@ -214,7 +214,7 @@ pub mut:
 	// handoff_ok is the application's conditions seam for the handoff (REQ-BOOT-015): false
 	// answers conditionsNotCorrect (0x22) and nothing is handed off. nil = allowed — the server
 	// knows no vehicle state, and only the application can.
-	handoff_ok fn () bool
+	handoff_ok fn () bool = unsafe { nil }
 	// handoff_elsewhere: this request arrived over a transport the bootloader does not serve, so
 	// the handoff is refused with conditionsNotCorrect (0x22): a handoff over DoIP to a bootloader
 	// that answers on CAN only would reset the ECU out from under a tester whose TCP connection

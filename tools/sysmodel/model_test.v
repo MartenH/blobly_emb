@@ -8,7 +8,7 @@ import toml
 // not that generation analysis, so they must NOT claim to verify it by test.
 // @verifies REQ-TOPO-001, REQ-TOPO-002, REQ-TOPO-003, REQ-TOPO-004, REQ-TOPO-006, REQ-TOPO-007, REQ-TOPO-011, REQ-TOPO-012
 
-fn errs(issues []Issue) []string {
+fn issue_msgs(issues []Issue) []string {
 	mut out := []string{}
 	for i in issues {
 		if i.severity == .error {
@@ -97,7 +97,7 @@ fn clean_system() System {
 
 fn test_clean_system_has_no_errors() {
 	issues := validate_system(clean_system())
-	assert errs(issues).len == 0, 'clean system flagged: ${errs(issues)}'
+	assert issue_msgs(issues).len == 0, 'clean system flagged: ${issue_msgs(issues)}'
 }
 
 // REQ-TOPO-001: two nodes transmitting the same signal on one bus is a wire
@@ -107,7 +107,7 @@ fn test_two_writers_same_bus_is_error() {
 	// make domain ALSO transmit Speed
 	s.nodes[1].view.produces['can0'] = ['Rpm', 'Speed']
 	issues := validate_system(s)
-	e := errs(issues)
+	e := issue_msgs(issues)
 	assert e.len == 1, 'expected one collision, got ${e}'
 	assert e[0].contains('Speed'), e[0]
 	assert e[0].contains('transmitted by 2 nodes'), e[0]
@@ -120,7 +120,7 @@ fn test_consumer_without_producer_is_error() {
 	// domain consumes Torque that nobody transmits
 	s.nodes[1].view.consumes['can0'] = ['Speed', 'Torque']
 	issues := validate_system(s)
-	e := errs(issues)
+	e := issue_msgs(issues)
 	assert e.any(it.contains('Torque') && it.contains('no node transmits')), e.str()
 }
 
@@ -130,7 +130,7 @@ fn test_unconsumed_producer_is_error() {
 	mut s := clean_system()
 	s.nodes[0].view.produces['can0'] = ['Speed', 'Spare']
 	issues := validate_system(s)
-	assert errs(issues).any(it.contains('Spare') && it.contains('no node receives it')), errs(issues).str()
+	assert issue_msgs(issues).any(it.contains('Spare') && it.contains('no node receives it')), issue_msgs(issues).str()
 }
 
 // REQ-TOPO-002: two nodes sharing an NM id is an error.
@@ -138,7 +138,7 @@ fn test_shared_nm_id_is_error() {
 	mut s := clean_system()
 	s.nodes[1].nm = 0x11 // collide with sysnode
 	issues := validate_system(s)
-	e := errs(issues)
+	e := issue_msgs(issues)
 	assert e.any(it.contains('NM id 0x11') && it.contains('shared')), e.str()
 	assert 'REQ-TOPO-002' in reqs_of(issues, .error)
 }
@@ -155,7 +155,7 @@ fn test_shared_diag_addr_is_error() {
 		rsp: 0x7a8
 	}
 	issues := validate_system(s)
-	assert errs(issues).any(it.contains('diagnostic request id 0x7a0')), errs(issues).str()
+	assert issue_msgs(issues).any(it.contains('diagnostic request id 0x7a0')), issue_msgs(issues).str()
 }
 
 // REQ-TOPO-002: shared trace id is an error.
@@ -163,7 +163,7 @@ fn test_shared_trace_id_is_error() {
 	mut s := clean_system()
 	s.nodes[1].trace = 1 // collide with sysnode
 	issues := validate_system(s)
-	assert errs(issues).any(it.contains('trace node id 1')), errs(issues).str()
+	assert issue_msgs(issues).any(it.contains('trace node id 1')), issue_msgs(issues).str()
 }
 
 // REQ-TOPO-002: two nodes sharing an alive (on-wire NM) id is an error.
@@ -171,7 +171,7 @@ fn test_shared_alive_id_is_error() {
 	mut s := clean_system()
 	s.nodes[1].view.alive = 0x511 // collide with sysnode's alive
 	issues := validate_system(s)
-	assert errs(issues).any(it.contains('alive id 0x511') && it.contains('shared')), errs(issues).str()
+	assert issue_msgs(issues).any(it.contains('alive id 0x511') && it.contains('shared')), issue_msgs(issues).str()
 }
 
 // REQ-TOPO-005: a node's own [nm] node id must match the system.toml allocation.
@@ -179,7 +179,7 @@ fn test_node_nm_disagreement_is_error() {
 	mut s := clean_system()
 	s.nodes[0].view.nm_node = 0x22 // ecu.toml says 0x22, system says 0x11
 	issues := validate_system(s)
-	assert errs(issues).any(it.contains('disagrees with system.toml')), errs(issues).str()
+	assert issue_msgs(issues).any(it.contains('disagrees with system.toml')), issue_msgs(issues).str()
 	assert 'REQ-TOPO-005' in reqs_of(issues, .error)
 }
 
@@ -188,8 +188,8 @@ fn test_alive_outside_range_is_error() {
 	mut s := clean_system()
 	s.nodes[0].view.alive = 0x600 // outside [0x500,0x53f]
 	issues := validate_system(s)
-	assert errs(issues).any(it.contains('alive id 0x600')
-		&& it.contains('outside its cluster range')), errs(issues).str()
+	assert issue_msgs(issues).any(it.contains('alive id 0x600')
+		&& it.contains('outside its cluster range')), issue_msgs(issues).str()
 }
 
 // REQ-TOPO-004: nodes on one bus must agree on the cluster range.
@@ -197,7 +197,7 @@ fn test_nm_cluster_mismatch_is_error() {
 	mut s := clean_system()
 	s.nodes[1].view.peers_hi = 0x5ff // different range
 	issues := validate_system(s)
-	assert errs(issues).any(it.contains('cluster range mismatch')), errs(issues).str()
+	assert issue_msgs(issues).any(it.contains('cluster range mismatch')), issue_msgs(issues).str()
 	assert 'REQ-TOPO-004' in reqs_of(issues, .error)
 }
 
@@ -216,7 +216,7 @@ fn test_route_validity() {
 		to:      'edge'
 	}
 	issues := validate_system(s)
-	assert errs(issues).any(it.contains('does not sit on bus "edge"')), errs(issues).str()
+	assert issue_msgs(issues).any(it.contains('does not sit on bus "edge"')), issue_msgs(issues).str()
 
 	// same-bus route
 	mut s2 := clean_system()
@@ -226,7 +226,7 @@ fn test_route_validity() {
 		from:    'compute'
 		to:      'compute'
 	}
-	assert errs(validate_system(s2)).any(it.contains('from and to are the same bus'))
+	assert issue_msgs(validate_system(s2)).any(it.contains('from and to are the same bus'))
 
 	// both frame and signal set
 	mut s3 := clean_system()
@@ -242,7 +242,7 @@ fn test_route_validity() {
 		from:    'compute'
 		to:      'edge'
 	}
-	assert errs(validate_system(s3)).any(it.contains('exactly one of frame'))
+	assert issue_msgs(validate_system(s3)).any(it.contains('exactly one of frame'))
 }
 
 // a signal produced on one bus and routed to another satisfies a consumer there.
@@ -279,7 +279,7 @@ fn test_route_satisfies_cross_bus_consumer() {
 		}
 	}
 	// without a route -> error (no producer on edge)
-	assert errs(validate_system(s)).any(it.contains('Speed') && it.contains('no node transmits'))
+	assert issue_msgs(validate_system(s)).any(it.contains('Speed') && it.contains('no node transmits'))
 	// add the SIGNAL route. In the COMPOSED model it suppresses the raw
 	// missing-producer gap (reachability trusts it) BUT the route itself is rejected:
 	// a composed system never runs sysgen, so no forwarder would exist (codex #164).
@@ -290,7 +290,7 @@ fn test_route_satisfies_cross_bus_consumer() {
 		from:    'compute'
 		to:      'edge'
 	}
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert !e.any(it.contains('Speed') && it.contains('no node transmits')), 'reachability trusts the route: ${e}'
 	assert e.any(it.contains('only generated in the dissolution model')), 'composed route rejected: ${e}'
 }
@@ -310,7 +310,7 @@ fn test_shared_diag_response_id_is_error() {
 		rsp: 0x7a8 // distinct req, SAME rsp
 	}
 	issues := validate_system(s)
-	assert errs(issues).any(it.contains('response id 0x7a8') && it.contains('collides')), errs(issues).str()
+	assert issue_msgs(issues).any(it.contains('response id 0x7a8') && it.contains('collides')), issue_msgs(issues).str()
 }
 
 // REQ-TOPO-001/005: a bus a node claims must be declared AND map to a local
@@ -318,11 +318,11 @@ fn test_shared_diag_response_id_is_error() {
 fn test_bus_membership_errors() {
 	mut s := clean_system()
 	s.nodes[0].buses = ['nosuchbus'] // undeclared
-	assert errs(validate_system(s)).any(it.contains('bus "nosuchbus" is not declared')), 'undeclared bus'
+	assert issue_msgs(validate_system(s)).any(it.contains('bus "nosuchbus" is not declared')), 'undeclared bus'
 
 	mut s2 := clean_system()
 	s2.nodes[0].view.local_buses = ['can9'] // ecu.toml doesn't open can0
-	assert errs(validate_system(s2)).any(it.contains('no [bus.can0] interface')), 'missing local interface'
+	assert issue_msgs(validate_system(s2)).any(it.contains('no [bus.can0] interface')), 'missing local interface'
 }
 
 // REQ-TOPO-005: system.toml allocates an nm id but the node has no [nm] block.
@@ -330,7 +330,7 @@ fn test_missing_local_nm_is_error() {
 	mut s := clean_system()
 	s.nodes[0].view.has_nm = false // ecu.toml has no [nm]
 	issues := validate_system(s)
-	assert errs(issues).any(it.contains('has no [nm] block')), errs(issues).str()
+	assert issue_msgs(issues).any(it.contains('has no [nm] block')), issue_msgs(issues).str()
 	assert 'REQ-TOPO-005' in reqs_of(issues, .error)
 }
 
@@ -342,12 +342,12 @@ fn test_nm_timing_mismatch_is_error() {
 	s.nodes[1].view.nm_timeout_ms = 500 // both declared, differ
 	s.nodes[1].view.nm_has_timeout = true
 	issues := validate_system(s)
-	assert errs(issues).any(it.contains('timeout_ms mismatch')), errs(issues).str()
+	assert issue_msgs(issues).any(it.contains('timeout_ms mismatch')), issue_msgs(issues).str()
 	// a param only one node declares must NOT false-positive (default vs explicit)
 	mut s2 := clean_system()
 	s2.nodes[0].view.nm_repeat_ms = 200 // only one declares it
 	s2.nodes[0].view.nm_has_repeat = true
-	assert !errs(validate_system(s2)).any(it.contains('repeat_ms mismatch')), 'one-sided default should not flag'
+	assert !issue_msgs(validate_system(s2)).any(it.contains('repeat_ms mismatch')), 'one-sided default should not flag'
 }
 
 // REQ-TOPO-001: two nodes producing DIFFERENT signals that map to the SAME DBC
@@ -403,8 +403,8 @@ BO_ 288 StatusFrame: 8 a
 			},
 		]
 	}
-	assert errs(check_frame_single_writer(s)).any(it.contains('frame "StatusFrame"')
-		&& it.contains('one frame owner')), errs(check_frame_single_writer(s)).str()
+	assert issue_msgs(check_frame_single_writer(s)).any(it.contains('frame "StatusFrame"')
+		&& it.contains('one frame owner')), issue_msgs(check_frame_single_writer(s)).str()
 }
 
 // REQ-TOPO-001: a signal route whose SOURCE bus has no producer does not satisfy
@@ -447,7 +447,7 @@ fn test_route_without_source_producer_is_error() {
 		from:    'compute'
 		to:      'edge'
 	}
-	assert errs(validate_system(s)).any(it.contains('Torque') && it.contains('no node transmits')), 'route without a source producer must not satisfy the consumer'
+	assert issue_msgs(validate_system(s)).any(it.contains('Torque') && it.contains('no node transmits')), 'route without a source producer must not satisfy the consumer'
 }
 
 // --- codex #141 round-2 fixes ---
@@ -459,14 +459,14 @@ fn test_duplicate_bus_interface_is_error() {
 		name:      'edge'
 		interface: 'can0' // same as compute
 	}
-	assert errs(validate_system(s)).any(it.contains('share interface "can0"')), 'dup interface'
+	assert issue_msgs(validate_system(s)).any(it.contains('share interface "can0"')), 'dup interface'
 }
 
 // REQ-TOPO-002: duplicate node names break route/identity lookup.
 fn test_duplicate_node_name_is_error() {
 	mut s := clean_system()
 	s.nodes[1].name = 'sysnode' // collide
-	assert errs(validate_system(s)).any(it.contains('duplicate node name "sysnode"')), 'dup node name'
+	assert issue_msgs(validate_system(s)).any(it.contains('duplicate node name "sysnode"')), 'dup node name'
 }
 
 // REQ-TOPO-005: a local interface matching a system bus that the node forgets to
@@ -474,7 +474,7 @@ fn test_duplicate_node_name_is_error() {
 fn test_unclaimed_local_interface_is_error() {
 	mut s := clean_system()
 	s.nodes[0].buses = [] // opens [bus.can0] but claims no bus
-	assert errs(validate_system(s)).any(it.contains('does not claim') && it.contains('unchecked')), 'unclaimed interface'
+	assert issue_msgs(validate_system(s)).any(it.contains('does not claim') && it.contains('unchecked')), 'unclaimed interface'
 }
 
 // REQ-TOPO-005: [nm] node = 0 is a valid id; a system nm of 0x11 must still flag
@@ -484,7 +484,7 @@ fn test_local_nm_node_zero_disagrees() {
 	s.nodes[0].view.nm_node = 0 // declared as 0...
 	s.nodes[0].view.has_nm_node = true
 	// ...but system.toml allocates 0x11
-	assert errs(validate_system(s)).any(it.contains('disagrees with system.toml')), 'node=0 vs 0x11'
+	assert issue_msgs(validate_system(s)).any(it.contains('disagrees with system.toml')), 'node=0 vs 0x11'
 }
 
 // REQ-TOPO-004: with 3 nodes, a param the FIRST omits must still catch a later
@@ -516,7 +516,7 @@ fn test_nm_timing_anchor_is_per_param() {
 			nm_timeout_ms:  500 // conflicts with domain's 300
 		}
 	}
-	assert errs(validate_system(s)).any(it.contains('timeout_ms mismatch') && it.contains('500')), 'per-param anchor'
+	assert issue_msgs(validate_system(s)).any(it.contains('timeout_ms mismatch') && it.contains('500')), 'per-param anchor'
 }
 
 // REQ-TOPO-005: a node whose ecu.toml can't pass ecucheck can't be a clean
@@ -525,7 +525,7 @@ fn test_node_config_error_surfaces() {
 	mut s := clean_system()
 	s.nodes[0].view.config_errors = ['partition "app" is missing `core`']
 	issues := validate_system(s)
-	assert errs(issues).any(it.contains('ecu.toml invalid') && it.contains('missing `core`')), 'node config error'
+	assert issue_msgs(issues).any(it.contains('ecu.toml invalid') && it.contains('missing `core`')), 'node config error'
 }
 
 // --- codex #141 round-3 fixes (declaration presence + full node gate) ---
@@ -536,7 +536,7 @@ fn test_unallocated_local_nm_is_error() {
 	mut s := clean_system()
 	s.nodes[0].has_nm_alloc = false // ecu.toml has [nm] but system.toml omits nm
 	issues := validate_system(s)
-	assert errs(issues).any(it.contains('allocates it no `nm`')), errs(issues).str()
+	assert issue_msgs(issues).any(it.contains('allocates it no `nm`')), issue_msgs(issues).str()
 	assert 'REQ-TOPO-005' in reqs_of(issues, .error)
 }
 
@@ -546,7 +546,7 @@ fn test_nm_block_without_node_id_is_error() {
 	mut s := clean_system()
 	s.nodes[0].view.has_nm_node = false // [nm] present, `node` absent
 	issues := validate_system(s)
-	assert errs(issues).any(it.contains('has no `node` id')), errs(issues).str()
+	assert issue_msgs(issues).any(it.contains('has no `node` id')), issue_msgs(issues).str()
 }
 
 // REQ-TOPO-002: alive = 0 is a valid CAN id, so two nodes both declaring it
@@ -556,7 +556,7 @@ fn test_alive_zero_declared_collides() {
 	s.nodes[0].view.alive = 0
 	s.nodes[1].view.alive = 0 // both explicitly 0, both has_alive
 	issues := validate_system(s)
-	assert errs(issues).any(it.contains('alive id 0x0') && it.contains('shared')), errs(issues).str()
+	assert issue_msgs(issues).any(it.contains('alive id 0x0') && it.contains('shared')), issue_msgs(issues).str()
 }
 
 // REQ-TOPO-005 (integration): the FULL per-node gate runs — an unknown key that
@@ -596,8 +596,8 @@ fn test_nm_timing_effective_default_conflict() {
 	s.nodes[1].view.nm_timeout_ms = 500
 	s.nodes[1].view.nm_has_timeout = true
 	issues := validate_system(s)
-	assert errs(issues).any(it.contains('timeout_ms mismatch') && it.contains('300')
-		&& it.contains('500')), errs(issues).str()
+	assert issue_msgs(issues).any(it.contains('timeout_ms mismatch') && it.contains('300')
+		&& it.contains('500')), issue_msgs(issues).str()
 }
 
 // REQ-TOPO-004/005: an [nm] enabled = false node is a non-participant — no
@@ -608,22 +608,22 @@ fn test_nm_disabled_node_is_nonparticipant() {
 	s.nodes[1].has_nm_alloc = false // no system nm — fine, it doesn't participate
 	s.nodes[1].view.peers_hi = 0x5ff // a different range must NOT flag (it's inactive)
 	issues := validate_system(s)
-	assert !errs(issues).any(it.contains('cluster range mismatch')), 'disabled node should not flag: ${errs(issues)}'
-	assert !errs(issues).any(it.contains('allocates it no')), 'disabled node needs no allocation'
+	assert !issue_msgs(issues).any(it.contains('cluster range mismatch')), 'disabled node should not flag: ${issue_msgs(issues)}'
+	assert !issue_msgs(issues).any(it.contains('allocates it no')), 'disabled node needs no allocation'
 }
 
 // REQ-TOPO-001: an empty / typo'd system (no buses or nodes) is not a clean gate.
 fn test_empty_system_rejected() {
 	issues := validate_system(System{})
-	assert errs(issues).any(it.contains('no [bus.*] declared'))
-	assert errs(issues).any(it.contains('no [[node]] declared'))
+	assert issue_msgs(issues).any(it.contains('no [bus.*] declared'))
+	assert issue_msgs(issues).any(it.contains('no [[node]] declared'))
 }
 
 // REQ-TOPO-001: an unknown top-level section (e.g. a misspelled [[nodes]]).
 fn test_unknown_top_level_section_rejected() {
 	mut s := clean_system()
 	s.unknown_keys = ['nodes']
-	assert errs(validate_system(s)).any(it.contains('unknown top-level section "nodes"'))
+	assert issue_msgs(validate_system(s)).any(it.contains('unknown top-level section "nodes"'))
 }
 
 // REQ-TOPO-002: a named alive binding (a DBC message name) is NOT range/collision
@@ -699,7 +699,7 @@ fn test_disabled_node_no_nm_collision() {
 	mut s := clean_system()
 	s.nodes[1].nm = 0x11 // same as sysnode...
 	s.nodes[1].view.nm_enabled = false // ...but disabled -> non-participant, no collision
-	assert !errs(validate_system(s)).any(it.contains('NM id 0x11') && it.contains('shared')), 'disabled node should not collide'
+	assert !issue_msgs(validate_system(s)).any(it.contains('NM id 0x11') && it.contains('shared')), 'disabled node should not collide'
 }
 
 // REQ-TOPO-004: an EXPLICIT timeout_ms = 0 is preserved (not normalized to the
@@ -709,7 +709,7 @@ fn test_explicit_zero_timing_conflict() {
 	s.nodes[0].view.nm_timeout_ms = 0 // explicit 0
 	s.nodes[0].view.nm_has_timeout = true
 	// node 1 omits timeout -> loom2v default 300; 0 vs 300 conflict
-	assert errs(validate_system(s)).any(it.contains('timeout_ms mismatch') && it.contains('300')), 'explicit 0 vs default 300 must conflict'
+	assert issue_msgs(validate_system(s)).any(it.contains('timeout_ms mismatch') && it.contains('300')), 'explicit 0 vs default 300 must conflict'
 }
 
 // REQ-TOPO-005: a node matched to a system bus by INTERFACE, not the [bus] key —
@@ -717,7 +717,7 @@ fn test_explicit_zero_timing_conflict() {
 fn test_bus_matched_by_interface() {
 	mut s := clean_system()
 	s.nodes[0].view.local_buses = ['can1'] // its [bus].interface is can1, not can0
-	assert errs(validate_system(s)).any(it.contains('has no [bus.can0] interface')), 'membership is by interface'
+	assert issue_msgs(validate_system(s)).any(it.contains('has no [bus.can0] interface')), 'membership is by interface'
 }
 
 // REQ-TOPO-004: NM coherence scoped to the node's nm.bus — a gateway with
@@ -755,7 +755,7 @@ fn test_nm_bus_scoping() {
 		}
 	}
 	// the gateway (nm.bus=compute) must NOT be compared against edge's range
-	assert !errs(validate_system(s)).any(it.contains('cluster range mismatch')), 'nm.bus scopes coherence: ${errs(validate_system(s))}'
+	assert !issue_msgs(validate_system(s)).any(it.contains('cluster range mismatch')), 'nm.bus scopes coherence: ${issue_msgs(validate_system(s))}'
 }
 
 // --- codex #141 round-6 fixes ---
@@ -793,7 +793,7 @@ fn test_nm_bus_scoping_timing() {
 			nm_timeout_ms:  999 // a different timeout than the gateway's default
 		}
 	}
-	assert !errs(validate_system(s)).any(it.contains('timeout_ms mismatch')), 'nm.bus scopes timing: ${errs(validate_system(s))}'
+	assert !issue_msgs(validate_system(s)).any(it.contains('timeout_ms mismatch')), 'nm.bus scopes timing: ${issue_msgs(validate_system(s))}'
 }
 
 // REQ-TOPO-002/005: a non-threadx target disables NM (loom2v emits none), so the
@@ -831,14 +831,14 @@ kind = "baremetal"
 fn test_system_nm_out_of_range() {
 	mut s := clean_system()
 	s.nodes[0].nm_alloc_ok = false // system.toml nm was out of range (e.g. -1 or 0x100)
-	assert errs(validate_system(s)).any(it.contains('outside the 0..255 node-id range'))
+	assert issue_msgs(validate_system(s)).any(it.contains('outside the 0..255 node-id range'))
 }
 
 // REQ-TOPO-005: a local [nm] node outside 0..255 (loom2v rejects it).
 fn test_local_nm_node_out_of_range() {
 	mut s := clean_system()
 	s.nodes[0].view.nm_node_ok = false // e.g. node = -1 or node = 300
-	assert errs(validate_system(s)).any(it.contains('outside the 0..255 range loom2v requires'))
+	assert issue_msgs(validate_system(s)).any(it.contains('outside the 0..255 range loom2v requires'))
 }
 
 // --- codex #141 round-7 fixes ---
@@ -852,7 +852,7 @@ fn test_route_missing_endpoint() {
 		from:    'compute'
 		// no `to`
 	}
-	assert errs(validate_system(s)).any(it.contains('needs both `from` and `to`'))
+	assert issue_msgs(validate_system(s)).any(it.contains('needs both `from` and `to`'))
 }
 
 // REQ-TOPO-002: two active nodes naming the same alive DBC binding collide.
@@ -862,7 +862,7 @@ fn test_named_alive_binding_collision() {
 	s.nodes[0].view.alive_binding = 'AliveMsg'
 	s.nodes[1].view.has_alive = false
 	s.nodes[1].view.alive_binding = 'AliveMsg' // same message name
-	assert errs(validate_system(s)).any(it.contains('alive binding "AliveMsg"')
+	assert issue_msgs(validate_system(s)).any(it.contains('alive binding "AliveMsg"')
 		&& it.contains('resolves to one CAN id'))
 }
 
@@ -935,7 +935,7 @@ fn test_implicit_nm_bus_is_telemetry() {
 	}
 	// the gateway's NM runs on compute (its telemetry bus), so edge's different
 	// range must NOT clash with it
-	assert !errs(validate_system(s)).any(it.contains('cluster range mismatch')), 'implicit nm.bus = telemetry bus'
+	assert !issue_msgs(validate_system(s)).any(it.contains('cluster range mismatch')), 'implicit nm.bus = telemetry bus'
 }
 
 // parse_system + load_node round-trip on a written system.toml + node ecu.toml.
@@ -1124,8 +1124,8 @@ fn test_nm_bus_must_match_telemetry() {
 	s.nodes[0].view.has_telemetry = true
 	s.nodes[0].view.telem_bus = 'can0'
 	s.nodes[0].view.nm_bus = 'can1' // differs from the telemetry bus
-	assert errs(validate_system(s)).any(it.contains('[nm].bus "can1"')
-		&& it.contains('[telemetry].bus "can0"')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('[nm].bus "can1"')
+		&& it.contains('[telemetry].bus "can0"')), issue_msgs(validate_system(s)).str()
 }
 
 // REQ-TOPO-001: a local interface no system bus declares, carrying bus-facing
@@ -1134,8 +1134,8 @@ fn test_undeclared_interface_with_signals_is_error() {
 	mut s := clean_system()
 	s.nodes[0].view.local_buses = ['can0', 'can1'] // can1 is not a system bus
 	s.nodes[0].view.produces['can1'] = ['Extra'] // ...yet it transmits there
-	assert errs(validate_system(s)).any(it.contains('[bus.can1]')
-		&& it.contains('no system contract')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('[bus.can1]')
+		&& it.contains('no system contract')), issue_msgs(validate_system(s)).str()
 }
 
 // The per-node gate runs ecucheck via run_capture, which uses an ARGUMENT VECTOR
@@ -1174,8 +1174,8 @@ fn test_telemetry_id_collision_is_error() {
 	}
 	s.nodes[0].view.telem_id = 0x7e0
 	s.nodes[1].view.telem_id = 0x7e0 // same telemetry id on the same bus
-	assert errs(validate_system(s)).any(it.contains('telemetry id 0x7e0')
-		&& it.contains('single-writer')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('telemetry id 0x7e0')
+		&& it.contains('single-writer')), issue_msgs(validate_system(s)).str()
 }
 
 // REQ-TOPO-002: an OMITTED telemetry id defaults to 0 and CpuLoad is always sent,
@@ -1190,8 +1190,8 @@ fn test_omitted_telemetry_ids_collide_at_zero() {
 		s.nodes[i].view.nm_bus = 'can0'
 		s.nodes[i].view.telem_id = 0 // both omit -> effective 0
 	}
-	assert errs(validate_system(s)).any(it.contains('telemetry id 0x0')
-		&& it.contains('single-writer')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('telemetry id 0x0')
+		&& it.contains('single-writer')), issue_msgs(validate_system(s)).str()
 }
 
 // REQ-TOPO-004: a named [nm].alive binding whose bus has no DBC cannot be
@@ -1289,7 +1289,7 @@ fn test_undeclared_telemetry_interface_is_error() {
 	s.nodes[0].view.telem_bus = 'can9' // not a system bus interface
 	s.nodes[0].view.nm_bus = 'can9'
 	s.nodes[0].view.local_buses = ['can0', 'can9']
-	assert errs(validate_system(s)).any(it.contains('[bus.can9]') && it.contains('telemetry')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('[bus.can9]') && it.contains('telemetry')), issue_msgs(validate_system(s)).str()
 }
 
 // --- codex #141 round-12 fixes ---
@@ -1312,7 +1312,7 @@ fn test_composed_route_rejected() {
 		from:    'compute'
 		to:      'edge'
 	}
-	assert errs(validate_system(s)).any(it.contains('only generated in the dissolution model')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('only generated in the dissolution model')), issue_msgs(validate_system(s)).str()
 }
 
 // frame_route_system builds a 2-bus dissolved system with a gateway raw-forwarding
@@ -1369,7 +1369,7 @@ fn test_frame_route_identical_contract_ok() {
 	defer {
 		os.rmdir_all(dir) or {}
 	}
-	assert errs(check_route_dbc(s)).len == 0, errs(check_route_dbc(s)).str()
+	assert issue_msgs(check_route_dbc(s)).len == 0, issue_msgs(check_route_dbc(s)).str()
 }
 
 // REQ-TOPO-007: an EVENT frame (no GenMsgCycleTime) can't be raw-forwarded — under
@@ -1381,7 +1381,7 @@ fn test_frame_route_event_frame_rejected() {
 	defer {
 		os.rmdir_all(dir) or {}
 	}
-	assert errs(check_route_dbc(s)).any(it.contains('not cyclic')), errs(check_route_dbc(s)).str()
+	assert issue_msgs(check_route_dbc(s)).any(it.contains('not cyclic')), issue_msgs(check_route_dbc(s)).str()
 }
 
 // REQ-TOPO-007: a signal-semantics mismatch (differing factor => a different
@@ -1392,7 +1392,7 @@ fn test_frame_route_factor_mismatch_rejected() {
 	defer {
 		os.rmdir_all(dir) or {}
 	}
-	assert errs(check_route_dbc(s)).any(it.contains('factor') && it.contains('signal route')), errs(check_route_dbc(s)).str()
+	assert issue_msgs(check_route_dbc(s)).any(it.contains('factor') && it.contains('signal route')), issue_msgs(check_route_dbc(s)).str()
 }
 
 // REQ-TOPO-007: the destination bus must define the forwarded frame — else there is
@@ -1403,7 +1403,7 @@ fn test_frame_route_missing_on_dest_rejected() {
 	defer {
 		os.rmdir_all(dir) or {}
 	}
-	assert errs(check_route_dbc(s)).any(it.contains('not defined in destination')), errs(check_route_dbc(s)).str()
+	assert issue_msgs(check_route_dbc(s)).any(it.contains('not defined in destination')), issue_msgs(check_route_dbc(s)).str()
 }
 
 // REQ-TOPO-007: an EXTENDED-id frame CAN be raw-forwarded now (the driver Frame carries
@@ -1417,7 +1417,7 @@ fn test_frame_route_extended_id_matching_ok() {
 	defer {
 		os.rmdir_all(dir) or {}
 	}
-	assert errs(check_route_dbc(s)).len == 0, errs(check_route_dbc(s)).str()
+	assert issue_msgs(check_route_dbc(s)).len == 0, issue_msgs(check_route_dbc(s)).str()
 }
 
 // REQ-TOPO-007: a std<->ext width MISMATCH can't be raw-forwarded (the forward can't
@@ -1429,7 +1429,7 @@ fn test_frame_route_id_width_mismatch_rejected() {
 	defer {
 		os.rmdir_all(dir) or {}
 	}
-	assert errs(check_route_dbc(s)).any(it.contains('id width differs')), errs(check_route_dbc(s)).str()
+	assert issue_msgs(check_route_dbc(s)).any(it.contains('id width differs')), issue_msgs(check_route_dbc(s)).str()
 }
 
 // REQ-TOPO-007: an unflagged id above the 11-bit standard range can't be raw-forwarded
@@ -1441,7 +1441,7 @@ fn test_frame_route_id_above_standard_rejected() {
 	defer {
 		os.rmdir_all(dir) or {}
 	}
-	assert errs(check_route_dbc(s)).any(it.contains('standard range')), errs(check_route_dbc(s)).str()
+	assert issue_msgs(check_route_dbc(s)).any(it.contains('standard range')), issue_msgs(check_route_dbc(s)).str()
 }
 
 // REQ-TOPO-007: the two buses must share the fd mode — Channel.send picks classic vs
@@ -1454,7 +1454,7 @@ fn test_frame_route_fd_mismatch_rejected() {
 		os.rmdir_all(dir) or {}
 	}
 	s.buses[1].fd = true // edge is FD, compute is classic
-	assert errs(check_route_dbc(s)).any(it.contains('CAN-FD')), errs(check_route_dbc(s)).str()
+	assert issue_msgs(check_route_dbc(s)).any(it.contains('CAN-FD')), issue_msgs(check_route_dbc(s)).str()
 }
 
 // REQ-TOPO-001/007: a frame route carries EVERY signal of its frame, so it satisfies
@@ -1486,7 +1486,7 @@ fn test_frame_route_wrong_dest_sender_rejected() {
 	defer {
 		os.rmdir_all(dir) or {}
 	}
-	assert errs(check_route_dbc(s)).any(it.contains('not the gateway')), errs(check_route_dbc(s)).str()
+	assert issue_msgs(check_route_dbc(s)).any(it.contains('not the gateway')), issue_msgs(check_route_dbc(s)).str()
 }
 
 // REQ-TOPO-012: a raw frame route is the SOLE writer of the PDU — two raw routes onto
@@ -1504,7 +1504,7 @@ fn test_two_raw_routes_same_gateway_collide() {
 		from:    'compute'
 		to:      'edge'
 	}
-	assert errs(check_routes(s, true)).any(it.contains('sole writer')), errs(check_routes(s,
+	assert issue_msgs(check_routes(s, true)).any(it.contains('sole writer')), issue_msgs(check_routes(s,
 		true)).str()
 }
 
@@ -1517,7 +1517,7 @@ fn test_frame_route_subtick_cadence_rejected() {
 	defer {
 		os.rmdir_all(dir) or {}
 	}
-	assert errs(check_route_dbc(s)).any(it.contains('below the 10 ms')), errs(check_route_dbc(s)).str()
+	assert issue_msgs(check_route_dbc(s)).any(it.contains('below the 10 ms')), issue_msgs(check_route_dbc(s)).str()
 }
 
 // REQ-TOPO-007: a multiplexed frame is not raw-forwarded (candb can't model SG_MUL_VAL_).
@@ -1527,7 +1527,7 @@ fn test_frame_route_multiplexed_rejected() {
 	defer {
 		os.rmdir_all(dir) or {}
 	}
-	assert errs(check_route_dbc(s)).any(it.contains('multiplexed')), errs(check_route_dbc(s)).str()
+	assert issue_msgs(check_route_dbc(s)).any(it.contains('multiplexed')), issue_msgs(check_route_dbc(s)).str()
 }
 
 // REQ-TOPO-007: a duplicate SG_ name makes the contract comparison ambiguous.
@@ -1537,7 +1537,7 @@ fn test_frame_route_duplicate_signal_rejected() {
 	defer {
 		os.rmdir_all(dir) or {}
 	}
-	assert errs(check_route_dbc(s)).any(it.contains('more than once')), errs(check_route_dbc(s)).str()
+	assert issue_msgs(check_route_dbc(s)).any(it.contains('more than once')), issue_msgs(check_route_dbc(s)).str()
 }
 
 // REQ-TOPO-007: raw forwarding keeps the SOURCE rate, so the two buses must agree on
@@ -1549,7 +1549,7 @@ fn test_frame_route_cadence_mismatch_rejected() {
 	defer {
 		os.rmdir_all(dir) or {}
 	}
-	assert errs(check_route_dbc(s)).any(it.contains('cadence differs')), errs(check_route_dbc(s)).str()
+	assert issue_msgs(check_route_dbc(s)).any(it.contains('cadence differs')), issue_msgs(check_route_dbc(s)).str()
 }
 
 // REQ-TOPO-002: a telemetry id equal to ANOTHER node's alive id collides on the
@@ -1567,8 +1567,8 @@ fn test_telemetry_id_aliases_other_node_alive() {
 	s.nodes[0].view.telem_id = 0x513 // == node 1's alive id
 	// node 1 is an active NM participant with alive 0x513 (from clean_system)
 	s.nodes[1].view.nm_bus = 'can0'
-	assert errs(validate_system(s)).any(it.contains('telemetry id 0x513')
-		&& it.contains('NM alive id of "domain"')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('telemetry id 0x513')
+		&& it.contains('NM alive id of "domain"')), issue_msgs(validate_system(s)).str()
 }
 
 // REQ-TOPO-002: a threadx node's exec-hook trace record frame (default 0x7e5)
@@ -1585,8 +1585,8 @@ fn test_trace_record_id_collision_is_error() {
 		s.nodes[i].view.trace_on = true
 		s.nodes[i].view.trace_record_id = 0x7e5 // both default -> collide
 	}
-	assert errs(validate_system(s)).any(it.contains('trace record id 0x7e5')
-		&& it.contains('single-writer')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('trace record id 0x7e5')
+		&& it.contains('single-writer')), issue_msgs(validate_system(s)).str()
 }
 
 // REQ-TOPO-004: a DISABLED [nm] block with a named alive binding needs no DBC —
@@ -1650,8 +1650,8 @@ fn test_isotp_id_collision_is_error() {
 		iface: 'can0'
 		rx_id: 0x700
 	}] // same on-wire diag id
-	assert errs(validate_system(s)).any(it.contains('[isotp] diagnostic id 0x700')
-		&& it.contains('collides')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('[isotp] diagnostic id 0x700')
+		&& it.contains('collides')), issue_msgs(validate_system(s)).str()
 }
 
 // REQ-TOPO-002: a host (non-threadx) node with telemetry still transmits CpuLoad,
@@ -1664,8 +1664,8 @@ fn test_host_telemetry_id_collision() {
 		s.nodes[i].view.telem_bus = 'can0'
 		s.nodes[i].view.telem_id = 0x7e0 // same id
 	}
-	assert errs(validate_system(s)).any(it.contains('telemetry id 0x7e0')
-		&& it.contains('single-writer')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('telemetry id 0x7e0')
+		&& it.contains('single-writer')), issue_msgs(validate_system(s)).str()
 }
 
 // REQ-TOPO-002: a threadx node's shell.out response frame (default 0x7f1) is a
@@ -1682,8 +1682,8 @@ fn test_shell_out_id_collision_is_error() {
 		s.nodes[i].view.shell_on = true
 		s.nodes[i].view.shell_out_id = 0x7f1 // both default -> collide
 	}
-	assert errs(validate_system(s)).any(it.contains('shell out id 0x7f1')
-		&& it.contains('single-writer')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('shell out id 0x7f1')
+		&& it.contains('single-writer')), issue_msgs(validate_system(s)).str()
 }
 
 // --- codex #141 round-14 fixes ---
@@ -1703,8 +1703,8 @@ fn test_trace_rsp_id_collision() {
 		s.nodes[i].view.trace_record_id = u32(0x7b0 + i) // distinct records
 		s.nodes[i].view.trace_rsp_id = 0x7e3 // same rsp -> collide
 	}
-	assert errs(validate_system(s)).any(it.contains('trace rsp id 0x7e3')
-		&& it.contains('single-writer')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('trace rsp id 0x7e3')
+		&& it.contains('single-writer')), issue_msgs(validate_system(s)).str()
 }
 
 // REQ-TOPO-002: a host node can trace on [trace].bus with telemetry DISABLED, so
@@ -1722,8 +1722,8 @@ fn test_host_trace_without_telemetry_collision() {
 		s.nodes[i].view.produces = map[string][]string{}
 		s.nodes[i].view.consumes = map[string][]string{}
 	}
-	assert errs(validate_system(s)).any(it.contains('trace record id 0x7e5')
-		&& it.contains('single-writer')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('trace record id 0x7e5')
+		&& it.contains('single-writer')), issue_msgs(validate_system(s)).str()
 }
 
 // --- codex #141 round-15 fixes ---
@@ -1772,7 +1772,7 @@ BO_ 288 TraceRecord: 8 a
 		]
 	}
 	// the bound record resolves to 0x120 (=TraceRecord) but must NOT be an alias error
-	assert !errs(check_telemetry_frames(s)).any(it.contains('aliases DBC application frame')), errs(check_telemetry_frames(s)).str()
+	assert !issue_msgs(check_telemetry_frames(s)).any(it.contains('aliases DBC application frame')), issue_msgs(check_telemetry_frames(s)).str()
 }
 
 // REQ-TOPO-002: a node's module RECEIVE id (trace cmd, default 0x7e2) is reserved
@@ -1797,8 +1797,8 @@ fn test_module_rx_id_reserved() {
 	s.nodes[1].view.telem_bus = 'can0'
 	s.nodes[1].view.nm_bus = 'can0'
 	s.nodes[1].view.telem_id = 0x7e2 // transmits at node 0's reserved trace cmd id
-	assert errs(validate_system(s)).any(it.contains('telemetry id 0x7e2')
-		&& it.contains('trace cmd (rx) id of "sysnode"')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('telemetry id 0x7e2')
+		&& it.contains('trace cmd (rx) id of "sysnode"')), issue_msgs(validate_system(s)).str()
 }
 
 // REQ-TOPO-002: a named binding resolves the way loom2v does (snake-normalized),
@@ -1859,8 +1859,8 @@ BO_ 300 TraceRecord: 8 a
 			},
 		]
 	}
-	assert errs(check_telemetry_frames(s)).any(it.contains('trace record id 0x12c')
-		&& it.contains('single-writer')), errs(check_telemetry_frames(s)).str()
+	assert issue_msgs(check_telemetry_frames(s)).any(it.contains('trace record id 0x12c')
+		&& it.contains('single-writer')), issue_msgs(check_telemetry_frames(s)).str()
 }
 
 // REQ-TOPO-004: an active NM alive id above 0x7ff is masked to 11 bits by the
@@ -1873,7 +1873,7 @@ fn test_active_nm_alive_over_11bit_is_error() {
 	s.nodes[1].view.peers_lo = 0x800
 	s.nodes[1].view.peers_hi = 0x83f
 	s.nodes[1].view.alive = 0x813
-	assert errs(validate_system(s)).any(it.contains('exceeds 0x7ff') && it.contains('11-bit')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('exceeds 0x7ff') && it.contains('11-bit')), issue_msgs(validate_system(s)).str()
 }
 
 // --- codex #141 round-16 fixes ---
@@ -1885,8 +1885,8 @@ fn test_fd_mode_mismatch_is_error() {
 	s.nodes[0].view.local_bus_fd = {
 		'can0': true
 	} // but the node opens it as FD
-	assert errs(validate_system(s)).any(it.contains('fd = true')
-		&& it.contains('one CAN mode per wire')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('fd = true')
+		&& it.contains('one CAN mode per wire')), issue_msgs(validate_system(s)).str()
 }
 
 // REQ-TOPO-002: shell.fc (default 0x7f2) is a reserved RX id — another node
@@ -1909,8 +1909,8 @@ fn test_shell_fc_id_reserved() {
 	s.nodes[1].view.telem_bus = 'can0'
 	s.nodes[1].view.nm_bus = 'can0'
 	s.nodes[1].view.telem_id = 0x7f2 // transmits at node 0's reserved shell fc id
-	assert errs(validate_system(s)).any(it.contains('telemetry id 0x7f2')
-		&& it.contains('shell fc (rx) id of "sysnode"')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('telemetry id 0x7f2')
+		&& it.contains('shell fc (rx) id of "sysnode"')), issue_msgs(validate_system(s)).str()
 }
 
 // REQ-TOPO-002: a named module binding that resolves to no DBC message fails
@@ -1956,8 +1956,8 @@ BO_ 288 Other: 8 a
 			},
 		]
 	}
-	assert errs(validate_system(s)).any(it.contains('NoSuchMessage')
-		&& it.contains('does not exist')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('NoSuchMessage')
+		&& it.contains('does not exist')), issue_msgs(validate_system(s)).str()
 }
 
 // REQ-TOPO-002: a MULTI-partition host node builds WITHOUT trace, so its trace
@@ -1976,7 +1976,7 @@ fn test_multipartition_host_trace_not_reserved() {
 		s.nodes[i].view.produces = map[string][]string{}
 		s.nodes[i].view.consumes = map[string][]string{}
 	}
-	assert !errs(validate_system(s)).any(it.contains('trace record id 0x7e5')), errs(validate_system(s)).str()
+	assert !issue_msgs(validate_system(s)).any(it.contains('trace record id 0x7e5')), issue_msgs(validate_system(s)).str()
 }
 
 // --- codex #141 round-17: run the real loom2v per node ---
@@ -2040,7 +2040,7 @@ trace = 1
 	}
 	mut sys := parse_system(os.join_path(dir, 'system.toml')) or { panic(err) }
 	sys.load_nodes()
-	assert errs(validate_system(sys)).any(it.contains('not generatable')), errs(validate_system(sys)).str()
+	assert issue_msgs(validate_system(sys)).any(it.contains('not generatable')), issue_msgs(validate_system(sys)).str()
 }
 
 // --- codex #141 round-18 fixes ---
@@ -2067,7 +2067,7 @@ fn test_unbound_dump_fc_not_reserved() {
 	s.nodes[1].view.telem_bus = 'can0'
 	s.nodes[1].view.nm_bus = 'can0'
 	s.nodes[1].view.telem_id = 0x7e6 // == node 0's unbound dump_fc id -> should be OK
-	assert !errs(validate_system(s)).any(it.contains('0x7e6')), errs(validate_system(s)).str()
+	assert !issue_msgs(validate_system(s)).any(it.contains('0x7e6')), issue_msgs(validate_system(s)).str()
 }
 
 // REQ-TOPO-002: bound dump_fc IS reserved.
@@ -2091,7 +2091,7 @@ fn test_bound_dump_fc_reserved() {
 	s.nodes[1].view.telem_bus = 'can0'
 	s.nodes[1].view.nm_bus = 'can0'
 	s.nodes[1].view.telem_id = 0x7e6 // collides with node 0's bound dump_fc rx id
-	assert errs(validate_system(s)).any(it.contains('telemetry id 0x7e6') && it.contains('dump_fc')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('telemetry id 0x7e6') && it.contains('dump_fc')), issue_msgs(validate_system(s)).str()
 }
 
 // REQ-TOPO-002: a single-partition HOST trace runner sends inline CpuLoad only,
@@ -2114,7 +2114,7 @@ fn test_host_trace_detail_not_counted() {
 	s.nodes[1].view.is_threadx = false
 	s.nodes[1].view.has_telemetry = true
 	s.nodes[1].view.telem_bus = 'can0'
-	assert !errs(validate_system(s)).any(it.contains('0x7a1')), errs(validate_system(s)).str()
+	assert !issue_msgs(validate_system(s)).any(it.contains('0x7a1')), issue_msgs(validate_system(s)).str()
 }
 
 // P3c-0: a traced BARE-METAL node keeps its own superloop, LoadDetail included — unlike the
@@ -2141,7 +2141,7 @@ fn test_baremetal_trace_detail_is_counted() {
 	s.nodes[1].view.is_threadx = false
 	s.nodes[1].view.has_telemetry = true
 	s.nodes[1].view.telem_bus = 'can0'
-	assert errs(validate_system(s)).any(it.contains('0x7a1')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('0x7a1')), issue_msgs(validate_system(s)).str()
 }
 
 // ...and syscheck agrees with loom2v about what the superloop refuses (the shared shape policy):
@@ -2208,8 +2208,8 @@ BO_ 1312 SpeedFrame: 8 a
 			},
 		]
 	}
-	assert errs(check_telemetry_frames(s)).any(it.contains('SpeedFrame')
-		&& it.contains('NM peer range')), errs(check_telemetry_frames(s)).str()
+	assert issue_msgs(check_telemetry_frames(s)).any(it.contains('SpeedFrame')
+		&& it.contains('NM peer range')), issue_msgs(check_telemetry_frames(s)).str()
 }
 
 // --- codex #141 round-20 fixes ---
@@ -2259,8 +2259,8 @@ BO_ 1297 AliveMsg: 8 a
 			},
 		]
 	}
-	assert !errs(check_telemetry_frames(s)).any(it.contains('AliveMsg')
-		&& it.contains('NM peer range')), errs(check_telemetry_frames(s)).str()
+	assert !issue_msgs(check_telemetry_frames(s)).any(it.contains('AliveMsg')
+		&& it.contains('NM peer range')), issue_msgs(check_telemetry_frames(s)).str()
 }
 
 // REQ-TOPO-001: two differently-NAMED DBC messages at the SAME CAN id are one wire
@@ -2316,8 +2316,8 @@ BO_ 288 FrameB: 8 b
 			},
 		]
 	}
-	assert errs(check_frame_single_writer(s)).any(it.contains('one frame owner')
-		&& it.contains('288')), errs(check_frame_single_writer(s)).str()
+	assert issue_msgs(check_frame_single_writer(s)).any(it.contains('one frame owner')
+		&& it.contains('288')), issue_msgs(check_frame_single_writer(s)).str()
 }
 
 // REQ-TOPO-002: a host node with a node-local [[route]] builds WITHOUT trace
@@ -2338,7 +2338,7 @@ fn test_a_routed_node_without_dump_fc_reserves_nothing() {
 	// A bridged node traces TWO lanes (the bridge and its app partition), and loom2v refuses
 	// that without dump_fc — only the ISO-TP block path carries a per-window header. So no
 	// runner exists and syscheck must not reserve ids for one (emb#191 P3b).
-	assert !errs(validate_system(s)).any(it.contains('trace record id 0x7e5')), errs(validate_system(s)).str()
+	assert !issue_msgs(validate_system(s)).any(it.contains('trace record id 0x7e5')), issue_msgs(validate_system(s)).str()
 }
 
 // ...and WITH dump_fc it is a real bridge-owner runner, so the ids are reserved and two nodes
@@ -2357,7 +2357,7 @@ fn test_a_routed_node_with_dump_fc_reserves_its_ids() {
 		s.nodes[i].view.produces = map[string][]string{}
 		s.nodes[i].view.consumes = map[string][]string{}
 	}
-	assert errs(validate_system(s)).any(it.contains('trace record id 0x7e5')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('trace record id 0x7e5')), issue_msgs(validate_system(s)).str()
 }
 
 // --- codex #141 round-21 fixes ---
@@ -2407,8 +2407,8 @@ BO_ 1297 SpeedFrame: 8 a
 		]
 	}
 	// SpeedFrame at 0x511 is a real app frame colliding with the numeric alive id
-	assert errs(check_telemetry_frames(s)).any(it.contains('SpeedFrame')
-		&& it.contains('NM peer range')), errs(check_telemetry_frames(s)).str()
+	assert issue_msgs(check_telemetry_frames(s)).any(it.contains('SpeedFrame')
+		&& it.contains('NM peer range')), issue_msgs(check_telemetry_frames(s)).str()
 }
 
 // REQ-TOPO-003: a declared bus DBC that cannot be parsed is a system error, not a
@@ -2438,8 +2438,8 @@ fn test_unreadable_bus_dbc_is_error() {
 			},
 		]
 	}
-	assert errs(validate_system(s)).any(it.contains('cannot load declared DBC')
-		&& it.contains('missing.dbc')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('cannot load declared DBC')
+		&& it.contains('missing.dbc')), issue_msgs(validate_system(s)).str()
 }
 
 // --- codex #141 round-22 fixes ---
@@ -2462,8 +2462,8 @@ fn test_isotp_id_zero_collides() {
 			tx_id: 0x702
 		},
 	] // both rx at 0
-	assert errs(validate_system(s)).any(it.contains('[isotp] diagnostic id 0x0')
-		&& it.contains('collides')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('[isotp] diagnostic id 0x0')
+		&& it.contains('collides')), issue_msgs(validate_system(s)).str()
 }
 
 // REQ-TOPO-002: an ISO-TP rx id is reserved on its bus — a telemetry frame at the
@@ -2482,8 +2482,8 @@ fn test_isotp_rx_reserved_vs_telemetry() {
 	s.nodes[1].view.has_telemetry = true
 	s.nodes[1].view.telem_bus = 'can0'
 	s.nodes[1].view.telem_id = 0x7e0
-	assert errs(validate_system(s)).any(it.contains('telemetry id 0x7e0')
-		&& it.contains('isotp rx (rx) id of "sysnode"')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('telemetry id 0x7e0')
+		&& it.contains('isotp rx (rx) id of "sysnode"')), issue_msgs(validate_system(s)).str()
 }
 
 // REQ-TOPO-002: an ISO-TP FUNCTIONAL id is reserved against transmitters too (a frame there
@@ -2500,12 +2500,12 @@ fn test_isotp_functional_id_reserved_but_shared() {
 			},
 		]
 	}
-	assert !errs(validate_system(s)).any(it.contains('0x7df')), errs(validate_system(s)).str()
+	assert !issue_msgs(validate_system(s)).any(it.contains('0x7df')), issue_msgs(validate_system(s)).str()
 	s.nodes[1].view.has_telemetry = true
 	s.nodes[1].view.telem_bus = 'can0'
 	s.nodes[1].view.telem_id = 0x7df
-	assert errs(validate_system(s)).any(it.contains('telemetry id 0x7df')
-		&& it.contains('isotp functional (rx) id')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('telemetry id 0x7df')
+		&& it.contains('isotp functional (rx) id')), issue_msgs(validate_system(s)).str()
 }
 
 // REQ-TOPO-002: two nodes explicitly allocated trace = 0 share a trace id (0 is a
@@ -2516,7 +2516,7 @@ fn test_trace_id_zero_collides() {
 	s.nodes[0].has_trace = true
 	s.nodes[1].trace = 0
 	s.nodes[1].has_trace = true
-	assert errs(validate_system(s)).any(it.contains('trace node id 0') && it.contains('shared')), errs(validate_system(s)).str()
+	assert issue_msgs(validate_system(s)).any(it.contains('trace node id 0') && it.contains('shared')), issue_msgs(validate_system(s)).str()
 }
 
 // --- codex #141 round-23 fixes ---
@@ -2580,8 +2580,8 @@ BO_ 2018 SpeedFrame: 8 b
 			},
 		]
 	}
-	assert errs(check_telemetry_frames(s)).any(it.contains('application frame "SpeedFrame"')
-		&& it.contains('trace cmd (rx) id of "tracer"')), errs(check_telemetry_frames(s)).str()
+	assert issue_msgs(check_telemetry_frames(s)).any(it.contains('application frame "SpeedFrame"')
+		&& it.contains('trace cmd (rx) id of "tracer"')), issue_msgs(check_telemetry_frames(s)).str()
 }
 
 // REQ-TOPO-002: a host node with ZERO partitions gets no trace (loom2v trace_host
@@ -2598,7 +2598,7 @@ fn test_zero_partition_host_no_trace() {
 		s.nodes[i].view.produces = map[string][]string{}
 		s.nodes[i].view.consumes = map[string][]string{}
 	}
-	assert !errs(validate_system(s)).any(it.contains('trace record id 0x7e5')), errs(validate_system(s)).str()
+	assert !issue_msgs(validate_system(s)).any(it.contains('trace record id 0x7e5')), issue_msgs(validate_system(s)).str()
 }
 
 // --- codex #141 round-24 fixes ---
@@ -2765,7 +2765,7 @@ fn test_dbc_ambiguous_signal_name() {
 	// "Speed" appears in BOTH SpeedFrame and OtherFrame
 	amb := 'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 a\n SG_ Speed : 0|16@1+ (1,0) [0|65535] "" b\nBO_ 290 OtherFrame: 8 a\n SG_ Speed : 0|16@1+ (1,0) [0|65535] "" b\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
 	s := dissolved_with_dbc(dir, amb)
-	assert errs(check_dbc_conformance(s)).any(it.contains('appears in 2 frames'))
+	assert issue_msgs(check_dbc_conformance(s)).any(it.contains('appears in 2 frames'))
 }
 
 fn test_dbc_conformance_clean() {
@@ -2775,7 +2775,7 @@ fn test_dbc_conformance_clean() {
 	}
 	s := dissolved_with_dbc(dir, good_dbc)
 	issues := check_dbc_conformance(s)
-	assert errs(issues).len == 0, 'clean DBC flagged: ${errs(issues)}'
+	assert issue_msgs(issues).len == 0, 'clean DBC flagged: ${issue_msgs(issues)}'
 }
 
 // REQ-TOPO-003: a signal whose fields overflow the DBC frame's payload.
@@ -2797,7 +2797,7 @@ fn test_dbc_fields_overflow() {
 		'h': 'u64'
 		'i': 'u64'
 	}
-	assert errs(check_dbc_conformance(s)).any(it.contains('need') && it.contains('only 8 bytes'))
+	assert issue_msgs(check_dbc_conformance(s)).any(it.contains('need') && it.contains('only 8 bytes'))
 }
 
 // REQ-TOPO-003: an application DBC frame id inside the NM peer range would be
@@ -2810,7 +2810,7 @@ fn test_dbc_frame_id_in_nm_range() {
 	// SpeedFrame id 0x510 falls in the cluster's peers range [0x500,0x53f]
 	bad := 'VERSION ""\nBU_: a b\nBO_ 1296 SpeedFrame: 8 a\n SG_ Speed : 0|16@1+ (1,0) [0|65535] "" b\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
 	s := dissolved_with_dbc(dir, bad) // clean_dissolved's bus has peers [0x500,0x53f]
-	assert errs(check_dbc_conformance(s)).any(it.contains('falls in the NM peer range'))
+	assert issue_msgs(check_dbc_conformance(s)).any(it.contains('falls in the NM peer range'))
 }
 
 // REQ-TOPO-003: a signal whose frame is not defined in the bus DBC.
@@ -2822,7 +2822,7 @@ fn test_dbc_frame_missing() {
 	// DBC has only SpeedFrame; RpmFrame is absent
 	s := dissolved_with_dbc(dir,
 		'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 a\n SG_ Speed : 0|16@1+ (1,0) [0|65535] "" b\n')
-	assert errs(check_dbc_conformance(s)).any(it.contains('frame "RpmFrame" is not defined'))
+	assert issue_msgs(check_dbc_conformance(s)).any(it.contains('frame "RpmFrame" is not defined'))
 }
 
 // REQ-TOPO-003: a multiplexed DBC SG_ has no codec support in this model.
@@ -2834,7 +2834,7 @@ fn test_dbc_multiplexed_signal_rejected() {
 	// Speed is multiplexed (m0) in SpeedFrame
 	mux := 'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 a\n SG_ Mode M : 16|8@1+ (1,0) [0|255] "" b\n SG_ Speed m0 : 0|16@1+ (1,0) [0|65535] "" b\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
 	s := dissolved_with_dbc(dir, mux)
-	assert errs(check_dbc_conformance(s)).any(it.contains('is multiplexed'))
+	assert issue_msgs(check_dbc_conformance(s)).any(it.contains('is multiplexed'))
 }
 
 // REQ-TOPO-003: the DBC transmitter disagreeing with the declared producer.
@@ -2846,7 +2846,7 @@ fn test_dbc_sender_mismatch() {
 	// SpeedFrame sender is 'b' in the DBC but producer is 'a' in system.toml
 	bad := 'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 b\n SG_ Speed : 0|16@1+ (1,0) [0|65535] "" a\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
 	s := dissolved_with_dbc(dir, bad)
-	assert errs(check_dbc_conformance(s)).any(it.contains('transmitted by "b"')
+	assert issue_msgs(check_dbc_conformance(s)).any(it.contains('transmitted by "b"')
 		&& it.contains('producer "a"'))
 }
 
@@ -2862,7 +2862,7 @@ fn test_dbc_sender_not_in_bu() {
 	// SpeedFrame sender 'a' still matches producer 'a', but BU_ lists only 'b'.
 	bad := 'VERSION ""\nBU_: b\nBO_ 288 SpeedFrame: 8 a\n SG_ Speed : 0|16@1+ (1,0) [0|65535] "" b\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" b\n'
 	s := dissolved_with_dbc(dir, bad)
-	assert errs(check_dbc_conformance(s)).any(it.contains('transmitted by "a"')
+	assert issue_msgs(check_dbc_conformance(s)).any(it.contains('transmitted by "a"')
 		&& it.contains('BU_ list'))
 }
 
@@ -2878,7 +2878,7 @@ fn test_dbc_receiver_not_in_bu() {
 	// Speed's receiver 'z' is in no BU_ entry (BU_ lists a b); senders are valid.
 	bad := 'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 a\n SG_ Speed : 0|16@1+ (1,0) [0|65535] "" z\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
 	s := dissolved_with_dbc(dir, bad)
-	assert errs(check_dbc_conformance(s)).any(it.contains('received by "z"')
+	assert issue_msgs(check_dbc_conformance(s)).any(it.contains('received by "z"')
 		&& it.contains('BU_ list'))
 }
 
@@ -2891,7 +2891,7 @@ fn test_dbc_signal_not_in_frame() {
 	// SpeedFrame carries SG_ "Velocity", not "Speed"
 	bad := 'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 a\n SG_ Velocity : 0|16@1+ (1,0) [0|65535] "" b\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
 	s := dissolved_with_dbc(dir, bad)
-	assert errs(check_dbc_conformance(s)).any(it.contains('has no SG_ named "Speed"'))
+	assert issue_msgs(check_dbc_conformance(s)).any(it.contains('has no SG_ named "Speed"'))
 }
 
 // REQ-TOPO-003: a signal whose field width disagrees with the DBC SG_ width.
@@ -2903,7 +2903,7 @@ fn test_dbc_signal_width_mismatch() {
 	// Speed's field is u16 (16 bits) but the DBC SG_ is 8 bits
 	bad := 'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 a\n SG_ Speed : 0|8@1+ (1,0) [0|255] "" b\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
 	s := dissolved_with_dbc(dir, bad)
-	assert errs(check_dbc_conformance(s)).any(it.contains('16 bits') && it.contains('8 bits'))
+	assert issue_msgs(check_dbc_conformance(s)).any(it.contains('16 bits') && it.contains('8 bits'))
 }
 
 // REQ-TOPO-003: a u16 field on a SIGNED DBC SG_ (or vice versa).
@@ -2915,7 +2915,7 @@ fn test_dbc_signedness_mismatch() {
 	// SpeedFrame's SG_ is SIGNED (@1-) but the field is u16
 	bad := 'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 a\n SG_ Speed : 0|16@1- (1,0) [0|65535] "" b\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
 	s := dissolved_with_dbc(dir, bad)
-	assert errs(check_dbc_conformance(s)).any(it.contains('field is unsigned but DBC SG_')
+	assert issue_msgs(check_dbc_conformance(s)).any(it.contains('field is unsigned but DBC SG_')
 		&& it.contains('signed'))
 }
 
@@ -2924,19 +2924,19 @@ fn test_dbc_signedness_mismatch() {
 fn test_dissolved_alive_out_of_range() {
 	mut s := clean_dissolved()
 	s.nodes[0].nm = 0x40 // 0x500 + 0x40 = 0x540, outside [0x500,0x53f]
-	assert errs(validate_system_gen(s)).any(it.contains('outside the cluster range'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('outside the cluster range'))
 }
 
 // REQ-TOPO-003: a bus carrying cross-node signals must declare a DBC.
 fn test_dissolved_bus_without_dbc() {
 	mut s := clean_dissolved()
 	s.buses[0].dbc = '' // no DBC, but it carries Speed/Rpm
-	assert errs(check_dbc_conformance(s)).any(it.contains('carries cross-node signals but declares no `dbc`'))
+	assert issue_msgs(check_dbc_conformance(s)).any(it.contains('carries cross-node signals but declares no `dbc`'))
 }
 
 fn test_dissolved_clean() {
 	issues := validate_system_gen(clean_dissolved())
-	assert errs(issues).len == 0, 'clean dissolved system flagged: ${errs(issues)}'
+	assert issue_msgs(issues).len == 0, 'clean dissolved system flagged: ${issue_msgs(issues)}'
 }
 
 // REQ-TOPO-001: a consumer that reads a signal but isn't on its bus.
@@ -2947,7 +2947,7 @@ fn test_dissolved_consumer_off_bus() {
 		interface: 'can1'
 	}
 	s.nodes[1].buses = ['edge'] // b reads Speed (on compute) but sits on edge
-	assert errs(validate_system_gen(s)).any(it.contains('consumer "b"')
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('consumer "b"')
 		&& it.contains('not on its bus'))
 }
 
@@ -2958,7 +2958,7 @@ fn test_dissolved_cross_partition_reader() {
 	s.nodes[1].view.read_partitions = {
 		'Speed': ['ctlA', 'ctlB']
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('read from 2 partitions'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('read from 2 partitions'))
 }
 
 // REQ-TOPO-003: a bus DBC with two BO_ sharing one CAN id is ambiguous — the
@@ -2984,7 +2984,7 @@ BO_ 289 RpmFrame: 8 b
  SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a
 '
 	s := dissolved_with_dbc(dir, dup)
-	assert errs(check_dbc_conformance(s)).any(it.contains('share CAN id 0x120')), errs(check_dbc_conformance(s)).str()
+	assert issue_msgs(check_dbc_conformance(s)).any(it.contains('share CAN id 0x120')), issue_msgs(check_dbc_conformance(s)).str()
 }
 
 // REQ-TOPO-001: a cross-node signal declared twice.
@@ -2996,7 +2996,7 @@ fn test_dissolved_duplicate_signal_name() {
 		bus:      'compute'
 		frame:    'SpeedFrame'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('declared more than once'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('declared more than once'))
 }
 
 // REQ-TOPO-001: two signals sharing a frame disagree on cycle_ms.
@@ -3010,7 +3010,7 @@ fn test_dissolved_frame_cycle_conflict() {
 	s.signals[1].cycle_ms = 50
 	s.nodes[0].view.fb_writes = ['Speed', 'Rpm'] // a produces both
 	s.nodes[1].view.fb_writes = []
-	assert errs(validate_system_gen(s)).any(it.contains('disagree on cycle'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('disagree on cycle'))
 }
 
 // REQ-TOPO-001: a shared frame where one signal omits cycle_ms (defaults to 100)
@@ -3024,7 +3024,7 @@ fn test_dissolved_frame_effective_cycle_conflict() {
 	s.signals[1].cycle_ms = 50
 	s.nodes[0].view.fb_writes = ['Speed', 'Rpm']
 	s.nodes[1].view.fb_writes = []
-	assert errs(validate_system_gen(s)).any(it.contains('disagree on cycle')
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('disagree on cycle')
 		&& it.contains('effective'))
 }
 
@@ -3032,14 +3032,14 @@ fn test_dissolved_frame_effective_cycle_conflict() {
 fn test_dissolved_frame_owner_collision() {
 	mut s := clean_dissolved()
 	s.signals[1].frame = 'SpeedFrame' // Rpm(prod b) shares SpeedFrame with Speed(prod a)
-	assert errs(validate_system_gen(s)).any(it.contains('one frame owner per bus'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('one frame owner per bus'))
 }
 
 // REQ-TOPO-004: a host (non-threadx) node on an NM cluster gets a dead [nm].
 fn test_dissolved_host_node_nm_dead() {
 	mut s := clean_dissolved()
 	s.nodes[0].view.is_threadx = false // a host node
-	assert errs(validate_system_gen(s)).any(it.contains('not a threadx target')
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('not a threadx target')
 		&& it.contains('no runtime'))
 }
 
@@ -3052,7 +3052,7 @@ fn test_dissolved_multibus_nongateway_rejected() {
 		interface: 'can1'
 	}
 	s.nodes[0].buses = ['compute', 'edge']
-	assert errs(validate_system_gen(s)).any(it.contains('gateways no route'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('gateways no route'))
 }
 
 // REQ-TOPO-006: a multi-bus node IS accepted when it is a declared route gateway
@@ -3082,7 +3082,7 @@ fn test_dissolved_multibus_gateway_accepted() {
 		from:    'compute'
 		to:      'edge'
 	}
-	e := errs(validate_system_gen(s))
+	e := issue_msgs(validate_system_gen(s))
 	assert !e.any(it.contains('gateways no route')), 'a route gateway is allowed multi-bus: ${e}'
 	assert !e.any(it.contains('exactly one bus')), e.str()
 }
@@ -3113,7 +3113,7 @@ fn test_route_dest_double_writer_rejected() {
 		from:    'compute'
 		to:      'edge'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('single writer')
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('single writer')
 		|| it.contains('single-writer') || it.contains('one writer'))
 }
 
@@ -3144,7 +3144,7 @@ fn test_gateway_with_system_fb_rejected() {
 		from:    'compute'
 		to:      'edge'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('gateway "gw"')
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('gateway "gw"')
 		&& it.contains('may only route'))
 }
 
@@ -3187,7 +3187,7 @@ fn test_route_dest_width_transcode_accepted() {
 		from:    'compute'
 		to:      'edge'
 	}
-	assert !errs(validate_system_gen(s)).any(it.contains('bits but destination DBC')), errs(validate_system_gen(s)).str()
+	assert !issue_msgs(validate_system_gen(s)).any(it.contains('bits but destination DBC')), issue_msgs(validate_system_gen(s)).str()
 }
 
 // REQ-TOPO-003 (codex #164 r7): a destination frame with an unrouted sibling SG_
@@ -3217,7 +3217,7 @@ fn test_route_dest_frame_partial_rejected() {
 		from:    'compute'
 		to:      'edge'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('partially populated')), errs(validate_system_gen(s)).str()
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('partially populated')), issue_msgs(validate_system_gen(s)).str()
 }
 
 // REQ-TOPO-003 (P2a.2b): a destination SG_ with a non-trivial factor/offset is now
@@ -3249,7 +3249,7 @@ fn test_route_dest_factor_transcode_accepted() {
 		from:    'compute'
 		to:      'edge'
 	}
-	assert !errs(validate_system_gen(s)).any(it.contains('factor/offset')), errs(validate_system_gen(s)).str()
+	assert !issue_msgs(validate_system_gen(s)).any(it.contains('factor/offset')), issue_msgs(validate_system_gen(s)).str()
 }
 
 // REQ-TOPO-004 (codex #164 r7): a gateway with an NM cluster on its primary bus but
@@ -3283,7 +3283,7 @@ fn test_gateway_nm_telemetry_bus_mismatch_rejected() {
 		from:    'compute'
 		to:      'edge'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('NM runs on the telemetry bus'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('NM runs on the telemetry bus'))
 }
 
 // REQ-TOPO-003 (codex #164 r6): a big-endian (Motorola) destination SG_ is
@@ -3312,7 +3312,7 @@ fn test_route_dest_big_endian_rejected() {
 		from:    'compute'
 		to:      'edge'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('big-endian')), errs(validate_system_gen(s)).str()
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('big-endian')), issue_msgs(validate_system_gen(s)).str()
 }
 
 // REQ-TOPO-003 (codex #164 r5): the destination SG_'s OCCUPIED bit range (not just
@@ -3342,7 +3342,7 @@ fn test_route_dest_sg_position_overflow_rejected() {
 		from:    'compute'
 		to:      'edge'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('occupies up to bit 72')), errs(validate_system_gen(s)).str()
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('occupies up to bit 72')), issue_msgs(validate_system_gen(s)).str()
 }
 
 // REQ-TOPO-006 (codex #164 r4): a gateway listing a bus twice is rejected — it
@@ -3367,7 +3367,7 @@ fn test_gateway_duplicate_bus_rejected() {
 		from:    'compute'
 		to:      'edge'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('listed more than once'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('listed more than once'))
 }
 
 // REQ-TOPO-003 (codex #164 r4): a signal route to a bus with no `dbc` is rejected
@@ -3392,7 +3392,7 @@ fn test_route_dest_bus_no_dbc_rejected() {
 		from:    'compute'
 		to:      'edge'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('has no `dbc`'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('has no `dbc`'))
 }
 
 // REQ-TOPO-003 (codex #164 r4): the routed signal must fit the destination FRAME's
@@ -3422,7 +3422,7 @@ fn test_route_dest_dlc_overflow_rejected() {
 		from:    'compute'
 		to:      'edge'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('only 1 bytes')), errs(validate_system_gen(s)).str()
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('only 1 bytes')), issue_msgs(validate_system_gen(s)).str()
 }
 
 // REQ-TOPO-006 (codex #164 r3): a signal route whose `signal` is not a declared
@@ -3447,7 +3447,7 @@ fn test_route_undeclared_signal_rejected() {
 		from:    'compute'
 		to:      'edge'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('not a declared system'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('not a declared system'))
 }
 
 // REQ-TOPO-006 (codex #164 r3): a signal route from a bus that does not PRODUCE
@@ -3473,7 +3473,7 @@ fn test_route_source_not_producing_rejected() {
 		from:    'edge'
 		to:      'compute'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('not produced on its source bus'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('not produced on its source bus'))
 }
 
 // REQ-TOPO-003 (codex #164 r3): a multiplexed destination SG_ is rejected — the
@@ -3513,7 +3513,7 @@ fn test_route_dest_multiplexed_rejected() {
 		from:    'compute'
 		to:      'edge'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('multiplexed')), errs(validate_system_gen(s)).str()
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('multiplexed')), issue_msgs(validate_system_gen(s)).str()
 }
 
 // REQ-TOPO-004 (codex #164 r2): a gateway whose SECONDARY bus declares an NM
@@ -3546,7 +3546,7 @@ fn test_gateway_secondary_nm_cluster_rejected() {
 		from:    'compute'
 		to:      'edge'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('secondary bus')
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('secondary bus')
 		&& it.contains('NM cluster'))
 }
 
@@ -3571,7 +3571,7 @@ fn test_route_cycle_rejected() {
 		from:    'edge'
 		to:      'compute'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('cycle'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('cycle'))
 }
 
 // REQ-TOPO-001: a cross-node signal must carry EXACTLY ONE field (loom2v's
@@ -3582,7 +3582,7 @@ fn test_dissolved_multifield_signal() {
 		'kph': 'u16'
 		'mph': 'u16'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('value fields')
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('value fields')
 		&& it.contains('carries exactly one'))
 }
 
@@ -3594,7 +3594,7 @@ fn test_dissolved_node_without_nm_alloc() {
 	s.nodes[0].view.has_nm = false
 	s.nodes[0].view.is_threadx = false // a declaration-only node, not a generated member
 	s.nodes[0].view.has_telemetry = false
-	for e in errs(validate_system_gen(s)) {
+	for e in issue_msgs(validate_system_gen(s)) {
 		assert !e.contains('nm'), e
 	}
 }
@@ -3607,7 +3607,7 @@ fn test_dissolved_threadx_node_without_nm_alloc_is_error() {
 	s.nodes[0].has_nm_alloc = false
 	s.nodes[0].view.has_nm = false
 	issues := validate_system_gen(s)
-	assert errs(issues).any(it.contains('must allocate `nm`')), errs(issues).str()
+	assert issue_msgs(issues).any(it.contains('must allocate `nm`')), issue_msgs(issues).str()
 	assert 'REQ-TOPO-004' in reqs_of(issues, .error)
 }
 
@@ -3617,14 +3617,14 @@ fn test_dissolved_non_scalar_field() {
 	s.signals[0].fields = {
 		'kph': 'string'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('unsupported type "string"'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('unsupported type "string"'))
 }
 
 // REQ-TOPO-001: a NON-producer node writing a declared signal.
 fn test_dissolved_nonproducer_write_rejected() {
 	mut s := clean_dissolved()
 	s.nodes[1].view.fb_writes = ['Rpm', 'Speed'] // b writes Speed, but a is the producer
-	assert errs(validate_system_gen(s)).any(it.contains('only the producer may write'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('only the producer may write'))
 }
 
 // REQ-TOPO-002: an OMITTED telemetry id defaults to 0 and the CpuLoad frame is
@@ -3634,15 +3634,15 @@ fn test_dissolved_omitted_telemetry_ids_collide_at_zero() {
 	mut s := clean_dissolved()
 	s.nodes[0].view.telem_id = 0
 	s.nodes[1].view.telem_id = 0
-	assert errs(validate_system_gen(s)).any(it.contains('telemetry id 0x0')
-		&& it.contains('single-writer')), errs(validate_system_gen(s)).str()
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('telemetry id 0x0')
+		&& it.contains('single-writer')), issue_msgs(validate_system_gen(s)).str()
 }
 
 // REQ-TOPO-005: a [[route]] authored in a partial is uncheckable wiring.
 fn test_dissolved_partial_authors_route() {
 	mut s := clean_dissolved()
 	s.nodes[0].view.authored_routes = true
-	assert errs(validate_system_gen(s)).any(it.contains('authors bus wiring')
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('authors bus wiring')
 		&& it.contains('[[route]]'))
 }
 
@@ -3650,14 +3650,14 @@ fn test_dissolved_partial_authors_route() {
 fn test_dissolved_partial_authors_wiring() {
 	mut s := clean_dissolved()
 	s.nodes[0].view.local_buses = ['can0'] // authored a [bus.can0]
-	assert errs(validate_system_gen(s)).any(it.contains('authors bus wiring'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('authors bus wiring'))
 }
 
 // REQ-TOPO-005: a partial authoring a bus-endpoint [[signal]] with NO [bus.*].
 fn test_dissolved_partial_signal_without_bus_table() {
 	mut s := clean_dissolved()
 	s.nodes[0].view.authored_signals = true // authored a [[signal]] (no [bus])
-	assert errs(validate_system_gen(s)).any(it.contains('authors bus wiring')
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('authors bus wiring')
 		&& it.contains('[[signal]]'))
 }
 
@@ -3665,35 +3665,35 @@ fn test_dissolved_partial_signal_without_bus_table() {
 fn test_dissolved_producer_doesnt_write() {
 	mut s := clean_dissolved()
 	s.nodes[0].view.fb_writes = [] // 'a' declared producer of Speed but writes nothing
-	assert errs(validate_system_gen(s)).any(it.contains('has no FB that writes it'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('has no FB that writes it'))
 }
 
 // REQ-TOPO-001: a signal whose producer isn't a declared node.
 fn test_dissolved_producer_not_a_node() {
 	mut s := clean_dissolved()
 	s.signals[0].producer = 'ghost'
-	assert errs(validate_system_gen(s)).any(it.contains('producer "ghost" is not a declared node'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('producer "ghost" is not a declared node'))
 }
 
 // REQ-TOPO-001: the producer must sit on the signal's bus.
 fn test_dissolved_producer_off_bus() {
 	mut s := clean_dissolved()
 	s.nodes[0].buses = [] // 'a' produces Speed on compute but isn't on it
-	assert errs(validate_system_gen(s)).any(it.contains('does not sit on its bus'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('does not sit on its bus'))
 }
 
 // REQ-TOPO-001: a producer that also reads its own bus-published signal.
 fn test_dissolved_producer_reads_own_signal() {
 	mut s := clean_dissolved()
 	s.nodes[0].view.fb_reads = ['Rpm', 'Speed'] // a produces Speed AND reads it
-	assert errs(validate_system_gen(s)).any(it.contains('also reads it'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('also reads it'))
 }
 
 // REQ-TOPO-001: a signal declared with no fields (loom2v rejects an empty map).
 fn test_dissolved_signal_no_fields() {
 	mut s := clean_dissolved()
 	s.signals[0].fields = map[string]string{}
-	assert errs(validate_system_gen(s)).any(it.contains('has no value field'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('has no value field'))
 }
 
 // REQ-TOPO-004: a threadx+telemetry cluster member that produces/consumes NO
@@ -3713,8 +3713,8 @@ fn test_dissolved_signalless_cluster_member_is_error() {
 			// no fb_reads / fb_writes: not a producer, reads nothing -> no bridge
 		}
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('node "c"')
-		&& it.contains('produces/consumes no system signal')), errs(validate_system_gen(s)).str()
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('node "c"')
+		&& it.contains('produces/consumes no system signal')), issue_msgs(validate_system_gen(s)).str()
 }
 
 // REQ-TOPO-001: receive metadata alone has no value for the bridge to serialize, and a `valid`
@@ -3724,12 +3724,12 @@ fn test_dissolved_metadata_only_and_valid_rejected() {
 	s.signals[0].fields = {
 		'status': 'RxStatus'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('has no value field'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('has no value field'))
 	s.signals[0].fields = {
 		'kph':   'u16'
 		'valid': 'bool'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('`valid` field is not carried'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('`valid` field is not carried'))
 }
 
 // REQ-TOPO-002: a telemetry id equal to a DBC application frame aliases two
@@ -3737,7 +3737,7 @@ fn test_dissolved_metadata_only_and_valid_rejected() {
 fn test_dissolved_telemetry_aliases_dbc_frame_is_error() {
 	mut s := clean_dissolved()
 	s.nodes[0].view.telem_id = 0x120 // == SpeedFrame (288) in good_dbc
-	assert errs(validate_system_gen(s)).any(it.contains('aliases DBC application frame "SpeedFrame"')), errs(validate_system_gen(s)).str()
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('aliases DBC application frame "SpeedFrame"')), issue_msgs(validate_system_gen(s)).str()
 }
 
 // REQ-TOPO-002: two nodes with the same explicit telemetry id on one bus are an
@@ -3746,8 +3746,8 @@ fn test_dissolved_telemetry_id_collision_is_error() {
 	mut s := clean_dissolved()
 	s.nodes[0].view.telem_id = 0x7e0
 	s.nodes[1].view.telem_id = 0x7e0 // same id as node a
-	assert errs(validate_system_gen(s)).any(it.contains('telemetry id 0x7e0')
-		&& it.contains('single-writer')), errs(validate_system_gen(s)).str()
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('telemetry id 0x7e0')
+		&& it.contains('single-writer')), issue_msgs(validate_system_gen(s)).str()
 }
 
 // REQ-TOPO-002: a node's telemetry id and detail_id must differ.
@@ -3755,14 +3755,14 @@ fn test_dissolved_telemetry_id_equals_detail_is_error() {
 	mut s := clean_dissolved()
 	s.nodes[0].view.telem_id = 0x7e0
 	s.nodes[0].view.telem_detail_id = 0x7e0 // same as its own id
-	assert errs(validate_system_gen(s)).any(it.contains('collides with its own')), errs(validate_system_gen(s)).str()
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('collides with its own')), issue_msgs(validate_system_gen(s)).str()
 }
 
 // REQ-TOPO-001: the producer writing a signal from two FBs (two publishers).
 fn test_dissolved_two_writers_rejected() {
 	mut s := clean_dissolved()
 	s.nodes[0].view.fb_writes = ['Speed', 'Speed'] // two handlers write Speed
-	assert errs(validate_system_gen(s)).any(it.contains('writes it from 2 FBs'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('writes it from 2 FBs'))
 }
 
 // REQ-TOPO-001: a node whose bus is not declared in system.toml.
@@ -3770,14 +3770,14 @@ fn test_dissolved_undeclared_bus() {
 	mut s := clean_dissolved()
 	s.nodes[0].buses = ['ghostbus']
 	s.signals[0].bus = 'ghostbus' // so membership passes textually
-	assert errs(validate_system_gen(s)).any(it.contains('bus "ghostbus" is not declared'))
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('bus "ghostbus" is not declared'))
 }
 
 // REQ-TOPO-001: an FB reading a signal the system never declared.
 fn test_dissolved_unknown_read_is_error() {
 	mut s := clean_dissolved()
 	s.nodes[0].view.fb_reads = ['Rpm', 'Ghost']
-	assert errs(validate_system_gen(s)).any(it.contains('reads "Ghost"')
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('reads "Ghost"')
 		&& it.contains('neither a system signal nor a node-local'))
 }
 
@@ -3790,8 +3790,8 @@ fn test_dissolved_local_io_signal_accepted() {
 	s.nodes[0].view.fb_reads = ['Rpm', 'UserButton'] // Rpm = system, UserButton = local io
 	s.nodes[0].view.fb_writes = ['LedGreen'] // a local io output
 	// neither the local read nor the local write is an error
-	assert !errs(validate_system_gen(s)).any(it.contains('UserButton'))
-	assert !errs(validate_system_gen(s)).any(it.contains('LedGreen'))
+	assert !issue_msgs(validate_system_gen(s)).any(it.contains('UserButton'))
+	assert !issue_msgs(validate_system_gen(s)).any(it.contains('LedGreen'))
 }
 
 // REQ-TOPO-001: a signal no other node reads is a warning, not an error.
@@ -3799,7 +3799,7 @@ fn test_dissolved_unread_signal_is_warning() {
 	mut s := clean_dissolved()
 	s.nodes[1].view.fb_reads = [] // nobody reads Speed anymore
 	issues := validate_system_gen(s)
-	assert errs(issues).len == 0
+	assert issue_msgs(issues).len == 0
 	assert issues.any(it.severity == .warning && it.msg.contains('Speed')
 		&& it.msg.contains('read by no other node'))
 }
@@ -3813,7 +3813,7 @@ fn test_dissolved_receive_metadata_refused() {
 			'kph': 'u16'
 			meta:  if meta == 'status' { 'RxStatus' } else { 'u16' }
 		}
-		assert errs(validate_system_gen(s)).any(it.contains('is not lowered from system.toml yet')), errs(validate_system_gen(s)).str()
+		assert issue_msgs(validate_system_gen(s)).any(it.contains('is not lowered from system.toml yet')), issue_msgs(validate_system_gen(s)).str()
 	}
 }
 
@@ -3825,8 +3825,8 @@ fn test_host_telemetry_id_collision_gen() {
 		s.nodes[i].view.is_threadx = false // host target
 		s.nodes[i].view.telem_id = 0x7e0 // same id on the same bus
 	}
-	assert errs(check_telemetry_frames(s)).any(it.contains('telemetry id 0x7e0')
-		&& it.contains('single-writer')), errs(check_telemetry_frames(s)).str()
+	assert issue_msgs(check_telemetry_frames(s)).any(it.contains('telemetry id 0x7e0')
+		&& it.contains('single-writer')), issue_msgs(check_telemetry_frames(s)).str()
 }
 
 // codex parity (#141 round 11): loom2v's parse_telemetry defaults an omitted
@@ -3951,7 +3951,7 @@ fn clean_someip() System {
 
 fn test_someip_clean_system_has_no_errors() {
 	issues := validate_system(clean_someip())
-	assert errs(issues).len == 0, 'clean someip system flagged: ${errs(issues)}'
+	assert issue_msgs(issues).len == 0, 'clean someip system flagged: ${issue_msgs(issues)}'
 }
 
 // the membership claim is only honoured against a real local endpoint: a node that
@@ -3960,7 +3960,7 @@ fn test_someip_claim_without_endpoint_is_error() {
 	mut s := clean_someip()
 	s.nodes[0].view.has_someip = false
 	s.nodes[0].view.someip_iface = ''
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert e.any(it.contains('claims someip bus "backbone"') && it.contains('no [someip] endpoint')), e.str()
 }
 
@@ -3969,7 +3969,7 @@ fn test_someip_claim_without_endpoint_is_error() {
 fn test_someip_endpoint_must_be_a_local_bus() {
 	mut s := clean_someip()
 	s.nodes[0].view.someip_iface = 'eth9'
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert e.any(it.contains('[someip].bus resolves to "eth9"')), e.str()
 }
 
@@ -3978,14 +3978,14 @@ fn test_someip_endpoint_must_be_a_local_bus() {
 fn test_someip_service_mismatch_is_error() {
 	mut s := clean_someip()
 	s.nodes[1].view.someip_service = 0x0200
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert e.any(it.contains('service 0x200') && it.contains('declares 0x100')), e.str()
 }
 
 fn test_someip_version_mismatch_is_error() {
 	mut s := clean_someip()
 	s.nodes[1].view.someip_version = 2
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert e.any(it.contains('interface version 2') && it.contains('declares 1')), e.str()
 }
 
@@ -3995,7 +3995,7 @@ fn test_someip_exemption_does_not_cover_other_interfaces() {
 	mut s := clean_someip()
 	s.nodes[0].view.local_buses << 'can9'
 	s.nodes[0].view.produces['can9'] = ['Stray']
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert e.any(it.contains('[bus.can9]') && it.contains('not declared by any system bus')), e.str()
 }
 
@@ -4005,14 +4005,14 @@ fn test_someip_exemption_does_not_cover_other_interfaces() {
 fn test_someip_two_writers_is_error() {
 	mut s := clean_someip()
 	s.nodes[1].view.produces['192.168.0.50'] = ['LampCmd', 'BenchLoad']
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert e.any(it.contains('"BenchLoad" transmitted by 2 nodes')), e.str()
 }
 
 fn test_someip_producer_without_consumer_is_error() {
 	mut s := clean_someip()
 	s.nodes[1].view.consumes['192.168.0.50'] = []
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert e.any(it.contains('"BenchLoad"') && it.contains('no node receives it')), e.str()
 }
 
@@ -4020,7 +4020,7 @@ fn test_someip_producer_without_consumer_is_error() {
 fn test_unknown_bus_kind_is_error() {
 	mut s := clean_someip()
 	s.buses[0].kind = 'somepi'
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert e.any(it.contains('unknown kind "somepi"')), e.str()
 }
 
@@ -4029,10 +4029,10 @@ fn test_unknown_bus_kind_is_error() {
 fn test_contract_fields_must_match_the_carrier() {
 	mut s := clean_someip()
 	s.buses[0].dbc = 'backbone.dbc'
-	assert errs(validate_system(s)).any(it.contains('carries a service, not DBC frames')), 'someip bus with a dbc must be rejected'
+	assert issue_msgs(validate_system(s)).any(it.contains('carries a service, not DBC frames')), 'someip bus with a dbc must be rejected'
 	mut c := clean_system()
 	c.buses[0].has_service = true
-	assert errs(validate_system(c)).any(it.contains('a CAN bus carries DBC frames')), 'can bus with a service must be rejected'
+	assert issue_msgs(validate_system(c)).any(it.contains('a CAN bus carries DBC frames')), 'can bus with a service must be rejected'
 }
 
 // REQ-TOPO-003: a someip bus's contract is its SERVICE — the DBC requirement must
@@ -4056,9 +4056,9 @@ fn test_someip_bus_contract_is_the_service() {
 		]
 	}
 	// no "bus has no `dbc`" error: a someip signal has no DBC frame to conform to
-	assert !errs(check_dbc_conformance(s)).any(it.contains('no `dbc`')), errs(check_dbc_conformance(s)).str()
+	assert !issue_msgs(check_dbc_conformance(s)).any(it.contains('no `dbc`')), issue_msgs(check_dbc_conformance(s)).str()
 	s.buses[0].has_service = false
-	e := errs(check_topology_wellformed(s))
+	e := issue_msgs(check_topology_wellformed(s))
 	assert e.any(it.contains('kind = "someip" needs a `service`')), e.str()
 }
 
@@ -4080,7 +4080,7 @@ fn test_someip_signal_without_a_frame_is_error() {
 			}
 		},
 	]
-	e := errs(check_signals_dissolved(s))
+	e := issue_msgs(check_signals_dissolved(s))
 	assert e.any(it.contains('no [[frame]] carries it')), e.str()
 }
 
@@ -4108,7 +4108,7 @@ fn test_someip_signal_with_its_event_is_accepted() {
 			signals: ['BenchLoad']
 		},
 	]
-	assert errs(check_signals_dissolved(s)).len == 0, errs(check_signals_dissolved(s)).str()
+	assert issue_msgs(check_signals_dissolved(s)).len == 0, issue_msgs(check_signals_dissolved(s)).str()
 }
 
 // two events sharing an id is a SILENT mis-delivery: the receive envelope dispatches on the id.
@@ -4132,7 +4132,7 @@ fn test_two_someip_events_sharing_an_id_is_error() {
 			signals: ['BenchLoad']
 		},
 	]
-	e := errs(check_signals_dissolved(s))
+	e := issue_msgs(check_signals_dissolved(s))
 	assert e.any(it.contains('both use event id 0x8001')), e.str()
 }
 
@@ -4153,7 +4153,7 @@ fn test_a_system_frame_on_a_can_bus_is_error() {
 			signals: ['BenchLoad']
 		},
 	]
-	e := errs(check_signals_dissolved(s))
+	e := issue_msgs(check_signals_dissolved(s))
 	assert e.any(it.contains('is kind = "can"')), e.str()
 }
 
@@ -4168,7 +4168,7 @@ fn test_node_claiming_two_someip_buses_is_error() {
 		has_service: true
 	}
 	s.nodes[0].buses << 'backbone2'
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert e.any(it.contains('claims 2 someip buses')), e.str()
 }
 
@@ -4211,7 +4211,7 @@ version = 1
 fn test_someip_peers_must_be_reciprocal() {
 	mut s := clean_someip()
 	s.nodes[0].view.someip_peer = '192.168.0.190:30491' // the bench tool, not the peer node
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert e.any(it.contains('[someip].peer is "192.168.0.190:30491"')
 		&& it.contains('never exchange a datagram')), e.str()
 }
@@ -4219,7 +4219,7 @@ fn test_someip_peers_must_be_reciprocal() {
 fn test_someip_peer_port_mismatch_is_error() {
 	mut s := clean_someip()
 	s.nodes[0].view.someip_peer = '192.168.0.50:30999' // right node, wrong port
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert e.any(it.contains('never exchange a datagram')), e.str()
 }
 
@@ -4232,7 +4232,7 @@ fn test_someip_third_member_is_error() {
 	third.view.someip_iface = '192.168.0.52'
 	third.view.local_buses = ['192.168.0.52']
 	s.nodes << third
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert e.any(it.contains('3 members') && it.contains('point-to-point')), e.str()
 }
 
@@ -4247,7 +4247,7 @@ fn test_someip_duplicate_endpoint_address_is_error() {
 	s.nodes[1].view.consumes = {
 		'192.168.0.51': ['BenchLoad']
 	}
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert e.any(it.contains('both use endpoint address "192.168.0.51"')), e.str()
 }
 
@@ -4256,14 +4256,14 @@ fn test_someip_duplicate_endpoint_address_is_error() {
 fn test_someip_event_id_mismatch_is_error() {
 	mut s := clean_someip()
 	s.nodes[1].view.sig_frame_id['192.168.0.50|BenchLoad'] = u32(0x8002)
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert e.any(it.contains('event 0x8001 on "tcu"') && it.contains('0x8002 on "sysnode"')), e.str()
 }
 
 fn test_someip_signal_without_an_event_id_is_error() {
 	mut s := clean_someip()
 	s.nodes[0].view.sig_frame_id.delete('192.168.0.51|BenchLoad')
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert e.any(it.contains('transmits signal "BenchLoad"') && it.contains('no [[frame]] id')), e.str()
 }
 
@@ -4275,7 +4275,7 @@ fn test_someip_service_zero_is_a_legal_id() {
 	s.buses[0].has_service = true
 	s.nodes[0].view.someip_service = 0
 	s.nodes[1].view.someip_service = 0
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert !e.any(it.contains('needs a `service`')), 'service = 0x0000 is a declared id, not an omission: ${e}'
 }
 
@@ -4328,7 +4328,7 @@ signals = ["LampCmd"]
 fn test_someip_field_mismatch_is_error() {
 	mut s := clean_someip()
 	s.nodes[1].view.sig_fields['192.168.0.50|BenchLoad'] = 'load:u32'
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert e.any(it.contains('fields {load:u8} on "tcu"') && it.contains('{load:u32} on "sysnode"')), e.str()
 }
 
@@ -4337,7 +4337,7 @@ fn test_someip_field_mismatch_is_error() {
 fn test_someip_packing_order_mismatch_is_error() {
 	mut s := clean_someip()
 	s.nodes[0].view.sig_payload['192.168.0.51|BenchLoad'] = 'signals=BenchTicks,BenchLoad;e2e=data_id=33,ctr=7,crc=8'
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert e.any(it.contains('one event, one payload contract')), e.str()
 }
 
@@ -4346,7 +4346,7 @@ fn test_someip_packing_order_mismatch_is_error() {
 fn test_someip_e2e_mismatch_is_error() {
 	mut s := clean_someip()
 	s.nodes[1].view.sig_payload['192.168.0.50|BenchLoad'] = 'signals=BenchLoad;e2e=none'
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert e.any(it.contains('one event, one payload contract')), e.str()
 }
 
@@ -4362,7 +4362,7 @@ fn test_someip_duplicate_address_across_spellings_is_error() {
 	s.nodes[1].view.consumes = {
 		'192.168.000.051': ['BenchLoad']
 	}
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert e.any(it.contains('both use endpoint address')), e.str()
 }
 
@@ -4371,7 +4371,7 @@ fn test_someip_duplicate_address_across_spellings_is_error() {
 fn test_someip_peer_spelling_is_normalized() {
 	mut s := clean_someip()
 	s.nodes[0].view.someip_peer = '192.168.000.050:30490'
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert !e.any(it.contains('never exchange a datagram')), 'a padded dotted quad is the same peer: ${e}'
 }
 
@@ -4380,10 +4380,10 @@ fn test_someip_peer_spelling_is_normalized() {
 fn test_someip_contract_ranges_are_validated() {
 	mut s := clean_someip()
 	s.buses[0].service_ok = false
-	assert errs(validate_system(s)).any(it.contains('service id range')), 'out-of-range service must be rejected'
+	assert issue_msgs(validate_system(s)).any(it.contains('service id range')), 'out-of-range service must be rejected'
 	mut t := clean_someip()
 	t.buses[0].version_ok = false
-	assert errs(validate_system(t)).any(it.contains('interface version range')), 'out-of-range version must be rejected'
+	assert issue_msgs(validate_system(t)).any(it.contains('interface version range')), 'out-of-range version must be rejected'
 }
 
 // version = 0 is a legal SOME/IP interface version, so a CAN bus declaring it is a
@@ -4391,7 +4391,7 @@ fn test_someip_contract_ranges_are_validated() {
 fn test_can_bus_with_explicit_version_zero_is_error() {
 	mut c := clean_system()
 	c.buses[0].has_version = true
-	e := errs(validate_system(c))
+	e := issue_msgs(validate_system(c))
 	assert e.any(it.contains('a CAN bus carries DBC frames')), e.str()
 }
 
@@ -4471,7 +4471,7 @@ to   = "eth0"
 fn test_someip_peer_port_spelling_is_normalized() {
 	mut s := clean_someip()
 	s.nodes[0].view.someip_peer = '192.168.0.50:030490'
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert !e.any(it.contains('never exchange a datagram')), 'a zero-padded port is the same port: ${e}'
 }
 
@@ -4482,7 +4482,7 @@ fn test_nm_cluster_on_a_someip_bus_is_error() {
 	s.buses[0].has_nm_cluster = true
 	s.buses[0].nm_peers_lo = 0x500
 	s.buses[0].nm_peers_hi = 0x53f
-	e := errs(validate_system(s))
+	e := issue_msgs(validate_system(s))
 	assert e.any(it.contains('cannot carry an NM cluster')), e.str()
 }
 
@@ -4510,7 +4510,7 @@ fn test_someip_signal_receive_metadata_is_refused() {
 			},
 		]
 	}
-	assert errs(check_signals_dissolved(s)).any(it.contains('is not lowered from system.toml yet')), errs(check_signals_dissolved(s)).str()
+	assert issue_msgs(check_signals_dissolved(s)).any(it.contains('is not lowered from system.toml yet')), issue_msgs(check_signals_dissolved(s)).str()
 }
 
 // a receiver's `status` (RxStatus) is the bridge's and never on the wire: it stays out of the
@@ -4612,7 +4612,7 @@ form = "compute"
 		panic(err)
 	}
 	s := parse_system(path) or { panic(err) }
-	e := errs(check_topology_wellformed(s))
+	e := issue_msgs(check_topology_wellformed(s))
 	for want in ['bus "compute": unknown key "bitrat"', 'bus "compute" nm: unknown key "timout_ms"',
 		'signal "S": unknown key "producr"', 'node "a" endpoint: unknown key "prot"',
 		'node "a" diag: unknown key "rps"', 'route: unknown key "form"'] {

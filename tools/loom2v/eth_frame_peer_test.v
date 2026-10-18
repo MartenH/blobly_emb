@@ -46,21 +46,21 @@ fn frame_peer_example() (string, string) {
 	assert cfg.contains('port    = ${fp_app_port}'), 'host_someip changed shape: [someip] not found'
 	ecu := os.join_path(tmp, 'ecu.toml')
 	os.write_file(ecu, cfg) or { panic(err) }
-	vexe := os.quoted_path(@VEXE)
+	vexe := @VEXE
 	glue := os.join_path(tmp, 'gen', 'loom_gen.v')
 	for cmd in [
-		'${vexe} -enable-globals run ${os.join_path(repo, 'tools', 'ecucheck', 'gen.v')} ${ecu}',
-		'${vexe} -enable-globals run ${os.join_path(repo, 'tools', 'cfg2v', 'gen.v')} ${ecu} ${os.join_path(tmp,
-			'gen', 'ecu_gen.v')}',
-		'${vexe} -enable-globals run ${os.join_path(repo, 'tools', 'loom2v')} ${ecu} ${os.join_path(tmp,
-			'bus.dbc')} ${os.join_path(tmp, 'sig', 'signals_gen.v')} ${os.join_path(tmp, 'ports',
-			'ports_gen.v')} ${glue} ${os.join_path(tmp, 'gen', 'manifest.csv')}',
+		[vexe, '-enable-globals', 'run', os.join_path(repo, 'tools', 'ecucheck', 'gen.v'), ecu],
+		[vexe, '-enable-globals', 'run', os.join_path(repo, 'tools', 'cfg2v', 'gen.v'), ecu,
+			os.join_path(tmp, 'gen', 'ecu_gen.v')],
+		[vexe, '-enable-globals', 'run', os.join_path(repo, 'tools', 'loom2v'), ecu,
+			os.join_path(tmp, 'bus.dbc'), os.join_path(tmp, 'sig', 'signals_gen.v'),
+			os.join_path(tmp, 'ports', 'ports_gen.v'), glue, os.join_path(tmp, 'gen', 'manifest.csv')],
 	] {
-		r := os.execute(cmd)
-		assert r.exit_code == 0, '${cmd}\n${r.output}'
+		r := os.exec(cmd)
+		assert r.exit_code == 0, '${cmd.join(' ')}\n${r.output}'
 	}
-	r := os.execute('cd ${os.quoted_path(repo)} && ${vexe} -gc none -enable-globals -path "@vlib|@vmodules|.|${tmp}" -o ${os.join_path(tmp,
-		'app_bin')} ${tmp}')
+	r := os.exec([vexe, '-gc', 'none', '-enable-globals', '-path', '@vlib|@vmodules|${repo}|${tmp}',
+		'-o', os.join_path(tmp, 'app_bin'), tmp])
 	assert r.exit_code == 0, r.output
 	return tmp, os.read_file(glue) or { '' }
 }

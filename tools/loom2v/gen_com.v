@@ -1358,7 +1358,7 @@ fn emit_eth_target_create(m Model, prio int) []string {
 // loop's seams differ, and each side is bench-proven against the same host
 // oracle, so parameterizing one emitter over both seam sets would trade two
 // straight-line loops for one harder-to-review indirection (deliberate).
-fn emit_eth_thread_target(m Model, doc toml.Doc) []string {
+fn emit_eth_thread_target(m Model) []string {
 	mut glue := []string{}
 	if !eth_thread_on(m) {
 		return glue
@@ -1377,7 +1377,7 @@ fn emit_eth_thread_target(m Model, doc toml.Doc) []string {
 	glue << ''
 	glue << '// --- eth comm thread (${m.eth}): SOME/IP over the NetX seam (docs/someip.md'
 	glue << '//     target rung). Rx/tx chain identical to the host bridge; IOC + NetX seams. ---'
-	glue << 'fn eth_thread_entry(input u32) {'
+	glue << 'fn eth_thread_entry(_ u32) {'
 	glue << "\tif C.blob_eth_open(c'${iface}', someip_port) != 0 {"
 	glue << '\t\tfor {'
 	glue << '\t\t\tC._tx_thread_sleep(1000) // dead endpoint — park, never fake a service'

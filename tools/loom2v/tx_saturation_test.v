@@ -20,8 +20,7 @@ tx_saturations = true
 '
 
 fn testsuite_begin() {
-	r := os.execute('${@VEXE} -enable-globals -o ${ts_bin} ${os.join_path(@VMODROOT, 'tools',
-		'loom2v')}')
+	r := os.exec([@VEXE, '-enable-globals', '-o', ts_bin, os.join_path(@VMODROOT, 'tools', 'loom2v')])
 	assert r.exit_code == 0, r.output
 }
 
@@ -40,8 +39,8 @@ fn ts_generate(name string, ex string, edit fn (string) string, extra string) (i
 	ecu := os.join_path(tmp, 'ecu.toml')
 	os.write_file(ecu, edit(src) + extra) or { panic(err) }
 	glue := os.join_path(tmp, 'gen.v')
-	r := os.execute('${ts_bin} ${ecu} ${os.join_path(ex, 'bus.dbc')} ${os.join_path(tmp, 'sig.v')} ' +
-		'${os.join_path(tmp, 'ports.v')} ${glue} ${os.join_path(tmp, 'manifest.csv')}')
+	r := os.exec([ts_bin, ecu, os.join_path(ex, 'bus.dbc'), os.join_path(tmp, 'sig.v'),
+		os.join_path(tmp, 'ports.v'), glue, os.join_path(tmp, 'manifest.csv')])
 	return r.exit_code, r.output, os.read_file(glue) or { '' }
 }
 

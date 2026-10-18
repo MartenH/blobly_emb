@@ -16,7 +16,7 @@ import time
 fn test_button_drives_led() {
 	dir := os.real_path(os.dir(@FILE))
 	// V=@VEXE: the nested make must use the V running THIS test, not rely on PATH
-	build := os.execute('make -C ${dir} V=${os.quoted_path(@VEXE)}')
+	build := os.exec(['make', '-C', dir, 'V=${@VEXE}'])
 	assert build.exit_code == 0, build.output
 
 	// run in a scratch cwd so io/ never lands in the example dir

@@ -6,8 +6,7 @@
 # boot. An int- or void-returning implicit call is ABI-safe on this target. boards/*/board.mk
 # force-includes board.h, which is the fix; this is the guard for the next such function.
 #
-# Limits, stated: an image compiled with -w prints no warning to find (board.mk's -include still
-# covers board.h there); a struct or alias return is not matched. Run the build under LC_ALL=C so
+# Limits, stated: a struct or alias return is not matched. Run the build under LC_ALL=C so
 # gcc quotes names with ASCII quotes (the match takes the typographic ones too).
 set -uo pipefail
 log="${1:?usage: check_implicit_wide.sh <build-log>}"

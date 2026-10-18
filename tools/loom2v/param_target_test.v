@@ -54,8 +54,7 @@ param_status = true
 const pt_bin = os.join_path(os.temp_dir(), 'loom2v_param_target_${os.getpid()}_${time.now().unix_nano()}')
 
 fn testsuite_begin() {
-	r := os.execute('${@VEXE} -enable-globals -o ${pt_bin} ${os.join_path(@VMODROOT, 'tools',
-		'loom2v')}')
+	r := os.exec([@VEXE, '-enable-globals', '-o', pt_bin, os.join_path(@VMODROOT, 'tools', 'loom2v')])
 	assert r.exit_code == 0, r.output
 }
 
@@ -102,9 +101,8 @@ fn pt_generate(name string, edit fn (string) string, extra string) PtOut {
 	os.write_file(ecu, edit(one_thread(src)) + extra) or { panic(err) }
 	dbc := os.join_path(tmp, 'bus.dbc')
 	os.cp(os.join_path(fixture_dir, 'bus.dbc'), dbc) or { panic(err) }
-	r := os.execute('${pt_bin} ${ecu} ${dbc} ${os.join_path(tmp, 'sig.v')} ' +
-		'${os.join_path(tmp, 'ports.v')} ${os.join_path(tmp, 'gen.v')} ${os.join_path(tmp,
-		'manifest.csv')}')
+	r := os.exec([pt_bin, ecu, dbc, os.join_path(tmp, 'sig.v'), os.join_path(tmp, 'ports.v'),
+		os.join_path(tmp, 'gen.v'), os.join_path(tmp, 'manifest.csv')])
 	rd := fn [tmp] (f string) string {
 		return os.read_file(os.join_path(tmp, f)) or { '' }
 	}

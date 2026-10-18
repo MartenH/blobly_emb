@@ -598,7 +598,7 @@ fn gateway_forward_arms(m Model, src_bus string) []string {
 		if r.from_bus != src_bus {
 			continue
 		}
-		nm_gate := if m.nm.on && r.to_bus == m.telem.bus { 'g_nm.awake() && ' } else { '' }
+		route_gate := if m.nm.on && r.to_bus == m.telem.bus { 'g_nm.awake() && ' } else { '' }
 		dst := gw_var(r.to_bus, m.telem.bus)
 		out << '\t\t\tif rx.id == u32(0x${r.from_id.hex()}) && rx.len == ${r.from_dlc} && rx.ext == ${r.from_ext} { // route ${r.signal}: ${r.from_bus} -> ${r.to_bus} 0x${r.to_id.hex()}'
 		out << '\t\t\t\tmut ff := can.Frame{'
@@ -609,12 +609,12 @@ fn gateway_forward_arms(m Model, src_bus string) []string {
 		if r.signal == '' {
 			// a FRAME route forwards the PDU as it is: its bytes are not this node's values
 			out << '\t\t\t\tff.data = rx.data // frame route: forwarded as is, only the id/bus differ'
-			out << '\t\t\t\tif ${nm_gate}${dst}.tx_ready() {'
+			out << '\t\t\t\tif ${route_gate}${dst}.tx_ready() {'
 			out << '\t\t\t\t\t${dst}.send(ff)'
 			out << '\t\t\t\t\tg_fwd_count++ // count frames actually forwarded, not ones dropped on a full tx FIFO / NM sleep'
 			out << '\t\t\t\t}'
 		} else {
-			out << route_reencode_lines(r, dst, nm_gate)
+			out << route_reencode_lines(r, dst, route_gate)
 		}
 		out << '\t\t\t}'
 	}
@@ -2465,14 +2465,16 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// cross-core CpuLoad: the comm thread reads each satellite core's published load
 				glue << "fn C.xcore_load_get(int) u16 // a satellite core's per-mille load (xcore.h; weak 0)"
 			}
-			glue << shell_cmd_fns(m)
+			glue << shell_cmd_fns(m, comm_thread_on)
 			glue << diag_target_fns(m, ioc_idx)
 			glue << diag_target_sa_fns(m)
 			glue << diag_target_c_decls(m)
 			glue << boot_target_fns(m)
 			glue << doip_target_fns(m)
 			glue << nm_shell_fns(m)
-			glue << stat_shell_fns(m, doc, app_threads, multi)
+			if comm_thread_on { // where the CAN shell registers it
+				glue << stat_shell_fns(m, doc, app_threads, multi)
+			}
 			glue << trace_fb_hooks(m, doc, app_threads, multi, m.io_points.len > 0)
 			if comm_thread_on {
 				// Board glue (boards/common/comm_glue.c): the FDCAN Rx-FIFO0 ISR posts a semaphore
@@ -2507,13 +2509,11 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << 'fn C.load_sum_10s() u32'
 					glue << 'fn C.load_sum_overruns() u32'
 				}
-				if true {
-					glue << 'fn C.load_permille() u32'
-					glue << 'fn C.load_100ms() u32'
-					glue << 'fn C.load_1s() u32'
-					glue << 'fn C.load_10s() u32'
-					glue << 'fn C.load_overruns() u32'
-				}
+				glue << 'fn C.load_permille() u32'
+				glue << 'fn C.load_100ms() u32'
+				glue << 'fn C.load_1s() u32'
+				glue << 'fn C.load_10s() u32'
+				glue << 'fn C.load_overruns() u32'
 			}
 			if ioc_idx.len > 0 {
 				// Target IOC pool (glue C, wait-free triple-buffer ioc.h): every cross-thread
@@ -2954,13 +2954,13 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// thread owns the bus. ThreadX: lower priority number = higher priority.
 				if multi {
 					for thr in app_threads {
-						glue << 'fn ${thr}_thread_entry(input u32) {'
+						glue << 'fn ${thr}_thread_entry(_ u32) {'
 						glue << '\trun_${thr}() // FB dispatch only — the comm thread owns the bus'
 						glue << '}'
 						glue << ''
 					}
 				} else {
-					glue << 'fn ${part}_thread_entry(input u32) {'
+					glue << 'fn ${part}_thread_entry(_ u32) {'
 					glue << '\trun() // FB dispatch only — the comm thread owns the bus'
 					glue << '}'
 					glue << ''
@@ -2991,7 +2991,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				} else {
 					'\t\t\tdetail := telem.encode_loaddetail(u16(C.load_100ms()), u16(C.load_1s()), u16(C.load_10s()), ovr - last_overruns)'
 				}
-			glue << 'fn comm_thread_entry(input u32) {'
+			glue << 'fn comm_thread_entry(_ u32) {'
 				glue << '\tmut ch := can.Channel{}'
 				glue << "\tif !ch.open('${tx_bus_idx}', ${tx_bus_fd}) { // ${m.telem.bus}; board clocks/pins set by main.v"
 				glue << '\t\tfor { C._tx_thread_sleep(1000) } // dead channel — park, never own a bus we can\'t drive'
@@ -3191,8 +3191,8 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					idx := ioc_idx[si.name] or { 0 }
 					glue << '\t\t// PRODUCER: external tx signal "${si.name}" — read the FB-published IOC'
 					glue << '\t\t// cell, encode the value (LE at byte 0), and send it cyclically (tx_ready-gated).'
-					nm_gate := if m.nm.on { 'nm_up && ' } else { '' }
-					glue << '\t\tif ${nm_gate}${diag_tx_gate(m)}t1 - last_tx_${snake(si.name)} >= u64(${cyc}) && ch.tx_ready() {'
+					tx_gate := if m.nm.on { 'nm_up && ' } else { '' }
+					glue << '\t\tif ${tx_gate}${diag_tx_gate(m)}t1 - last_tx_${snake(si.name)} >= u64(${cyc}) && ch.tx_ready() {'
 					glue << '\t\t\tlast_tx_${snake(si.name)} = t1'
 					glue << '\t\t\tmut tv_a := u32(0)'
 					glue << '\t\t\tmut tv_b := u32(0)'
@@ -3225,7 +3225,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << '}'
 				glue << ''
 				glue << "@[export: 'tx_application_define']"
-				glue << 'fn tx_application_define(first_unused voidptr) {'
+				glue << 'fn tx_application_define(_ voidptr) {'
 				glue << emit_io_target_boot(m, ioc_idx)
 				if multi {
 					for thr in app_threads {
@@ -3280,13 +3280,13 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					// like the comm branch — run() does not exist in the multi cut,
 					// and the app threads never touch CAN here (codex on emb#150 r5/r6)
 					for thr in app_threads {
-						glue << 'fn ${thr}_thread_entry(input u32) {'
+						glue << 'fn ${thr}_thread_entry(_ u32) {'
 						glue << '\trun_${thr}()'
 						glue << '}'
 						glue << ''
 					}
 				} else {
-					glue << 'fn ${part}_thread_entry(input u32) {'
+					glue << 'fn ${part}_thread_entry(_ u32) {'
 					if m.buses.len == 0 || eth_only_img(m) {
 						// an io-only node (no [bus] at all) or an eth-only node:
 						// run() is channel-free — emitting a can.Channel here would
@@ -3303,7 +3303,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				}
 				glue << ''
 				glue << "@[export: 'tx_application_define']"
-				glue << 'fn tx_application_define(first_unused voidptr) {'
+				glue << 'fn tx_application_define(_ voidptr) {'
 				glue << emit_io_target_boot(m, ioc_idx)
 				if multi {
 					for thr in app_threads {
@@ -3370,8 +3370,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				mut bnames := eth_iocb_idx(m).keys()
 				bnames.sort()
 				for bn in bnames {
-					glue << '\tmut cfg_${snake(bn)} := sig.${bn}{}'
-					glue << '\tC.iocb_cfg(${eth_iocb_idx(m)[bn]}, u16(sizeof(cfg_${snake(bn)})))'
+					glue << '\tC.iocb_cfg(${eth_iocb_idx(m)[bn]}, u16(sizeof(sig.${bn})))'
 				}
 			}
 			glue << rx_target_boot(m)
@@ -4028,6 +4027,7 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 	if m.params.len > 0 {
 		glue << 'import comm.param' // the parameters (docs/diagnostics.md §3.4)
 	}
+	glue << bulk_import(m.bulk, m.part, '')
 	if m.doip.on {
 		glue << 'import comm.doip' // the diagnostic server over DoIP too (gen_doip.v)
 		glue << 'import driver.doipnet' // its network loop, shared with the node's bootloader
@@ -4075,7 +4075,7 @@ fn main() {
 	derive_param_nvm(mut m)
 	check_journal_capacity(m)
 	m.fault_grace_us = fault_grace_us(m, doc)
-	wear_report := check_journal_wear(m, doc)
+	wear_report_lines := check_journal_wear(m, doc)
 	validate_doip(m)
 	validate_net(m)
 	display_check(m)
@@ -4716,7 +4716,7 @@ fn main() {
 	}
 	// --- eth comm thread: SOME/IP over the NetX seam (ThreadX target) ---
 	if m.target.threadx {
-		glue << emit_eth_thread_target(m, doc)
+		glue << emit_eth_thread_target(m)
 	}
 	mut bus_names := bnames.clone()
 
@@ -4812,6 +4812,7 @@ fn main() {
 
 	os.write_file(args[3], signals.join('\n') + '\n') or { panic('write ${args[3]}: ${err}') }
 	os.write_file(args[4], ports.join('\n') + '\n') or { panic('write ${args[4]}: ${err}') }
+	glue = blank_unused_params(glue)
 	os.write_file(args[5], glue.join('\n') + '\n') or { panic('write ${args[5]}: ${err}') }
 
 	// --- ThreadX build fragment: right-size loom's Scheduler tables to this image's real
@@ -4874,7 +4875,7 @@ fn main() {
 		os.write_file(args[6], man.join('\n') + '\n') or { panic('write ${args[6]}: ${err}') }
 	}
 
-	for l in wear_report {
+	for l in wear_report_lines {
 		eprintln(l)
 	}
 	eprintln('loom2v: ${m.sig_names.len} signals (${bus_names.len} bus bridge), ${m.isotp_conns.len} isotp, ${m.part.by_part.len} partition(s)')
@@ -5861,10 +5862,10 @@ fn fault_target_boot(m Model) []string {
 	if !fault_target_on(m) {
 		return []string{}
 	}
-	mut g := ['\tfcfg_rep := fault.Reports{}', '\tfcfg_ctl := fault.Control{}']
+	mut g := []string{}
 	for fb in fault_fbs(m) {
-		g << '\tC.iocb_cfg(${fault_cell(m, fb, false)}, u16(sizeof(fcfg_rep))) // ${fb}: reports'
-		g << '\tC.iocb_cfg(${fault_cell(m, fb, true)}, u16(sizeof(fcfg_ctl))) // ${fb}: control'
+		g << '\tC.iocb_cfg(${fault_cell(m, fb, false)}, u16(sizeof(fault.Reports))) // ${fb}: reports'
+		g << '\tC.iocb_cfg(${fault_cell(m, fb, true)}, u16(sizeof(fault.Control))) // ${fb}: control'
 	}
 	return g
 }

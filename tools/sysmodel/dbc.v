@@ -385,7 +385,9 @@ pub fn check_route_dbc(s System) []Issue {
 			continue
 		}
 		to := s.bus_by_name(r.to) or { continue }
-		sig := s.signal_by_name(r.signal) or { continue }
+		if s.signal_by_name(r.signal) == none {
+			continue
+		}
 		// a routed signal must have a destination DBC to re-encode into. Reject a
 		// dest bus with no `dbc` HERE so syscheck and sysgen fail on the same contract
 		// (sysgen's frame_of_signal would otherwise fail only mid-generation).

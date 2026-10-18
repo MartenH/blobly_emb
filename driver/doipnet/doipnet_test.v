@@ -74,7 +74,7 @@ fn diag(uds []u8) []u8 {
 }
 
 // echoes the request back with its SID + 0x40, like a positive answer
-fn echo(ctx voidptr, req &u8, n int, functional bool, resp &u8, cap int) int {
+fn echo(_ voidptr, req &u8, n int, _ bool, resp &u8, _ int) int {
 	for i in 0 .. n {
 		unsafe {
 			resp[i] = req[i]

@@ -115,12 +115,13 @@ fn shell_module_init(m Model) []string {
 }
 
 // shell_cmd_fns: module-level command adapters (target-backed commands bridge to C here — the
-// platform module stays pure V and host-testable).
-fn shell_cmd_fns(m Model) []string {
+// platform module stays pure V and host-testable). ps and bmc only with a comm thread: the CAN
+// shell it inits registers them (shell_module_init), an eth-bound shell does not.
+fn shell_cmd_fns(m Model, comm_thread_on bool) []string {
 	if !m.shell.on {
 		return []string{}
 	}
-	base := [
+	base := if !comm_thread_on { []string{} } else { [
 		'',
 		'fn shell_ps_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {',
 		'\tn := C.shell_ps(&rsp.buf[0], ${shell.max_rsp})',
@@ -135,7 +136,7 @@ fn shell_cmd_fns(m Model) []string {
 		'\t\trsp.len = n',
 		'\t}',
 		'}',
-	]
+	] }
 	mut g := base.clone()
 	for name in m.shell.commands {
 		g << ''

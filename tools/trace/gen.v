@@ -47,7 +47,7 @@ fn v_test_results(files []string) map[string]string {
 	}
 	// the runner hides its OK lines under CI unless told not to, and a file with no line fails
 	os.setenv('VTEST_HIDE_OK', '0', true)
-	out := os.execute('${@VEXE} -enable-globals test ${files.map(os.quoted_path(it)).join(' ')}').output
+	out := os.exec([@VEXE, '-enable-globals', 'test', ...files]).output
 	for ln in out.split_into_lines() {
 		t := ln.trim_space()
 		word := t.all_before(' ')
@@ -213,7 +213,8 @@ fn main() {
 			skip_code := int((m['skip_exit'] or { toml.Any(-1) }).int())
 			mut result := 'pending'
 			if cmd != '' {
-				ec := os.execute(cmd).exit_code
+				// a check's `command` is a shell line (quoting, sh -c, env tests)
+				ec := os.exec(['sh', '-c', cmd]).exit_code
 				result = if ec == 0 { 'pass' } else if ec == skip_code { 'pending' } else { 'fail' }
 			}
 			ctxset[ctx] = true

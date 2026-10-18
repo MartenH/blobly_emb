@@ -172,8 +172,8 @@ feature branch runs only `guard`, so a green tick there is the identity check, N
 gate. Open the PR to get one.
 
 It runs more than the four you would run by hand: host unit tests
-(`v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot`), `make lint`,
-`make check`, `make trace-check` (not `make trace`), `syscheck`, `v -enable-globals test
+(`v -cc cc -nocache -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot`), `make lint`,
+`make check`, `make trace-check` (not `make trace`), `syscheck`, `v -cc cc -nocache -enable-globals test
 examples`, per-example host builds with generation, and a repo-wide **"Generated outputs are
 fresh"** gate. The last one is the usual surprise: a stale committed `gen/` output passes every
 local command and fails CI. Re-run generation before opening the PR.
@@ -217,8 +217,9 @@ script existed, and nothing in CI ran it until now.
 And each build log goes through **`scripts/check_implicit_wide.sh`**: a C function the V code
 declares returning u64/i64/f32/f64 that gcc saw with no prototype is truncated to `int`, which is
 how `board_now_us()` made every target's `now` go negative 35.8 minutes after boot (the fix is the
-`-include board.h` in each `boards/*/board.mk`). Blind on the images compiled with `-w`, which is
-why the fix sits on the compile line and not in the check.
+`-include board.h` in each `boards/*/board.mk`). No image is compiled with `-w`: V3 declares every
+`fn C.` function itself unless the declaring module has a C `#include` (it then trusts the header),
+so a generated `gen` module carries none — bulk.h is `comm/bulk`'s.
 The job then links one shape no committed image has, a **multi-thread gateway**
 (`scripts/glue_link_check.sh`: sysnode plus a second app thread, in a scratch copy). Every
 ThreadX image links ONE generic glue, `boards/common/comm_glue.c`, through `gen/loom_build.mk`'s
@@ -337,7 +338,7 @@ The two H755 scripts need no CAN adapter, but they need DIFFERENT SWD tooling, s
 
 Plain **`v test .` at the repo root looks broken** — it walks into `.claude/worktrees/` and runs
 duplicate copies of every example e2e test concurrently. Test the real tree instead
-(`make deps-cmsis && v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot examples`), which is
+(`make deps-cmsis && v -cc cc -nocache -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot examples`), which is
 what CI does.
 
 ### Commit identity (enforced)

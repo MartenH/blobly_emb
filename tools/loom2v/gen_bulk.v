@@ -57,11 +57,6 @@ fn bulk_cross_core(p BulkPoolCfg, part PartMap) bool {
 	return bulk_ep_core(p.producer, part) != bulk_ep_core(p.consumer, part)
 }
 
-// bulk_touches: this pool has an endpoint (producer or consumer) on partition `ptn`.
-fn bulk_touches(p BulkPoolCfg, part PartMap, ptn string) bool {
-	return bulk_ep_part(p.producer, part) == ptn || bulk_ep_part(p.consumer, part) == ptn
-}
-
 // bulk_part_local: this partition's code is emitted by the OWNER image — i.e. it is NOT a
 // generated satellite (image =) and NOT a hand-written external partition.
 fn bulk_part_local(ptn string, part PartMap) bool {
@@ -140,6 +135,14 @@ fn emit_bulk_service_arm(bulk []BulkPoolCfg, part PartMap, image_part string, in
 	return out
 }
 
+// bulk_import: the import an image's bulk glue needs — none when it emits no pool
+fn bulk_import(pools []BulkPoolCfg, part PartMap, image_part string) []string {
+	if pools.any(bulk_in_image(it, part, image_part)) {
+		return ['import comm.bulk // the pool API over boards/common/bulk.h']
+	}
+	return []string{}
+}
+
 // emit_bulk_glue generates V declarations and wrapper functions for bulk pools. An INTRA-core
 // pool gets a per-image global arena; a CROSS-CORE pool (producer/consumer on different cores)
 // is placed at a fixed address in the H755 shared window (xcore.h XCORE_BULK_ADDR) so both images
@@ -182,22 +185,8 @@ fn emit_bulk_glue(pools []BulkPoolCfg, part PartMap, image_part string) []string
 	mut g := []string{}
 	g << ''
 	g << '// --- Bulk Transport Pools (docs/bulk-transport.md) ---'
-	// boards/common is on the target C path via BOARD_INCS, but a HOST/sim build compiles from
-	// the repo root without it — so anchor the include at the v.mod root (@VMODROOT), which
-	// resolves from either cwd.
-	g << '#flag -I @VMODROOT/boards/common'
-	g << '#include "bulk.h"'
-	g << ''
-	g << 'struct C.bulk_t {}'
-	g << 'fn C.bulk_init(b &C.bulk_t, nbuf u32, bufsz u32)'
-	g << 'fn C.bulk_valid(b &C.bulk_t) int'
-	g << 'fn C.bulk_loan(b &C.bulk_t) int'
-	g << 'fn C.bulk_publish(b &C.bulk_t, idx u32, len u32)'
-	g << 'fn C.bulk_ready(b &C.bulk_t) u32'
-	g << 'fn C.bulk_take(b &C.bulk_t, len &u32) int'
-	g << 'fn C.bulk_release(b &C.bulk_t, idx u32)'
-	g << 'fn C.bulk_buf(b &C.bulk_t, idx u32) &u8'
-	g << 'fn C.bulk_overflows(b &C.bulk_t) u32'
+	// the pool API is comm.bulk's (bulk_import): bulk.h is a C include, and in this module it would
+	// stop V3 declaring every other C function the image calls
 	if has_shared {
 		// The cross-core region base comes from a PLATFORM seam, exactly like xcore_pub/xcore_ioc_init:
 		// generated code externs it and the board's glue C provides it (from xcore.h's XCORE_BULK_ADDR
@@ -240,44 +229,44 @@ fn emit_bulk_glue(pools []BulkPoolCfg, part PartMap, image_part string) []string
 		cons_here := if image_part == '' { bulk_part_local(cp, part) } else { cp == image_part }
 		if prod_here {
 			g << 'pub fn bulk_${p.name}_init() {'
-			g << '\tC.bulk_init(bulk_${p.name}_ptr(), u32(${p.nbuf}), u32(${p.bufsz}))'
+			g << '\tbulk.init(bulk_${p.name}_ptr(), u32(${p.nbuf}), u32(${p.bufsz}))'
 			g << '}'
 			g << ''
 			g << 'pub fn bulk_${p.name}_loan() int {'
-			g << '\treturn int(C.bulk_loan(bulk_${p.name}_ptr()))'
+			g << '\treturn bulk.loan(bulk_${p.name}_ptr())'
 			g << '}'
 			g << ''
 			g << 'pub fn bulk_${p.name}_publish(idx int, len u32) bool {'
 			g << '\tif idx < 0 || idx >= ${p.nbuf} || len > u32(${p.bufsz}) {'
 			g << '\t\treturn false'
 			g << '\t}'
-			g << '\tC.bulk_publish(bulk_${p.name}_ptr(), u32(idx), len)'
+			g << '\tbulk.publish(bulk_${p.name}_ptr(), u32(idx), len)'
 			g << '\treturn true'
 			g << '}'
 			g << ''
 			g << 'pub fn bulk_${p.name}_overflows() u32 {'
-			g << '\treturn C.bulk_overflows(bulk_${p.name}_ptr())'
+			g << '\treturn bulk.overflows(bulk_${p.name}_ptr())'
 			g << '}'
 			g << ''
 		}
 		if cons_here {
 			g << 'pub fn bulk_${p.name}_valid() bool {'
-			g << '\treturn C.bulk_valid(bulk_${p.name}_ptr()) != 0'
+			g << '\treturn bulk.valid(bulk_${p.name}_ptr())'
 			g << '}'
 			g << ''
 			g << 'pub fn bulk_${p.name}_ready() u32 {'
-			g << '\treturn C.bulk_ready(bulk_${p.name}_ptr())'
+			g << '\treturn bulk.ready(bulk_${p.name}_ptr())'
 			g << '}'
 			g << ''
 			g << 'pub fn bulk_${p.name}_take(len &u32) int {'
-			g << '\treturn int(C.bulk_take(bulk_${p.name}_ptr(), len))'
+			g << '\treturn bulk.take(bulk_${p.name}_ptr(), len)'
 			g << '}'
 			g << ''
 			g << 'pub fn bulk_${p.name}_release(idx int) bool {'
 			g << '\tif idx < 0 || idx >= ${p.nbuf} {'
 			g << '\t\treturn false'
 			g << '\t}'
-			g << '\tC.bulk_release(bulk_${p.name}_ptr(), u32(idx))'
+			g << '\tbulk.release(bulk_${p.name}_ptr(), u32(idx))'
 			g << '\treturn true'
 			g << '}'
 			g << ''
@@ -286,7 +275,7 @@ fn emit_bulk_glue(pools []BulkPoolCfg, part PartMap, image_part string) []string
 		g << '\tif idx < 0 || idx >= ${p.nbuf} {'
 		g << '\t\treturn unsafe { nil }'
 		g << '\t}'
-		g << '\treturn C.bulk_buf(bulk_${p.name}_ptr(), u32(idx))'
+		g << '\treturn bulk.buf(bulk_${p.name}_ptr(), u32(idx))'
 		g << '}'
 		g << ''
 	}

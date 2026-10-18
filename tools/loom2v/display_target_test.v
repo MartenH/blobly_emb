@@ -12,8 +12,7 @@ const display_fixture = os.join_path(@DIR, 'testdata', 'threadx_node')
 fn display_loom2v() string {
 	bin := os.join_path(os.temp_dir(), 'loom2v_display_target_${os.getpid()}')
 	if !os.exists(bin) {
-		r := os.execute('${@VEXE} -enable-globals -o ${bin} ${os.join_path(@VMODROOT, 'tools',
-			'loom2v')}')
+		r := os.exec([@VEXE, '-enable-globals', '-o', bin, os.join_path(@VMODROOT, 'tools', 'loom2v')])
 		assert r.exit_code == 0, r.output
 	}
 	return bin
@@ -40,8 +39,8 @@ fn gen_display(name string, keep_trace bool, extra string) (int, string, string,
 	dbc := os.join_path(tmp, 'bus.dbc')
 	os.cp(os.join_path(display_fixture, 'bus.dbc'), dbc) or { panic(err) }
 	glue := os.join_path(tmp, 'gen.v')
-	r := os.execute('${display_loom2v()} ${ecu} ${dbc} ${os.join_path(tmp, 'sig.v')} ' +
-		'${os.join_path(tmp, 'ports.v')} ${glue} ${os.join_path(tmp, 'manifest.csv')}')
+	r := os.exec([display_loom2v(), ecu, dbc, os.join_path(tmp, 'sig.v'), os.join_path(tmp, 'ports.v'),
+		glue, os.join_path(tmp, 'manifest.csv')])
 	return r.exit_code, r.output, os.read_file(glue) or { '' }, os.read_file(os.join_path(tmp,
 		'loom_build.mk')) or { '' }
 }

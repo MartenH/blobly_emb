@@ -26,8 +26,7 @@ ascii = "BLOBLY-TEST"
 fn loom2v_bin() string {
 	bin := os.join_path(os.temp_dir(), 'loom2v_diag_target_${os.getpid()}')
 	if !os.exists(bin) {
-		r := os.execute('${@VEXE} -enable-globals -o ${bin} ${os.join_path(@VMODROOT, 'tools',
-			'loom2v')}')
+		r := os.exec([@VEXE, '-enable-globals', '-o', bin, os.join_path(@VMODROOT, 'tools', 'loom2v')])
 		assert r.exit_code == 0, r.output
 	}
 	return bin
@@ -65,8 +64,8 @@ fn run_in_scratch(tmp string, ex string, edit fn (string) string, extra string) 
 	os.write_file(ecu, edit(src) + extra) or { panic(err) }
 	os.cp(os.join_path(ex, 'bus.dbc'), os.join_path(scratch_ex, 'bus.dbc')) or { panic(err) }
 	glue := os.join_path(tmp, 'gen.v')
-	r := os.execute('${loom2v_bin()} ${ecu} ${os.join_path(scratch_ex, 'bus.dbc')} ${os.join_path(tmp,
-		'sig.v')} ${os.join_path(tmp, 'ports.v')} ${glue} ${os.join_path(tmp, 'manifest.csv')}')
+	r := os.exec([loom2v_bin(), ecu, os.join_path(scratch_ex, 'bus.dbc'), os.join_path(tmp, 'sig.v'),
+		os.join_path(tmp, 'ports.v'), glue, os.join_path(tmp, 'manifest.csv')])
 	return r.exit_code, r.output, os.read_file(glue) or { '' }
 }
 
@@ -146,7 +145,7 @@ write = { session = ["extended"], security = 1 }
 	limits := '\n[uds]\nsecurity_attempts = 2\nsecurity_delay_ms = 3000'
 	code, out, glue := generate('sec', diag_conn + gated + limits)
 	assert code == 0, out
-	for want in ['fn C.diag_sa_seed(&u8, int) int', 'fn diag_sa_seed_v(ctx voidptr, out &u8, n int) bool {',
+	for want in ['fn C.diag_sa_seed(&u8, int) int', 'fn diag_sa_seed_v(_ voidptr, out &u8, n int) bool {',
 		'return C.diag_sa_seed(out, n) != 0', 'fn C.diag_sa_key_ok(u8, &u8, &u8, int) int',
 		'return C.diag_sa_key_ok(level, seed, key, n) != 0', 'C.diag_sa_init()',
 		'g_diag.server.security = uds.SecurityOps{', 'seed:   diag_sa_seed_v', 'key_ok: diag_sa_key_v',

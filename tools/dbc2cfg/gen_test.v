@@ -48,10 +48,10 @@ VAL_ 256 Pct 255 "SNA" ;
 ')!
 	out := os.join_path(tmp, 'dbc_gen.v')
 	tool := os.join_path(tmp, 'dbc2cfg')
-	build := os.execute('${@VEXE} -path "@vlib|@vmodules|${@VMODROOT}" -o ${tool} ${os.join_path(@VMODROOT,
-		'tools', 'dbc2cfg')}')
+	build := os.exec([@VEXE, '-path', '@vlib|@vmodules|${@VMODROOT}', '-o', tool, os.join_path(@VMODROOT,
+		'tools', 'dbc2cfg')])
 	assert build.exit_code == 0, build.output
-	gen := os.execute('${tool} ${dbc} ${out}')
+	gen := os.exec([tool, dbc, out])
 	assert gen.exit_code == 0, gen.output
 	os.write_file(os.join_path(tmp, 'sat_test.v'), "module gen
 
@@ -152,7 +152,7 @@ fn test_infinities_and_not_a_number() {
 ")!
 	// the test file alone (V compiles the module's other files beside it): `v test` would hand the
 	// -path on to a shell unquoted
-	r := os.execute('${@VEXE} -enable-globals -path "@vlib|@vmodules|${@VMODROOT}" ${os.join_path(tmp,
-		'sat_test.v')}')
+	r := os.exec([@VEXE, '-enable-globals', '-path', '@vlib|@vmodules|${@VMODROOT}', os.join_path(tmp,
+		'sat_test.v')])
 	assert r.exit_code == 0, r.output
 }

@@ -204,8 +204,8 @@ fn test_the_scan_recognises_v_run() {
 // Makefile has, so make reads everything, prints its database and stops without running a
 // recipe; `-o gen/loom_build.mk` keeps it from remaking the one include that has a remake rule
 // (which would run generation). Nothing is built and nothing is written.
-fn default_goal(dir string, extra string) string {
-	r := os.execute('make -C ${os.quoted_path(dir)} -pq -o gen/loom_build.mk ${extra} no-such-goal-probe 2>/dev/null')
+fn default_goal(dir string, extra []string) string {
+	r := os.exec(['make', '-C', dir, '-pq', '-o', 'gen/loom_build.mk', ...extra, 'no-such-goal-probe'])
 	mut goal := ''
 	for l in r.output.split_into_lines() {
 		if l.starts_with('.DEFAULT_GOAL :=') {
@@ -232,7 +232,7 @@ fn test_including_tools_mk_keeps_every_default_goal() {
 		}
 		dir := os.dir(mk)
 		want := if dir == @VMODROOT { 'example' } else { 'all' }
-		for extra in ['', 'TOOL_DIR=${os.quoted_path(empty)}'] {
+		for extra in [[]string{}, ['TOOL_DIR=${empty}']] {
 			got := default_goal(dir, extra)
 			assert got == want, '${mk} ${extra}: a plain `make` builds `${got}`, not `${want}`'
 			n++
@@ -241,9 +241,10 @@ fn test_including_tools_mk_keeps_every_default_goal() {
 	assert n >= 72, 'asked make about only ${n / 2} Makefiles'
 }
 
-// make_q: does make consider `target` up to date? (`-q` runs no recipe and builds nothing)
-fn make_q(dir string, target string, extra string) bool {
-	return os.execute('${extra} make -q -C ${os.quoted_path(dir)} ${os.quoted_path(target)} 2>/dev/null').exit_code == 0
+// make_q: does make consider `target` up to date? (`-q` runs no recipe and builds nothing);
+// `env` holds VAR=value assignments put in make's environment
+fn make_q(dir string, target string, env []string) bool {
+	return os.exec(['env', ...env, 'make', '-q', '-C', dir, target]).exit_code == 0
 }
 
 fn set_mtime(path string, t i64) {
@@ -272,8 +273,8 @@ fn test_a_tool_is_rebuilt_when_any_input_changes() {
 	fake := os.join_path(d, 'fakev.sh')
 	os.write_file(fake, '#!/bin/sh\nexec ${os.quoted_path(@VEXE)} "\$@"\n') or { panic(err) }
 	os.chmod(fake, 0o755) or { panic(err) }
-	v := 'V=${os.quoted_path(@VEXE)}'
-	build := os.execute('make -C ${os.quoted_path(d)} all ${v} 2>&1')
+	v := 'V=${@VEXE}'
+	build := os.exec(['make', '-C', d, 'all', v])
 	assert build.exit_code == 0, build.output
 	tool := os.join_path(d, 'bin', '.tool-probe')
 	deps := os.read_file(tool + '.d') or { panic(err) }
@@ -286,51 +287,51 @@ fn test_a_tool_is_rebuilt_when_any_input_changes() {
 		set_mtime(f, old)
 	}
 	set_mtime(tool, now)
-	assert make_q(d, tool, v), 'a freshly built tool is out of date: the test proves nothing'
+	assert make_q(d, tool, [v]), 'a freshly built tool is out of date: the test proves nothing'
 
 	// a V source, a header reached only through `#flag -I`, a new file beside either
 	for f in [src, hdr] {
 		set_mtime(f, now + 1000)
-		assert !make_q(d, tool, v), '${f} changed and the tool is still up to date'
+		assert !make_q(d, tool, [v]), '${f} changed and the tool is still up to date'
 		set_mtime(f, old)
 	}
 	for f in [os.join_path(d, 'src', 'extra.v'), os.join_path(d, 'inc', 'extra.h')] {
 		os.write_file(f, '') or { panic(err) }
 		set_mtime(f, now + 1000)
-		assert !make_q(d, tool, v), '${f} appeared and the tool is still up to date'
+		assert !make_q(d, tool, [v]), '${f} appeared and the tool is still up to date'
 		os.rm(f) or { panic(err) }
 	}
-	assert make_q(d, tool, v)
+	assert make_q(d, tool, [v])
 
 	// the compiler and how it is asked: another V, $VFLAGS, the tool's flags
-	assert !make_q(d, tool, 'V=${os.quoted_path(fake)}'), 'another compiler and the tool is still up to date'
-	assert !make_q(d, tool, '${v} VFLAGS=-g'), 'VFLAGS changed and the tool is still up to date'
-	assert !make_q(d, tool, '${v} TOOL_FLAGS_probe=-g'), 'the tool flags changed and it is still up to date'
+	assert !make_q(d, tool, ['V=${fake}']), 'another compiler and the tool is still up to date'
+	assert !make_q(d, tool, [v, 'VFLAGS=-g']), 'VFLAGS changed and the tool is still up to date'
+	assert !make_q(d, tool, [v, 'TOOL_FLAGS_probe=-g']), 'the tool flags changed and it is still up to date'
 
 	// no record of what it was built from
 	for rec in ['.d', '.sig'] {
 		os.mv(tool + rec, tool + rec + '.away') or { panic(err) }
-		assert !make_q(d, tool, v), 'no ${rec} and the tool is still up to date'
+		assert !make_q(d, tool, [v]), 'no ${rec} and the tool is still up to date'
 		os.mv(tool + rec + '.away', tool + rec) or { panic(err) }
 	}
-	assert make_q(d, tool, v)
+	assert make_q(d, tool, [v])
 
 	// the signature is compared as written: one more space in it is another signature
 	sig := os.read_file(tool + '.sig') or { panic(err) }
 	sig_t := os.file_last_mod_unix(tool + '.sig')
 	os.write_file(tool + '.sig', sig.replace_once(' | ', ' |  ')) or { panic(err) }
 	set_mtime(tool + '.sig', sig_t)
-	assert !make_q(d, tool, v), 'a signature differing in whitespace and the tool is still up to date'
+	assert !make_q(d, tool, [v]), 'a signature differing in whitespace and the tool is still up to date'
 	os.write_file(tool + '.sig', sig) or { panic(err) }
 	set_mtime(tool + '.sig', sig_t)
-	assert make_q(d, tool, v)
+	assert make_q(d, tool, [v])
 
 	// a header behind `#flag -I` deleted (the wildcard alone would just stop naming it)
 	os.mv(hdr, hdr + '.away') or { panic(err) }
-	assert !make_q(d, tool, v), 'a header was deleted and the tool is still up to date'
+	assert !make_q(d, tool, [v]), 'a header was deleted and the tool is still up to date'
 	os.mv(hdr + '.away', hdr) or { panic(err) }
 	set_mtime(hdr, old)
-	assert make_q(d, tool, v)
+	assert make_q(d, tool, [v])
 
 	// the same records under another path (a moved checkout): they name the old output
 	moved := d + '_moved'
@@ -340,10 +341,10 @@ fn test_a_tool_is_rebuilt_when_any_input_changes() {
 	}
 	mtool := os.join_path(moved, 'bin', '.tool-probe')
 	set_mtime(mtool, now)
-	assert !make_q(moved, mtool, v), 'a record from another path vouches for the tool'
+	assert !make_q(moved, mtool, [v]), 'a record from another path vouches for the tool'
 
 	// tools.mk and the helper are prerequisites of every tool (asked of make, not of the text)
-	db := os.execute('make -pq -C ${os.quoted_path(d)} ${v} no-such-goal-probe 2>/dev/null').output
+	db := os.exec(['make', '-pq', '-C', d, v, 'no-such-goal-probe']).output
 	rule := db.split_into_lines().filter(it.starts_with(os.join_path(d, 'bin', '.tool-%:')))
 	assert rule.len == 1, 'no tool rule in the database'
 	assert rule[0].contains('/tools/tools.mk') && rule[0].contains('/scripts/build_tool.sh'), rule[0]

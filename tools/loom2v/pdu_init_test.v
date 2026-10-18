@@ -13,8 +13,7 @@ import tools.candb
 const pi_bin = os.join_path(os.temp_dir(), 'loom2v_pdu_init_${os.getpid()}_${time.now().unix_nano()}')
 
 fn testsuite_begin() {
-	r := os.execute('${@VEXE} -enable-globals -o ${pi_bin} ${os.join_path(@VMODROOT, 'tools',
-		'loom2v')}')
+	r := os.exec([@VEXE, '-enable-globals', '-o', pi_bin, os.join_path(@VMODROOT, 'tools', 'loom2v')])
 	assert r.exit_code == 0, r.output
 }
 
@@ -34,8 +33,8 @@ fn pi_generate(name string, ecu string, dbc string) (int, string, string) {
 	os.write_file(ecup, ecu) or { panic(err) }
 	os.write_file(dbcp, dbc) or { panic(err) }
 	glue := os.join_path(tmp, 'gen.v')
-	r := os.execute('${pi_bin} ${ecup} ${dbcp} ${os.join_path(tmp, 'sig.v')} ' +
-		'${os.join_path(tmp, 'ports.v')} ${glue} ${os.join_path(tmp, 'manifest.csv')}')
+	r := os.exec([pi_bin, ecup, dbcp, os.join_path(tmp, 'sig.v'), os.join_path(tmp, 'ports.v'),
+		glue, os.join_path(tmp, 'manifest.csv')])
 	return r.exit_code, r.output, os.read_file(glue) or { '' }
 }
 

@@ -187,14 +187,6 @@ pub fn (mut m ShellModule) on_in(now u64, f can.Frame) {
 	if m.link.busy() || f.len == 0 {
 		return
 	}
-	// split the line at the first space: [0..sp) = name, (sp..len) = args
-	mut sp := int(f.len)
-	for i in 0 .. int(f.len) {
-		if f.data[i] == ` ` {
-			sp = i
-			break
-		}
-	}
 	m.rsp.len = 0
 	m.dispatch(f.data, int(f.len), now, true, mut m.rsp)
 	m.link.send(&m.rsp.buf[0], m.rsp.len)
@@ -302,12 +294,12 @@ pub fn (mut m ShellModule) produce(now u64, mut f can.Frame) bool {
 
 // builtins ---------------------------------------------------------------------------------------
 
-fn clear_cmd(args &u8, args_len int, now u64, mut rsp Rsp) {
+fn clear_cmd(_ &u8, _ int, _ u64, mut rsp Rsp) {
 	rsp.write("(clearing is the client display's job)")
 	rsp.nl()
 }
 
-fn uptime_cmd(args &u8, args_len int, now u64, mut rsp Rsp) {
+fn uptime_cmd(_ &u8, _ int, now u64, mut rsp Rsp) {
 	secs := u32(now / 1_000_000)
 	rsp.write('up ')
 	rsp.write_u32(secs / 60)

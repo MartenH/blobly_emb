@@ -114,8 +114,8 @@ const img_setting_off = u8(0x02) // image byte 1: DTC setting was off (0x85) —
 pub struct Store {
 pub mut:
 	ctx      voidptr
-	put      fn (ctx voidptr, id u16, data &u8, len u16) bool
-	get      fn (ctx voidptr, id u16, out &u8, cap u16) u16
+	put      fn (ctx voidptr, id u16, data &u8, len u16) bool = unsafe { nil }
+	get      fn (ctx voidptr, id u16, out &u8, cap u16) u16 = unsafe { nil }
 	id       u16 // the status image's block
 	retry_us u64 // a refused automatic write waits this long before the next attempt
 }

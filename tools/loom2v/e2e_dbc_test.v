@@ -15,8 +15,7 @@ fn rand_suffix() string {
 
 // the generator is built once per run, from the source under test, and removed after it
 fn testsuite_begin() {
-	r := os.execute('${@VEXE} -enable-globals -o ${e2e_bin} ${os.join_path(@VMODROOT, 'tools',
-		'loom2v')}')
+	r := os.exec([@VEXE, '-enable-globals', '-o', e2e_bin, os.join_path(@VMODROOT, 'tools', 'loom2v')])
 	assert r.exit_code == 0, r.output
 }
 
@@ -51,8 +50,8 @@ fn overspeed_with_dbc(name string, edit fn (string) string, edit_dbc fn (string)
 		panic(err)
 	}
 	glue := os.join_path(tmp, 'gen.v')
-	r := os.execute('${e2e_loom2v_bin()} ${ecu} ${dbc} ${os.join_path(tmp,
-		'sig.v')} ${os.join_path(tmp, 'ports.v')} ${glue} ${os.join_path(tmp, 'manifest.csv')}')
+	r := os.exec([e2e_loom2v_bin(), ecu, dbc, os.join_path(tmp, 'sig.v'), os.join_path(tmp,
+		'ports.v'), glue, os.join_path(tmp, 'manifest.csv')])
 	return r.exit_code, r.output, os.read_file(glue) or { '' }
 }
 

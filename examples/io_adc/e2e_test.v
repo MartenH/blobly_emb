@@ -12,7 +12,7 @@ import time
 
 fn test_analog_input_drives_threshold_led() {
 	dir := os.real_path(os.dir(@FILE))
-	build := os.execute('make -C ${dir} V=${os.quoted_path(@VEXE)}')
+	build := os.exec(['make', '-C', dir, 'V=${@VEXE}'])
 	assert build.exit_code == 0, build.output
 
 	work := os.join_path(os.temp_dir(), 'io_adc_e2e_${os.getpid()}')
