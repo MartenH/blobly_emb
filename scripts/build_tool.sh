@@ -21,6 +21,21 @@ flags=$2
 src=$3
 
 mkdir -p "$(dirname "$out")"
+# One build per tool at a time: the lock is taken BEFORE the compile, so parallel builds of one tool
+# (several node makes, several tests asking sysmodel.tool_binary) wait for one compile instead of
+# each running their own — and a build that finds one published with its own signature while it
+# waited is done. Different tools still build in parallel (one lock each). "Published while it
+# waited" is proven by the binary's inode, not a time: a publication renames a new file into place,
+# so the inode changes, while a second-resolution mtime cannot tell a build done after an edit from
+# one done before it in the same second.
+was=$(stat -c %i "$out" 2>/dev/null || echo none)
+exec 9>"$out.lock"
+flock 9
+if [ -f "$out" ] && [ "$(stat -c %i "$out")" != "$was" ] &&
+	[ "$(cat "$out.sig" 2>/dev/null)" = "${TOOL_SIG:-}" ]; then
+	exit 0
+fi
+started=$(date +%s%N)
 tmp="$out.tmp.$$"
 # temporaries must not end in .d or .sig: tools.mk includes bin/.tool-*.d, and a make starting
 # while this one writes would read half a makefile
@@ -46,16 +61,15 @@ cdeps=$(tr -d '"'"'" <"$tmp.cflags" | awk '
 printf '%s\n' "$cdeps" | awk '$1 == "I" { print $2 }' >"$tmp.dirs"
 "$(dirname "$0")/vdeps.sh" "$out" "$tmp.srcs" "$tmp.dirs" >"$dtmp"
 
-# Publication: the old signature goes first (no record rebuilds the tool), then the
-# dependencies, then the binary, and the new signature last — so an interruption never leaves a
-# signature vouching for a binary it was not built with. bin/.tool-<name>.lock serialises it, so
-# two builds with different compilers cannot interleave their renames (one's signature beside the
-# other's binary).
+# Publication, under the lock taken above: the old signature goes first (no record rebuilds the
+# tool), then the dependencies, then the binary, and the new signature last — so an interruption
+# never leaves a signature vouching for a binary it was not built with.
 printf '%s\n' "${TOOL_SIG:-}" >"$out.sig.tmp.$$"
-(
-	flock 9
-	rm -f "$out.sig"
-	mv -f "$dtmp" "$out.d"
-	mv -f "$tmp" "$out"
-	mv -f "$out.sig.tmp.$$" "$out.sig"
-) 9>"$out.lock"
+rm -f "$out.sig"
+mv -f "$dtmp" "$out.d"
+mv -f "$tmp" "$out"
+mv -f "$out.sig.tmp.$$" "$out.sig"
+# said, with its time: a tool build takes seconds, and a build that runs one should show where
+name=$(basename "$out")
+awk -v ns=$(($(date +%s%N) - started)) -v name="${name#.tool-}" \
+	'BEGIN { printf "  compiled tools/%s: %.2f s\n", name, ns / 1e9 }' >&2

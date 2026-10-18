@@ -2,7 +2,7 @@ module main
 
 // @verifies REQ-DIAG-017
 import os
-import time
+import tools.sysmodel
 
 // Parameters on a ThreadX target (docs/diagnostics.md §3.4, R7): the table restored before the
 // kernel and published into each reading FB's IOC cell, bound to the server on the comm thread, its
@@ -51,16 +51,7 @@ id           = 0x0112
 param_status = true
 '
 
-const pt_bin = os.join_path(os.temp_dir(), 'loom2v_param_target_${os.getpid()}_${time.now().unix_nano()}')
-
-fn testsuite_begin() {
-	r := os.exec([@VEXE, '-enable-globals', '-o', pt_bin, os.join_path(@VMODROOT, 'tools', 'loom2v')])
-	assert r.exit_code == 0, r.output
-}
-
-fn testsuite_end() {
-	os.rm(pt_bin) or {}
-}
+const pt_bin = sysmodel.tool_binary('loom2v') or { panic(err) }
 
 // one_thread: the fixture with every FB on its first thread
 fn one_thread(src string) string {

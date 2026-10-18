@@ -26,6 +26,10 @@ run-example:
 list:
 	@for d in examples/*/; do if [ -f "$$d/Makefile" ]; then basename "$$d"; fi; done
 
+# one repo tool by name: `make tool-mkimage` builds bin/.tool-mkimage if it is not current
+# (tools/tools.mk's targets are absolute paths, so `make bin/.tool-x` names no rule)
+tool-%: $(TOOL_DIR)/.tool-% ;
+
 # which V does CI use, and is it the one you are building with? advisory, never fails.
 v-pin:
 	@./scripts/v_pin.sh "$(V)"
@@ -121,15 +125,20 @@ trace-check: $(TOOL_trace)
 # coherence, routes. The build gate for a system of ECUs, as `check` is per node.
 # Override with SYSTEM=path/to/system.toml.
 SYSTEM ?= examples/system_bench/system.toml
+# The tools the system checks run per node (and syscheck's sysgen run), built by tools.mk and
+# handed over through BLOB_TOOL_DIR (tools/sysmodel tool_dir_env): as prerequisites they are
+# current, and the checks run them instead of compiling their own copies each run.
+SYSTEM_GATE_TOOLS = $(TOOL_sysgen) $(TOOL_ecucheck) $(TOOL_loom2v) $(TOOL_dbcmerge)
+SYSTEM_TOOLS_ENV = BLOB_TOOL_DIR=$(TOOL_DIR)
 .PHONY: syscheck gen-system
-syscheck: $(TOOL_syscheck)
-	$(TOOL_syscheck) $(SYSTEM)
+syscheck: $(TOOL_syscheck) $(SYSTEM_GATE_TOOLS)
+	$(SYSTEM_TOOLS_ENV) $(TOOL_syscheck) $(SYSTEM)
 
 # Generate a complete ecu.toml per node from a DISSOLVED system.toml (P1b): the
 # cross-node signals declared once + each node's authored internals -> gen-<node>.toml,
 # each gated by ecucheck. docs/multi-node.md. Override with SYSTEM=.
-gen-system: $(TOOL_sysgen)
-	$(TOOL_sysgen) $(SYSTEM)
+gen-system: $(TOOL_sysgen) $(SYSTEM_GATE_TOOLS)
+	$(SYSTEM_TOOLS_ENV) $(TOOL_sysgen) $(SYSTEM)
 
 # ---- Misc -------------------------------------------------------------------
 lint:

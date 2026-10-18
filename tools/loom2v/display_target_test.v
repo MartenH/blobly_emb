@@ -1,6 +1,7 @@
 module main
 
 import os
+import tools.sysmodel
 
 // [display] (gen_display.v): the display thread the generator creates, where it sits among the
 // image's threads, what gen/loom_build.mk links for it, and what it refuses. Runs the real
@@ -10,12 +11,7 @@ import os
 const display_fixture = os.join_path(@DIR, 'testdata', 'threadx_node')
 
 fn display_loom2v() string {
-	bin := os.join_path(os.temp_dir(), 'loom2v_display_target_${os.getpid()}')
-	if !os.exists(bin) {
-		r := os.exec([@VEXE, '-enable-globals', '-o', bin, os.join_path(@VMODROOT, 'tools', 'loom2v')])
-		assert r.exit_code == 0, r.output
-	}
-	return bin
+	return sysmodel.tool_binary('loom2v') or { panic(err) }
 }
 
 // without_trace: the fixture's config with its [trace] table cut (it runs to the next table)

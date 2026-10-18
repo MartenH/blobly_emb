@@ -4,10 +4,12 @@
 // Errors exit non-zero — the build gate for a system of ECUs, the way ecucheck
 // gates one node.
 //
-//   v run tools/syscheck examples/system_bench/system.toml
+//   make tool-syscheck   # built once by tools/tools.mk, rebuilt when its sources change
+//   bin/.tool-syscheck examples/system_bench/system.toml
 module main
 
 import os
+import time
 import sysmodel
 
 fn main() {
@@ -16,6 +18,7 @@ fn main() {
 		exit(2)
 	}
 	path := os.args[1]
+	total := time.new_stopwatch()
 	mut sys := sysmodel.parse_system(path) or {
 		eprintln('syscheck: ${err}')
 		exit(2)
@@ -109,7 +112,7 @@ fn main() {
 	}
 
 	if nerr == 0 {
-		println('syscheck: OK (${nwarn} warning(s))')
+		println('syscheck: OK (${nwarn} warning(s)) in ${sysmodel.secs(total)}')
 		exit(0)
 	}
 	eprintln('syscheck: ${nerr} error(s), ${nwarn} warning(s)')

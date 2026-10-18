@@ -4,7 +4,8 @@
 // that carries every frame/signal. Text-level: union BU_ nodes, concatenate BO_/SG_
 // blocks (rejecting a duplicate CAN id), and carry the value tables + attributes.
 //
-//   v run tools/dbcmerge/gen.v <out.dbc> <in1.dbc> <in2.dbc> [...]
+//   make tool-dbcmerge   # built once by tools/tools.mk, rebuilt when its sources change
+//   bin/.tool-dbcmerge <out.dbc> <in1.dbc> <in2.dbc> [...]
 module main
 
 import os

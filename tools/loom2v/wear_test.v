@@ -2,7 +2,7 @@ module main
 
 // @verifies REQ-NVM-010
 import os
-import time
+import tools.sysmodel
 
 // The journal's wear check (gen_wear.v): every writer — persisted signals, clean markers, the fault
 // memory, the parameters — in one computation, refused at generation below `min_years` with each
@@ -10,9 +10,9 @@ import time
 // with a connection, a fault, parameters and [nvm] appended, and on system_full's lowered nodes.
 const fixture_dir = os.join_path(@DIR, 'testdata', 'threadx_node')
 
-const wt_bin = os.join_path(os.temp_dir(), 'loom2v_wear_${os.getpid()}_${time.now().unix_nano()}')
+const wt_bin = sysmodel.tool_binary('loom2v') or { panic(err) }
 
-const wt_sysgen = os.join_path(os.temp_dir(), 'sysgen_wear_${os.getpid()}_${time.now().unix_nano()}')
+const wt_sysgen = sysmodel.tool_binary('sysgen') or { panic(err) }
 
 // a node with a persisted fault memory (one snapshot DTC) and two parameters, on the NM fixture
 const wt_cfg = '
@@ -61,21 +61,6 @@ write = { session = ["extended"], security = 1 }
 [nvm]
 min_write_ms = 1000
 '
-
-fn testsuite_begin() {
-	for out, tool in {
-		wt_bin:    'loom2v'
-		wt_sysgen: 'sysgen'
-	} {
-		r := os.exec([@VEXE, '-enable-globals', '-o', out, os.join_path(@VMODROOT, 'tools', tool)])
-		assert r.exit_code == 0, r.output
-	}
-}
-
-fn testsuite_end() {
-	os.rm(wt_bin) or {}
-	os.rm(wt_sysgen) or {}
-}
 
 // one_thread: the fixture with every FB on its first thread (faults in a multi-thread partition
 // are not generated), LoadSlow reading both parameters

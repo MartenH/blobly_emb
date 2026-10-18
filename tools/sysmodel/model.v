@@ -16,6 +16,7 @@ module sysmodel
 
 import os
 import sync
+import time
 import rand
 import toml
 import tools.candb
@@ -1412,12 +1413,12 @@ fn run_capture(exe string, args []string) (string, int) {
 }
 
 // ecucheck_errors runs the real per-node gate (tools/ecucheck) on a node's
-// ecu.toml and returns its error lines (empty = clean). Running the REAL @VEXE
+// ecu.toml and returns its error lines (empty = clean). Running the REAL tool
 // keeps this the EXACT validation loom2v builds behind — no re-implementation to
 // drift. ecucheck prints "<file>: <msg>" per error and a "ecucheck: N …"
 // summary, then exits non-zero; we keep the messages, drop the summary/prefix.
 // v_compiler_noise reports whether a captured line is the V COMPILER talking about our own
-// source, not the tool talking about the config. The tools are built apart now (build_tool), so
+// source, not the tool talking about the config. The tools are built apart now (tool_binary), so
 // a successful build's notices no longer reach this stream; kept for a tool that itself runs
 // the compiler. Under `v run` a notice or warning in any transitively-compiled file landed on
 // the same stream as the tool's output --
@@ -1550,74 +1551,88 @@ pub fn (s System) someip_event_partner(n Node, fr SysFrame) ?string {
 	return none
 }
 
-// build_tool compiles a repo tool into `dir` (a private directory the caller owns) and returns
-// the binary's path — `.exe` on Windows, which is what `v -o` writes there. Never `v run`: that
-// compiles to a path derived from the tool's source and deletes the binary when it exits, so two
-// concurrent runs of one tool (parallel tests, syscheck beside sysgen) share one file and one
-// deletes it under the other — `generated tcu: No such file or directory` (#313).
-pub fn build_tool(src string, globals bool, dir string) !string {
-	mut bin := os.join_path(dir, os.file_name(src).all_before('.'))
-	$if windows {
-		bin += '.exe'
+// tool_dir_env names the directory make keeps the repo's tools in (tools/tools.mk: $(TOOL_DIR)).
+// Only make sets it, for a run whose rule lists every tool the run calls as a prerequisite, so each
+// `.tool-<name>` there is current and is used as it is.
+pub const tool_dir_env = 'BLOB_TOOL_DIR'
+
+// tool_binary: the repo tool `name` (tools/tools.mk's TOOL_SRC_<name>) as ONE binary for every
+// caller — the system checks, sysgen, the tests — so a tool is compiled once, not once per process
+// (three private V builds were ~4 s of a ~5 s sysgen run, and every loom2v test built its own).
+// Under make, the binary make handed over (tool_dir_env); otherwise make is asked for
+// `bin/.tool-<name>`, which tools.mk rebuilds only when its sources, V or flags changed — with
+// make's own V, so a test and an ordinary make sign the tool alike and neither rebuilds the
+// other's. Parallel callers that find a tool stale wait for one compile: scripts/build_tool.sh
+// builds one tool at a time and skips a build another published meanwhile. Asked once per
+// process: a check costs ~170 ms and the system checks run a tool per node, while nothing a run
+// does changes the tool's sources. Never `v run`, whose shared binary is deleted on exit (#313).
+pub fn tool_binary(name string) !string {
+	if bin := prebuilt_tool(name) {
+		return bin
 	}
-	mut args := if globals { ['-enable-globals'] } else { []string{} }
-	args << ['-o', bin, src]
-	out, code := run_capture(@VEXE, args)
-	if code != 0 {
-		return error('cannot build ${src}: ${out.trim_space()}')
+	tool_bins.mu.lock()
+	defer {
+		tool_bins.mu.unlock()
+	}
+	if bin := tool_bins.bins[name] {
+		if os.is_file(bin) {
+			return bin
+		}
+	}
+	dir := os.join_path(@VMODROOT, 'bin')
+	bin := os.join_path(dir, '.tool-${name}')
+	// a fresh top-level make (one started inside another must not inherit its jobserver), told
+	// where the tools live: an exported TOOL_DIR would otherwise move its target away from `bin`
+	out, code := run_capture('env', ['-u', 'MAKEFLAGS', '-u', 'MFLAGS', '-u', 'MAKELEVEL', 'make',
+		'-s', '--no-print-directory', '-C', @VMODROOT, 'TOOL_DIR=${dir}', bin])
+	if code != 0 || !os.is_file(bin) {
+		return error('cannot build tools/${name}: ${out.trim_space()}')
+	}
+	// what build_tool.sh said: the tool it compiled and how long it took
+	if out.trim_space() != '' {
+		eprintln(out.trim_right('\n'))
+	}
+	tool_bins.bins[name] = bin
+	return bin
+}
+
+// ToolBins: the tool binaries this process has had from make (tool_binary)
+struct ToolBins {
+mut:
+	mu   sync.Mutex
+	bins map[string]string
+}
+
+__global tool_bins = ToolBins{}
+
+// prebuilt_tool: make's binary for `name`, when make said where
+fn prebuilt_tool(name string) ?string {
+	dir := os.getenv(tool_dir_env)
+	if dir == '' {
+		return none
+	}
+	bin := os.join_path(dir, '.tool-${name}')
+	if !os.is_file(bin) {
+		return none
 	}
 	return bin
 }
 
-// run_tool runs a repo tool, built once per process (cached_tool). A tool that does not BUILD is
-// an error, kept apart from what the tool says about the config.
-pub fn run_tool(src string, globals bool, args []string) !(string, int) {
-	bin := cached_tool(src, globals)!
+// run_tool runs the repo tool `name` (tool_binary). A tool that does not BUILD is an error, kept
+// apart from what the tool says about the config.
+pub fn run_tool(name string, args []string) !(string, int) {
+	bin := tool_binary(name)!
 	out, code := run_capture(bin, args)
 	return out, code
 }
 
-// ToolCache: the tools this process has built. A build costs seconds under V3 and the system
-// checks run the same few tools node after node, so each is built once, into its own private
-// directory (two tools may share a file name: cfg2v/gen.v, ecucheck/gen.v), removed at exit.
-struct ToolCache {
-mut:
-	mu   sync.Mutex
-	dirs []string
-	bins map[string]string
-}
-
-__global tool_cache = ToolCache{}
-
-fn cached_tool(src string, globals bool) !string {
-	tool_cache.mu.lock()
-	defer {
-		tool_cache.mu.unlock()
-	}
-	key := '${globals} ${src}'
-	if bin := tool_cache.bins[key] {
-		if os.exists(bin) {
-			return bin
-		}
-	}
-	dir := private_temp_dir('blobly_tool')!
-	if tool_cache.dirs.len == 0 {
-		at_exit(remove_tool_dirs) or {}
-	}
-	tool_cache.dirs << dir
-	bin := build_tool(src, globals, dir)!
-	tool_cache.bins[key] = bin
-	return bin
-}
-
-fn remove_tool_dirs() {
-	for dir in tool_cache.dirs {
-		os.rmdir_all(dir) or {}
-	}
+// secs: a stopwatch's time so far, as a progress line prints it
+pub fn secs(sw time.StopWatch) string {
+	return '${f64(sw.elapsed().milliseconds()) / 1000.0:.2f} s'
 }
 
 pub fn ecucheck_errors(node_path string) []string {
-	output, code := run_tool('${@VMODROOT}/tools/ecucheck/gen.v', false, [node_path]) or {
+	output, code := run_tool('ecucheck', [node_path]) or {
 		return [err.msg()]
 	}
 	if code == 0 {
@@ -1679,7 +1694,7 @@ pub fn private_temp_dir(prefix string) !string {
 // `out_dir` is a scratch directory: sysgen --out writes the generated configs and copies each
 // referenced DBC there, so nothing touches the source tree.
 pub fn sysgen_errors(system_path string, out_dir string) []string {
-	output, code := run_tool('${@VMODROOT}/tools/sysgen', true, [system_path, '--out', out_dir]) or {
+	output, code := run_tool('sysgen', [system_path, '--out', out_dir]) or {
 		return [err.msg()]
 	}
 	if code == 0 {
@@ -1694,7 +1709,8 @@ pub fn sysgen_errors(system_path string, out_dir string) []string {
 		body := t.all_after('sysgen:').trim_space()
 		// the per-node "<node> -> <path> (ok)" progress lines are not errors; a refusal may
 		// contain an arrow of its own, so match the progress line's whole shape
-		if (body.contains(' -> ') && body.ends_with('(ok)')) || body.starts_with('refusing to generate') {
+		if (body.contains(' -> ') && body.contains(' (ok, ') && body.ends_with(' s)'))
+			|| body.starts_with('refusing to generate') {
 			continue
 		}
 		out << body
@@ -1712,7 +1728,7 @@ pub fn sysgen_errors(system_path string, out_dir string) []string {
 pub fn dbcmerge_errors(out string, ins []string) []string {
 	mut args := [out]
 	args << ins
-	output, code := run_tool('${@VMODROOT}/tools/dbcmerge/gen.v', false, args) or {
+	output, code := run_tool('dbcmerge', args) or {
 		return ['dbcmerge: ${err.msg()}']
 	}
 	if code == 0 {
@@ -1764,7 +1780,7 @@ pub fn loom2v_errors(node_path string, dbc_path string) []string {
 	ports := os.join_path(tmp, 'ports.v')
 	glue := os.join_path(tmp, 'glue.v')
 	man := os.join_path(tmp, 'manifest.toml')
-	output, code := run_tool('${@VMODROOT}/tools/loom2v', true, [node_path, dbc_path, sig, ports,
+	output, code := run_tool('loom2v', [node_path, dbc_path, sig, ports,
 		glue, man]) or { return [err.msg()] }
 	if code == 0 {
 		return []string{}

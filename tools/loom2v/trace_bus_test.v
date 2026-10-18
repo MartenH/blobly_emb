@@ -4,28 +4,9 @@ import os
 import toml
 import tools.sysmodel
 
-// the tools these tests run, built once per test process into a private directory — never
-// `v run`, whose shared, self-deleting binary races a parallel test running the same tool (#313)
-const tool_dir = sysmodel.private_temp_dir('blobly_test_tools') or { panic(err) }
-
+// built_tool: the repo tool `name`, one binary shared with every other caller (sysmodel.tool_binary)
 fn built_tool(name string) string {
-	bin := os.join_path(tool_dir, name)
-	$if windows {
-		if os.exists(bin + '.exe') {
-			return bin + '.exe'
-		}
-	} $else {
-		if os.exists(bin) {
-			return bin
-		}
-	}
-	return sysmodel.build_tool(os.join_path(@VMODROOT, 'tools', name), true, tool_dir) or {
-		panic(err)
-	}
-}
-
-fn testsuite_end() {
-	os.rmdir_all(tool_dir) or {}
+	return sysmodel.tool_binary(name) or { panic(err) }
 }
 
 // A bus can carry no signals at all and still need a partition: the comm thread is where the

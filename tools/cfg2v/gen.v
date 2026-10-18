@@ -3,7 +3,8 @@
 // transport, partition table) consumed by the runtime. Nothing parses TOML on
 // the target. Companion to tools/dbc2cfg (which generates the signal codec).
 //
-//   v run tools/cfg2v/gen.v config/ecu.toml gen/ecu_gen.v
+//   make tool-cfg2v   # built once by tools/tools.mk, rebuilt when its sources change
+//   bin/.tool-cfg2v config/ecu.toml gen/ecu_gen.v
 module main
 
 import os

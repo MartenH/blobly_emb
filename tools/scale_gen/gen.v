@@ -10,7 +10,8 @@
 //     each FB reads ~10 signals (CAN rx + internal) and writes ~10 (internal +
 //     some CAN tx + a cross-core hand-off), every 10 ms.
 //
-//   v run tools/scale_gen/gen.v [partitions] [buses] [fbs_per_partition]
+//   make tool-scale_gen   # built once by tools/tools.mk, rebuilt when its sources change
+//   bin/.tool-scale_gen [partitions] [buses] [fbs_per_partition]
 // writes bus.dbc, ecu.toml, app/scale_fbs.v into the current directory.
 module main
 

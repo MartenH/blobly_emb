@@ -8,7 +8,8 @@
 // BEFORE the generators (cfg2v/loom2v/sigmap all parse the same file), reporting EVERY
 // problem at once, so no generator ever sees an invalid config.
 //
-//   v run tools/ecucheck/gen.v <ecu.toml>
+//   make tool-ecucheck   # built once by tools/tools.mk, rebuilt when its sources change
+//   bin/.tool-ecucheck <ecu.toml>
 module main
 
 import os

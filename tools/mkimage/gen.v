@@ -4,7 +4,8 @@
 // factory image programmed whole over SWD — the field path leaves it unset
 // and the ECU's check routine marks after verifying).
 //
-//   v run tools/mkimage <app.bin> <out.img> <sw_version> [--valid] [--pad-vectors] [--sign <seed>]
+//   make tool-mkimage   # built once by tools/tools.mk, rebuilt when its sources change
+//   bin/.tool-mkimage <app.bin> <out.img> <sw_version> [--valid] [--pad-vectors] [--sign <seed>]
 //
 // --pad-vectors: pad 0xFF between the header and the app so the app's vector
 // table lands at +0x400 from the region base (Cortex-M VTOR alignment — the

@@ -1,7 +1,7 @@
 module main
 
 import os
-import time
+import tools.sysmodel
 import tools.candb
 
 // @verifies REQ-COM-010
@@ -11,22 +11,13 @@ import tools.candb
 // host bridge's own sends and its gateway signal routes (the target comm thread's producers are
 // pinned in rx_target_test.v, beside its fixture).
 
-const ts_bin = os.join_path(os.temp_dir(), 'loom2v_tx_sat_${os.getpid()}_${time.now().unix_nano()}')
+const ts_bin = sysmodel.tool_binary('loom2v') or { panic(err) }
 
 const ts_did = '
 [[did]]
 id             = 0x0120
 tx_saturations = true
 '
-
-fn testsuite_begin() {
-	r := os.exec([@VEXE, '-enable-globals', '-o', ts_bin, os.join_path(@VMODROOT, 'tools', 'loom2v')])
-	assert r.exit_code == 0, r.output
-}
-
-fn testsuite_end() {
-	os.rm(ts_bin) or {}
-}
 
 // ts_generate runs loom2v on example `ex` (its ecu.toml edited, `extra` appended) and its DBC.
 fn ts_generate(name string, ex string, edit fn (string) string, extra string) (int, string, string) {

@@ -109,6 +109,12 @@ every V file `-dump-files` reports (vlib's too), every C source and `#flag -I` d
 `v version`, the tool's flags, `$VFLAGS`), `tools.mk` and the helper. The list lives in `tools.mk`;
 `tools/loom2v/no_v_run_makefiles_test.v` changes each kind of input and asks make, pins that no
 Makefile runs `v run`, and that including `tools.mk` leaves every default goal where it was.
+**And nothing outside make compiles a tool of its own either**: `sysmodel.tool_binary(name)` is
+the one way V code gets a repo tool — the system checks, sysgen, syscheck and the tests alike. Under
+make it is the binary make handed over (`BLOB_TOOL_DIR`, set by the root Makefile's `gen-system` and
+`syscheck`, which list every tool the run calls as a prerequisite); otherwise make is asked for
+`bin/.tool-<name>` once per process, so a tool is compiled once and shared, never a private copy per
+process or per test (three such builds were ~4 s of a ~5 s sysgen run).
 The same goes for what an IMAGE transpiles: every `app.c` (and a bootloader's `boot.c`) depends on
 what V compiled into it and how V was run — `$(call v_unrecorded,$(BUILD)/app.c)` among its
 prerequisites (no record, remade), `$(call v_sign,$(BUILD)/app.c,$(TRANSPILE_FLAGS))` (the V command,

@@ -2,7 +2,7 @@ module main
 
 // @verifies REQ-COM-008 REQ-E2E-002 REQ-DIAG-011
 import os
-import time
+import tools.sysmodel
 import tools.candb
 
 // The ThreadX comm thread's receive path (docs/diagnostics.md R5): a frame with a deadline, E2E or a
@@ -12,7 +12,7 @@ import tools.candb
 // testdata/threadx_node (Command arrives on CmdFrame from the Tester) with its FBs on one thread.
 const rt_fixture = os.join_path(@DIR, 'testdata', 'threadx_node')
 
-const rt_bin = os.join_path(os.temp_dir(), 'loom2v_rx_target_${os.getpid()}_${time.now().unix_nano()}')
+const rt_bin = sysmodel.tool_binary('loom2v') or { panic(err) }
 
 const rt_conn = '
 [isotp]
@@ -74,15 +74,6 @@ cycle = "power"
 [nvm]
 min_write_ms = 1000
 '
-
-fn testsuite_begin() {
-	r := os.exec([@VEXE, '-enable-globals', '-o', rt_bin, os.join_path(@VMODROOT, 'tools', 'loom2v')])
-	assert r.exit_code == 0, r.output
-}
-
-fn testsuite_end() {
-	os.rm(rt_bin) or {}
-}
 
 // rt_one_thread: the fixture's FBs on its first thread
 fn rt_one_thread(src string) string {
