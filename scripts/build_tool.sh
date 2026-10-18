@@ -24,12 +24,15 @@ mkdir -p "$(dirname "$out")"
 # One build per tool at a time: the lock is taken BEFORE the compile, so parallel builds of one tool
 # (several node makes, several tests asking sysmodel.tool_binary) wait for one compile instead of
 # each running their own — and a build that finds one published with its own signature while it
-# waited is done. Different tools still build in parallel (one lock each).
-asked=$(date +%s)
+# waited is done. Different tools still build in parallel (one lock each). "Published while it
+# waited" is proven by the binary's inode, not a time: a publication renames a new file into place,
+# so the inode changes, while a second-resolution mtime cannot tell a build done after an edit from
+# one done before it in the same second.
+was=$(stat -c %i "$out" 2>/dev/null || echo none)
 exec 9>"$out.lock"
 flock 9
-if [ -f "$out" ] && [ "$(cat "$out.sig" 2>/dev/null)" = "${TOOL_SIG:-}" ] &&
-	[ "$(stat -c %Y "$out")" -ge "$asked" ]; then
+if [ -f "$out" ] && [ "$(stat -c %i "$out")" != "$was" ] &&
+	[ "$(cat "$out.sig" 2>/dev/null)" = "${TOOL_SIG:-}" ]; then
 	exit 0
 fi
 started=$(date +%s%N)
