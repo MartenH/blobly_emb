@@ -75,7 +75,7 @@ gen: gen/.stamp
 # are cross-node (a peer that stops reading one signal of an event this node sends makes the
 # system invalid). Depending only on our own file left a stale image passing a gate that would
 # now reject it (codex on #245).
-gen/.stamp: $(SYSDIR)/system.toml $(wildcard $(SYSDIR)/nodes/*/ecu.toml) $(wildcard app/*.v) $(GENSRC) $(TOOL_loom2v)
+gen/.stamp: $(SYSDIR)/system.toml $(call net_sign,gen/net) $(wildcard $(SYSDIR)/nodes/*/ecu.toml) $(wildcard app/*.v) $(GENSRC) $(TOOL_loom2v)
 	@mkdir -p gen ports sig
 	$(MAKE) -C $(REPO) gen-system SYSTEM=examples/system_full/system.toml
 	cd $(REPO) && $(TOOL_loom2v) examples/system_full/gen-$(NAME).toml $(EX)/bus.dbc \

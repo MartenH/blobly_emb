@@ -87,6 +87,11 @@ v_unrecorded = $(if $(wildcard $(1).d),,v-unrecorded)
 # same <flags>, so the signature is what was actually run.
 v_sigtext = $(V) | $(TOOL_V_PATH) | $(TOOL_V_VERSION) | $(1) | $(VFLAGS)
 v_sign = $(call tool_signed,$(1),$(call v_sigtext,$(2)))
+# A system's bench network is an input as well: BLOB_NET_SUBNET replaces a someip segment's `subnet`
+# (tools/sysmodel subnet.v), so an image whose addresses come from it — a node with an `endpoint` —
+# names $(call net_sign,gen/net) beside its generated config, and moving the bench remakes it.
+# Signed as `BLOB_NET_SUBNET=<value>`, never as the bare value: tool_same cannot match an empty text.
+net_sign = $(call tool_signed,$(1),BLOB_NET_SUBNET=$(BLOB_NET_SUBNET))
 # <stem>.sig holding <text>: rewritten only when it differs, so an unchanged signature keeps its age.
 # Compared as written, never stripped: strip collapses the whitespace inside a quoted argument
 # (-DMSG='"a b"' and '"a  b"' are two programs), so neither a signature's text nor its reading is.

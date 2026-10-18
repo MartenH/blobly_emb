@@ -279,12 +279,13 @@ for the bus tester too — 7/7 on the bench 2026-10-02 (an image built from #347
 merged as c22eb18; `requirements/verifications.toml` `sysnode-doip-hardware`).
 
 **Declared by the system, not the node** (rung 6): sysnode's address and DoIP entity
-address are `endpoint = { address = "192.168.0.50", port = 30490 }` and
+address are `endpoint = { host = 50, port = 30490 }` (host 50 of the `tel` segment's `subnet`, see
+below) and
 `doip = { logical = 0x07A0 }` on its `[[node]]` in `examples/system_full/system.toml`;
 sysgen lowers them into its `[doip]` and — because sysnode is now a member of the `tel`
 SOME/IP segment beside tcu — its `[bus.eth0]`/`[someip]` too. It publishes one event
 there, `GwStatus` (0x8020, `GwUptime { seconds u32 }`, cyclic 1 s, from the GwHealth FB),
-to the bench tool's endpoint (192.168.0.190:30491, the same one tcu sends to), and its
+to the bench tool's endpoint (host 190, port 30491 — the same one tcu sends to), and its
 CAN routes are unchanged: nothing routes between CAN and SOME/IP. So the image runs the
 comm thread (routes, NM, the diagnostic server), the eth thread (SOME/IP) and the doip
 threads on one NetX, and its node `ecu.toml` authors none of its network. The tel segment
@@ -300,6 +301,34 @@ network and a `[doip]` node's bootloader (`boot/boot.mk`) are compiled with it, 
 answers on the same subnet. `tools/netcfg` is the one rule syscheck and the node gate apply: a
 contiguous mask of /1../30, a gateway inside the subnet that is neither its network nor its
 broadcast address, and an address that is a host of it.
+
+### Moving the bench network (`subnet`, `BLOB_NET_SUBNET`)
+
+A someip segment may state its network once — `subnet = "192.168.77.0/24"` on `[bus.tel]` — and
+then each member's `endpoint` gives only its `host` number (`host = 50` is 192.168.77.50); an
+`address` is refused there, since it would not move with the segment. The subnet's mask is the
+nodes' netmask and its `.1` their default gateway (an endpoint with `host` gives neither). `system_full` does this, so its whole bench
+network is that one value: the default, 192.168.77.0/24, suits a dedicated router for the bench —
+a network of its own, which DoIP discovery's broadcast and SOME/IP need anyway, and which stays off
+an office or home LAN's usual 192.168.0.x/1.x.
+
+To put the boards on another network instead — your own LAN, a router already configured
+differently — set **`BLOB_NET_SUBNET=<network>/<prefix>`** (say in your shell profile) and rebuild.
+It replaces the segment's `subnet` wherever the system is read (syscheck, sysgen), the node
+images that carry an address record it (`$(call net_sign,gen/net)` in `tools/tools.mk`), so a
+changed value regenerates them, and refusing a value that is not a network is the same rule as
+for the file. The addresses are compiled into the images — the tester's too, since tcu sends to
+it — so the host running blobly_net must be at the tester's host number on that network, and the
+boards must be reflashed after a change.
+
+sysgen writes the result to `gen-net.env` beside system.toml (`SYSNODE_ADDR=…`, `TCU_ADDR=…`,
+`TESTER_ADDR=…`, each with its `_PORT`) on every generation — so it states the LAST one, which the
+flashed images match only if they were built since — and the bench scripts read it rather than
+keep a copy:
+`test/net_env.sh` for the shell, `test/tcu_e2e.lua` and `test/doip_entity.py` directly. The two
+`.blobnet` projects (`test/doip_bench.blobnet`, `test/diag_bench.blobnet`) still name sysnode's
+address literally — a project cannot read the system's yet — so a bench on another network edits
+those two lines too.
 
 ### The entity at the transport level (ISO 13400-2:2012)
 
