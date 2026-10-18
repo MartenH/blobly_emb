@@ -22,11 +22,13 @@ LVGL_UNUSED    = drivers libs debugging others widgets/property image/svg \
                  stdlib/clib stdlib/rtthread stdlib/micropython stdlib/uefi
 LVGL_C        := $(filter-out $(foreach d,$(LVGL_UNUSED),$(LVGL)/src/$(d)/%),$(shell find $(LVGL)/src -name '*.c' 2>/dev/null))
 LVGL_OBJ       = $(patsubst $(LVGL)/src/%.c,$(BUILD)/lvgl/%.o,$(LVGL_C))
-# `ar -rc` replaces and adds members but never removes one, and a prerequisite taken off LVGL_OBJ
-# leaves the archive current, so an archive holding a member the list no longer names is deleted
-# here and rebuilt from exactly the listed objects
+# `ar -rc` replaces and adds members but never removes one, and a change to LVGL_OBJ can leave the
+# archive current either way (a member dropped, or one added whose object an earlier build left
+# behind), so an archive whose members are not exactly the listed objects is deleted here and
+# rebuilt from them
 ifneq ($(wildcard $(LVGL_A)),)
-ifneq ($(filter-out $(notdir $(LVGL_OBJ)),$(shell $(AR) t $(LVGL_A) 2>/dev/null)),)
+LVGL_MEMBERS := $(shell $(AR) t $(LVGL_A) 2>/dev/null)
+ifneq ($(filter-out $(notdir $(LVGL_OBJ)),$(LVGL_MEMBERS))$(filter-out $(LVGL_MEMBERS),$(notdir $(LVGL_OBJ))),)
 $(shell rm -f $(LVGL_A))
 endif
 endif
