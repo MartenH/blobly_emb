@@ -22,6 +22,14 @@ LVGL_UNUSED    = drivers libs debugging others widgets/property image/svg \
                  stdlib/clib stdlib/rtthread stdlib/micropython stdlib/uefi
 LVGL_C        := $(filter-out $(foreach d,$(LVGL_UNUSED),$(LVGL)/src/$(d)/%),$(shell find $(LVGL)/src -name '*.c' 2>/dev/null))
 LVGL_OBJ       = $(patsubst $(LVGL)/src/%.c,$(BUILD)/lvgl/%.o,$(LVGL_C))
+# `ar -rc` replaces and adds members but never removes one, and a prerequisite taken off LVGL_OBJ
+# leaves the archive current, so an archive holding a member the list no longer names is deleted
+# here and rebuilt from exactly the listed objects
+ifneq ($(wildcard $(LVGL_A)),)
+ifneq ($(filter-out $(notdir $(LVGL_OBJ)),$(shell $(AR) t $(LVGL_A) 2>/dev/null)),)
+$(shell rm -f $(LVGL_A))
+endif
+endif
 
 # LVGL at -O2: its software renderer is the display thread's whole cost; -O2 took the demonstrator
 # from ~21.5% to ~18.5% of the CPU for ~85 KB of flash. A pinned third-party archive, compiled
