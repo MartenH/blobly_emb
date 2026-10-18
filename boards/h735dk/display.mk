@@ -12,8 +12,8 @@ DISPLAY_SRCS   = $(BOARD_DIR)/display.c $(BOARD_DIR)/lcd.c $(BOARD_DIR)/touch.c 
 LVGL_A         = $(BUILD)/lvgl.a
 # LVGL ships code for other platforms and for options this board's lv_conf.h turns off: host and OS
 # display drivers, other chips' GPU backends, the image/font decoder libraries, the alternative stdlib
-# and debugging tools. Each compiles to an empty object after its header parse, so they are left out
-# (~240 of 483 files; no linked object comes from them). Turning one of those options on in lv_conf.h
+# and debugging tools. Nothing from them reaches the link, so they are left out (265 of LVGL
+# v9.6.0's 483 files, 218 compiled). Turning one of those options on in lv_conf.h
 # fails the link with its symbol undefined: take its directory off this list.
 LVGL_UNUSED    = drivers libs debugging others widgets/property image/svg \
                  draw/vg_lite draw/nanovg draw/nema_gfx draw/nxp draw/renesas draw/sifli draw/eve \
