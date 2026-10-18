@@ -1413,7 +1413,7 @@ fn run_capture(exe string, args []string) (string, int) {
 }
 
 // ecucheck_errors runs the real per-node gate (tools/ecucheck) on a node's
-// ecu.toml and returns its error lines (empty = clean). Running the REAL @VEXE
+// ecu.toml and returns its error lines (empty = clean). Running the REAL tool
 // keeps this the EXACT validation loom2v builds behind — no re-implementation to
 // drift. ecucheck prints "<file>: <msg>" per error and a "ecucheck: N …"
 // summary, then exits non-zero; we keep the messages, drop the summary/prefix.
@@ -1559,36 +1559,61 @@ pub const tool_dir_env = 'BLOB_TOOL_DIR'
 // tool_binary: the repo tool `name` (tools/tools.mk's TOOL_SRC_<name>) as ONE binary for every
 // caller — the system checks, sysgen, the tests — so a tool is compiled once, not once per process
 // (three private V builds were ~4 s of a ~5 s sysgen run, and every loom2v test built its own).
-// Under make, the binary make handed over (tool_dir_env); otherwise make is asked for it: tools.mk
-// rebuilds `bin/.tool-<name>` only when its sources, V or flags changed, under a lock per tool, so
-// concurrent callers share one build. Never `v run`, whose shared binary is deleted on exit (#313).
+// Under make, the binary make handed over (tool_dir_env); otherwise make is asked for
+// `bin/.tool-<name>`, which tools.mk rebuilds only when its sources, V or flags changed — with
+// make's own V, so a test and an ordinary make sign the tool alike and neither rebuilds the
+// other's. The ask holds a lock per tool (`.tool-<name>.use.lock`; build_tool.sh's own lock covers
+// only its rename, after the compile), so parallel callers that find a tool stale wait for one
+// build instead of each compiling it. Asked once per process: a check costs ~170 ms and the system
+// checks run a tool per node, while nothing a run does changes the tool's sources. Never `v run`,
+// whose shared binary is deleted on exit (#313).
 pub fn tool_binary(name string) !string {
 	if bin := prebuilt_tool(name) {
 		return bin
 	}
-	// asked of make once per process: a check costs ~170 ms and the system checks run a tool per
-	// node, while nothing a run does changes the tool's sources
 	tool_bins.mu.lock()
 	defer {
 		tool_bins.mu.unlock()
 	}
 	if bin := tool_bins.bins[name] {
-		return bin
+		if os.is_file(bin) {
+			return bin
+		}
 	}
 	bin := os.join_path(@VMODROOT, 'bin', '.tool-${name}')
-	before := if os.is_file(bin) { os.file_last_mod_unix(bin) } else { i64(0) }
+	os.mkdir_all(os.dir(bin)) or {}
+	mut lf := os.open_file('${bin}.use.lock', 'a') or {
+		return error('cannot lock tools/${name}: ${err}')
+	}
+	C.flock(lf.fd, lock_ex)
+	defer {
+		C.flock(lf.fd, lock_un)
+		lf.close()
+	}
+	before := inode_of(bin)
 	sw := time.new_stopwatch()
 	// a fresh top-level make: one started inside another must not inherit its jobserver
-	out, code := run_capture('env', ['-u', 'MAKEFLAGS', '-u', 'MFLAGS', '-u', 'MAKELEVEL', 'make', '-s',
-		'--no-print-directory', '-C', @VMODROOT, 'V=${@VEXE}', bin])
+	out, code := run_capture('env', ['-u', 'MAKEFLAGS', '-u', 'MFLAGS', '-u', 'MAKELEVEL', 'make',
+		'-s', '--no-print-directory', '-C', @VMODROOT, bin])
 	if code != 0 || !os.is_file(bin) {
 		return error('cannot build tools/${name}: ${out.trim_space()}')
 	}
-	if os.file_last_mod_unix(bin) != before {
+	// a build renames a new file into place, so a new inode is a build that happened under our lock
+	if inode_of(bin) != before {
 		eprintln('  compiled tools/${name}: ${secs(sw)}')
 	}
 	tool_bins.bins[name] = bin
 	return bin
+}
+
+fn C.flock(fd int, op int) int
+
+const lock_ex = 2 // flock(2) LOCK_EX
+const lock_un = 8 // flock(2) LOCK_UN
+
+fn inode_of(path string) u64 {
+	st := os.stat(path) or { return 0 }
+	return st.inode
 }
 
 // ToolBins: the tool binaries this process has had from make (tool_binary)
@@ -1704,7 +1729,8 @@ pub fn sysgen_errors(system_path string, out_dir string) []string {
 		body := t.all_after('sysgen:').trim_space()
 		// the per-node "<node> -> <path> (ok)" progress lines are not errors; a refusal may
 		// contain an arrow of its own, so match the progress line's whole shape
-		if (body.contains(' -> ') && body.contains('(ok')) || body.starts_with('refusing to generate') {
+		if (body.contains(' -> ') && body.contains(' (ok, ') && body.ends_with(' s)'))
+			|| body.starts_with('refusing to generate') {
 			continue
 		}
 		out << body

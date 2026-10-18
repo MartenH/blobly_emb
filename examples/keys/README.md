@@ -21,5 +21,5 @@ the technician (ideally a smartcard / per-technician PKI, not a shared file).
 Never ship either of these.
 
 Usage:
-- sign an image:  `v run tools/mkimage app.bin app.img <ver> --pad-vectors --sign examples/keys/mkimage.seed`
+- sign an image:  `bin/.tool-mkimage app.bin app.img <ver> --pad-vectors --sign examples/keys/mkimage.seed` (built by `make -s bin/.tool-mkimage`)
 - the flasher's 0x29 seed:  `$BLOBLY_FLASH_SEED` (64 hex) or `examples/keys/tester.seed`

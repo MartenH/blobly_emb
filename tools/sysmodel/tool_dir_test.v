@@ -18,3 +18,24 @@ fn test_a_prebuilt_tool_is_used_only_where_make_put_one() {
 	assert prebuilt_tool('ecucheck') or { '' } == os.join_path(dir, '.tool-ecucheck')
 	assert prebuilt_tool('loom2v') == none
 }
+
+// every tool the system checks run is one the root Makefile hands over (SYSTEM_GATE_TOOLS): a tool
+// left off that list would be read from BLOB_TOOL_DIR without make having kept it current
+fn test_every_tool_the_checks_run_is_handed_over_by_make() {
+	mk := os.read_file(os.join_path(@VMODROOT, 'Makefile')) or { panic(err) }
+	gate := mk.split_into_lines().filter(it.starts_with('SYSTEM_GATE_TOOLS ='))
+	assert gate.len == 1, 'the root Makefile defines SYSTEM_GATE_TOOLS once'
+	mut run := 0
+	for f in os.ls(os.join_path(@VMODROOT, 'tools', 'sysmodel')) or { panic(err) } {
+		if !f.ends_with('.v') || f.ends_with('_test.v') {
+			continue
+		}
+		src := os.read_file(os.join_path(@VMODROOT, 'tools', 'sysmodel', f)) or { panic(err) }
+		for chunk in src.split("run_tool('")[1..] {
+			name := chunk.all_before("'")
+			run++
+			assert gate[0].contains('\$(TOOL_${name})'), '${f} runs ${name}, which SYSTEM_GATE_TOOLS does not list'
+		}
+	}
+	assert run >= 4, 'found only ${run} run_tool calls'
+}

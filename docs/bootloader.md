@@ -348,12 +348,14 @@ layout — one config, as always.
 Build invocations:
 
 ```sh
+make -s bin/.tool-mkimage   # the tool, built once (tools/tools.mk)
+
 # field image — the boot verifies the signature and marks it valid itself
-v run tools/mkimage app.bin app.img <ver> --pad-vectors --sign examples/keys/mkimage.seed
+bin/.tool-mkimage app.bin app.img <ver> --pad-vectors --sign examples/keys/mkimage.seed
 
 # factory image — pre-marked, SWD-only, physical-trust path (no --sign; the two
 # are mutually exclusive: pre-marking would bypass the signature check)
-v run tools/mkimage app.bin app.img <ver> --pad-vectors --valid
+bin/.tool-mkimage app.bin app.img <ver> --pad-vectors --valid
 ```
 
 ## Trust model — what the tester holds vs what the ECU holds
