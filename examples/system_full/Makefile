@@ -27,9 +27,10 @@
 
 # One job per core, and each command's output kept together (-Otarget): the build is ~2,500
 # independent third-party compiles — serial it took 215 s cold, parallel 34 s. A -j on the command
-# line wins over this one (`make -j1` serialises). Only at the top level: a sub-make parsing its
-# Makefile does not see the -j it inherits, and forcing one there resets the jobserver.
-ifeq ($(MAKELEVEL),0)
+# line wins over this one (`make -j1` serialises). Only at the top level (a sub-make parsing its
+# Makefile does not see the -j it inherits, and forcing one there resets the jobserver), and not
+# when `clean` is asked for, which would otherwise run beside the build it is listed after.
+ifeq ($(MAKELEVEL)$(filter clean,$(MAKECMDGOALS)),0)
 MAKEFLAGS += -j$(shell nproc 2>/dev/null || echo 1) --output-sync=target
 endif
 
@@ -37,7 +38,6 @@ NODES := sysnode domain zone_a tcu
 # domain_m4 is the domain's CM4 satellite image (a [[partition]] image=, not a system.toml node):
 # built AFTER domain (it links against ../domain/gen) and flashed to flash bank 2.
 SATELLITES := domain_m4
-SATELLITE_OWNER_domain_m4 := domain
 
 all: gen syscheck nodes
 
@@ -49,19 +49,17 @@ syscheck:
 
 # cross-build every node's ThreadX image (requires the arm toolchain + `make -C ../.. deps`),
 # one target per node so `make -j` builds them side by side (each node's own compiles share the
-# jobserver); a CM4 satellite after its owner node, whose gen has emitted the satellite's image.
+# jobserver); a CM4 satellite after every node: each node's sysgen run regenerates the satellite's
+# sources in place (its gate emits the owner's satellite images), so none may still be running.
 # Under `make all` the nodes also wait for syscheck, which gates the build as it did serially.
 NODE_GATE := gen $(if $(filter all,$(or $(MAKECMDGOALS),all)),syscheck)
 nodes: $(addprefix node-,$(NODES) $(SATELLITES))
 $(addprefix node-,$(NODES)): node-%: $(NODE_GATE)
 	@echo "== building $*"
 	$(MAKE) -C nodes/$* all
-define satellite
-node-$(1): $(NODE_GATE) $(addprefix node-,$(filter $(SATELLITE_OWNER_$(1)),$(NODES)))
-	@echo "== building satellite $(1)"
-	$$(MAKE) -C nodes/$(1) all
-endef
-$(foreach s,$(SATELLITES),$(eval $(call satellite,$(s))))
+$(addprefix node-,$(SATELLITES)): node-%: $(NODE_GATE) $(addprefix node-,$(NODES))
+	@echo "== building satellite $*"
+	$(MAKE) -C nodes/$* all
 
 clean:
 	@for n in $(NODES) $(SATELLITES); do $(MAKE) -C nodes/$$n clean 2>/dev/null || true; done
