@@ -40,7 +40,8 @@ comm/   comms stack: com (tx modes; encode_raw, the ONE send encode — emitted 
         fault (debounce + fault memory behind 0x19/0x14/0x85; snapshots, extended data, displacement
         and its persistence in the NvM journal — entry.v, persist.v), param (variant coding: read-only
         FB inputs coded with 0x2E on a bound DID, one NvM journal record each, docs/diagnostics.md §3.4),
-        diag (the UDS server on its ISO-TP
+        bulk (bulk.h's pool API for generated code — its own module because V3 stops declaring a
+        module's `fn C.` functions once a file in it includes a C header), diag (the UDS server on its ISO-TP
         connection and the order a pass runs it — the host bridge calls it; the ThreadX comm
         thread from R2; its transport step — intake, busy guard, pump/abort, S3 hold, wire
         drain — is step.v, which the bootloader runs whole as serve_step), diagroute (a DoIP
@@ -278,7 +279,8 @@ compares the commit.
   `_vinit`), which `crt0.S` must not call;
 - **`osal/vrt`** supplies the hooks V3's freestanding builtin declares and nobody defines
   (`bare_print`/`bare_eprint`/`bare_panic`/`bare_backtrace`/`__malloc`, and a nil `malloc` family
-  so newlib's heap is never linked); each `main.v` imports it as `import osal.vrt as _`;
+  so newlib's heap is never linked; `libc_stubs.h` defines `exit` (a stop, like `bare_panic`),
+  `getenv` and `setenv`, whose newlib versions linked its stdio and allocator); each `main.v` imports it as `import osal.vrt as _`;
   `boards/common/board.h` defines `_Thread_local` away (no thread pointer on target);
 - **no allocation is reachable** (`scripts/check_no_heap.sh`, every ELF in the cross job): V3 moves
   a local to the heap when its address reaches a call it cannot see through, and copies a fixed

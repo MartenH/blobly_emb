@@ -12,8 +12,9 @@ fn blank_unused_params(lines []string) []string {
 	mut i := 0
 	for i < out.len {
 		l := out[i]
-		if !l.starts_with('fn ') || l.starts_with('fn C.') || !l.trim_right(' ').ends_with('{') {
-			if l.starts_with('fn ') && !l.starts_with('fn C.') && l.trim_right(' ').ends_with('{}') {
+		is_fn := (l.starts_with('fn ') || l.starts_with('pub fn ')) && !l.contains('fn C.')
+		if !is_fn || !l.trim_right(' ').ends_with('{') {
+			if is_fn && l.trim_right(' ').ends_with('{}') {
 				out[i] = blank_in_signature(l, '')
 			}
 			i++
@@ -33,7 +34,7 @@ fn blank_unused_params(lines []string) []string {
 fn blank_in_signature(sig string, body string) string {
 	// the parameter list: the first parenthesised group, or the second for a method
 	mut open := sig.index_u8(`(`)
-	if sig.starts_with('fn (') {
+	if sig.starts_with('fn (') || sig.starts_with('pub fn (') {
 		open = sig.index_after('(', closing_paren(sig, open) + 1) or { return sig }
 	}
 	if open < 0 {

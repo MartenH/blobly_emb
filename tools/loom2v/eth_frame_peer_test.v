@@ -59,7 +59,7 @@ fn frame_peer_example() (string, string) {
 		r := os.exec(cmd)
 		assert r.exit_code == 0, '${cmd.join(' ')}\n${r.output}'
 	}
-	r := os.exec([vexe, '-gc', 'none', '-enable-globals', '-path', '@vlib|@vmodules|${repo}|${tmp}',
+	r := os.exec([vexe, '-cc', 'cc', '-gc', 'none', '-enable-globals', '-path', '@vlib|@vmodules|${repo}|${tmp}',
 		'-o', os.join_path(tmp, 'app_bin'), tmp])
 	assert r.exit_code == 0, r.output
 	return tmp, os.read_file(glue) or { '' }

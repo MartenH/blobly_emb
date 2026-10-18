@@ -47,7 +47,7 @@ fn v_test_results(files []string) map[string]string {
 	}
 	// the runner hides its OK lines under CI unless told not to, and a file with no line fails
 	os.setenv('VTEST_HIDE_OK', '0', true)
-	out := os.exec([@VEXE, '-enable-globals', 'test', ...files]).output
+	out := os.exec([@VEXE, '-cc', 'cc', '-nocache', '-enable-globals', 'test', ...files]).output
 	for ln in out.split_into_lines() {
 		t := ln.trim_space()
 		word := t.all_before(' ')
