@@ -86,6 +86,7 @@ make list                                  # list examples
 cd examples/overspeed && make all           # generate + build (freestanding)
 make vcan && (cd examples/overspeed && make run)   # run on vcan0
 make example NAME=overspeed                 # same as `cd … && make all`, from root
+(cd examples/system_full && make nodes)     # every node image, one job per core by default (-j1 serialises)
 make lint                                  # no-alloc + isolation checks (MUST pass)
 make demo                                  # backend harness on POSIX (or demo-threadx)
 make bench                                  # IOC transport + Loom dispatch benchmarks

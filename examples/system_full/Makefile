@@ -25,6 +25,14 @@
 # transceivers, so blobly_net can tap both. Driving edge on silicon needs the h735dk board to
 # mux the FDCAN2 pins (a bench step); the image builds and its routing runs on host vcan.
 
+# One job per core unless the caller names one (`make -j8`, `-j1` to serialise): the build is ~2,500
+# independent third-party compiles, serial it took 215 s cold and parallel 36 s. Only at the top
+# level — a sub-make parsing its Makefile does not see the -j it inherits, and forcing one there
+# resets the jobserver.
+ifeq ($(MAKELEVEL)$(filter -j%,$(MAKEFLAGS)),0)
+MAKEFLAGS += -j$(shell nproc 2>/dev/null || echo 1)
+endif
+
 NODES := sysnode domain zone_a tcu
 # domain_m4 is the domain's CM4 satellite image (a [[partition]] image=, not a system.toml node):
 # built AFTER domain (it links against ../domain/gen) and flashed to flash bank 2.
@@ -39,12 +47,17 @@ syscheck:
 	$(MAKE) -C ../.. syscheck SYSTEM=examples/system_full/system.toml
 
 # cross-build every node's ThreadX image (requires the arm toolchain + `make -C ../.. deps`),
-# then the CM4 satellite(s) — after their owner node so the owner's gen has emitted their image.
-nodes: gen
-	@for n in $(NODES); do echo "== building $$n"; $(MAKE) -C nodes/$$n all || exit 1; done
-	@for s in $(SATELLITES); do echo "== building satellite $$s"; $(MAKE) -C nodes/$$s all || exit 1; done
+# one target per node so `make -j` builds them side by side (each node's own compiles share the
+# jobserver); a CM4 satellite after its owner node, whose gen has emitted the satellite's image.
+nodes: $(addprefix node-,$(NODES) $(SATELLITES))
+$(addprefix node-,$(NODES)): node-%: gen
+	@echo "== building $*"
+	$(MAKE) -C nodes/$* all
+node-domain_m4: node-domain
+	@echo "== building satellite domain_m4"
+	$(MAKE) -C nodes/domain_m4 all
 
 clean:
 	@for n in $(NODES) $(SATELLITES); do $(MAKE) -C nodes/$$n clean 2>/dev/null || true; done
 
-.PHONY: all gen syscheck nodes clean
+.PHONY: all gen syscheck nodes clean $(addprefix node-,$(NODES) $(SATELLITES))

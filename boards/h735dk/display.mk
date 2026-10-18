@@ -10,7 +10,17 @@ DISPLAY_CFLAGS = -DLV_CONF_INCLUDE_SIMPLE -I$(LVGL)
 DISPLAY_SRCS   = $(BOARD_DIR)/display.c $(BOARD_DIR)/lcd.c $(BOARD_DIR)/touch.c $(BOARD_DIR)/hyperram.c \
                  $(BOARD_DIR)/cpuprof.c
 LVGL_A         = $(BUILD)/lvgl.a
-LVGL_C        := $(shell find $(LVGL)/src -name '*.c' 2>/dev/null)
+# LVGL ships code for other platforms and for options this board's lv_conf.h turns off: host and OS
+# display drivers, other chips' GPU backends, the image/font decoder libraries, the alternative stdlib
+# and debugging tools. Each compiles to an empty object after its header parse, so they are left out
+# (~240 of 483 files; no linked object comes from them). Turning one of those options on in lv_conf.h
+# fails the link with its symbol undefined: take its directory off this list.
+LVGL_UNUSED    = drivers libs debugging others widgets/property image/svg \
+                 draw/vg_lite draw/nanovg draw/nema_gfx draw/nxp draw/renesas draw/sifli draw/eve \
+                 draw/espressif draw/dma2d draw/opengles draw/sdl \
+                 font/freetype font/tiny_ttf font/imgfont font/font_manager \
+                 stdlib/clib stdlib/rtthread stdlib/micropython stdlib/uefi
+LVGL_C        := $(filter-out $(foreach d,$(LVGL_UNUSED),$(LVGL)/src/$(d)/%),$(shell find $(LVGL)/src -name '*.c' 2>/dev/null))
 LVGL_OBJ       = $(patsubst $(LVGL)/src/%.c,$(BUILD)/lvgl/%.o,$(LVGL_C))
 
 # LVGL at -O2: its software renderer is the display thread's whole cost; -O2 took the demonstrator
