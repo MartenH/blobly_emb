@@ -5,6 +5,7 @@ import comm.someip
 import net
 import os
 import time
+import tools.sysmodel
 
 // An eth [[frame]]'s own `peer` (rung 6: a segment of more than two members). A member that
 // exchanges different events with different members sends each tx event to, and accepts each rx
@@ -49,10 +50,9 @@ fn frame_peer_example() (string, string) {
 	vexe := @VEXE
 	glue := os.join_path(tmp, 'gen', 'loom_gen.v')
 	for cmd in [
-		[vexe, '-enable-globals', 'run', os.join_path(repo, 'tools', 'ecucheck', 'gen.v'), ecu],
-		[vexe, '-enable-globals', 'run', os.join_path(repo, 'tools', 'cfg2v', 'gen.v'), ecu,
-			os.join_path(tmp, 'gen', 'ecu_gen.v')],
-		[vexe, '-enable-globals', 'run', os.join_path(repo, 'tools', 'loom2v'), ecu,
+		[tool('ecucheck'), ecu],
+		[tool('cfg2v'), ecu, os.join_path(tmp, 'gen', 'ecu_gen.v')],
+		[tool('loom2v'), ecu,
 			os.join_path(tmp, 'bus.dbc'), os.join_path(tmp, 'sig', 'signals_gen.v'),
 			os.join_path(tmp, 'ports', 'ports_gen.v'), glue, os.join_path(tmp, 'gen', 'manifest.csv')],
 	] {
@@ -158,4 +158,9 @@ fn test_an_event_is_accepted_only_from_its_own_peer() {
 	def.write_to(app, fp_cmd_safe(mut prot2, 50))!
 	echoes = fp_echoes(mut def, 2000 * time.millisecond)
 	assert 92 in echoes, 'BenchCmdSafe from the default peer was not accepted'
+}
+
+// tool: the repo tool `name`, one binary shared with every other caller (sysmodel.tool_binary)
+fn tool(name string) string {
+	return sysmodel.tool_binary(name) or { panic(err) }
 }

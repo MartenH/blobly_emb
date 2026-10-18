@@ -1,27 +1,13 @@
 module main
 
 import os
-import time
+import tools.sysmodel
 
 // E2E from the DBC (blobly_net#271): a frame the DBC protects needs no [[frame]].e2e, and on an
 // ECU with one CAN bus no [[frame]] at all. Runs the real generator on examples/overspeed, whose
 // BrakeStatus layout lives in its bus.dbc — a refusal is a panic, which cannot be caught in-process.
 
-const e2e_bin = os.join_path(os.temp_dir(), 'loom2v_e2e_dbc_${os.getpid()}_${rand_suffix()}')
-
-fn rand_suffix() string {
-	return time.now().unix_nano().str()
-}
-
-// the generator is built once per run, from the source under test, and removed after it
-fn testsuite_begin() {
-	r := os.exec([@VEXE, '-enable-globals', '-o', e2e_bin, os.join_path(@VMODROOT, 'tools', 'loom2v')])
-	assert r.exit_code == 0, r.output
-}
-
-fn testsuite_end() {
-	os.rm(e2e_bin) or {}
-}
+const e2e_bin = sysmodel.tool_binary('loom2v') or { panic(err) }
 
 fn e2e_loom2v_bin() string {
 	return e2e_bin

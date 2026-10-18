@@ -8,6 +8,7 @@ module main
 import os
 import toml
 import tools.ecumodel
+import tools.sysmodel
 
 const repo = os.real_path(os.join_path(os.dir(@FILE), '..', '..', '..'))
 
@@ -23,9 +24,9 @@ fn lowered(node string) []ecumodel.EthLayoutCell {
 	defer {
 		os.rmdir_all(out) or {}
 	}
-	sysgen := os.join_path(repo, 'tools', 'sysgen')
+	sysgen := sysmodel.tool_binary('sysgen') or { panic(err) }
 	sys := os.join_path(repo, 'examples', 'system_full', 'system.toml')
-	r := os.exec([@VEXE, '-enable-globals', 'run', sysgen, sys, '--out', out])
+	r := os.exec([sysgen, sys, '--out', out])
 	assert r.exit_code == 0, r.output
 	doc := toml.parse_file(os.join_path(out, 'gen-${node}.toml')) or { panic(err) }
 	return ecumodel.eth_layouts(doc)

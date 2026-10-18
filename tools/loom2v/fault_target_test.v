@@ -2,7 +2,7 @@ module main
 
 // @verifies REQ-DIAG-012
 import os
-import time
+import tools.sysmodel
 
 // Faults on a ThreadX target (docs/diagnostics.md R6): the fault memory on the comm thread, each
 // fault-owning FB's report and control cells on the byte IOC, the operation cycle from NM (D3) or
@@ -31,17 +31,7 @@ debounce = { kind = "counter", fail = 3, pass = 3 }
 min_write_ms = 1000
 '
 
-const ft_bin = os.join_path(os.temp_dir(), 'loom2v_fault_target_${os.getpid()}_${time.now().unix_nano()}')
-
-// the generator is built once per run, from the source under test, and removed after it
-fn testsuite_begin() {
-	r := os.exec([@VEXE, '-enable-globals', '-o', ft_bin, os.join_path(@VMODROOT, 'tools', 'loom2v')])
-	assert r.exit_code == 0, r.output
-}
-
-fn testsuite_end() {
-	os.rm(ft_bin) or {}
-}
+const ft_bin = sysmodel.tool_binary('loom2v') or { panic(err) }
 
 fn ft_loom2v() string {
 	return ft_bin

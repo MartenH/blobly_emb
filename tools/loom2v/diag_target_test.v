@@ -1,6 +1,7 @@
 module main
 
 import os
+import tools.sysmodel
 import comm.doip as doippolicy
 
 // The diagnostic server on a ThreadX comm thread (docs/diagnostics.md R2): what the generator
@@ -24,12 +25,7 @@ ascii = "BLOBLY-TEST"
 '
 
 fn loom2v_bin() string {
-	bin := os.join_path(os.temp_dir(), 'loom2v_diag_target_${os.getpid()}')
-	if !os.exists(bin) {
-		r := os.exec([@VEXE, '-enable-globals', '-o', bin, os.join_path(@VMODROOT, 'tools', 'loom2v')])
-		assert r.exit_code == 0, r.output
-	}
-	return bin
+	return sysmodel.tool_binary('loom2v') or { panic(err) }
 }
 
 // generate runs loom2v on the fixture's config with `extra` appended; returns the exit code, the

@@ -1,6 +1,7 @@
 module main
 
 import os
+import tools.sysmodel
 
 // [doip] (gen_doip.v): the node's one diagnostic server reachable over DoIP too — what the
 // generator wires into the comm thread and boot, and what it refuses. Runs the real generator on
@@ -44,12 +45,7 @@ logical_address = 0x07B0
 '
 
 fn doip_loom2v() string {
-	bin := os.join_path(os.temp_dir(), 'loom2v_doip_target_${os.getpid()}')
-	if !os.exists(bin) {
-		r := os.exec([@VEXE, '-enable-globals', '-o', bin, os.join_path(@VMODROOT, 'tools', 'loom2v')])
-		assert r.exit_code == 0, r.output
-	}
-	return bin
+	return sysmodel.tool_binary('loom2v') or { panic(err) }
 }
 
 // generate runs loom2v on the fixture's config with `extra` appended: exit code, output, glue

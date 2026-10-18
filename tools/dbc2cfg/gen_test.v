@@ -1,6 +1,7 @@
 module main
 
 import os
+import tools.sysmodel
 import tools.candb
 
 // A DBC may spell its names however its owner likes; what dbc2cfg refuses is two of them emitting
@@ -47,10 +48,7 @@ BO_ 257 Wide: 8 ECU
 VAL_ 256 Pct 255 "SNA" ;
 ')!
 	out := os.join_path(tmp, 'dbc_gen.v')
-	tool := os.join_path(tmp, 'dbc2cfg')
-	build := os.exec([@VEXE, '-path', '@vlib|@vmodules|${@VMODROOT}', '-o', tool, os.join_path(@VMODROOT,
-		'tools', 'dbc2cfg')])
-	assert build.exit_code == 0, build.output
+	tool := sysmodel.tool_binary('dbc2cfg')!
 	gen := os.exec([tool, dbc, out])
 	assert gen.exit_code == 0, gen.output
 	os.write_file(os.join_path(tmp, 'sat_test.v'), "module gen

@@ -1,22 +1,13 @@
 module main
 
 import os
-import time
+import tools.sysmodel
 
 // The SOME/IP receive path's E2E (REQ-E2E-002, #299): what loom2v refuses, by running the real
 // generator on examples/host_someip with its config edited — a refusal is a panic, which cannot
 // be caught in-process.
 
-const eth_bin = os.join_path(os.temp_dir(), 'loom2v_eth_e2e_${os.getpid()}_${time.now().unix_nano()}')
-
-fn testsuite_begin() {
-	r := os.exec([@VEXE, '-enable-globals', '-o', eth_bin, os.join_path(@VMODROOT, 'tools', 'loom2v')])
-	assert r.exit_code == 0, r.output
-}
-
-fn testsuite_end() {
-	os.rm(eth_bin) or {}
-}
+const eth_bin = sysmodel.tool_binary('loom2v') or { panic(err) }
 
 // host_someip_with generates examples/host_someip with its ecu.toml edited, in a scratch dir.
 fn host_someip_with(name string, edit fn (string) string) (int, string, string) {

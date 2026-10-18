@@ -1,7 +1,7 @@
 module main
 
 import os
-import time
+import tools.sysmodel
 import tools.candb
 
 // @verifies REQ-COM-011
@@ -10,16 +10,7 @@ import tools.candb
 // value nearest 0) rather than at raw 0, and an initial value is never counted as a saturation: the
 // host bridge, the target's local producers and its satellite lanes.
 
-const pi_bin = os.join_path(os.temp_dir(), 'loom2v_pdu_init_${os.getpid()}_${time.now().unix_nano()}')
-
-fn testsuite_begin() {
-	r := os.exec([@VEXE, '-enable-globals', '-o', pi_bin, os.join_path(@VMODROOT, 'tools', 'loom2v')])
-	assert r.exit_code == 0, r.output
-}
-
-fn testsuite_end() {
-	os.rm(pi_bin) or {}
-}
+const pi_bin = sysmodel.tool_binary('loom2v') or { panic(err) }
 
 // pi_generate runs loom2v on `ecu` and `dbc` (texts); returns the exit code, the output and the glue.
 fn pi_generate(name string, ecu string, dbc string) (int, string, string) {

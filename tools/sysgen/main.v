@@ -6,13 +6,15 @@
 // wiring + the generated [nm] identity, prepended to the authored internals —
 // which then feeds the existing ecucheck/loom2v unchanged.
 //
-//   v run tools/sysgen examples/system_bench/system.toml
+//   make -s bin/.tool-sysgen   # built once by tools/tools.mk, rebuilt when its sources change
+//   bin/.tool-sysgen examples/system_bench/system.toml
 //
 // Generated files land in <node-dir>/gen-ecu.toml. The generator NEVER edits the
 // authored node or the DBC (the DBC is the hand-authored wire contract).
 module main
 
 import os
+import time
 import toml
 import sysmodel
 import tools.candb
@@ -79,7 +81,9 @@ fn main() {
 		}
 	}
 
+	total := time.new_stopwatch()
 	for n in sys.nodes {
+		sw := time.new_stopwatch()
 		out := generate_node(sys, n) or {
 			eprintln('sysgen: node "${n.name}": ${err}')
 			exit(1)
@@ -136,7 +140,7 @@ fn main() {
 			}
 			exit(1)
 		}
-		println('sysgen: ${n.name} -> ${gen_path} (ok)')
+		println('sysgen: ${n.name} -> ${gen_path} (ok, ${sysmodel.secs(sw)})')
 	}
 	env_path := os.join_path(gen_dir, 'gen-net.env')
 	if env == '' {
@@ -154,7 +158,7 @@ fn main() {
 		}
 		println('sysgen: addresses -> ${env_path}')
 	}
-	println('sysgen: ${sys.nodes.len} node(s) generated + gated')
+	println('sysgen: ${sys.nodes.len} node(s) generated + gated in ${sysmodel.secs(total)}')
 }
 
 // net_env: every node's endpoint as this generation resolved it — subnet and BLOB_NET_SUBNET
