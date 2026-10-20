@@ -751,7 +751,7 @@ fn generate_someip_node(sys sysmodel.System, node sysmodel.Node, bus sysmodel.Bu
 // answers tcu's telemetry on tel, so one generated file carries both halves (#245 step 3, leaf).
 // A plain IP host (`someip = false`) has no SOME/IP half: it is an address on the segment only.
 fn someip_sections(sys sysmodel.System, node sysmodel.Node, bus sysmodel.Bus, view sysmodel.NodeView, sig_part map[string]string) ![]string {
-	if node.ip_host {
+	if node.ip_host() {
 		return []string{}
 	}
 	iface := 'eth0'

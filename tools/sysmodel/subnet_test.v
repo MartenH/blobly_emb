@@ -147,13 +147,12 @@ fn test_a_subnet_no_member_reads_is_refused() {
 fn with_ip_host() System {
 	mut s := tel_system('192.168.77.0/24')
 	s.nodes << Node{
-		name:           'ota_gw'
-		buses:          ['tel']
-		has_endpoint:   true
-		has_host:       true
-		host_raw:       52
-		has_someip_key: true
-		ip_host:        true
+		name:         'ota_gw'
+		buses:        ['tel']
+		has_endpoint: true
+		has_host:     true
+		host_raw:     52
+		someip:       false
 	}
 	return s
 }

@@ -233,8 +233,9 @@ fn test_the_someip_key_is_read_from_the_file() {
 	os.write_file(path, text) or { panic(err) }
 	s := parse_system(path) or { panic(err) }
 	gw := s.nodes.filter(it.name == 'ota_gw')[0]
-	assert gw.ip_host && gw.has_someip_key && !gw.has_port
-	assert s.nodes.filter(it.name != 'ota_gw').all(!it.ip_host)
+	assert gw.ip_host() && !gw.has_port
+	assert s.nodes.filter(it.name != 'ota_gw').all(!it.ip_host())
+	// a value that is not a boolean is that one error, not also a member with no port or event
 	e := refused(dir, text.replace_once('host = 52, someip = false', 'host = 52, someip = "false"'))
-	assert e.any(it.contains('"ota_gw": endpoint `someip` must be a boolean')), e.str()
+	assert e == ['node "ota_gw": endpoint `someip` must be a boolean — false makes the node a plain IP host on its segment'], e.str()
 }

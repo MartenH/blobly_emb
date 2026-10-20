@@ -2553,6 +2553,75 @@ fn check_someip_segment(s System) []Issue {
 				}
 			}
 		}
+		// Per node, before the member count below ends the segment's checks: what is wrong with one
+		// node is reported whatever is wrong with the segment. A member's port first...
+		port_key := cfgschema.system.key('sys_endpoint', 'port')
+		for n in members {
+			if n.has_endpoint && !n.has_port {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": its `endpoint` has no `port` — the generated [someip] needs one, and 0 is not a UDP port'
+				}
+			} else if n.has_endpoint && !port_key.in_range(n.port_raw) {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": endpoint port ${n.port_raw} is outside ${port_key.min}..${port_key.max}'
+				}
+			}
+			if n.has_port && !n.port_int {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": endpoint `port` must be an integer — 30490.5 truncates to a valid, DIFFERENT port, and the lowered integer reads as authored'
+				}
+			}
+		}
+		// ...then every node on the segment, plain IP hosts too: its address and its NM allocation
+		mut addr_of := map[string]string{}
+		for n in on_seg {
+			if n.has_host && n.endpoint == '' {
+				continue // an unresolved `host`: check_subnets says why
+			}
+			if !n.has_endpoint || n.endpoint == '' {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": is on someip bus "${b.name}" but declares no `endpoint` — a someip segment has no shared wire, so the address is the NODE\'s identity and the peer is derived from it'
+				}
+				continue
+			}
+			if prev := addr_of[canon_addr(n.endpoint)] {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'bus "${b.name}": nodes "${prev}" and "${n.name}" both answer at "${n.endpoint}" — one address per node on a segment'
+				}
+			} else {
+				addr_of[canon_addr(n.endpoint)] = n.name
+			}
+			// NM is a CAN cluster protocol: there is no someip NM. But a LEAF that also sits on
+			// a CAN bus needs its cluster allocation — its CAN traffic must observe coordinated
+			// sleep like any other member's, and the lowering emits the [nm] against that CAN
+			// bus. So refuse `nm` only for a member with no CAN carrier at all; otherwise the
+			// mixed-carrier topology would be impossible on an NM-managed CAN network.
+			mut can_carrier := false
+			for bn in n.buses {
+				if bb := s.bus_by_name(bn) {
+					if bb.kind != 'someip' {
+						can_carrier = true
+					}
+				}
+			}
+			if n.has_nm_alloc && !can_carrier {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": is on someip bus "${b.name}" only, and declares `nm` — network management is a CAN cluster protocol; a segment-only member has no NM'
+				}
+			}
+		}
 		if members.len < 2 {
 			issues << Issue{
 				severity: .error
@@ -2626,72 +2695,6 @@ fn check_someip_segment(s System) []Issue {
 					severity: .error
 					req:      'REQ-TOPO-005'
 					msg:      'node "${n.name}": serves its [shell] over SOME/IP but exchanges events with ${partners.len} members of bus "${b.name}" (${partners.join(', ')}) — an RPC is answered to the node\'s one default peer, and with several partners nothing declares which one is the client'
-				}
-			}
-		}
-		mut addr_of := map[string]string{}
-		port_key := cfgschema.system.key('sys_endpoint', 'port')
-		for n in on_seg {
-			if n.ip_host {
-				// no port to check: check_ip_hosts refuses one
-			} else if n.has_endpoint && !n.has_port {
-				issues << Issue{
-					severity: .error
-					req:      'REQ-TOPO-005'
-					msg:      'node "${n.name}": its `endpoint` has no `port` — the generated [someip] needs one, and 0 is not a UDP port'
-				}
-			} else if n.has_endpoint && !port_key.in_range(n.port_raw) {
-				issues << Issue{
-					severity: .error
-					req:      'REQ-TOPO-005'
-					msg:      'node "${n.name}": endpoint port ${n.port_raw} is outside ${port_key.min}..${port_key.max}'
-				}
-			}
-			if n.has_host && n.endpoint == '' {
-				continue // an unresolved `host`: check_subnets says why
-			}
-			if !n.has_endpoint || n.endpoint == '' {
-				issues << Issue{
-					severity: .error
-					req:      'REQ-TOPO-005'
-					msg:      'node "${n.name}": is on someip bus "${b.name}" but declares no `endpoint` — a someip segment has no shared wire, so the address is the NODE\'s identity and the peer is derived from it'
-				}
-				continue
-			}
-			if prev := addr_of[canon_addr(n.endpoint)] {
-				issues << Issue{
-					severity: .error
-					req:      'REQ-TOPO-005'
-					msg:      'bus "${b.name}": nodes "${prev}" and "${n.name}" both answer at "${n.endpoint}" — one address per node on a segment'
-				}
-			} else {
-				addr_of[canon_addr(n.endpoint)] = n.name
-			}
-			if n.has_port && !n.port_int && !n.ip_host {
-				issues << Issue{
-					severity: .error
-					req:      'REQ-TOPO-005'
-					msg:      'node "${n.name}": endpoint `port` must be an integer — 30490.5 truncates to a valid, DIFFERENT port, and the lowered integer reads as authored'
-				}
-			}
-			// NM is a CAN cluster protocol: there is no someip NM. But a LEAF that also sits on
-			// a CAN bus needs its cluster allocation — its CAN traffic must observe coordinated
-			// sleep like any other member's, and the lowering emits the [nm] against that CAN
-			// bus. So refuse `nm` only for a member with no CAN carrier at all; otherwise the
-			// mixed-carrier topology would be impossible on an NM-managed CAN network.
-			mut can_carrier := false
-			for bn in n.buses {
-				if bb := s.bus_by_name(bn) {
-					if bb.kind != 'someip' {
-						can_carrier = true
-					}
-				}
-			}
-			if n.has_nm_alloc && !can_carrier {
-				issues << Issue{
-					severity: .error
-					req:      'REQ-TOPO-005'
-					msg:      'node "${n.name}": is on someip bus "${b.name}" only, and declares `nm` — network management is a CAN cluster protocol; a segment-only member has no NM'
 				}
 			}
 		}
@@ -2782,12 +2785,13 @@ fn check_endpoint_carrier(s System) []Issue {
 
 // check_ip_hosts: `someip = false` makes a node a plain IP host on its someip segment — an address
 // on the network and nothing else (system_full's OTA gateway). What would make that untrue is
-// refused: a `port` (where a SOME/IP member listens), a signal on the segment it produces or reads
-// (only a member exchanges events), and the key on a node on no segment, where it says nothing.
+// refused: a `port` (where a SOME/IP member listens), a `netmask` or `gateway` nothing lowers (a
+// DoIP entity's [doip] carries them), a signal on the segment it produces or reads (only a member
+// exchanges events), and the key on a node on no segment, where it says nothing.
 fn check_ip_hosts(s System) []Issue {
 	mut issues := []Issue{}
 	for n in s.nodes {
-		if n.someip_not_bool {
+		if n.someip_bad {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-005'
@@ -2795,7 +2799,7 @@ fn check_ip_hosts(s System) []Issue {
 			}
 			continue
 		}
-		if !n.has_someip_key {
+		if n.someip == none {
 			continue
 		}
 		segs := n.buses.filter(is_someip_bus(s, it))
@@ -2807,7 +2811,7 @@ fn check_ip_hosts(s System) []Issue {
 			}
 			continue
 		}
-		if !n.ip_host {
+		if !n.ip_host() {
 			continue
 		}
 		if n.has_port {
@@ -2815,6 +2819,14 @@ fn check_ip_hosts(s System) []Issue {
 				severity: .error
 				req:      'REQ-TOPO-005'
 				msg:      'node "${n.name}": its endpoint has a `port` but says `someip = false` — the port is where a SOME/IP member listens, and a plain IP host has none, so it would be dead configuration'
+			}
+		}
+		if !n.has_doip && ((n.endpoint_netmask != none && !n.netmask_from_subnet)
+			|| n.endpoint_gateway != none) {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": its endpoint configures a netmask or gateway but says `someip = false` — a plain IP host brings no network up here (only a member\'s [bus.eth0] or a DoIP entity\'s [doip] carries them), so they would be dead configuration'
 			}
 		}
 		for sig in s.signals {
@@ -3182,6 +3194,13 @@ fn check_composed_unlowered(s System) []Issue {
 				msg:      'node "${n.name}": `doip` on a [[node]] is lowered by sysgen, which runs only on a dissolved system (one declaring signals, routes, frames or endpoints) — in a composed system author [doip] in the node\'s ecu.toml'
 			}
 		}
+		if n.someip != none || n.someip_bad {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": endpoint `someip` is read by sysgen, which runs only on a dissolved system (one declaring signals, routes, frames or endpoints) — a composed segment member authors its own [someip]'
+			}
+		}
 		if n.diag.has_logical {
 			issues << Issue{
 				severity: .error
@@ -3219,11 +3238,17 @@ fn check_endpoint_net(s System) []Issue {
 		if n.has_host && n.endpoint == '' {
 			continue // an unresolved `host`: check_subnets says why
 		}
-		if n.endpoint_netmask == none && n.endpoint_gateway == none && !n.has_doip {
+		// a plain IP host's address is judged like an entity's — a host of its subnet — since no
+		// lowered [bus.eth0] takes it to the node gate; its subnet keys reach nothing unless it is a
+		// DoIP entity (check_ip_hosts refuses them), so its address is judged on the segment's mask
+		lowered := !n.ip_host() || n.has_doip
+		mask := if lowered || n.netmask_from_subnet { n.endpoint_netmask } else { ?string(none) }
+		gateway := if lowered { n.endpoint_gateway } else { ?string(none) }
+		if mask == none && gateway == none && !n.has_doip && !n.ip_host() {
 			continue // nothing configured, nothing brought up as an entity: the defaults stand
 		}
-		if ((n.endpoint_netmask != none && !n.netmask_from_subnet) || n.endpoint_gateway != none)
-			&& !n.view.is_threadx {
+		if lowered && ((n.endpoint_netmask != none && !n.netmask_from_subnet)
+			|| n.endpoint_gateway != none) && !n.view.is_threadx {
 			// the subnet is NetX's (driver/eth/netx_up.c); a host member binds on the host's network
 			issues << Issue{
 				severity: .error
@@ -3231,8 +3256,7 @@ fn check_endpoint_net(s System) []Issue {
 				msg:      'node "${n.name}": its endpoint configures a netmask or gateway, but it is not a threadx target — the subnet is brought up by NetX on the target; a host member binds its address on the host\'s own network, which nothing here configures'
 			}
 		}
-		_, subnet, host := netcfg.check(n.endpoint, n.endpoint_netmask, n.endpoint_gateway,
-			n.has_doip)
+		_, subnet, host := netcfg.check(n.endpoint, mask, gateway, n.has_doip || n.ip_host())
 		for w in subnet {
 			// a DoIP entity's unparsable address is check_doip's to say, with the rest of its rule
 			if n.has_doip && w.starts_with('address ') {

@@ -1742,13 +1742,12 @@ fn test_net_env_lists_each_endpoint_as_resolved() {
 // its address reaches gen-net.env like a member's.
 fn ip_host() sysmodel.Node {
 	return sysmodel.Node{
-		name:           'ota_gw'
-		ecu:            'nodes/ota_gw/ecu.toml'
-		buses:          ['tel']
-		endpoint:       '192.168.0.52'
-		has_endpoint:   true
-		has_someip_key: true
-		ip_host:        true
+		name:         'ota_gw'
+		ecu:          'nodes/ota_gw/ecu.toml'
+		buses:        ['tel']
+		endpoint:     '192.168.0.52'
+		has_endpoint: true
+		someip:       false
 	}
 }
 
@@ -1786,8 +1785,7 @@ fn test_net_env_lists_an_ip_host_without_a_port() {
 fn test_a_member_without_port_or_event_is_still_refused() {
 	mut sys := tel_system()
 	mut n := ip_host()
-	n.ip_host = false
-	n.has_someip_key = false
+	n.someip = none
 	sys.nodes << n
 	e := seg_errs(sys).filter(it.contains('"ota_gw"'))
 	assert e.any(it.contains('has no `port`')), e.str()
@@ -1836,4 +1834,64 @@ fn test_an_ip_host_that_claims_more_is_refused() {
 		endpoint: '192.168.0.51'
 	}
 	assert seg_errs(dup).any(it.contains('nodes "tcu" and "ota_gw" both answer at')), seg_errs(dup).str()
+}
+
+// an IP host's address reaches no node gate (nothing is lowered for it), so syscheck judges it as
+// a host of its subnet — the rule a `host` number already meets
+fn test_an_ip_host_address_is_judged_as_a_host_of_its_subnet() {
+	for addr, want in {
+		'192.168.0.520': 'address "192.168.0.520"'
+		'192.168.0.0':   'is the network address of'
+		'192.168.0.255': 'is the broadcast address of'
+		'192.168.0.1':   'is its own gateway'
+	} {
+		mut sys := tel_system()
+		sys.nodes << sysmodel.Node{
+			...ip_host()
+			endpoint:    addr
+			has_address: true
+		}
+		assert seg_errs(sys).any(it.contains('"ota_gw"') && it.contains(want)), '${addr}: ${seg_errs(sys)}'
+	}
+}
+
+// a netmask or gateway on an IP host reaches nothing: refused as dead configuration, once
+fn test_an_ip_host_subnet_keys_are_refused() {
+	for key in ['netmask', 'gateway'] {
+		mut sys := tel_system()
+		mut n := ip_host()
+		if key == 'netmask' {
+			n.endpoint_netmask = '255.255.0.0'
+		} else {
+			n.endpoint_gateway = '192.168.0.254'
+		}
+		sys.nodes << n
+		e := seg_errs(sys).filter(it.contains('"ota_gw"'))
+		assert e.len == 1 && e[0].contains('configures a netmask or gateway but says `someip = false`'), '${key}: ${e}'
+	}
+}
+
+// the node checks run whatever the segment's member count: a lone member beside an IP host still
+// hears about the IP host's duplicate address and its nm
+fn test_a_lone_member_segment_still_reports_its_nodes() {
+	mut sys := tel_system()
+	sys.nodes = [sys.nodes[0]]
+	sys.nodes << sysmodel.Node{
+		...ip_host()
+		endpoint:     '192.168.0.51'
+		nm:           0x14
+		has_nm_alloc: true
+	}
+	e := seg_errs(sys)
+	assert e.any(it.contains('has 1 member(s)')), e.str()
+	assert e.any(it.contains('nodes "tcu" and "ota_gw" both answer at')), e.str()
+	assert e.any(it.contains('"ota_gw": is on someip bus "tel" only, and declares `nm`')), e.str()
+}
+
+// a composed system lowers nothing, so `someip` there would look effective and do nothing
+fn test_someip_on_a_composed_node_is_refused() {
+	mut sys := tel_system()
+	sys.nodes << ip_host()
+	e := sysmodel.validate_system(sys).filter(it.severity == .error).map(it.msg)
+	assert e.any(it.contains('"ota_gw": endpoint `someip` is read by sysgen')), e.str()
 }
