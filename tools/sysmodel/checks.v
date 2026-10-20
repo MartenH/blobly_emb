@@ -81,6 +81,7 @@ pub fn validate_system_gen(s System) []Issue {
 	// the dissolution path states its own rules rather than inheriting nothing.
 	issues << check_someip_segment(s)
 	issues << check_endpoint_carrier(s)
+	issues << check_ip_hosts(s)
 	issues << check_endpoint_net(s)
 	issues << check_doip(s)
 	issues << check_doip_routes(s)
@@ -2498,12 +2499,9 @@ fn check_someip_segment(s System) []Issue {
 		if b.kind != 'someip' {
 			continue
 		}
-		mut members := []Node{}
-		for n in s.nodes {
-			if b.name in n.buses {
-				members << n
-			}
-		}
+		// the service's members; every node on the segment, plain IP hosts too, for its addresses
+		members := s.someip_members(b.name)
+		on_seg := s.nodes.filter(b.name in it.buses)
 		if !b.has_version {
 			// 0 is a legal interface version, so an omitted one is indistinguishable from a
 			// declared one the moment it is written into the generated [someip] (codex #245).
@@ -2633,8 +2631,10 @@ fn check_someip_segment(s System) []Issue {
 		}
 		mut addr_of := map[string]string{}
 		port_key := cfgschema.system.key('sys_endpoint', 'port')
-		for n in members {
-			if n.has_endpoint && !n.has_port {
+		for n in on_seg {
+			if n.ip_host {
+				// no port to check: check_ip_hosts refuses one
+			} else if n.has_endpoint && !n.has_port {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-005'
@@ -2667,7 +2667,7 @@ fn check_someip_segment(s System) []Issue {
 			} else {
 				addr_of[canon_addr(n.endpoint)] = n.name
 			}
-			if n.has_port && !n.port_int {
+			if n.has_port && !n.port_int && !n.ip_host {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-005'
@@ -2780,6 +2780,57 @@ fn check_endpoint_carrier(s System) []Issue {
 	return issues
 }
 
+// check_ip_hosts: `someip = false` makes a node a plain IP host on its someip segment — an address
+// on the network and nothing else (system_full's OTA gateway). What would make that untrue is
+// refused: a `port` (where a SOME/IP member listens), a signal on the segment it produces or reads
+// (only a member exchanges events), and the key on a node on no segment, where it says nothing.
+fn check_ip_hosts(s System) []Issue {
+	mut issues := []Issue{}
+	for n in s.nodes {
+		if n.someip_not_bool {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": endpoint `someip` must be a boolean — false makes the node a plain IP host on its segment'
+			}
+			continue
+		}
+		if !n.has_someip_key {
+			continue
+		}
+		segs := n.buses.filter(is_someip_bus(s, it))
+		if segs.len == 0 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": its endpoint sets `someip` but it is on no someip bus — the key says whether a node on a segment speaks SOME/IP there, and off one it would be dead configuration'
+			}
+			continue
+		}
+		if !n.ip_host {
+			continue
+		}
+		if n.has_port {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": its endpoint has a `port` but says `someip = false` — the port is where a SOME/IP member listens, and a plain IP host has none, so it would be dead configuration'
+			}
+		}
+		for sig in s.signals {
+			if sig.bus !in segs || (sig.producer != n.name && sig.name !in n.view.fb_reads) {
+				continue
+			}
+			verb := if sig.producer == n.name { 'produces' } else { 'reads' }
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": ${verb} signal "${sig.name}" on someip bus "${sig.bus}" but says `someip = false` — only a SOME/IP member exchanges events; a plain IP host is an address on the segment and nothing more'
+			}
+		}
+	}
+	return issues
+}
 
 // someip_send_cycle_ms is how often a someip frame's producer sends it when nothing changes: its
 // cycle_ms, else loom2v's 100 ms default for a cyclic or mixed frame (a frame with no tx at all

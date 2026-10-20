@@ -1736,3 +1736,104 @@ fn test_net_env_lists_each_endpoint_as_resolved() {
 	}
 	assert false, 'tcu and TCU share one key'
 }
+
+// A plain IP host on the segment (`someip = false`): system_full's OTA gateway, an address on the
+// bench network that speaks no SOME/IP. It needs no port and no event, gets no SOME/IP half, and
+// its address reaches gen-net.env like a member's.
+fn ip_host() sysmodel.Node {
+	return sysmodel.Node{
+		name:           'ota_gw'
+		ecu:            'nodes/ota_gw/ecu.toml'
+		buses:          ['tel']
+		endpoint:       '192.168.0.52'
+		has_endpoint:   true
+		has_someip_key: true
+		ip_host:        true
+	}
+}
+
+fn test_an_ip_host_needs_no_port_and_no_event() {
+	mut sys := tel_system()
+	sys.nodes << ip_host()
+	assert seg_errs(sys) == [], seg_errs(sys).str()
+	// not a member of the service: the segment is still the two members, each the other's peer
+	assert sys.someip_members('tel').map(it.name) == ['tcu', 'bench']
+	out := generate_someip_node(sys, sys.nodes[0], sys.buses[0], sysmodel.NodeView{}, {
+		'BenchLoad': 'app'
+	}, '') or { panic(err) }
+	assert out.contains('peer    = "192.168.0.190:30491"'), out
+}
+
+fn test_an_ip_host_is_lowered_without_a_someip_half() {
+	mut sys := tel_system()
+	sys.nodes << ip_host()
+	out := generate_someip_node(sys, sys.nodes[2], sys.buses[0], sysmodel.NodeView{}, map[string]string{},
+		'[[partition]]\nname = "ota"') or { panic(err) }
+	assert !out.contains('[bus.eth0]') && !out.contains('[someip]') && !out.contains('[[frame]]'), out
+	assert out.contains('[[partition]]'), out
+}
+
+fn test_net_env_lists_an_ip_host_without_a_port() {
+	mut sys := tel_system()
+	sys.nodes << ip_host()
+	env := net_env(sys)!
+	assert env.ends_with('BENCH_PORT=30491\nOTA_GW_ADDR=192.168.0.52\n'), env
+	assert !env.contains('OTA_GW_PORT'), env
+}
+
+// The explicit marker is what lets a port be optional: a member that forgot its port AND its
+// events is still refused for both, never read as an IP host.
+fn test_a_member_without_port_or_event_is_still_refused() {
+	mut sys := tel_system()
+	mut n := ip_host()
+	n.ip_host = false
+	n.has_someip_key = false
+	sys.nodes << n
+	e := seg_errs(sys).filter(it.contains('"ota_gw"'))
+	assert e.any(it.contains('has no `port`')), e.str()
+	assert e.any(it.contains('exchanges no event')), e.str()
+}
+
+fn test_an_ip_host_that_claims_more_is_refused() {
+	// a port: where a SOME/IP member listens
+	mut port := tel_system()
+	port.nodes << sysmodel.Node{
+		...ip_host()
+		port:     30492
+		port_raw: 30492
+		has_port: true
+	}
+	assert seg_errs(port).any(it.contains('"ota_gw"') && it.contains('has a `port` but says `someip = false`')), seg_errs(port).str()
+	// an event it sends or reads: only a member exchanges them
+	mut reads := tel_system()
+	reads.nodes << sysmodel.Node{
+		...ip_host()
+		view: sysmodel.NodeView{
+			fb_reads: ['BenchLoad']
+		}
+	}
+	assert seg_errs(reads).any(it.contains('"ota_gw": reads signal "BenchLoad" on someip bus "tel"')), seg_errs(reads).str()
+	mut sends := tel_system()
+	sends.nodes << ip_host()
+	sends.signals[1].producer = 'ota_gw'
+	assert seg_errs(sends).any(it.contains('"ota_gw": produces signal "LampCmd"')), seg_errs(sends).str()
+	// the key on a node on no segment says nothing
+	mut off := tel_system()
+	off.buses << sysmodel.Bus{
+		name:      'pt'
+		kind:      'can'
+		interface: 'can0'
+	}
+	off.nodes << sysmodel.Node{
+		...ip_host()
+		buses: ['pt']
+	}
+	assert seg_errs(off).any(it.contains('"ota_gw": its endpoint sets `someip` but it is on no someip bus')), seg_errs(off).str()
+	// and an IP host still answers at an address of its own
+	mut dup := tel_system()
+	dup.nodes << sysmodel.Node{
+		...ip_host()
+		endpoint: '192.168.0.51'
+	}
+	assert seg_errs(dup).any(it.contains('nodes "tcu" and "ota_gw" both answer at')), seg_errs(dup).str()
+}

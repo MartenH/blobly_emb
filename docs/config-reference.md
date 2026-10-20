@@ -748,7 +748,7 @@ A member ECU and its system-owned identities.
 | `nm` | integer |  | — | 0..255 | its NM node id (alive = peers lo + nm); absent = not an NM node; required for a ThreadX member of a bus with an NM cluster |
 | `trace` | integer |  | — |  | its trace node id, unique across the system (checked only, not generated) |
 | `diag` | table → [`[[node]] diag`](#system-sys-diag) |  | — |  | its ISO-TP diagnostic ids, unique across the system (checked only, not generated); required with `doip` |
-| `endpoint` | table → [`[[node]] endpoint`](#system-sys-endpoint) |  | — |  | its network identity: the address SOME/IP and DoIP answer at; required on a someip bus member and on a DoIP entity |
+| `endpoint` | table → [`[[node]] endpoint`](#system-sys-endpoint) |  | — |  | its network identity: the address SOME/IP and DoIP answer at; required on a someip bus member (a plain IP host on the segment too) and on a DoIP entity |
 | `doip` | table → [`[[node]] doip`](#system-sys-doip) |  | — |  | the node is a DoIP entity at its endpoint address (lowered into [doip]; dissolved systems only) |
 
 <a id="system-sys-diag"></a>
@@ -769,7 +769,8 @@ A member ECU and its system-owned identities.
 |---|---|---|---|---|---|
 | `address` | string |  | — |  | IPv4 dotted quad; unique per segment; a DoIP node needs a host address of its subnet (not its network, broadcast or gateway address — on the default /24: not .0, .1 or .255). Exactly one of `address` / `host`; refused on a segment with a `subnet` |
 | `host` | integer |  | — | 1..2147483646 | the host number on its someip segment's `subnet` (50 on 192.168.77.0/24 is 192.168.77.50) — what follows the subnet when it moves; exactly one of `address` / `host` |
-| `port` | integer |  | — | 1..65535 | the SOME/IP listen port (required on a someip bus; not 13400 on a DoIP node) |
+| `port` | integer |  | — | 1..65535 | the SOME/IP listen port (required on a someip bus, refused with `someip = false`; not 13400 on a DoIP node) |
+| `someip` | boolean |  | `true` |  | false: the node is a plain IP host on its someip segment — an address there that speaks no SOME/IP (an OTA gateway, a backend): no `port`, no events, no [someip] lowered; its address still follows the `subnet` and is written to gen-net.env. Only on a node on a someip bus |
 | `netmask` | string |  | `"255.255.255.0"` | dotted IPv4 | the subnet mask the node is brought up on (application and bootloader alike); contiguous, /1../30. With `host` it is the segment subnet's, and refused here |
 | `gateway` | string |  | — | dotted IPv4 | the default gateway; inside address/netmask and not its network or broadcast address. Absent = the subnet's first host, (address & netmask) \| 1. Refused with `host` (the segment subnet's .1) |
 

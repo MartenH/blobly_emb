@@ -306,7 +306,10 @@ broadcast address, and an address that is a host of it.
 
 A someip segment may state its network once — `subnet = "192.168.77.0/24"` on `[bus.tel]` — and
 then each member's `endpoint` gives only its `host` number (`host = 50` is 192.168.77.50); an
-`address` is refused there, since it would not move with the segment. The subnet's mask is the
+`address` is refused there, since it would not move with the segment. A machine on that network
+that speaks no SOME/IP — system_full's OTA gateway, blobly_gw's Linux box at host 52 — is declared
+a **plain IP host** on the segment, `endpoint = { host = 52, someip = false }`: no port, no
+events, nothing lowered or built, only an address that moves with the rest (docs/multi-node.md). The subnet's mask is the
 nodes' netmask and its `.1` their default gateway (an endpoint with `host` gives neither). `system_full` does this, so its whole bench
 network is that one value: the default, 192.168.77.0/24, suits a dedicated router for the bench —
 a network of its own, which DoIP discovery's broadcast and SOME/IP need anyway, and which stays off
@@ -322,10 +325,11 @@ it — so the host running blobly_net must be at the tester's host number on tha
 boards must be reflashed after a change.
 
 sysgen writes the result to `gen-net.env` beside system.toml (`SYSNODE_ADDR=…`, `TCU_ADDR=…`,
-`TESTER_ADDR=…`, each with its `_PORT`) on every generation — so it states the LAST one, which the
-flashed images match only if they were built since — and the bench scripts read it rather than
-keep a copy:
-`test/net_env.sh` for the shell, `test/tcu_e2e.lua` and `test/doip_entity.py` directly. The two
+`TESTER_ADDR=…`, each with its `_PORT`, and `OTA_GW_ADDR=…`, a plain IP host's, with none) on every
+generation — so it states the LAST one, which the flashed images match only if they were built
+since — and the bench scripts read it rather than keep a copy:
+`test/net_env.sh` for the shell, `test/tcu_e2e.lua` and `test/doip_entity.py` directly, and
+blobly_gw's scripts for the gateway's own address. The two
 `.blobnet` projects (`test/doip_bench.blobnet`, `test/diag_bench.blobnet`) still name sysnode's
 address literally — a project cannot read the system's yet — so a bench on another network edits
 those two lines too.

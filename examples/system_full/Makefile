@@ -10,6 +10,8 @@
 #                         blobly_net restbus-simulates it, nothing is built
 #   chassis   (none)    : an absent edge ECU sending zone_a its protected SafetyCmd — a declaration
 #                         only (nodes/chassis/ecu.toml); blobly_net simulates it on the bench
+#   ota_gw    (none)    : the OTA gateway, a Linux box built in blobly_gw — a declaration only
+#                         (nodes/ota_gw/ecu.toml): a plain IP host on tel, declared for its address
 #
 # Usage:
 #   make syscheck          # validate system-wide invariants and signal routes
@@ -18,8 +20,8 @@
 #   make all               # gen + syscheck + nodes
 #
 # Every BUILT node — including the gateway — is a real ThreadX image generated from system.toml
-# (the tester and the chassis are declaration-only: in the model, not in NODES; blobly_net stands
-# in for them).
+# (the tester, the chassis and ota_gw are declaration-only: in the model, not in NODES; blobly_net
+# stands in for the first two, blobly_gw is the third).
 # sysnode's comm thread owns both FDCAN buses (compute=FDCAN1, edge=FDCAN2) and forwards the
 # 4 resolved routes on target (raw copy + id remap). Both buses come out on the H735-DK's own
 # transceivers, so blobly_net can tap both. Driving edge on silicon needs the h735dk board to

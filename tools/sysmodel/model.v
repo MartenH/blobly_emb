@@ -127,6 +127,12 @@ pub mut:
 	// the netmask came from the segment's subnet, not from the node: it is lowered like an
 	// authored one, but a host member is not refused for "configuring" it
 	netmask_from_subnet bool
+	// `someip = false`: a plain IP HOST on its someip segment — an address on the network that
+	// speaks no SOME/IP (system_full's OTA gateway). It is not a member of the service: no port,
+	// no events, no [someip] lowered, while its address follows the subnet like a member's.
+	ip_host         bool
+	has_someip_key  bool // `someip` given at all: it says nothing on a node on no segment
+	someip_not_bool bool
 	// `doip = { logical = 0x07A0 }`: the node's diagnostic server is reachable over DoIP
 	// (ISO 13400) too, at its endpoint address. Lowered into the node's [doip] — the address is
 	// the endpoint's, so a node has ONE network identity and it is declared here, not per node.
@@ -643,6 +649,14 @@ pub fn parse_system(path string) !System {
 				node.has_port = 'port' in em
 				node.port_int = m_is_int(em, 'port')
 				node.has_endpoint = true
+				if sv := em['someip'] {
+					node.has_someip_key = true
+					if sv is bool {
+						node.ip_host = !sv
+					} else {
+						node.someip_not_bool = true
+					}
+				}
 				for key in ['netmask', 'gateway'] {
 					if v := em[key] {
 						if v !is string {
@@ -1474,9 +1488,11 @@ pub fn (s System) someip_event_producer(fr SysFrame) string {
 	return ''
 }
 
-// someip_members: the nodes that name someip bus `bus` in `buses`, in declaration order.
+// someip_members: the nodes that name someip bus `bus` in `buses` and speak SOME/IP on it, in
+// declaration order — a plain IP host (`someip = false`) sits on the segment but is not a member
+// of its service, so no event, partner or two-member rule counts it.
 pub fn (s System) someip_members(bus string) []Node {
-	return s.nodes.filter(bus in it.buses)
+	return s.nodes.filter(bus in it.buses && !it.ip_host)
 }
 
 // someip_event_receivers: the members of fr's segment, other than its producer, whose FBs read

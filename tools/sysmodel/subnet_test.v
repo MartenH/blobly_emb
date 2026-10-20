@@ -141,3 +141,30 @@ fn test_a_subnet_no_member_reads_is_refused() {
 	assert e.len == 1 && e[0].contains('would move nothing'), '${e}'
 	assert !s.subnet_applied
 }
+
+// a plain IP host (`someip = false`) is a host of its segment like a member: the subnet and its
+// override place it, and it needs no port to be placed
+fn with_ip_host() System {
+	mut s := tel_system('192.168.77.0/24')
+	s.nodes << Node{
+		name:           'ota_gw'
+		buses:          ['tel']
+		has_endpoint:   true
+		has_host:       true
+		host_raw:       52
+		has_someip_key: true
+		ip_host:        true
+	}
+	return s
+}
+
+fn test_a_plain_ip_host_moves_with_the_subnet() {
+	mut s := with_ip_host()
+	s.resolve_hosts('')
+	assert s.subnet_errs == []
+	assert s.nodes[2].endpoint == '192.168.77.52'
+	mut moved := with_ip_host()
+	moved.resolve_hosts('10.20.0.0/16')
+	assert moved.subnet_errs == []
+	assert moved.nodes[2].endpoint == '10.20.0.52'
+}

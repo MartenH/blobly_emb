@@ -162,8 +162,9 @@ fn main() {
 }
 
 // net_env: every node's endpoint as this generation resolved it — subnet and BLOB_NET_SUBNET
-// applied — as KEY=value lines (<NODE>_ADDR, <NODE>_PORT), so a bench script, a Lua suite or a
-// Python probe reads the generated addresses instead of keeping a copy of them. '': no endpoints.
+// applied — as KEY=value lines (<NODE>_ADDR, and <NODE>_PORT where it has one: a plain IP host
+// has none), so a bench script, a Lua suite or a Python probe reads the generated addresses
+// instead of keeping a copy of them. '': no endpoints.
 fn net_env(sys sysmodel.System) !string {
 	nodes := sys.nodes.filter(it.has_endpoint && it.endpoint != '')
 	if nodes.len == 0 {
@@ -748,7 +749,11 @@ fn generate_someip_node(sys sysmodel.System, node sysmodel.Node, bus sysmodel.Bu
 // the events it produces or consumes. Split out of generate_someip_node because a node can be a
 // member of a someip segment AND sit on a CAN bus: nodes/tester breathes an LED on compute and
 // answers tcu's telemetry on tel, so one generated file carries both halves (#245 step 3, leaf).
+// A plain IP host (`someip = false`) has no SOME/IP half: it is an address on the segment only.
 fn someip_sections(sys sysmodel.System, node sysmodel.Node, bus sysmodel.Bus, view sysmodel.NodeView, sig_part map[string]string) ![]string {
+	if node.ip_host {
+		return []string{}
+	}
 	iface := 'eth0'
 	mut b := []string{}
 	b << '[bus.${iface}]'
