@@ -141,18 +141,20 @@ pub fn partition_can0(ch can.Channel, trace_chp can.Channel, sat_buf &trace.Trac
 
 __global (
 	g_sat_ring [64]trace.Record
+	g_sat_buf trace.TraceBuffer
+	g_sat_cap trace.Capture
 	g_import_ring [65]trace.Record
 	g_trace_freeze trace.FreezeSync
 )
 pub fn run(can0 can.Channel, can1 can.Channel) {
 	trace_origin := osal.now_us()
-	mut sat_buf := trace.new_buffer(&g_sat_ring[0], 64, .ring, 50)
-	sat_buf.start()
+	g_sat_buf = trace.new_buffer(&g_sat_ring[0], 64, .ring, 50)
+	g_sat_buf.start()
 	// the satellite restarts its own ring when the owner posts a re-arm (#273)
-	mut sat_cap := trace.satellite_capture(&sat_buf, trace_origin, 0, 500,
+	g_sat_cap = trace.satellite_capture(unsafe { &g_sat_buf }, trace_origin, 0, 500,
 		unsafe { &g_trace_freeze })
-	t_can0 := spawn partition_can0(can0, can1, &sat_buf, unsafe { &g_import_ring[0] }, trace_origin, unsafe { &g_trace_freeze })
-	t_app := spawn partition_app(1, unsafe { voidptr(&sat_cap) })
+	t_can0 := spawn partition_can0(can0, can1, unsafe { &g_sat_buf }, unsafe { &g_import_ring[0] }, trace_origin, unsafe { &g_trace_freeze })
+	t_app := spawn partition_app(1, unsafe { voidptr(&g_sat_cap) })
 	t_can0.wait()
 	t_app.wait()
 }

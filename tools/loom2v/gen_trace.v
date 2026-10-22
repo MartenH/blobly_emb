@@ -940,8 +940,8 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << ''
 	g << trace_run_globals(m)
 	g << 'pub fn run(chp can.Channel) {'
-	g << '	mut sat_buf := trace.new_buffer(&g_sat_ring[0], ${cap}, ${mode}, ${m.trace.pre_pct})'
-	g << '	sat_buf.start()'
+	g << '	g_sat_buf = trace.new_buffer(&g_sat_ring[0], ${cap}, ${mode}, ${m.trace.pre_pct})'
+	g << '	g_sat_buf.start()'
 	g << '	// one capture origin for BOTH cores: a per-thread origin would skew the two lanes by'
 	g << '	// the thread-start delay, invisibly (a shared clock emits no core-offset record).'
 	g << '	trace_origin := osal.now_us()'
@@ -950,10 +950,10 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << '	// hook — within one handler of the event. Generation-aware (#273): a raise counts only'
 	g << '	// for the window it was made in, and the satellite restarts its own ring on a re-arm.'
 	g << '	// the satellite restarts its own ring when the owner posts a re-arm (#273)'
-	g << '	mut sat_cap := trace.satellite_capture(&sat_buf, trace_origin, ${handler_id_base(m, doc, sat)}, ${m.trace.budget_us},'
+	g << '	g_sat_cap = trace.satellite_capture(unsafe { &g_sat_buf }, trace_origin, ${handler_id_base(m, doc, sat)}, ${m.trace.budget_us},'
 	g << '		unsafe { &g_trace_freeze })'
-	g << '	t_${sat} := spawn partition_${sat}(&sat_cap)'
-	g << '	t_${owner} := spawn partition_${owner}(chp, &sat_buf, unsafe { &g_import_ring[0] }, trace_origin,'
+	g << '	t_${sat} := spawn partition_${sat}(unsafe { &g_sat_cap })'
+	g << '	t_${owner} := spawn partition_${owner}(chp, unsafe { &g_sat_buf }, unsafe { &g_import_ring[0] }, trace_origin,'
 	g << '		unsafe { &g_trace_freeze })'
 	g << '	t_${sat}.wait()'
 	g << '	t_${owner}.wait()'
@@ -1221,24 +1221,26 @@ fn trace_run_setup(m Model, sat string, doc toml.Doc) []string {
 	cap := m.trace.buffer_records
 	return [
 		'\ttrace_origin := osal.now_us()',
-		'\tmut sat_buf := trace.new_buffer(&g_sat_ring[0], ${cap}, .ring, ${m.trace.pre_pct})',
-		'\tsat_buf.start()',
+		'\tg_sat_buf = trace.new_buffer(&g_sat_ring[0], ${cap}, .ring, ${m.trace.pre_pct})',
+		'\tg_sat_buf.start()',
 		'\t// the satellite restarts its own ring when the owner posts a re-arm (#273)',
-		'\tmut sat_cap := trace.satellite_capture(&sat_buf, trace_origin, ${handler_id_base(m, doc, sat)}, ${m.trace.budget_us},',
+		'\tg_sat_cap = trace.satellite_capture(unsafe { &g_sat_buf }, trace_origin, ${handler_id_base(m, doc, sat)}, ${m.trace.budget_us},',
 		'\t\tunsafe { &g_trace_freeze })',
 	]
 }
 
 // trace_run_globals: what run() keeps for both lanes while it waits on them — the satellite's ring,
-// the staging for the imported window (+1 for the core-offset record load_remote_buffer may
-// prepend) and the generation-aware freeze cell (#273) both captures point at (thread_globals).
+// its buffer and capture, the staging for the imported window (+1 for the core-offset record
+// load_remote_buffer may prepend) and the generation-aware freeze cell (#273) both captures point
+// at (thread_globals).
 fn trace_run_globals(m Model) []string {
 	cap := m.trace.buffer_records
-	return thread_globals(['g_sat_ring [${cap}]trace.Record', 'g_import_ring [${cap + 1}]trace.Record',
+	return thread_globals(['g_sat_ring [${cap}]trace.Record', 'g_sat_buf trace.TraceBuffer',
+		'g_sat_cap trace.Capture', 'g_import_ring [${cap + 1}]trace.Record',
 		'g_trace_freeze trace.FreezeSync'])
 }
 
 // trace_bridge_spawn_args: what run() hands the owner beyond its own COM channels.
 fn trace_bridge_spawn_args(trace_bus string) string {
-	return ', ${snake(trace_bus)}, &sat_buf, unsafe { &g_import_ring[0] }, trace_origin, unsafe { &g_trace_freeze }'
+	return ', ${snake(trace_bus)}, unsafe { &g_sat_buf }, unsafe { &g_import_ring[0] }, trace_origin, unsafe { &g_trace_freeze }'
 }
