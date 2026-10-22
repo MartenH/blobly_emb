@@ -132,6 +132,10 @@ fn test_no_makefile_runs_a_repo_tool_through_v_run() {
 //   -target-libc-headers  the target's own C library (newlib) supplies the headers. Without it a
 //                         program with any `#include "x.h"` gets V3's HOSTED preamble — dlfcn.h,
 //                         dirent.h, pthread.h — which newlib does not have.
+//   -bare-builtin-dir osal/vrt/bare
+//                         without it V3 compiles vlib/builtin/linux_bare into the image: a Linux
+//                         process's _start, syscalls and heap, whose malloc/calloc/realloc/free
+//                         collide with osal/vrt's.
 fn test_every_freestanding_transpile_names_its_target() {
 	mut seen := 0
 	for mk in makefiles(@VMODROOT) {
@@ -142,6 +146,7 @@ fn test_every_freestanding_transpile_names_its_target() {
 			seen++
 			assert l.contains('-arch arm32'), '${mk}: a freestanding transpile without `-arch arm32` gets 64-bit ints: ${l.trim_space()}'
 			assert l.contains('-target-libc-headers'), '${mk}: a freestanding transpile without `-target-libc-headers` gets the hosted libc preamble: ${l.trim_space()}'
+			assert l.contains('-bare-builtin-dir osal/vrt/bare'), '${mk}: a freestanding transpile without `-bare-builtin-dir osal/vrt/bare` compiles in a Linux process runtime: ${l.trim_space()}'
 		}
 	}
 	// the 13 applications' Makefiles and boot/boot.mk; fewer means the walk went wrong

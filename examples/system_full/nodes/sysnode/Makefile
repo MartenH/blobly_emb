@@ -93,7 +93,7 @@ CFLAGS += $(LOOM_NET_DEFS) # the network the config sizes (driver/eth/netx_up.c)
 gen/loom_build.mk: gen/.stamp ;
 
 # how V is run for it — also its signature (tools/tools.mk v_sign)
-TRANSPILE_FLAGS = -freestanding -arch arm32 -target-libc-headers -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) -path "@vlib|@vmodules|.|$(GW)"
+TRANSPILE_FLAGS = -freestanding -bare-builtin-dir osal/vrt/bare -arch arm32 -target-libc-headers -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) -path "@vlib|@vmodules|.|$(GW)"
 $(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) $(call v_sign,$(BUILD)/app.c,$(TRANSPILE_FLAGS)) | $(BUILD)
 	cd $(REPO) && $(V) $(TRANSPILE_FLAGS) $(call v_dump,$@) -o $(GW)/$(BUILD)/app.c examples/system_full/main.v
 	$(call v_deps,$@)
