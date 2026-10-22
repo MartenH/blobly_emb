@@ -749,10 +749,12 @@ fn handler_id_base(m Model, doc toml.Doc, part string) u32 {
 // thread would make both cores remote and force the protocol's state reporting to be re-derived
 // here, in generated code — exactly what docs/com-modules.md keeps in the platform.
 //
-// run() OWNS the satellite's ring, its capture context and the import staging, and passes them in;
-// it then waits on both threads, so they outlive every use. Deliberately not __global: the host
-// examples build without -enable-globals, and a global would need runtime assignment anyway to
-// stay clear of the _vinit trap (scripts/lint_vinit.sh, emb#134). Two threads touch the ring —
+// run() OWNS the satellite's ring, its buffer and capture, the import staging and the freeze cell,
+// and passes them in; it then waits on both threads, so they outlive every use. They are __globals
+// (trace_run_globals; the file is @[has_globals], so a host example needs no -enable-globals):
+// their addresses reach `spawn`, so V3 would move a local to the heap, and the examples run with
+// -gc none. run() assigns them, never a declaration, to stay clear of the _vinit trap
+// (scripts/lint_vinit.sh, emb#134). Two threads touch the ring —
 // the satellite writes, the owner reads under the freeze on_cmd_multicore applies — so it is one
 // writer and one reader, never a shared write path.
 fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string, telem_iface string, owner string, sat string) []string {
