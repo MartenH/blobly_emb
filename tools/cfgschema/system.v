@@ -54,7 +54,7 @@ fn system_schema() Schema {
 				k('nm', .int).range(0, 0xFF).doc('its NM node id (alive = peers lo + nm); absent = not an NM node; required for a ThreadX member of a bus with an NM cluster'),
 				k('trace', .int).doc('its trace node id, unique across the system (checked only, not generated)'),
 				sub('diag', .tbl, 'sys_diag').doc('its ISO-TP diagnostic ids, unique across the system (checked only, not generated); required with `doip`'),
-				sub('endpoint', .tbl, 'sys_endpoint').doc('its network identity: the address SOME/IP and DoIP answer at; required on a someip bus member and on a DoIP entity'),
+				sub('endpoint', .tbl, 'sys_endpoint').doc('its network identity: the address SOME/IP and DoIP answer at; required on a someip bus member (a plain IP host on the segment too) and on a DoIP entity'),
 				sub('doip', .tbl, 'sys_doip').doc('the node is a DoIP entity at its endpoint address (lowered into [doip]; dissolved systems only)'),
 			]),
 			tbl('sys_diag', '[[node]] diag', '', [
@@ -65,7 +65,8 @@ fn system_schema() Schema {
 			tbl('sys_endpoint', '[[node]] endpoint', '', [
 				k('address', .str).doc('IPv4 dotted quad; unique per segment; a DoIP node needs a host address of its subnet (not its network, broadcast or gateway address — on the default /24: not .0, .1 or .255). Exactly one of `address` / `host`; refused on a segment with a `subnet`'),
 				k('host', .int).range(1, 0x7FFFFFFE).doc('the host number on its someip segment\'s `subnet` (50 on 192.168.77.0/24 is 192.168.77.50) — what follows the subnet when it moves; exactly one of `address` / `host`'),
-				k('port', .int).range(1, 0xFFFF).doc('the SOME/IP listen port (required on a someip bus; not 13400 on a DoIP node)'),
+				k('port', .int).range(1, 0xFFFF).doc('the SOME/IP listen port (required on a someip bus, refused with `someip = false`; not 13400 on a DoIP node)'),
+				k('someip', .boolean).d('true').doc('false: the node is a plain IP host on its someip segment — an address there that speaks no SOME/IP (an OTA gateway, a backend): no `port`, no `netmask` or `gateway` (unless it serves `doip`), no events, no [someip] lowered; its address, judged as a host of its subnet, still follows the `subnet` and is written to gen-net.env. Only on a node on a someip bus, in a dissolved system'),
 				k('netmask', .str).ipv4().d('"255.255.255.0"').doc('the subnet mask the node is brought up on (application and bootloader alike); contiguous, /1../30. With `host` it is the segment subnet\'s, and refused here'),
 				k('gateway', .str).ipv4().doc('the default gateway; inside address/netmask and not its network or broadcast address. Absent = the subnet\'s first host, (address & netmask) | 1. Refused with `host` (the segment subnet\'s .1)'),
 			]),

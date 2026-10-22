@@ -1,0 +1,16 @@
+# ota_gw — the OTA gateway as a NODE, declaration only. The real thing is blobly_gw, a Linux box
+# (STM32MP257F-DK) with a repository of its own; nothing here is built, and it is not in the
+# Makefile's NODES. system.toml declares it a plain IP host on the tel segment (`someip = false`):
+# it speaks no SOME/IP — it is a DoIP tester to sysnode and an HTTP client of its backend — so the
+# model gives it an address (host 52 of the subnet, OTA_GW_ADDR in gen-net.env) and nothing else.
+# The model wants every node to have an ecu.toml; this one is the least a node can be, one
+# partition with one thread and no FB.
+#
+# NOTE: no inline comments inside [[...]] tables (vlang/v#27684).
+
+[[partition]]
+name = "ota"
+core = 0
+
+  [[partition.thread]]
+  name = "agent"

@@ -183,6 +183,19 @@ bench tool receives tcu's telemetry and sysnode's `GwStatus`, and the generated 
 accepts each only from its producer (loom2v's per-event `peer`, docs/someip.md). The
 COMPOSED model (nodes authoring their own `[someip]`) still holds a segment to two members.
 
+**A node on the segment need not speak SOME/IP.** `endpoint = { host = 52, someip = false }`
+makes it a **plain IP host** there — an address on the network and nothing more (system_full's
+`ota_gw`, the OTA gateway: a DoIP tester and an HTTP client, never a service member). It is not
+counted as a member: the event and peer rules above skip it, it gives no `port` and gets no
+`[bus.eth0]`/`[someip]`, and its address still follows the segment's `subnet` (and
+`BLOB_NET_SUBNET`) into `gen-net.env`. The marker is explicit on purpose: a member that forgot
+its port and its events is still refused for both, never read as a host. syscheck refuses a
+`port` beside `someip = false`, a `netmask` or `gateway` (nothing lowers them, unless the node is
+a DoIP entity), a signal on the segment that such a node produces or reads, `someip` on a node on
+no segment, and `someip` in a composed system (nothing lowers it there). Its address is judged as
+a host of its subnet — no node gate sees it otherwise — and the one-address-per-node rule applies
+to it like any member.
+
 **DoIP is declared on the node, at its endpoint.** `doip = { logical = 0x07A0 }` on a
 `[[node]]` (optionally `functional = 0xE4xx`) puts the node's one diagnostic server on
 TCP/UDP 13400 at its `endpoint` address — lowered into its `[doip]`, so a node has ONE

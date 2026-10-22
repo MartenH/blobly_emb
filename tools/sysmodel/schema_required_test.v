@@ -21,6 +21,7 @@ const conditional = {
 	'sys_node.nm':              'a threadx member of an NM bus'
 	'sys_node.diag':            'the node declares `doip`'
 	'sys_endpoint.port':        'the node is on a someip bus'
+	'sys_endpoint.someip':      'the node gives no port and exchanges no event (a plain IP host)'
 	'sys_endpoint.host':        'the endpoint gives no `address`'
 	'sys_bus.subnet':           'a member gives its endpoint `host`'
 	'sys_doip.allow_bench_key': 'the node uses [uds] security_key = "reference"'
@@ -128,6 +129,7 @@ fn test_a_required_row_is_exactly_a_key_sysmodel_refuses_to_miss() {
 	// inline tables: the first node's endpoint / doip / diag, the first frame's tx / e2e
 	drops << Drop{'sys_endpoint.host', 'endpoint = { host = 50, port', 'endpoint = { port'}
 	drops << Drop{'sys_endpoint.port', 'host = 50, port = 30490 }', 'host = 50 }'}
+	drops << Drop{'sys_endpoint.someip', 'host = 52, someip = false }', 'host = 52 }'}
 	drops << Drop{'sys_doip.logical', 'doip     = { logical = 0x07A0, ', 'doip     = { '}
 	drops << Drop{'sys_doip.testers', 'testers = [0x0E00], ', ''}
 	drops << Drop{'sys_doip.allow_bench_key', ', allow_bench_key = true }', ' }'}
@@ -189,7 +191,8 @@ fn test_an_endpoint_subnet_is_read_and_checked() {
 	text := os.read_file(os.join_path(@VMODROOT, 'examples', 'system_full', 'system.toml')) or {
 		panic(err)
 	}.replace_each(['subnet  = "192.168.77.0/24"\n', '', '{ host = 50,', '{ address = "192.168.0.50",',
-		'{ host = 51,', '{ address = "192.168.0.51",', '{ host = 190,', '{ address = "192.168.0.190",'])
+		'{ host = 51,', '{ address = "192.168.0.51",', '{ host = 190,', '{ address = "192.168.0.190",',
+		'{ host = 52,', '{ address = "192.168.0.52",'])
 	ep := 'endpoint = { address = "192.168.0.50", port = 30490 }'
 	assert text.contains(ep)
 	with := fn [text, ep] (keys string) string {
@@ -214,4 +217,25 @@ fn test_an_endpoint_subnet_is_read_and_checked() {
 		e := refused(dir, with(keys))
 		assert e.any(it.contains(want)), '${keys}: ${e}'
 	}
+}
+
+// `someip` is read as the boolean it must be: system_full's OTA gateway parses as a plain IP host,
+// and a value that is not a boolean is refused rather than read as either answer
+fn test_the_someip_key_is_read_from_the_file() {
+	dir := fixture_dir()
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	text := os.read_file(os.join_path(@VMODROOT, 'examples', 'system_full', 'system.toml')) or {
+		panic(err)
+	}
+	path := os.join_path(dir, 'system.toml')
+	os.write_file(path, text) or { panic(err) }
+	s := parse_system(path) or { panic(err) }
+	gw := s.nodes.filter(it.name == 'ota_gw')[0]
+	assert gw.ip_host() && !gw.has_port
+	assert s.nodes.filter(it.name != 'ota_gw').all(!it.ip_host())
+	// a value that is not a boolean is that one error, not also a member with no port or event
+	e := refused(dir, text.replace_once('host = 52, someip = false', 'host = 52, someip = "false"'))
+	assert e == ['node "ota_gw": endpoint `someip` must be a boolean — false makes the node a plain IP host on its segment'], e.str()
 }

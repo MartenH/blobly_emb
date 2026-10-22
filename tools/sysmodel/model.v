@@ -127,6 +127,11 @@ pub mut:
 	// the netmask came from the segment's subnet, not from the node: it is lowered like an
 	// authored one, but a host member is not refused for "configuring" it
 	netmask_from_subnet bool
+	// the endpoint's `someip` (none = absent). false: a plain IP HOST on its someip segment — an
+	// address on the network that speaks no SOME/IP (system_full's OTA gateway); see ip_host.
+	// someip_bad: authored as something other than a boolean.
+	someip     ?bool
+	someip_bad bool
 	// `doip = { logical = 0x07A0 }`: the node's diagnostic server is reachable over DoIP
 	// (ISO 13400) too, at its endpoint address. Lowered into the node's [doip] — the address is
 	// the endpoint's, so a node has ONE network identity and it is declared here, not per node.
@@ -643,6 +648,13 @@ pub fn parse_system(path string) !System {
 				node.has_port = 'port' in em
 				node.port_int = m_is_int(em, 'port')
 				node.has_endpoint = true
+				if sv := em['someip'] {
+					if sv is bool {
+						node.someip = sv
+					} else {
+						node.someip_bad = true
+					}
+				}
 				for key in ['netmask', 'gateway'] {
 					if v := em[key] {
 						if v !is string {
@@ -1474,9 +1486,25 @@ pub fn (s System) someip_event_producer(fr SysFrame) string {
 	return ''
 }
 
-// someip_members: the nodes that name someip bus `bus` in `buses`, in declaration order.
+// ip_host: the node says `someip = false` — a plain IP host on its segment, an address there and
+// nothing more: no port, no events, no [someip] lowered, while its address follows the subnet
+pub fn (n Node) ip_host() bool {
+	v := n.someip or { return false }
+	return !v
+}
+
+// outside_service: the node sits on its segment without being a member of the service — a plain
+// IP host, or a `someip` that is not a boolean, which check_ip_hosts refuses on its own rather than
+// beside every member rule the node would then fail. The ONE exemption the segment rules read.
+pub fn (n Node) outside_service() bool {
+	return n.someip_bad || n.ip_host()
+}
+
+// someip_members: the nodes that name someip bus `bus` in `buses` and are members of its service,
+// in declaration order — a node outside it (outside_service) sits on the segment, but no event,
+// partner, port or two-member rule counts it.
 pub fn (s System) someip_members(bus string) []Node {
-	return s.nodes.filter(bus in it.buses)
+	return s.nodes.filter(bus in it.buses && !it.outside_service())
 }
 
 // someip_event_receivers: the members of fr's segment, other than its producer, whose FBs read

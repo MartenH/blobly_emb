@@ -326,3 +326,16 @@ name     = "tcu"
 ecu      = "nodes/tcu/ecu.toml"
 buses    = ["tel"]
 endpoint = { host = 51, port = 30490 }
+
+# The OTA gateway: a Linux box of its own (blobly_gw, an STM32MP257F-DK) — a declaration only
+# (nodes/ota_gw/ecu.toml), nothing is built here. It is on the bench network but speaks no SOME/IP:
+# a DoIP tester to sysnode and an HTTP client of its backend, so `someip = false` makes it a plain
+# IP host on tel — no port, no events, no [someip] lowered. Declaring it puts its address where
+# every other one is: host 52 of the segment's subnet, moved by BLOB_NET_SUBNET with the rest, and
+# OTA_GW_ADDR in gen-net.env, which blobly_gw's scripts read. Its CAN tester side (on compute) is
+# not declared.
+[[node]]
+name     = "ota_gw"
+ecu      = "nodes/ota_gw/ecu.toml"
+buses    = ["tel"]
+endpoint = { host = 52, someip = false }

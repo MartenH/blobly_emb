@@ -77,7 +77,9 @@ segment may state its `subnet` once and its members only a `host` number (`tools
 subnet.v), which is how `system_full`'s bench network (192.168.77.0/24) is ONE value; the
 environment variable `BLOB_NET_SUBNET` replaces it per bench, the images that carry an address
 record it (`net_sign` in `tools/tools.mk`), and sysgen writes the result to `gen-net.env`, which the
-bench scripts read instead of keeping a copy (docs/net.md "Moving the bench network").
+bench scripts read instead of keeping a copy (docs/net.md "Moving the bench network"). A node on
+the segment that speaks no SOME/IP (system_full's OTA gateway) is a plain IP host, `someip = false`
+on its endpoint: an address that moves with the rest, no port, nothing lowered (docs/multi-node.md).
 
 ## Build & test
 
