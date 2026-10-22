@@ -86,7 +86,7 @@ $(BOOT_DIR):
 
 # what V compiles into it is its dependency list (tools/tools.mk v_deps)
 # how V is run for it — -d boot_doip on a [doip] node — also its signature (tools/tools.mk v_sign)
-BOOT_TRANSPILE_FLAGS = -freestanding -arch arm32 -target-libc-headers -gc none -no-bounds-checking -enable-globals $(BOOT_VDEFS) -path "@vlib|@vmodules|."
+BOOT_TRANSPILE_FLAGS = -freestanding -bare-builtin-dir osal/vrt/bare -arch arm32 -target-libc-headers -gc none -no-bounds-checking -enable-globals $(BOOT_VDEFS) -path "@vlib|@vmodules|."
 $(BOOT_DIR)/boot.c: $(call v_unrecorded,$(BOOT_DIR)/boot.c) $(call v_sign,$(BOOT_DIR)/boot.c,$(BOOT_TRANSPILE_FLAGS)) | $(BOOT_DIR)
 	cd $(REPO) && $(V) $(BOOT_TRANSPILE_FLAGS) $(call v_dump,$@) -o $(CURDIR)/$@ boot/target
 	$(call v_deps,$@)

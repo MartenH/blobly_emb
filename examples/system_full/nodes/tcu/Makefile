@@ -94,7 +94,7 @@ gen/loom_build.mk: gen/.stamp ;
 
 # 1) transpile the V stack to freestanding C (-enable-globals: ThreadX TCB/stack statics).
 # how V is run for it — also its signature (tools/tools.mk v_sign)
-TRANSPILE_FLAGS = -freestanding -arch arm32 -target-libc-headers -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) -path "@vlib|@vmodules|.|$(EX)"
+TRANSPILE_FLAGS = -freestanding -bare-builtin-dir osal/vrt/bare -arch arm32 -target-libc-headers -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) -path "@vlib|@vmodules|.|$(EX)"
 $(BUILD)/app.c: main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) $(call v_sign,$(BUILD)/app.c,$(TRANSPILE_FLAGS)) | $(BUILD)
 	cd $(REPO) && $(V) $(TRANSPILE_FLAGS) $(call v_dump,$@) -o $(EX)/$(BUILD)/app.c $(EX)/main.v
 	$(call v_deps,$@)

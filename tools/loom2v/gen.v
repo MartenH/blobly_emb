@@ -3500,7 +3500,7 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 		}
 		for part, _ in m.part.by_part {
 			arg := if tctx.on() && part == tctx.sat {
-				'unsafe { voidptr(&sat_cap) }' // the satellite's capture: its ring is the owner's to dump
+				'unsafe { voidptr(&g_sat_cap) }' // the satellite's capture: its ring is the owner's to dump
 			} else {
 				'unsafe { nil }'
 			}

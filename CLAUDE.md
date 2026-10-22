@@ -258,10 +258,11 @@ holds its persisted fault memory and its `SteerLimit` parameter: `make flash` ne
 and coded parameters survive a reflash — clear DTCs with 0x14, recode a parameter with 0x2E
 (`test/param_zone_a.lua` leaves it at 360).
 
-**CI pins the V compiler, and it is V3**: the commit in `.v-version` (today master `0535623`, the first
-commit with a vc bootstrap after vlang/v#30552 merged — that PR leaves the errno accessor to a
-`-target-libc-headers` target, where every master commit since vlang/v#30215 had declared it beside
-newlib's `int *` and none built the firmware), built from source with
+**CI pins the V compiler, and it is V3**: the commit in `.v-version` (today master `5f7d4d0`, the newest
+commit with a vc bootstrap generated from it once vlang/v#30964 and #30972 had merged; vlang/v#30552,
+in every pin since `0535623`, leaves the errno accessor to a `-target-libc-headers` target, where
+every master commit since vlang/v#30215 had declared it beside newlib's `int *` and none built the
+firmware), built from source with
 the vlang/vc bootstrap pinned in `.vc-version` (a vc at or before the pin that
 `scripts/v_toolchain.sh` has built it with) — keep it the pair blobly_net pins, moved in both repos
 together, so one `~/v` builds both (`.github/actions/setup-v`, `scripts/v_toolchain.sh`, both from blobly_net, tested by
@@ -281,8 +282,10 @@ compares the commit.
 **What V3 needs from a bare-metal image** (each pinned by a test or a gate):
 - every freestanding transpile passes **`-arch arm32`** — V3 sizes `int` by the target it writes C
   for, the 64-bit host's without it — and **`-target-libc-headers`**, or any `#include "x.h"` pulls
-  V3's hosted preamble (`dlfcn.h`, `pthread.h`) that newlib does not have
-  (`tools/loom2v/no_v_run_makefiles_test.v`);
+  V3's hosted preamble (`dlfcn.h`, `pthread.h`) that newlib does not have — and
+  **`-bare-builtin-dir osal/vrt/bare`**, an empty directory, or V3 compiles `vlib/builtin/linux_bare`
+  in (a Linux process's `_start`, syscalls and dlmalloc heap, whose `malloc` family collides with
+  `osal/vrt`'s) (`tools/loom2v/no_v_run_makefiles_test.v`);
 - the image enters at **`blob_entry`**, exported from its `main.v` (`@[export: 'blob_entry'] fn
   entry()`): V3 emits no `main__main` and wraps `fn main` in a hosted C main (a `VEXE` setenv,
   `_vinit`), which `crt0.S` must not call;
@@ -298,7 +301,8 @@ compares the commit.
   `can.Channel.recv` copies out of its own locals, never handing C an address into the caller's
   frame. `-warn-about-allocs` on a transpile names each local V3 moved. The HOST examples' generated
   code is held to the same (`scripts/check_host_allocs.sh`, the host job): a host thread's state,
-  scheduler, trace ring and receive frame are `__global`s too (`thread_globals` in loom2v);
+  scheduler, trace ring and receive frame are `__global`s too, and so are the satellite's trace
+  buffer and capture that run() hands its threads (`thread_globals` in loom2v);
 - a C struct V declares (`struct C.bulk_t`) has a TAG in its header: V3 emits `typedef struct x x;`;
 - a generated global read by NAME over SWD (`g_trace_ring`, `io_startup_faults`, the comm thread's
   counters — `swd_names` in `tools/loom2v/gen_trace.v`) is declared through `exported_global`, on

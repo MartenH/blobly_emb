@@ -149,12 +149,14 @@ pub fn partition_sense(chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &
 
 __global (
 	g_sat_ring [64]trace.Record
+	g_sat_buf trace.TraceBuffer
+	g_sat_cap trace.Capture
 	g_import_ring [65]trace.Record
 	g_trace_freeze trace.FreezeSync
 )
 pub fn run(chp can.Channel) {
-	mut sat_buf := trace.new_buffer(&g_sat_ring[0], 64, .ring, 50)
-	sat_buf.start()
+	g_sat_buf = trace.new_buffer(&g_sat_ring[0], 64, .ring, 50)
+	g_sat_buf.start()
 	// one capture origin for BOTH cores: a per-thread origin would skew the two lanes by
 	// the thread-start delay, invisibly (a shared clock emits no core-offset record).
 	trace_origin := osal.now_us()
@@ -163,10 +165,10 @@ pub fn run(chp can.Channel) {
 	// hook — within one handler of the event. Generation-aware (#273): a raise counts only
 	// for the window it was made in, and the satellite restarts its own ring on a re-arm.
 	// the satellite restarts its own ring when the owner posts a re-arm (#273)
-	mut sat_cap := trace.satellite_capture(&sat_buf, trace_origin, 2, 500,
+	g_sat_cap = trace.satellite_capture(unsafe { &g_sat_buf }, trace_origin, 2, 500,
 		unsafe { &g_trace_freeze })
-	t_ctrl := spawn partition_ctrl(&sat_cap)
-	t_sense := spawn partition_sense(chp, &sat_buf, unsafe { &g_import_ring[0] }, trace_origin,
+	t_ctrl := spawn partition_ctrl(unsafe { &g_sat_cap })
+	t_sense := spawn partition_sense(chp, unsafe { &g_sat_buf }, unsafe { &g_import_ring[0] }, trace_origin,
 		unsafe { &g_trace_freeze })
 	t_ctrl.wait()
 	t_sense.wait()

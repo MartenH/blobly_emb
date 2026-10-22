@@ -3,9 +3,10 @@ module vrt
 #include "@VMODROOT/osal/vrt/libc_stubs.h"
 
 // V3's builtin calls these on a `-freestanding` image and declares them without defining
-// them (its `-bare-builtin-dir`, which would supply them, is not implemented). Exported by
-// their C names, so the generated C links against them; written in V, so `bare_panic` and
-// `bare_backtrace` take and return V's own `string`.
+// them. Its `-bare-builtin-dir` would supply them, and by default supplies a Linux process's
+// (vlib/builtin/linux_bare), so every transpile points it at the empty osal/vrt/bare instead.
+// Exported by their C names, so the generated C links against them; written in V, so
+// `bare_panic` and `bare_backtrace` take and return V's own `string`.
 
 // bare_print / bare_eprint: the target has no console, so V's print output is dropped
 @[export: 'bare_print']

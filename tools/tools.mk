@@ -66,7 +66,7 @@ TOOL_GOAL := $(.DEFAULT_GOAL)
 # scripts/vdeps.sh: never a hand list of module directories, which went stale the day a generated
 # image started importing one more (driver/doipnet). In the rule, V run from $(REPO):
 #
-#     TRANSPILE_FLAGS = -freestanding -arch arm32 -target-libc-headers ... -path "..."
+#     TRANSPILE_FLAGS = -freestanding -bare-builtin-dir osal/vrt/bare -arch arm32 -target-libc-headers ... -path "..."
 #     $(BUILD)/app.c: main.v gen/.stamp $(call v_unrecorded,$(BUILD)/app.c) \
 #                     $(call v_sign,$(BUILD)/app.c,$(TRANSPILE_FLAGS)) | $(BUILD)
 #     	cd $(REPO) && $(V) $(TRANSPILE_FLAGS) $(call v_dump,$@) -o .../$(BUILD)/app.c .../main.v
