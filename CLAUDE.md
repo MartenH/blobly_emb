@@ -301,7 +301,8 @@ compares the commit.
   `can.Channel.recv` copies out of its own locals, never handing C an address into the caller's
   frame. `-warn-about-allocs` on a transpile names each local V3 moved. The HOST examples' generated
   code is held to the same (`scripts/check_host_allocs.sh`, the host job): a host thread's state,
-  scheduler, trace ring and receive frame are `__global`s too (`thread_globals` in loom2v);
+  scheduler, trace ring and receive frame are `__global`s too, and so are the satellite's trace
+  buffer and capture that run() hands its threads (`thread_globals` in loom2v);
 - a C struct V declares (`struct C.bulk_t`) has a TAG in its header: V3 emits `typedef struct x x;`;
 - a generated global read by NAME over SWD (`g_trace_ring`, `io_startup_faults`, the comm thread's
   counters — `swd_names` in `tools/loom2v/gen_trace.v`) is declared through `exported_global`, on
