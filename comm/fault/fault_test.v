@@ -2,7 +2,8 @@ module fault
 
 import comm.uds
 
-// @verifies REQ-DIAG-009 REQ-DIAG-010
+// @verifies REQ-DIAG-009 REQ-DIAG-010 REQ-DIAG-038 REQ-DIAG-039 REQ-DIAG-040 REQ-DIAG-041
+// @verifies REQ-DIAG-042 REQ-DIAG-043 REQ-DIAG-044 REQ-DIAG-045
 // (debounce on the producer with lossless monotonic counters; the ISO 14229-1 status byte through
 //  operation cycles, confirmation and aging; clears by generation; 0x85 suppression; 0x19 01/02/0A,
 //  0x14 and 0x85 through the diagnostic server.)

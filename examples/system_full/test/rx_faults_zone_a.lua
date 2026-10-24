@@ -1,5 +1,5 @@
 -- @project rx_faults.blobnet
--- @verifies REQ-COM-008 REQ-DIAG-011
+-- @verifies REQ-COM-008 REQ-DIAG-011 REQ-DIAG-046
 -- The receive checks on a TARGET (docs/diagnostics.md R5): zone_a (H723, the edge bus) checks the
 -- chassis node's SafetyCmdFrame on its ThreadX comm thread — AUTOSAR E2E Profile 1 and E2E's own
 -- 300 ms sender-loss timeout, from edge.dbc — and its FB SafetyMonitor reads the value WITH its
@@ -120,7 +120,7 @@ test("zone_a rx: a frozen counter cannot keep the sender alive, and is not an in
   sleep_ms(500)
 end)
 
--- REQ-DIAG-011: no result is recorded while CommunicationControl has reception off — the silence it
+-- REQ-DIAG-046: no result is recorded while CommunicationControl has reception off — the silence it
 -- commands is not a lost sender, and the frames the sender went on with are not lost frames
 test("zone_a rx: with 0x28 reception off a silence records nothing, nor does the gap it spans", function()
   local d = diag()

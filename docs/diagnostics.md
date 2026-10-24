@@ -3,8 +3,9 @@
 > Status: PLAN (2026-09-27), nothing below is built unless it says so. It joins three issues that
 > are one feature seen from three sides — #286 (rx status), #287 (faults → DTCs), #288 (parameters /
 > variant coding) — and the prerequisites none of them names. Requirements are derived from
-> SYS-REQ-DIAG-001 (agreed) in rung R0, extending the two drafts `requirements/diag.toml` already holds
-> (REQ-DIAG-001/002); until then this page is the shape to argue with.
+> SYS-REQ-DIAG-001 (agreed) in rung R0, extending the two drafts `requirements/diag.toml` then held
+> (REQ-DIAG-001/002). They are now `requirements/diag.toml`, one behaviour each; §1 "Supported, and
+> not" says per service what is served.
 >
 > **What this page settles, and what it leaves to the rungs.** It fixes the *shape*: which component
 > owns what, which way data crosses threads and cores, what is stored, what the tester sees, and the
@@ -42,6 +43,35 @@ Three doc claims were ahead of the code; R0 (#292) and R1 (#291) corrected them:
 marked diagnostics "✅ have" (only the request/response half exists), `docs/communication.md` called
 the ISO-TP handler a positive-response echo next to "UDS ✅", and `docs/nvm.md` opened with "Nothing
 is built" while P1/P2 and chains were.
+
+### Supported, and not
+
+What the server answers today, per ISO 14229-1 service, and what it deliberately does not — so
+silence is never read as compliance. The requirements are `requirements/diag.toml` (its scope note
+is the same list); a node serves the services of its **service table** (`[uds] services`, §3.1),
+in the sessions and behind the 0x27 level each row names, so "served" below means "can be served".
+
+| Service | Served | Not served |
+|---|---|---|
+| 0x10 DiagnosticSessionControl | 01 default, 03 extended, 04 safety; 02 programming only as the bootloader handoff of a `[boot]` node (else 0x12). The answer carries P2server_max 50 ms and P2\*server_max 5 s (REQ-DIAG-021) | other (OEM) sessions |
+| 0x11 ECUReset | 01 hardReset, 03 softReset — answered, then performed; never performed unanswered | 02 keyOffOnReset, 04 / 05 rapid power shutdown |
+| 0x14 ClearDiagnosticInformation | all DTCs (0xFFFFFF) or one DTC; on a target durable before the answer (0x72 otherwise) | DTC groups other than "all"; the memorySelection byte |
+| 0x19 ReadDTCInformation | 01, 02, 03, 04, 06, 0A | every other subfunction (05, 07–09, 0B–19, 42, 55, …) |
+| 0x22 ReadDataByIdentifier | several DIDs per request; 16 DIDs of ≤ 32 B: constants, live signals (on a target the node's own outputs), parameters and their status, `tx_saturations` | 0xF186 active session (REQ-DIAG-063, open); any other ISO identification DID unless declared as a constant; live DIDs on a target's inputs |
+| 0x27 SecurityAccess | levels 1–8, 4-byte seed through the injected seed / key seam, attempt limit and lockout delay, the count kept across a reset | a power-up delay; a securityAccessDataRecord is accepted and ignored |
+| 0x28 CommunicationControl | 00–03 on normal messages, this network (or all networks on a node with one) | network-management message types; 04 / 05 (enhanced address information) |
+| 0x2E WriteDataByIdentifier | writable RAM DIDs (a record of exactly the DID's size) and parameters (durable before the answer) | — |
+| 0x3E TesterPresent | 00 | — |
+| 0x85 ControlDTCSetting | 01 on, 02 off; an option record is accepted and ignored | — |
+| 0x29, 0x31, 0x34, 0x36, 0x37 | by the **bootloader** only: authentication, its erase and check routines, the download (docs/bootloader.md) | in an application (0x11) |
+| everything else | — | 0x23 / 0x3D memory access, 0x24, 0x2A, 0x2C, 0x2F, 0x35, 0x38, 0x83, 0x84, 0x86, 0x87, OBD services: answered serviceNotSupported (0x11) |
+
+Across services: functional requests (single frames only) are served with the ISO-suppressed
+negative responses withheld; negative responses come in ISO 14229-1's evaluation order with the
+NRCs the "NRCs" row above lists. **Not** done: responsePending (0x78) in an application —
+whether a parameter's durable write can outlast P2 is open (REQ-DIAG-062) — and busyRepeatRequest
+(0x21): a request arriving while an answer is in flight is dropped (REQ-DIAG-037). One server per
+node, whichever transport a request arrives on.
 
 ## 2. Principles (the ones every rung is checked against)
 

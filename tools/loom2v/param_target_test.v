@@ -1,6 +1,6 @@
 module main
 
-// @verifies REQ-DIAG-017
+// @verifies REQ-DIAG-017 REQ-DIAG-057 REQ-DIAG-061
 import os
 import tools.sysmodel
 

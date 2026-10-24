@@ -4,7 +4,7 @@ module diag
 // pieces, the bootloader runs serve_step whole. Each case is a defect a hand-written serve loop had
 // (codex #367 r4-r5): a truncated frame read as a request, a request served while an answer was in
 // flight, a refused frame taken as sent, S3 running while a request was still arriving.
-// @verifies REQ-BOOT-012 REQ-TP-013 REQ-TP-018
+// @verifies REQ-BOOT-012 REQ-DIAG-028 REQ-DIAG-037 REQ-TP-013 REQ-TP-018
 import boot
 import comm.isotp
 import driver.can
