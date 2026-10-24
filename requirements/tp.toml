@@ -5,16 +5,16 @@
 #
 # Scope — what this transport deliberately does NOT do (non-goals until a requirement here
 # says otherwise; silence is not compliance):
-#   * classic CAN only: no CAN FD frame formats (SF_DL escape, CAN_DL > 8) and no escape first
-#     frame (FF_DL > 4095) — every example runs `[bus] fd = false`;
+#   * classic CAN only: no CAN FD frame formats (SF_DL escape, CAN_DL > 8), and an escape first
+#     frame (FF_DL > 4095) is only refused (REQ-TP-015) — every example runs `[bus] fd = false`;
 #   * normal addressing on 11-bit identifiers only: no extended, mixed or 29-bit normal-fixed
 #     addressing (`[isotp] rx_id` / `tx_id` are 0x000..0x7FF);
 #   * a fixed padding byte (0x00) on every frame sent; no configurable fill value;
 #   * no enforcement of the peer's STmin or block size on frames WE receive (ISO 15765-2 leaves
 #     that to the sender), and no N_Br / N_Cs performance targets.
 #
-# Status: a requirement a passing test already verifies is `agreed` (gated by
-# `make trace-check`); one that is known not to hold yet, or has no test, stays `draft`.
+# Status: a requirement a passing test verifies is `agreed` (gated by `make trace-check`); one
+# that is known not to hold yet, or has no test, stays `draft`.
 
 [[req]]
 id = "REQ-TP-001"
@@ -65,7 +65,7 @@ derives = "SYS-REQ-DIAG-001"
 id = "REQ-TP-006"
 title = "Reserved STmin values"
 text = "When transmitting, the transport shall treat an STmin value the standard reserves (0x80..0xF0, 0xFA..0xFF) as 0x7F (127 ms), so a receiver that sent one is never flooded with back-to-back consecutive frames."
-status = "draft"   # NOT met: a reserved STmin is read as 0 today
+status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
@@ -101,7 +101,7 @@ derives = "SYS-REQ-DIAG-001"
 id = "REQ-TP-010"
 title = "Overflow and invalid flow status"
 text = "When transmitting, the transport shall abandon the transmission on a flow control with flow status OVERFLOW, and on one with a flow status the standard does not define (3..15), rather than wait for N_Bs."
-status = "draft"   # NOT met for 3..15: an undefined flow status is ignored until N_Bs expires
+status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
@@ -136,7 +136,7 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-TP-014"
 title = "Maximum message length"
-text = "The transport shall support messages up to a fixed maximum length that holds the largest message the system sends, shall refuse to start transmitting a longer message, and shall ignore a first frame announcing a length it cannot hold."
+text = "The transport shall support messages up to a fixed maximum length that holds the largest message the system sends, shall refuse to start transmitting a longer message, and shall start no reception for a first frame announcing a length it cannot hold."
 status = "agreed"
 method = "test"
 asil = "QM"
@@ -145,8 +145,8 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-TP-015"
 title = "Answer an oversize first frame"
-text = "On a first frame announcing a length above its maximum, the transport shall answer with a flow control of flow status OVERFLOW, so the sender fails at once instead of waiting out its own N_Bs."
-status = "draft"   # NOT met: such a first frame is ignored silently today
+text = "On a first frame announcing a length above its maximum, an escape first frame included, the transport shall answer with a flow control of flow status OVERFLOW, so the sender fails at once instead of waiting out its own N_Bs."
+status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
@@ -163,7 +163,7 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-TP-017"
 title = "Transmission outcome"
-text = "The transport shall count each transmission it abandons (N_Bs, WFTmax, overflow), so an owner can tell a message that was given up from one that was sent, both of which leave the connection free."
+text = "The transport shall count each transmission it abandons (N_Bs, WFTmax, an overflow or undefined flow status), so an owner can tell a message that was given up from one that was sent, both of which leave the connection free."
 status = "agreed"
 method = "test"
 asil = "QM"

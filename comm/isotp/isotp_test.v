@@ -1,10 +1,12 @@
 module isotp
 
 // @verifies REQ-TP-001 REQ-TP-002 REQ-TP-003 REQ-TP-004 REQ-TP-005 REQ-TP-007 REQ-TP-008 REQ-TP-009
-// @verifies REQ-TP-011 REQ-TP-012 REQ-TP-013 REQ-TP-014 REQ-TP-016 REQ-TP-017 REQ-TP-018
+// @verifies REQ-TP-006 REQ-TP-010 REQ-TP-011 REQ-TP-012 REQ-TP-013 REQ-TP-014 REQ-TP-015
+// @verifies REQ-TP-016 REQ-TP-017 REQ-TP-018
 // (segmentation/reassembly: single/first/consecutive frames, sequence wrap, blocksize, STmin, both
 //  directions; flow control incl. WAIT bounds, N_Bs/N_Cr timeouts, sequence errors, unexpected and
-//  truncated frames, the length bound, busy refusal, abort counting and abort_tx.)
+//  truncated frames, reserved STmin, undefined flow status, overflow, the length bound, busy
+//  refusal, abort counting and abort_tx.)
 
 // pump runs PDUs between two links until quiescent — each link's output is the
 // other's input (the bridge does this id-routing on a real bus).
@@ -622,17 +624,91 @@ fn test_a_single_frame_mid_reception_replaces_it() {
 	assert l.take(&buf[0]) == 0 // the old reception does not resume
 }
 
-// a first frame announcing more than max_payload starts nothing and owes no flow control
-fn test_an_oversize_first_frame_is_ignored() {
+// a first frame announcing more than max_payload starts nothing: it is refused with FC.OVFLW,
+// and ends a reception in progress
+fn test_an_oversize_first_frame_is_refused_with_overflow() {
 	mut l := Link{}
 	l.init_defaults()
+	mut buf := [max_payload]u8{}
 	mut p := Pdu{}
+	l.on_frame(0, Pdu{
+		data: [u8(0x10), 20, 1, 2, 3, 4, 5, 6]!
+	})
 	total := max_payload + 1
 	l.on_frame(0, Pdu{
 		data: [u8(0x10 | (total >> 8)), u8(total & 0xFF), 0, 0, 0, 0, 0, 0]!
 	})
+	assert !l.idle() // a flow control is owed
+	assert l.poll(0, mut p)
+	assert p.data[0] == 0x32 && p.data[1] == 0 && p.data[2] == 0
+	assert !l.poll(0, mut p) // once, and no CTS for the reception it ended
 	assert l.idle()
+	l.on_frame(0, Pdu{
+		data: [u8(0x21), 7, 8, 9, 10, 11, 12, 13]!
+	})
+	assert l.take(&buf[0]) == 0
+}
+
+// a refusal still owed when the sender restarts — with a valid first frame or a single frame — is
+// never sent: it would fail the transfer that replaced the oversize one
+fn test_an_owed_overflow_is_dropped_by_the_next_first_or_single_frame() {
+	mut l := Link{}
+	l.init_defaults()
+	mut p := Pdu{}
+	mut buf := [max_payload]u8{}
+	oversize := Pdu{
+		data: [u8(0x10 | (600 >> 8)), u8(600 & 0xFF), 0, 0, 0, 0, 0, 0]!
+	}
+	l.on_frame(0, oversize)
+	l.on_frame(0, Pdu{
+		data: [u8(0x10), 20, 1, 2, 3, 4, 5, 6]!
+	})
+	assert l.poll(0, mut p) && p.data[0] == 0x30 // the CTS for the valid one, no OVFLW
 	assert !l.poll(0, mut p)
+	l.on_frame(0, oversize)
+	l.on_frame(0, Pdu{
+		data: [u8(0x02), 0x3E, 0x00, 0, 0, 0, 0, 0]!
+	})
+	assert l.take(&buf[0]) == 2
+	assert !l.poll(0, mut p) && l.idle()
+}
+
+// an escape first frame (FF_DL 0: a 32-bit length follows, above 4095) is refused with FC.OVFLW
+fn test_an_escape_first_frame_is_refused_with_overflow() {
+	mut l := Link{}
+	l.init_defaults()
+	mut p := Pdu{}
+	l.on_frame(0, Pdu{
+		data: [u8(0x10), 0x00, 0x00, 0x00, 0x13, 0x88, 1, 2]!
+	})
+	assert l.poll(0, mut p) && p.data[0] == 0x32
+}
+
+// a reserved STmin is read as 0x7F (127 ms), never as 0 (back-to-back)
+fn test_a_reserved_stmin_is_read_as_127_ms() {
+	for b in [u8(0x80), 0xF0, 0xFA, 0xFF] {
+		mut l := granted(0, b, 0)
+		mut p := Pdu{}
+		assert l.poll(0, mut p)
+		assert !l.poll(126_999, mut p), 'STmin 0x${b:02X}'
+		assert l.poll(127_000, mut p), 'STmin 0x${b:02X}'
+	}
+}
+
+// a flow status the standard does not define (3..15) ends the transmission at once, counted
+fn test_an_undefined_flow_status_aborts_the_transmission() {
+	for fs in 3 .. 16 {
+		mut l := Link{}
+		l.init_defaults()
+		buf := [20]u8{}
+		mut p := Pdu{}
+		assert l.send(&buf[0], 20)
+		assert l.poll(0, mut p) // FF
+		l.on_frame(100, Pdu{
+			data: [u8(0x30 | fs), 0, 0, 0, 0, 0, 0, 0]!
+		})
+		assert !l.busy() && l.tx_aborts == 1, 'FS ${fs}'
+	}
 }
 
 // the length each frame type needs before its bytes may be read

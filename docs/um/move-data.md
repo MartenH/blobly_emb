@@ -258,13 +258,13 @@ sends today (one trace dump block: 8 B header + 64 records × 8 B). Raising it g
 link's buffer, so it is a deliberate ceiling. For anything image-sized use the bootloader's
 block transfer instead — it acks per block and lets ISO-TP flow control pace it.
 
-**Two failure modes, and they are asymmetric:**
+**Both directions fail loudly:**
 
-- **Sending too much fails loudly-ish** — `send()` returns `false` and transmits nothing.
-- **Being *asked* to receive too much fails silently.** A FirstFrame declaring more than
-  `max_payload` is ignored: no reassembly starts and **no OVFLW flow-control is sent**, so
-  the peer just sees silence and times out. (We *honour* an OVFLW we receive, but never
-  emit one.) If a remote transfer mysteriously stalls, check its declared length first.
+- **Sending too much** — `send()` returns `false` and transmits nothing.
+- **Being *asked* to receive too much** — a FirstFrame declaring more than `max_payload`
+  (or an escape FirstFrame, any length above 4095) starts no reassembly and is answered at
+  once with an OVFLW flow control, so the peer fails immediately instead of timing out
+  (REQ-TP-015). An OVFLW we *receive* aborts our transmission the same way.
 
 ### On Ethernet — SOME/IP over UDP
 
