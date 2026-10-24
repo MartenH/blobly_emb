@@ -69,7 +69,7 @@ pub mut:
 	progress u32
 	// N_Cr: max gap between consecutive frames of an in-flight RECEIVE before the
 	// partial reassembly is abandoned (ISO 15765-2 N_Cr) — without it a sender that
-	// dies after its FF leaves the link .receiving forever (REQ-TP-002 bounds BOTH
+	// dies after its FF leaves the link .receiving forever (REQ-TP-007/008 bound BOTH
 	// directions; the gap was documented in move-data.md and is now closed).
 	// 0 disables. No field default — the _vinit rule again: init_defaults() sets it.
 	n_cr_us u64
@@ -202,7 +202,8 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 				}
 				l.ready = true
 				l.ready_len = n
-				l.rx = .idle
+				l.rx = .idle // a reception it interrupts is over (REQ-TP-012), and so is its CTS
+				l.fc_send = false
 				l.progress++
 			}
 		}
@@ -328,7 +329,7 @@ pub fn (mut l Link) tick(now u64) {
 		l.give_up_tx()
 	}
 	// N_Cr: a receive whose sender went quiet mid-transfer is abandoned, so the link
-	// (and its reassembly buffer) cannot stay .receiving forever (REQ-TP-002). Only
+	// (and its reassembly buffer) cannot stay .receiving forever (REQ-TP-008). Only
 	// armed deadlines count — rx_deadline == 0 means the CTS hasn't been emitted yet,
 	// so the sender is correctly waiting for flow control, not stalling (codex #218).
 	if l.n_cr_us != 0 && l.rx == .receiving && l.rx_deadline != 0 && now >= l.rx_deadline {
