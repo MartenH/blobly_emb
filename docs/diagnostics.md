@@ -71,10 +71,9 @@ negative responses withheld; negative responses come in ISO 14229-1's evaluation
 NRCs the "NRCs" row above lists. **Not** done: responsePending (0x78) in an application. The write
 a request makes durable — a parameter's 0x2E, a 0x14 — appends records and at most copies the live
 set into the already-erased partner, never erases (REQ-DIAG-062; erases happen at boot, at an NM
-sleep edge and in the flush a write made in bus sleep runs, and after an ECUReset's answer, §3.3).
-P2 on silicon is REQ-DIAG-064, a bench measurement still to run, and one case is known to miss it:
-a request served while the CAN network sleeps (a DoIP tester) whose write runs the in-sleep flush,
-which may erase in that pass. Nor busyRepeatRequest
+sleep edge, and after an ECUReset's answer, §3.3 — the flush a write made in bus sleep runs, which
+a DoIP tester's default-session 0x14 can trigger without waking the network, never erases,
+REQ-NVM-015). P2 on silicon is REQ-DIAG-064, a bench measurement still to run. Nor busyRepeatRequest
 (0x21): a request arriving while an answer is in flight is dropped (REQ-DIAG-037). One server per
 node, whichever transport a request arrives on.
 
@@ -545,7 +544,9 @@ in the ending cycle too. An interrupt-driven handler has no period; 50 ms stands
 **Where writes happen.** Every comm pass after the cycle step (`fault_target_persist`), and with a
 flush in the persisted signals' choreography at every quiet point — the NM sleep edges and before an
 ECUReset (after the latest reports are consumed and their snapshots taken). A write made in bus sleep
-re-runs the whole choreography, so the clean marker never sits below a record it does not cover. The
+re-runs the choreography, so the clean marker never sits below a record it does not cover — in one
+pass and without its erase (REQ-NVM-015): the write may be a DoIP tester's 0x14, whose answer waits
+for the network threads below the comm thread, and an erase there would hold it 1–2 s. The
 journal's sectors are the BOARD's (`bootmap.h` `NVM_A_ADDR` / `NVM_B_ADDR` / `NVM_SIZE`, checked
 outside the boot and application regions by `tools/vectab`), linked with the board's flash driver by
 the generator (`boards/common/nvm_map.c`, `BOARD_FLASH`, from the emitted declarations). A node

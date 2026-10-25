@@ -1,6 +1,6 @@
 module main
 
-// @verifies REQ-DIAG-017 REQ-DIAG-057 REQ-DIAG-061 REQ-DIAG-063
+// @verifies REQ-DIAG-017 REQ-DIAG-057 REQ-DIAG-061 REQ-DIAG-063 REQ-NVM-015
 import os
 import tools.sysmodel
 
@@ -169,6 +169,10 @@ fn test_parameters_are_restored_before_the_kernel_and_bound_on_the_comm_thread()
 	// the fixture runs NM: a parameter coded in bus sleep re-runs the flush choreography
 	in_order(o.glue, ['g_diag.serve()', 'if g_param.take_wrote() && g_nm.state() == .bus_sleep {',
 		'g_nvm.mark_clean()'])
+	// ... and never erases there (REQ-NVM-015)
+	sleep_flush := o.glue.all_after('if g_param.take_wrote() && g_nm.state() == .bus_sleep {').all_before('\n\t\t}\n')
+	assert sleep_flush.contains('g_nvm.mark_clean()'), sleep_flush
+	assert !sleep_flush.contains('erase_pending'), 'an erase in bus sleep:\n${sleep_flush}'
 	assert o.glue.contains('import comm.param')
 	assert o.manifest.contains('LoadCap,0x110,'), o.manifest
 	assert o.manifest.contains(',reset,x:i8:-128..127=-3'), o.manifest
@@ -361,6 +365,8 @@ fn test_one_sleep_choreography_for_the_fault_memory_and_the_parameters() {
 	assert o.code == 0, o.out
 	in_order(o.glue, ['g_fmem.persist(t1, false)', 'param_wrote := g_param.take_wrote()',
 		'if (g_fmem.wrote > 0 || param_wrote) && g_nm.state() == .bus_sleep {', 'g_nvm.mark_clean()'])
+	both := o.glue.all_after('if (g_fmem.wrote > 0 || param_wrote) && g_nm.state() == .bus_sleep {').all_before('\n\t\t}\n')
+	assert !both.contains('erase_pending'), 'an erase in bus sleep:\n${both}' // REQ-NVM-015
 	assert o.glue.count('g_param.take_wrote()') == 1
 	assert !o.glue.contains('if g_param.take_wrote() && g_nm.state()')
 }

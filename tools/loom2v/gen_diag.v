@@ -724,7 +724,7 @@ fn diag_target_reset(m Model, ioc_idx map[string]int) []string {
 		// flush or marker that fails holds the reset and retries on the following passes; past the
 		// bound the reset goes ahead (its answer promised one), leaving the journal exactly as a
 		// power cut would — which it is built to survive.
-		g << nvm_flush_choreo(m, ioc_idx, '\t\t\t')
+		g << nvm_flush_choreo(m, ioc_idx, '\t\t\t', true)
 		g << '\t\t\tif !nvm_flush_ok && diag_reset_tries < 20 {'
 		g << '\t\t\t\tdiag_reset_tries++'
 		g << '\t\t\t\tcontinue'

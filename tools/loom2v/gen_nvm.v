@@ -662,7 +662,7 @@ fn nvm_service(m Model, ioc_idx map[string]int) []string {
 			// power-off at any point during bus_sleep then mounts clean with the
 			// newest values. The prepare/entry edges have their own invocation.
 			g << '\t\t\t\t\tif g_nm.state() == .bus_sleep {'
-			g << nvm_flush_choreo(m, ioc_idx, '\t\t\t\t\t\t')
+			g << nvm_flush_choreo(m, ioc_idx, '\t\t\t\t\t\t', false)
 			g << '\t\t\t\t\t}'
 		}
 		g << '\t\t\t\t}'
@@ -682,7 +682,7 @@ fn nvm_service(m Model, ioc_idx map[string]int) []string {
 		g << '\t\t\t\t// FLUSH FIRST: the capacity gate reserved a full flush set of'
 		g << '\t\t\t\t// headroom, so values go durable in microseconds — never behind'
 		g << '\t\t\t\t// a seconds-long erase (a cut mid-erase must not cost values).'
-		g << nvm_flush_choreo(m, ioc_idx, '\t\t\t\t')
+		g << nvm_flush_choreo(m, ioc_idx, '\t\t\t\t', true)
 		g << '\t\t\t}'
 		g << '\t\t\tnvm_prev_nm = nm_now'
 		g << '\t\t}'
@@ -691,18 +691,26 @@ fn nvm_service(m Model, ioc_idx map[string]int) []string {
 }
 
 
-// nvm_flush_choreo: the flush-first choreography — 2 passes (one erase-recovery),
-// every persist signal flushed, clean marked ONLY when all values are durable,
-// deferred erase last. Emitted at the NM edges AND after an in-sleep put
-// (REQ-NVM-014: the marker must cover ALL persist dirt — a "now" write during
-// sleep flushes shutdown-class changes too before claiming clean). A failed
-// mark leaves the claim broken (values durable, conservative); the next
-// in-sleep write or edge retries it.
-fn nvm_flush_choreo(m Model, ioc_idx map[string]int, ind string) []string {
+// nvm_flush_choreo: the flush-first choreography — every persist signal flushed, clean marked
+// ONLY when all values are durable. Emitted at the NM edges, before an ECUReset AND after an
+// in-sleep write (REQ-NVM-014: the marker must cover ALL persist dirt — a "now" write during
+// sleep flushes shutdown-class changes too before claiming clean). A failed mark leaves the
+// claim broken (values durable, conservative); the next in-sleep write or edge retries it.
+// `erase` (the edges and the ECUReset): 2 passes (one erase-recovery) and the deferred erase
+// last. Without it (a write made in bus sleep, REQ-NVM-015) one pass and no erase at all: the
+// write may be a DoIP tester's 0x14, whose answer waits in the mailbox for the network threads
+// below this one — a 1-2 s erase here would hold it past P2 (REQ-DIAG-064). A sector a
+// compaction left behind waits for the next sleep edge; until then a refused put or marker
+// stays refused (0x72 to a tester), never erased for.
+fn nvm_flush_choreo(m Model, ioc_idx map[string]int, ind string, erase bool) []string {
 	mut g := []string{}
 	g << '${ind}mut nvm_flush_ok := true'
-	g << '${ind}for nvm_pass := 0; nvm_pass < 2; nvm_pass++ {'
-	g << '${ind}\tnvm_flush_ok = true'
+	if erase {
+		g << '${ind}for nvm_pass := 0; nvm_pass < 2; nvm_pass++ {'
+		g << '${ind}\tnvm_flush_ok = true'
+	} else {
+		g << '${ind}{ // one pass: no erase in bus sleep (REQ-NVM-015)'
+	}
 	for sname in m.nvm_names {
 		si := m.sig_of[sname] or { continue }
 		n := snake(sname)
@@ -729,12 +737,14 @@ fn nvm_flush_choreo(m Model, ioc_idx map[string]int, ind string) []string {
 		g << '${ind}\t\tnvm_flush_ok = false'
 		g << '${ind}\t}'
 	}
-	g << '${ind}\tif nvm_flush_ok || nvm_pass > 0 {'
-	g << '${ind}\t\tbreak'
-	g << '${ind}\t}'
-	g << '${ind}\t// recovery pass: a refused put (dirty partner blocking the'
-	g << '${ind}\t// inline compact) earns ONE quiet-point erase, then a retry'
-	g << '${ind}\tg_nvm.erase_pending()'
+	if erase {
+		g << '${ind}\tif nvm_flush_ok || nvm_pass > 0 {'
+		g << '${ind}\t\tbreak'
+		g << '${ind}\t}'
+		g << '${ind}\t// recovery pass: a refused put (dirty partner blocking the'
+		g << '${ind}\t// inline compact) earns ONE quiet-point erase, then a retry'
+		g << '${ind}\tg_nvm.erase_pending()'
+	}
 	g << '${ind}}'
 	if fault_persist_on(m) && m.nm.on {
 		// no clean marker while the fault cycle's end waits for its barrier: the end's own write,
@@ -748,7 +758,9 @@ fn nvm_flush_choreo(m Model, ioc_idx map[string]int, ind string) []string {
 	g << '${ind}\t// the next in-sleep write or edge); nvm_flush_ok then says values AND marker'
 	g << '${ind}\tnvm_flush_ok = g_nvm.mark_clean()'
 	g << '${ind}}'
-	g << '${ind}g_nvm.erase_pending() // cleanup AFTER values + marker are durable'
+	if erase {
+		g << '${ind}g_nvm.erase_pending() // cleanup AFTER values + marker are durable'
+	}
 	return g
 }
 

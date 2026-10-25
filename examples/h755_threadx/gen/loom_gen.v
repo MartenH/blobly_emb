@@ -570,8 +570,7 @@ fn comm_thread_entry(_ u32) {
 					nvm_load_cmd_b = b
 					if g_nm.state() == .bus_sleep {
 						mut nvm_flush_ok := true
-						for nvm_pass := 0; nvm_pass < 2; nvm_pass++ {
-							nvm_flush_ok = true
+						{ // one pass: no erase in bus sleep (REQ-NVM-015)
 						{ // flush LoadCmd
 							mut fa := u32(0)
 							mut fb := u32(0)
@@ -590,19 +589,12 @@ fn comm_thread_entry(_ u32) {
 								}
 							}
 						}
-							if nvm_flush_ok || nvm_pass > 0 {
-								break
-							}
-							// recovery pass: a refused put (dirty partner blocking the
-							// inline compact) earns ONE quiet-point erase, then a retry
-							g_nvm.erase_pending()
 						}
 						if nvm_flush_ok {
 							// clean ONLY when every value is durable (a failed mark stays unclean: retried on
 							// the next in-sleep write or edge); nvm_flush_ok then says values AND marker
 							nvm_flush_ok = g_nvm.mark_clean()
 						}
-						g_nvm.erase_pending() // cleanup AFTER values + marker are durable
 					}
 				}
 				nvm_load_cmd_t = t1 // failed puts wait the floor too: a burned

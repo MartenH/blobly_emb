@@ -481,3 +481,16 @@ purpose (the value is not durable — conservative wins); the prepare/entry
 edges were already covered by the flush choreography. Bench-verified on the
 H755: release → silence → puts land for 30 s → reset at an arbitrary moment →
 `clean = 1`, newest value restored.
+
+**No erase in bus sleep (REQ-NVM-015).** The choreography an in-sleep write
+re-runs is the edges' minus its erases: one pass, no recovery erase, no
+trailing `erase_pending()`. Such a write can be a tester's — a DoIP 0x14 in the
+default session holds no network, so it lands in `bus_sleep` — and its answer
+waits in the DoIP mailbox for the network threads, which run below the comm
+thread: `bflash_erase` busy-waits there for the sector's erase time (1–2 s on
+the H7, either bank), which would hold the answer past P2. Nothing is lost by
+waiting. A sector only needs erasing after a compaction, and the `bus_sleep`
+entry edge erases whatever the run left, so in sleep the partner is clean
+unless a sleep's writes fill a whole sector. If one does, the next sleep edge
+erases it, and until then a put or marker the journal refuses stays refused:
+0x72 to a tester, an unclean claim for a value.
