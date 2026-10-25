@@ -57,7 +57,7 @@ in the sessions and behind the 0x27 level each row names, so "served" below mean
 | 0x11 ECUReset | 01 hardReset, 03 softReset — answered, then performed; never performed unanswered | 02 keyOffOnReset, 04 / 05 rapid power shutdown |
 | 0x14 ClearDiagnosticInformation | all DTCs (0xFFFFFF) or one DTC; on a target durable before the answer (0x72 otherwise) | DTC groups other than "all"; the memorySelection byte |
 | 0x19 ReadDTCInformation | 01, 02, 03, 04, 06, 0A | every other subfunction (05, 07–09, 0B–19, 42, 55, …) |
-| 0x22 ReadDataByIdentifier | several DIDs per request; 16 DIDs of ≤ 32 B: constants, live signals (on a target the node's own outputs), parameters and their status, `tx_saturations` | 0xF186 active session (REQ-DIAG-063, open); any other ISO identification DID unless declared as a constant; live DIDs on a target's inputs |
+| 0x22 ReadDataByIdentifier | several DIDs per request; 16 DIDs of ≤ 32 B: constants, live signals (on a target the node's own outputs), parameters and their status, `tx_saturations`; and 0xF186, the active session, served by the server itself wherever 0x22 is (REQ-DIAG-063) | any other ISO identification DID unless declared as a constant; live DIDs on a target's inputs |
 | 0x27 SecurityAccess | levels 1–8, 4-byte seed through the injected seed / key seam, attempt limit and lockout delay, the count kept across a reset | a power-up delay; a securityAccessDataRecord is accepted and ignored |
 | 0x28 CommunicationControl | 00–03 on normal messages, this network (or all networks on a node with one) | network-management message types; 04 / 05 (enhanced address information) |
 | 0x2E WriteDataByIdentifier | writable RAM DIDs (a record of exactly the DID's size) and parameters (durable before the answer) | — |
@@ -68,8 +68,13 @@ in the sessions and behind the 0x27 level each row names, so "served" below mean
 
 Across services: functional requests (single frames only) are served with the ISO-suppressed
 negative responses withheld; negative responses come in ISO 14229-1's evaluation order with the
-NRCs the "NRCs" row above lists. **Not** done: responsePending (0x78) in an application —
-whether a parameter's durable write can outlast P2 is open (REQ-DIAG-062) — and busyRepeatRequest
+NRCs the "NRCs" row above lists. **Not** done: responsePending (0x78) in an application. The write
+a request makes durable — a parameter's 0x2E, a 0x14 — appends records and at most copies the live
+set into the already-erased partner, never erases (REQ-DIAG-062; erases happen at boot, at an NM
+sleep edge and in the flush a write made in bus sleep runs, and after an ECUReset's answer, §3.3).
+P2 on silicon is REQ-DIAG-064, a bench measurement still to run, and one case is known to miss it:
+a request served while the CAN network sleeps (a DoIP tester) whose write runs the in-sleep flush,
+which may erase in that pass. Nor busyRepeatRequest
 (0x21): a request arriving while an answer is in flight is dropped (REQ-DIAG-037). One server per
 node, whichever transport a request arrives on.
 
@@ -225,9 +230,9 @@ What it adds, all table-driven so an unsupported path answers the right NRC rath
 - **Functional addressing**, with the suppress-positive-response rules and the negative responses
   a functional request must NOT answer: 0x11, 0x12, 0x31, 0x7E and 0x7F (a broadcast into a gated
   service stays silent on every ECU).
-- **Response pending (0x78)** for anything that waits on flash (0x2E of a persisted DID, 0x14): the
-  server answers 0x78 inside P2 and completes within P2*; the comm thread never blocks. The final
-  answer reflects durability: if the journal refuses the write (capacity, programming, read-back —
+- **Durable answers** for anything that writes flash (0x2E of a parameter, 0x14) — as built with no
+  0x78 (the plan had one): the write is one synchronous journal append that never erases
+  (REQ-DIAG-062, §1 "Supported, and not"). The final answer reflects durability: if the journal refuses the write (capacity, programming, read-back —
   `nvm.Journal.put` returns false) the previous durable state stands and the request ends with **0x72
   generalProgrammingFailure**, never a positive response for data that was not stored. Both services
   get a fault-injection test.
@@ -595,8 +600,8 @@ stored. An update that lowers `entries` keeps the most important, newest snapsho
 
 **UDS side:** 0x19 subfunctions **0x01** (count by mask), **0x02** (DTCs by mask), **0x03** (snapshot
 identification), **0x04** (snapshot by DTC), **0x06** (extended data by DTC), **0x0A** (supported
-DTCs); **0x14** ClearDiagnosticInformation (group 0xFFFFFF and per-DTC, 0x78 while the journal
-writes); **0x85** ControlDTCSetting on/off.
+DTCs); **0x14** ClearDiagnosticInformation (group 0xFFFFFF and per-DTC, durable before the
+answer — 0x72 when the journal refuses it); **0x85** ControlDTCSetting on/off.
 
 **System level:** syscheck rejects a DTC number used twice **within one diagnostic server** (never
 across servers — the same value is legitimate on two ECUs) and a freeze-frame DID the producing thread

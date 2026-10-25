@@ -5,7 +5,7 @@ import nvm
 import comm.uds
 
 // @verifies REQ-DIAG-017 REQ-DIAG-053 REQ-DIAG-054 REQ-DIAG-055 REQ-DIAG-056 REQ-DIAG-057
-// @verifies REQ-DIAG-058 REQ-DIAG-059 REQ-DIAG-060
+// @verifies REQ-DIAG-058 REQ-DIAG-059 REQ-DIAG-060 REQ-DIAG-062
 // (parameters: a coded value durable before it is acknowledged, validated at 0x2E and again at
 //  restore, applied at the next dispatch or the next start, read back by 0x22, never written twice
 //  for one value, and never another schema's bytes — under power cuts anywhere in a write.)

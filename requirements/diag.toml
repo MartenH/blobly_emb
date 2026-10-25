@@ -12,7 +12,7 @@
 #   * 0x11 subfunctions other than hardReset (01) and softReset (03); 0x19 subfunctions other
 #     than 01, 02, 03, 04, 06 and 0A; 0x28 communication types other than normal messages;
 #   * no busyRepeatRequest (0x21): a request that arrives while an answer is in flight is
-#     dropped (REQ-DIAG-037);
+#     dropped (REQ-DIAG-037); no responsePending (0x78) in an application (REQ-DIAG-062);
 #   * no memorySelection byte on 0x14 (a 4-byte request only); no power-up delay on 0x27 (the
 #     failed-key count surviving a reset, REQ-DIAG-033, does that job);
 #   * one diagnostic server per node, whichever transport a request arrives on.
@@ -90,9 +90,18 @@ derives = "SYS-REQ-DIAG-001"
 
 [[req]]
 id = "REQ-DIAG-062"
-title = "Response timing (P2 / P2*)"
-text = "The server shall send its answer, or a responsePending (0x78) negative response, within P2server_max (50 ms) of a request, and after each 0x78 its answer or the next 0x78 within P2*server_max (5 s)."
-status = "draft"   # unmeasured: the application server never sends 0x78, and a parameter's durable write (REQ-DIAG-054) may outlast 50 ms
+title = "A request's own write never erases"
+text = "The write a request makes durable before its answer — a parameter's 0x2E, a 0x14 clear — shall append its own records and, when the journal sector is full, at most copy the live set into the already-erased partner sector, never erase one; a write that would need an erase shall be refused with generalProgrammingFailure (0x72) instead. The application server computes the answer in the pass that served the request and sends no responsePending (0x78)."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-064"
+title = "Response within P2"
+text = "On a target the application server shall send its answer within P2server_max (50 ms) of the request's last frame, a parameter write that copies the live set included."
+status = "draft"   # a bench measurement, not yet run; and known NOT met for a request served while the CAN network sleeps whose write runs the in-sleep flush, which may erase in that pass
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
@@ -165,8 +174,8 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-DIAG-063"
 title = "Active session identifier"
-text = "The server shall answer ReadDataByIdentifier 0xF186 (ActiveDiagnosticSessionDataIdentifier) with the active session, in every session."
-status = "draft"   # NOT met: 0xF186 is not served
+text = "Wherever the server serves ReadDataByIdentifier, it shall answer 0xF186 (ActiveDiagnosticSessionDataIdentifier) with the active session, needing no session or security level of its own, alone or among other identifiers; a write to it shall be refused with requestOutOfRange (0x31), and a configuration declaring it as a data identifier shall be refused at generation."
+status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"

@@ -4,7 +4,7 @@ import boot
 import nvm
 import comm.uds
 
-// @verifies REQ-DIAG-016 REQ-DIAG-048 REQ-DIAG-049 REQ-DIAG-050 REQ-DIAG-051 REQ-DIAG-052
+// @verifies REQ-DIAG-016 REQ-DIAG-048 REQ-DIAG-049 REQ-DIAG-050 REQ-DIAG-051 REQ-DIAG-052 REQ-DIAG-062
 // (the fault memory persisted in the NvM journal: what survives a reset and a power loss, the
 //  operation cycle power interrupted, bounded writes, a durable 0x14, an update that reorders the
 //  faults, and power cuts anywhere in a write, displacement included.)
