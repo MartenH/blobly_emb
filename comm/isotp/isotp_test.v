@@ -1,8 +1,12 @@
 module isotp
 
-// @verifies REQ-TP-001 REQ-TP-002
-// (segmentation/reassembly: single/first/consecutive frames, blocksize, both
-//  directions; flow control incl. WAIT bounds and N_Bs/N_Cs timeouts either way.)
+// @verifies REQ-TP-001 REQ-TP-002 REQ-TP-003 REQ-TP-004 REQ-TP-005 REQ-TP-007 REQ-TP-008 REQ-TP-009
+// @verifies REQ-TP-006 REQ-TP-010 REQ-TP-011 REQ-TP-012 REQ-TP-013 REQ-TP-014 REQ-TP-015
+// @verifies REQ-TP-016 REQ-TP-017 REQ-TP-018
+// (segmentation/reassembly: single/first/consecutive frames, sequence wrap, blocksize, STmin, both
+//  directions; flow control incl. WAIT bounds, N_Bs/N_Cr timeouts, sequence errors, unexpected and
+//  truncated frames, reserved STmin, undefined flow status, overflow, the length bound, busy
+//  refusal, abort counting and abort_tx.)
 
 // pump runs PDUs between two links until quiescent — each link's output is the
 // other's input (the bridge does this id-routing on a real bus).
@@ -501,4 +505,221 @@ fn test_flow_control_a_transmission_waits_for_counts_as_progress() {
 	fc.data[0] = 0x30 // CTS
 	l.on_frame(700, fc)
 	assert l.progress == 3 && l.busy()
+}
+
+// a message of the maximum length crosses the sequence number's 15 -> 0 wrap intact (74 CFs)
+fn test_a_max_length_message_wraps_the_sequence_number() {
+	mut server := Link{}
+	mut tester := Link{}
+	mut req := [max_payload]u8{}
+	for i in 0 .. max_payload {
+		req[i] = u8(i * 7)
+	}
+	assert tester.send(&req[0], max_payload)
+	pump(mut tester, mut server, 1000)
+	mut buf := [max_payload]u8{}
+	assert server.take(&buf[0]) == max_payload
+	for i in 0 .. max_payload {
+		assert buf[i] == u8(i * 7)
+	}
+}
+
+// our flow control carries the block size and STmin we grant, and comes again after each block
+fn test_flow_control_carries_our_block_size_and_stmin() {
+	mut l := Link{
+		bs:    2
+		stmin: 5
+	}
+	l.init_defaults()
+	mut p := Pdu{}
+	l.on_frame(0, Pdu{
+		data: [u8(0x10), 30, 0, 0, 0, 0, 0, 0]!
+	})
+	assert l.poll(0, mut p)
+	assert p.data[0] == 0x30 && p.data[1] == 2 && p.data[2] == 5
+	l.on_frame(0, Pdu{
+		data: [u8(0x21), 0, 0, 0, 0, 0, 0, 0]!
+	})
+	assert !l.poll(0, mut p) // mid-block: no flow control owed
+	l.on_frame(0, Pdu{
+		data: [u8(0x22), 0, 0, 0, 0, 0, 0, 0]!
+	})
+	assert l.poll(0, mut p) // block of 2 done: the next clear-to-send
+	assert p.data[0] == 0x30 && p.data[1] == 2 && p.data[2] == 5
+}
+
+// a single frame claiming length 0 or above 7 is no message
+fn test_a_single_frame_of_length_0_or_above_7_is_ignored() {
+	mut l := Link{}
+	mut buf := [max_payload]u8{}
+	l.on_frame(0, Pdu{
+		data: [u8(0x00), 1, 2, 3, 4, 5, 6, 7]!
+	})
+	assert l.take(&buf[0]) == 0
+	l.on_frame(0, Pdu{
+		data: [u8(0x08), 1, 2, 3, 4, 5, 6, 7]!
+	})
+	assert l.take(&buf[0]) == 0
+}
+
+// starts a 30-byte transmission and grants it `bs` / `stmin` with a clear-to-send at `now`
+fn granted(bs u8, stmin u8, now u64) Link {
+	mut l := Link{}
+	l.init_defaults()
+	buf := [30]u8{}
+	assert l.send(&buf[0], 30)
+	mut p := Pdu{}
+	assert l.poll(0, mut p) // FF
+	l.on_frame(now, Pdu{
+		data: [u8(0x30), bs, stmin, 0, 0, 0, 0, 0]!
+	})
+	return l
+}
+
+// no more consecutive frames than the receiver's block size before its next flow control
+fn test_transmission_honours_the_receivers_block_size() {
+	mut l := granted(2, 0, 0)
+	mut p := Pdu{}
+	assert l.poll(0, mut p) && p.data[0] == 0x21
+	assert l.poll(0, mut p) && p.data[0] == 0x22
+	assert !l.poll(0, mut p) // waiting for the next clear-to-send
+	l.on_frame(0, Pdu{
+		data: [u8(0x30), 0, 0, 0, 0, 0, 0, 0]!
+	})
+	assert l.poll(0, mut p) && p.data[0] == 0x23 // block size 0: the rest without waiting
+	assert l.poll(0, mut p) && p.data[0] == 0x24
+	assert !l.busy()
+}
+
+// consecutive frames are spaced by the receiver's STmin, in ms and in the 100..900 us range
+fn test_transmission_honours_the_receivers_stmin() {
+	mut l := granted(0, 5, 1000) // 5 ms
+	mut p := Pdu{}
+	assert l.poll(1000, mut p) && p.data[0] == 0x21
+	assert !l.poll(5999, mut p)
+	assert l.poll(6000, mut p) && p.data[0] == 0x22
+	mut m := granted(0, 0xF3, 1000) // 300 us
+	assert m.poll(1000, mut p)
+	assert !m.poll(1299, mut p)
+	assert m.poll(1300, mut p)
+}
+
+// a single frame arriving mid-reception ends it: the single frame is delivered, the partial not
+fn test_a_single_frame_mid_reception_replaces_it() {
+	mut l := Link{}
+	l.init_defaults()
+	mut buf := [max_payload]u8{}
+	l.on_frame(0, Pdu{
+		data: [u8(0x10), 20, 1, 2, 3, 4, 5, 6]!
+	})
+	l.on_frame(0, Pdu{
+		data: [u8(0x02), 0x3E, 0x00, 0, 0, 0, 0, 0]!
+	})
+	assert l.take(&buf[0]) == 2 && buf[0] == 0x3E
+	mut p := Pdu{}
+	assert !l.poll(0, mut p) // no clear-to-send for the reception it ended
+	l.on_frame(0, Pdu{
+		data: [u8(0x21), 7, 8, 9, 10, 11, 12, 13]!
+	})
+	assert l.take(&buf[0]) == 0 // the old reception does not resume
+}
+
+// a first frame announcing more than max_payload starts nothing: it is refused with FC.OVFLW,
+// and ends a reception in progress
+fn test_an_oversize_first_frame_is_refused_with_overflow() {
+	mut l := Link{}
+	l.init_defaults()
+	mut buf := [max_payload]u8{}
+	mut p := Pdu{}
+	l.on_frame(0, Pdu{
+		data: [u8(0x10), 20, 1, 2, 3, 4, 5, 6]!
+	})
+	total := max_payload + 1
+	l.on_frame(0, Pdu{
+		data: [u8(0x10 | (total >> 8)), u8(total & 0xFF), 0, 0, 0, 0, 0, 0]!
+	})
+	assert !l.idle() // a flow control is owed
+	assert l.poll(0, mut p)
+	assert p.data[0] == 0x32 && p.data[1] == 0 && p.data[2] == 0
+	assert !l.poll(0, mut p) // once, and no CTS for the reception it ended
+	assert l.idle()
+	l.on_frame(0, Pdu{
+		data: [u8(0x21), 7, 8, 9, 10, 11, 12, 13]!
+	})
+	assert l.take(&buf[0]) == 0
+}
+
+// a refusal still owed when the sender restarts — with a valid first frame or a single frame — is
+// never sent: it would fail the transfer that replaced the oversize one
+fn test_an_owed_overflow_is_dropped_by_the_next_first_or_single_frame() {
+	mut l := Link{}
+	l.init_defaults()
+	mut p := Pdu{}
+	mut buf := [max_payload]u8{}
+	oversize := Pdu{
+		data: [u8(0x10 | (600 >> 8)), u8(600 & 0xFF), 0, 0, 0, 0, 0, 0]!
+	}
+	l.on_frame(0, oversize)
+	l.on_frame(0, Pdu{
+		data: [u8(0x10), 20, 1, 2, 3, 4, 5, 6]!
+	})
+	assert l.poll(0, mut p) && p.data[0] == 0x30 // the CTS for the valid one, no OVFLW
+	assert !l.poll(0, mut p)
+	l.on_frame(0, oversize)
+	l.on_frame(0, Pdu{
+		data: [u8(0x02), 0x3E, 0x00, 0, 0, 0, 0, 0]!
+	})
+	assert l.take(&buf[0]) == 2
+	assert !l.poll(0, mut p) && l.idle()
+}
+
+// an escape first frame (FF_DL 0: a 32-bit length follows, above 4095) is refused with FC.OVFLW
+fn test_an_escape_first_frame_is_refused_with_overflow() {
+	mut l := Link{}
+	l.init_defaults()
+	mut p := Pdu{}
+	l.on_frame(0, Pdu{
+		data: [u8(0x10), 0x00, 0x00, 0x00, 0x13, 0x88, 1, 2]!
+	})
+	assert l.poll(0, mut p) && p.data[0] == 0x32
+}
+
+// a reserved STmin is read as 0x7F (127 ms), never as 0 (back-to-back)
+fn test_a_reserved_stmin_is_read_as_127_ms() {
+	for b in [u8(0x80), 0xF0, 0xFA, 0xFF] {
+		mut l := granted(0, b, 0)
+		mut p := Pdu{}
+		assert l.poll(0, mut p)
+		assert !l.poll(126_999, mut p), 'STmin 0x${b:02X}'
+		assert l.poll(127_000, mut p), 'STmin 0x${b:02X}'
+	}
+}
+
+// a flow status the standard does not define (3..15) ends the transmission at once, counted
+fn test_an_undefined_flow_status_aborts_the_transmission() {
+	for fs in 3 .. 16 {
+		mut l := Link{}
+		l.init_defaults()
+		buf := [20]u8{}
+		mut p := Pdu{}
+		assert l.send(&buf[0], 20)
+		assert l.poll(0, mut p) // FF
+		l.on_frame(100, Pdu{
+			data: [u8(0x30 | fs), 0, 0, 0, 0, 0, 0, 0]!
+		})
+		assert !l.busy() && l.tx_aborts == 1, 'FS ${fs}'
+	}
+}
+
+// the length each frame type needs before its bytes may be read
+fn test_truncated_frames_by_type() {
+	mut l := Link{}
+	assert l.truncated(0x03, 3) && !l.truncated(0x03, 4) // SF of 3 needs 4 bytes
+	assert l.truncated(0x10, 7) && !l.truncated(0x10, 8) // FF is always full
+	assert l.truncated(0x30, 2) && !l.truncated(0x30, 3) // FC needs FS, BS, STmin
+	l.rx_len = 20
+	l.rx_pos = 6
+	assert l.truncated(0x21, 7) // 14 bytes left: a CF must be full
+	l.rx_pos = 18
+	assert !l.truncated(0x23, 3) && l.truncated(0x23, 2) // the last 2 bytes need 3
 }

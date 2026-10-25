@@ -1,6 +1,6 @@
 module diag
 
-// @verifies REQ-BOOT-003 REQ-DIAG-001 REQ-DIAG-002 REQ-DIAG-003 REQ-DIAG-006 REQ-DIAG-007
+// @verifies REQ-BOOT-003 REQ-DIAG-001 REQ-DIAG-002 REQ-DIAG-003 REQ-DIAG-006 REQ-DIAG-007 REQ-TP-013 REQ-TP-019
 import comm.isotp
 import comm.uds
 import driver.can

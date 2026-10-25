@@ -2,21 +2,187 @@
 # than one CAN frame, with flow control and timeouts. The transport UDS (DIAG) runs
 # over; kept a separate area per requirements/modules.md (tp vs diag). Implementation-
 # and instance-agnostic.
+#
+# Scope — what this transport deliberately does NOT do (non-goals until a requirement here
+# says otherwise; silence is not compliance):
+#   * classic CAN only: no CAN FD frame formats (SF_DL escape, CAN_DL > 8), and an escape first
+#     frame (FF_DL > 4095) is only refused (REQ-TP-015) — every example runs `[bus] fd = false`;
+#   * normal addressing on 11-bit identifiers only: no extended, mixed or 29-bit normal-fixed
+#     addressing (`[isotp] rx_id` / `tx_id` are 0x000..0x7FF);
+#   * a fixed padding byte (0x00) on every frame sent; no configurable fill value;
+#   * no enforcement of the peer's STmin or block size on frames WE receive (ISO 15765-2 leaves
+#     that to the sender), and no N_Br / N_Cs performance targets.
+#
+# Status: a requirement a passing test verifies is `agreed` (gated by `make trace-check`); one
+# that is known not to hold yet, or has no test, stays `draft`.
 
 [[req]]
 id = "REQ-TP-001"
-title = "Segmented transport"
-text = "The transport shall reassemble a multi-frame request and segment a multi-frame response per ISO 15765-2 (single/first/consecutive frames), so a message larger than one CAN frame is exchanged intact."
-status = "draft"
+title = "Multi-frame exchange"
+text = "The transport shall transmit a message longer than one single frame as a first frame followed by consecutive frames with a sequence number counting 1..15 then 0, and shall reassemble such a message received, so a message of up to the transport's maximum length is exchanged intact in either direction."
+status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
 
 [[req]]
 id = "REQ-TP-002"
-title = "Flow control and timeout"
-text = "The transport shall honour and emit flow control (block size, separation time) and shall bound both directions with a timeout: abort a transmit whose flow control (or Tx-path readiness) makes no progress within N_Bs, and abort a reassembly whose next consecutive frame does not arrive within N_Cr (discarding the partial message). So neither a stalled sender nor a stalled receiver can wedge the connection or leak a half-assembled message."
-status = "draft"
+title = "Emit flow control"
+text = "On receiving a first frame, and again after each block of the block size it grants, the transport shall send a clear-to-send flow control carrying its configured block size and STmin; a block size of 0 shall grant the whole message at once."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-TP-003"
+title = "Single frame"
+text = "The transport shall send a message of 1 to 7 bytes as one single frame, and shall deliver a received single frame whose length is 1 to 7 as a complete message; a single frame claiming length 0 or above 7 shall be ignored."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-TP-004"
+title = "Honour the receiver's block size"
+text = "When transmitting, the transport shall send no more consecutive frames than the block size of the last clear-to-send flow control before waiting for the next flow control; a block size of 0 shall send the rest of the message without waiting."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-TP-005"
+title = "Honour the receiver's STmin"
+text = "When transmitting, the transport shall leave at least the STmin of the last clear-to-send flow control between consecutive frames: 0x00..0x7F as 0..127 ms, 0xF1..0xF9 as 100..900 us."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-TP-006"
+title = "Reserved STmin values"
+text = "When transmitting, the transport shall treat an STmin value the standard reserves (0x80..0xF0, 0xFA..0xFF) as 0x7F (127 ms), so a receiver that sent one is never flooded with back-to-back consecutive frames."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-TP-007"
+title = "Transmit timeout (N_Bs)"
+text = "The transport shall abandon a transmission that receives no flow control, or sends no consecutive frame, within N_Bs of its last progress, leaving the connection free for the next message; a flow control that arrives after N_Bs has expired shall not resume the abandoned transmission."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-TP-008"
+title = "Receive timeout (N_Cr)"
+text = "The transport shall abandon a reception whose next consecutive frame does not arrive within N_Cr, discarding the partial message and owing no flow control for it; N_Cr shall be measured from when the transport's clear-to-send flow control is sent, not from when the first frame arrived, and a consecutive frame arriving after N_Cr shall not resume the reception."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-TP-009"
+title = "Bounded wait frames (WFTmax)"
+text = "The transport shall restart N_Bs on each flow control with flow status WAIT, and shall abandon the transmission once more than WFTmax consecutive WAIT frames arrive, so a receiver that only ever waits cannot hold the connection."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-TP-010"
+title = "Overflow and invalid flow status"
+text = "When transmitting, the transport shall abandon the transmission on a flow control with flow status OVERFLOW, and on one with a flow status the standard does not define (3..15), rather than wait for N_Bs."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-TP-011"
+title = "Wrong sequence number"
+text = "The transport shall abandon a reception on a consecutive frame whose sequence number is not the one expected, delivering nothing of it, and shall accept the next first frame as a new reception."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-TP-012"
+title = "Unexpected first or single frame"
+text = "A first frame or single frame that arrives while a reception is in progress shall end that reception and be handled as a new one; the partial message shall not be delivered."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-TP-013"
+title = "Truncated frame"
+text = "The transport shall discard a received frame shorter than its protocol control information requires — a single frame shorter than its length plus one, a first frame shorter than 8 bytes, a consecutive frame shorter than 8 bytes that does not carry the last bytes of the message, a flow control shorter than 3 bytes — rather than read bytes that did not arrive."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-TP-014"
+title = "Maximum message length"
+text = "The transport shall support messages up to a fixed maximum length that holds the largest message the system sends, shall refuse to start transmitting a longer message, and shall start no reception for a first frame announcing a length it cannot hold."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-TP-015"
+title = "Answer an oversize first frame"
+text = "On a first frame announcing a length above its maximum, an escape first frame included, the transport shall answer with a flow control of flow status OVERFLOW, so the sender fails at once instead of waiting out its own N_Bs."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-TP-016"
+title = "One transmission at a time"
+text = "The transport shall refuse to start a transmission while another is in flight on the same connection, and shall report whether a transmission is in flight, so an owner never overwrites a message being sent."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-TP-017"
+title = "Transmission outcome"
+text = "The transport shall count each transmission it abandons (N_Bs, WFTmax, an overflow or undefined flow status), so an owner can tell a message that was given up from one that was sent, both of which leave the connection free."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-TP-018"
+title = "Refused frame aborts the transmission"
+text = "When the CAN path refuses a frame of a transmission in flight, the transmission shall be abandoned rather than continued or retried, so the receiver is never sent the rest of a message it can no longer reassemble."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-TP-019"
+title = "Functional requests are single frames"
+text = "On the functional request identifier the transport shall accept only single frames; a first, consecutive or flow control frame received on it shall be discarded and shall not disturb the physical connection."
+status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"

@@ -58,7 +58,8 @@ pub mut:
 	// the link the N_Bs timeout exists to protect. 0 disables the WAIT bound.
 	// No field default — same _vinit rule as n_bs_us.
 	wft_max u8
-	// transmissions the link gave up on (no flow control within N_Bs, too many WAITs, an overflow)
+	// transmissions the link gave up on (no flow control within N_Bs, too many WAITs, an overflow
+	// or an undefined flow status)
 	// — counted, so an owner tells a send that failed from one that completed, both of which leave
 	// the link not busy. Zero from the zeroed struct (no default: the _vinit rule).
 	tx_aborts u32
@@ -69,7 +70,7 @@ pub mut:
 	progress u32
 	// N_Cr: max gap between consecutive frames of an in-flight RECEIVE before the
 	// partial reassembly is abandoned (ISO 15765-2 N_Cr) — without it a sender that
-	// dies after its FF leaves the link .receiving forever (REQ-TP-002 bounds BOTH
+	// dies after its FF leaves the link .receiving forever (REQ-TP-007/008 bound BOTH
 	// directions; the gap was documented in move-data.md and is now closed).
 	// 0 disables. No field default — the _vinit rule again: init_defaults() sets it.
 	n_cr_us u64
@@ -81,6 +82,7 @@ pub mut:
 	rx_sn     u8
 	rx_count  u8 // CFs since our last FC
 	fc_send   bool
+	fc_ovflw  bool // an FC.OVFLW is owed: a first frame announced more than max_payload
 	ready     bool
 	ready_len int
 	// segmentation (tx)
@@ -142,6 +144,7 @@ fn (mut l Link) give_up_tx() {
 pub fn (mut l Link) abort_rx() {
 	l.rx = .idle
 	l.fc_send = false
+	l.fc_ovflw = false
 	l.ready = false
 }
 
@@ -150,7 +153,7 @@ pub fn (mut l Link) abort_rx() {
 // waiting to be taken. A caller that interleaves a second kind of traffic on the link (functional
 // requests answered on the physical id) starts only when the physical exchange is fully quiet.
 pub fn (l &Link) idle() bool {
-	return l.tx == .idle && l.rx != .receiving && !l.fc_send && !l.ready
+	return l.tx == .idle && l.rx != .receiving && !l.fc_send && !l.fc_ovflw && !l.ready
 }
 
 // has_request reports that a completed message is waiting to be taken.
@@ -202,13 +205,17 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 				}
 				l.ready = true
 				l.ready_len = n
-				l.rx = .idle
+				l.rx = .idle // a reception it interrupts is over (REQ-TP-012), and so is its CTS
+				l.fc_send = false
+				l.fc_ovflw = false // and a refusal still owed for an earlier first frame
 				l.progress++
 			}
 		}
 		0x10 { // first frame
+			// 0 is the escape first frame: a 32-bit length follows, always above 4095
 			total := int((u32(low) << 8) | u32(p.data[1]))
 			if total > 7 && total <= max_payload {
+				l.fc_ovflw = false // a refusal owed for an earlier first frame is moot now
 				// a first frame that replaces a reception in progress restarts it, and moves
 				// nothing: a sender repeating its first frame is not a transfer advancing
 				fresh := l.rx != .receiving
@@ -228,6 +235,13 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 				if fresh {
 					l.progress++
 				}
+			} else if total == 0 || total > max_payload {
+				// more than we can hold: refuse it at once with FC.OVFLW, so the sender fails now
+				// rather than waiting out its N_Bs (REQ-TP-015); like any first frame it ends a
+				// reception in progress (REQ-TP-012)
+				l.rx = .idle
+				l.fc_send = false
+				l.fc_ovflw = true
 			}
 		}
 		0x20 { // consecutive frame
@@ -296,7 +310,7 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 						l.fc_deadline = now + l.n_bs_us
 						l.progress++
 					}
-				} else if fs == 2 { // OVFLW / reserved -> abort
+				} else { // OVFLW, or a flow status the standard does not define -> abort (REQ-TP-010)
 					l.give_up_tx()
 				}
 			}
@@ -328,7 +342,7 @@ pub fn (mut l Link) tick(now u64) {
 		l.give_up_tx()
 	}
 	// N_Cr: a receive whose sender went quiet mid-transfer is abandoned, so the link
-	// (and its reassembly buffer) cannot stay .receiving forever (REQ-TP-002). Only
+	// (and its reassembly buffer) cannot stay .receiving forever (REQ-TP-008). Only
 	// armed deadlines count — rx_deadline == 0 means the CTS hasn't been emitted yet,
 	// so the sender is correctly waiting for flow control, not stalling (codex #218).
 	if l.n_cr_us != 0 && l.rx == .receiving && l.rx_deadline != 0 && now >= l.rx_deadline {
@@ -338,6 +352,12 @@ pub fn (mut l Link) tick(now u64) {
 }
 
 pub fn (mut l Link) poll(now u64, mut out Pdu) bool {
+	if l.fc_ovflw {
+		zero(mut out)
+		out.data[0] = 0x32 // FC, OVFLW
+		l.fc_ovflw = false
+		return true
+	}
 	if l.fc_send {
 		zero(mut out)
 		out.data[0] = 0x30 // FC, CTS
@@ -422,7 +442,7 @@ fn zero(mut p Pdu) {
 }
 
 // decode_stmin maps the FC STmin byte to microseconds: 0x00-0x7F ms, 0xF1-0xF9
-// = 100-900 us; anything else -> 0.
+// = 100-900 us; a reserved value (0x80-0xF0, 0xFA-0xFF) as 0x7F, the longest (REQ-TP-006).
 fn decode_stmin(b u8) u64 {
 	if b <= 0x7F {
 		return u64(b) * 1000
@@ -430,5 +450,5 @@ fn decode_stmin(b u8) u64 {
 	if b >= 0xF1 && b <= 0xF9 {
 		return u64(b - 0xF0) * 100
 	}
-	return 0
+	return 127_000
 }

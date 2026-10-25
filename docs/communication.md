@@ -218,6 +218,10 @@ State machine per connection:
 - **Timers**: N_As/N_Ar (frame tx/rx), N_Bs/N_Cr (FC/CF wait), N_Cs — timeouts abort
   the transfer.
 
+That is the protocol; what `comm/isotp` implements of it, one behaviour per requirement, and
+what it deliberately does not (CAN FD frame formats, addressing other than normal 11-bit, a
+configurable padding byte), is [requirements/tp.toml](../requirements/tp.toml).
+
 No-alloc: exactly one fixed `[max_len]u8` reassembly buffer and one TX buffer per
 connection, sized at build time. ISO-TP delivers a reassembled PDU up to **UDS**
 (below), and blobly_net’s `uds` module drives it in the integration tests (the DBC

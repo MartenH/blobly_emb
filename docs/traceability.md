@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 211 | 119 | 33 | 59 | 0 |
+| 228 | 136 | 33 | 59 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -222,6 +222,23 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TOPO-012 | QM | test | verified | model_test.v (pass) |
 | REQ-TP-001 | QM | test | verified | isotp_test.v (pass) |
 | REQ-TP-002 | QM | test | verified | isotp_test.v (pass) |
+| REQ-TP-003 | QM | test | verified | isotp_test.v (pass) |
+| REQ-TP-004 | QM | test | verified | isotp_test.v (pass) |
+| REQ-TP-005 | QM | test | verified | isotp_test.v (pass) |
+| REQ-TP-006 | QM | test | verified | isotp_test.v (pass) |
+| REQ-TP-007 | QM | test | verified | isotp_test.v (pass) |
+| REQ-TP-008 | QM | test | verified | isotp_test.v (pass) |
+| REQ-TP-009 | QM | test | verified | isotp_test.v (pass) |
+| REQ-TP-010 | QM | test | verified | isotp_test.v (pass) |
+| REQ-TP-011 | QM | test | verified | isotp_test.v (pass) |
+| REQ-TP-012 | QM | test | verified | isotp_test.v (pass) |
+| REQ-TP-013 | QM | test | verified | diag_test.v (pass), isotp_test.v (pass), step_test.v (pass) |
+| REQ-TP-014 | QM | test | verified | isotp_test.v (pass) |
+| REQ-TP-015 | QM | test | verified | isotp_test.v (pass) |
+| REQ-TP-016 | QM | test | verified | isotp_test.v (pass) |
+| REQ-TP-017 | QM | test | verified | isotp_test.v (pass) |
+| REQ-TP-018 | QM | test | verified | isotp_test.v (pass), step_test.v (pass) |
+| REQ-TP-019 | QM | test | verified | diag_test.v (pass) |
 | REQ-WDG-001 | B | test | verified | wdg_test.v (pass) |
 | REQ-WDG-002 | B | test | verified | wdg_test.v (pass) |
 | REQ-WDG-003 | B | test | verified | wdg_test.v (pass) |
@@ -438,6 +455,23 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TOPO-012 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-TP-001 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-TP-002 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TP-003 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TP-004 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TP-005 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TP-006 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TP-007 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TP-008 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TP-009 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TP-010 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TP-011 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TP-012 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TP-013 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TP-014 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TP-015 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TP-016 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TP-017 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TP-018 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TP-019 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-WDG-001 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-WDG-002 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-WDG-003 | | | | | | | | | | | | | | | | | | | ✓ | | | |
