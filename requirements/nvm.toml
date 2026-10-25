@@ -127,3 +127,12 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-015"
+title = "No erase in bus sleep"
+text = "The flush a write made while the bus is asleep runs shall not erase flash: a sector a compaction left behind is erased at the next sleep edge (or boot), and until then a write the journal refuses stays refused. A write in bus sleep may be a DoIP tester's (0x14 in the default session holds no network), whose answer waits behind the comm thread, so an erase there would hold the answer for the sector's erase time."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"

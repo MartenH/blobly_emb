@@ -1,6 +1,6 @@
 module main
 
-// @verifies REQ-DIAG-012 REQ-DIAG-047
+// @verifies REQ-DIAG-012 REQ-DIAG-047 REQ-NVM-015
 import os
 import tools.sysmodel
 
@@ -238,6 +238,15 @@ fn test_the_fault_memory_is_persisted_in_the_journal() {
 		'if g_fmem.cycle_end_due(t1) {', 'g_fmem.consume(0, g_frep_load_slow.r[0])', 'g_fmem.cycle_end()',
 		'g_fmem.persist(t1, false)', 'if g_fmem.wrote > 0 && g_nm.state() == .bus_sleep {',
 		'if !g_fmem.persist(t1, true) {', 'if g_fmem.ending {', 'nvm_flush_ok = false', 'g_nvm.mark_clean()'])
+	// REQ-NVM-015: the flush a write made in bus sleep runs (a DoIP tester's 0x14 among them) lays the
+	// marker in one pass and never erases — the answer waits behind this thread; the edges still do
+	sleep_flush := g2.all_after('if g_fmem.wrote > 0 && g_nm.state() == .bus_sleep {').all_before('\n\t\t}\n')
+	assert sleep_flush.contains('g_nvm.mark_clean()'), sleep_flush
+	assert !sleep_flush.contains('erase_pending'), 'an erase in bus sleep:\n${sleep_flush}'
+	assert !sleep_flush.contains('nvm_pass'), 'a recovery pass in bus sleep:\n${sleep_flush}'
+	edge := g2.all_after('(nm_now == .prepare_bus_sleep || nm_now == .bus_sleep) {').all_before('nvm_prev_nm = nm_now')
+	in_order(edge, ['for nvm_pass := 0; nvm_pass < 2; nvm_pass++ {', 'g_nvm.erase_pending()', 'g_nvm.mark_clean()',
+		'g_nvm.erase_pending() // cleanup AFTER values + marker are durable'])
 	// an ECUReset ends a cycle still waiting for its barrier, before its flush
 	in_order(g2, ['if g_diag.reset_due() != 0 {', 'g_fmem.consume(0, g_frep_load_slow.r[0])',
 		'if g_fmem.ending {', 'g_fmem.cycle_end()', 'if !g_fmem.persist(t1, true) {', 'C.diag_sys_reset()'])

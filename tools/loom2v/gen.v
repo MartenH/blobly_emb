@@ -5758,11 +5758,11 @@ fn fault_target_persist(m Model, ioc_idx map[string]int) []string {
 		// a parameter coded this pass too: ONE choreography for both writers
 		g << '\t\tparam_wrote := g_param.take_wrote()'
 		g << '\t\tif (g_fmem.wrote > 0 || param_wrote) && g_nm.state() == .bus_sleep {'
-		g << nvm_flush_choreo(m, ioc_idx, '\t\t\t')
+		g << nvm_flush_choreo(m, ioc_idx, '\t\t\t', false)
 		g << '\t\t}'
 	} else if m.nm.on {
 		g << '\t\tif g_fmem.wrote > 0 && g_nm.state() == .bus_sleep {'
-		g << nvm_flush_choreo(m, ioc_idx, '\t\t\t')
+		g << nvm_flush_choreo(m, ioc_idx, '\t\t\t', false)
 		g << '\t\t}'
 	}
 	return g

@@ -480,7 +480,7 @@ fn param_sleep_lines(m Model, ioc_idx map[string]int) []string {
 		return []string{} // a persisted fault memory's in-sleep choreography covers it (fault_target_persist)
 	}
 	mut g := ['\t\tif g_param.take_wrote() && g_nm.state() == .bus_sleep {']
-	g << nvm_flush_choreo(m, ioc_idx, '\t\t\t')
+	g << nvm_flush_choreo(m, ioc_idx, '\t\t\t', false)
 	g << '\t\t}'
 	return g
 }
