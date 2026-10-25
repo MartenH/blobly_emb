@@ -133,7 +133,7 @@ end)
 -- entry ([fault_memory] entries = 1), so the over-rev (priority 1) displaces the idle fault's
 -- snapshot once that one is passive and from an earlier cycle. 0x19 06: 01 occurrences (2 bytes),
 -- 02 aging, 03 failed cycles. Raw bytes, so this suite needs nothing from the tester's decoder.
--- @verifies REQ-DIAG-013 REQ-DIAG-014 REQ-DIAG-015
+-- (REQ-DIAG-013/014/015 are verified by comm/fault's records tests; this is their on-bus evidence.)
 test("Faults: a snapshot at the failure, extended data, and displacement by priority", function()
   local d = diag()
   ignition(true)

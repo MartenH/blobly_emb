@@ -1,39 +1,230 @@
 # DIAG — UDS (ISO 14229) diagnostic services. Runs over the ISO-TP transport (area TP)
 # and reads live values from the same COM/IOC source the FBs use. Implementation- and
-# instance-agnostic.
+# instance-agnostic. The fault memory and the parameters it serves are here too, for now.
+#
+# Scope — what the server deliberately does NOT do (non-goals until a requirement here says
+# otherwise; silence is not compliance). docs/diagnostics.md §1 "Supported, and not" is the
+# per-service statement of the same:
+#   * services not served by an application: 0x23/0x3D memory access, 0x24, 0x2A, 0x2C dynamic
+#     DIDs, 0x2F InputOutputControl, generic 0x31 RoutineControl, 0x34..0x38 transfers (the
+#     bootloader keeps its own 0x31/0x34/0x36/0x37), 0x29 Authentication (the bootloader's only),
+#     0x86 ResponseOnEvent, 0x87 LinkControl, OBD / WWH-OBD services;
+#   * 0x11 subfunctions other than hardReset (01) and softReset (03); 0x19 subfunctions other
+#     than 01, 02, 03, 04, 06 and 0A; 0x28 communication types other than normal messages;
+#   * no busyRepeatRequest (0x21): a request that arrives while an answer is in flight is
+#     dropped (REQ-DIAG-037);
+#   * no memorySelection byte on 0x14 (a 4-byte request only); no power-up delay on 0x27 (the
+#     failed-key count surviving a reset, REQ-DIAG-033, does that job);
+#   * one diagnostic server per node, whichever transport a request arrives on.
+#
+# Status: a requirement whose linked verifications all pass is `agreed` (gated by
+# `make trace-check`). An on-bus or bench suite that only repeats on the bus what a unit test
+# verifies is not tagged with it (its comment names it, so it stays the on-bus evidence); one whose
+# evidence needs such a suite stays `draft` until CI runs it, and one known not to hold, or with no
+# test, stays `draft`.
+
+# ---- The server ------------------------------------------------------------------------------
 
 [[req]]
 id = "REQ-DIAG-001"
-title = "UDS request/response"
-text = "The ECU shall dispatch a received UDS service request and return the corresponding positive or negative response, except that it shall suppress the positive response when the request sets the suppress-positive-response indication (a negative response is still returned on error)."
-status = "draft"
+title = "Request and response"
+text = "The diagnostic server shall answer a request for a service it serves with a positive response whose first byte is the service identifier plus 0x40, or with a negative response 0x7F, the service identifier and a negative response code."
+status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
 
 [[req]]
-id = "REQ-DIAG-002"
-title = "Read live signal by identifier"
-text = "A UDS ReadDataByIdentifier mapped to a live signal shall return that signal's current value, read from the same source the application sees."
-status = "draft"
-method = "test"
-asil = "QM"
-derives = "SYS-REQ-DIAG-001"
-
-[[req]]
-id = "REQ-DIAG-003"
-title = "Diagnostic sessions"
-text = "The diagnostic server shall start in the default session, return to the default session when a non-default session receives no request for the session timeout (S3), relock security on every session transition, restore communication on returning to the default session, and refuse a session it cannot serve (an application server refuses the programming session until a bootloader handoff exists)."
-status = "draft"
+id = "REQ-DIAG-018"
+title = "Suppressed positive response"
+text = "When a request of a service with a subfunction sets the suppress-positive-response bit, the server shall perform the request and send no positive response; a negative response shall still be sent. Two exceptions: a SecurityAccess requestSeed is always answered (its answer is the seed), and ReadDTCInformation does not serve a subfunction with the bit set (0x12)."
+status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
 
 [[req]]
 id = "REQ-DIAG-004"
-title = "Negative-response order and access gating"
-text = "The diagnostic server shall evaluate a request in the ISO 14229-1 order — service supported, service allowed in the active session, length, subfunction, conditions, range, security — returning the first failing check's negative response code, and shall gate each data identifier's read and write by session and by the unlocked security level."
-status = "draft"
+title = "Negative-response order"
+text = "The server shall evaluate a request in the ISO 14229-1 order — service supported, service allowed in the active session, the service's security level, then the service's own checks in the order ISO 14229-1 gives for it (minimum length, subfunction supported, subfunction allowed in the active session and behind its level, exact length, conditions, range) — and answer the first check that fails with its negative response code."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-020"
+title = "Service table"
+text = "A node shall serve exactly the services its configuration lists, each only in its listed sessions and behind its listed security level, answering serviceNotSupported (0x11) for any other service, serviceNotSupportedInActiveSession (0x7F) outside its sessions and securityAccessDenied (0x33) without its level."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-026"
+title = "Unsupported subfunction"
+text = "The server shall answer subFunctionNotSupported (0x12) to a subfunction it does not serve, whether or not the request sets the suppress-positive-response bit."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-006"
+title = "Functional requests"
+text = "The ECU shall serve a single-frame request sent to the functional address, answer it on its physical response address, and withhold the negative responses serviceNotSupported, subFunctionNotSupported, requestOutOfRange, subFunctionNotSupportedInActiveSession and serviceNotSupportedInActiveSession."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-037"
+title = "Request while an answer is in flight"
+text = "A request that completes while the server's previous answer is still being sent, or while a reset it announced is pending, shall be dropped unanswered and not served later."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-062"
+title = "Response timing (P2 / P2*)"
+text = "The server shall send its answer, or a responsePending (0x78) negative response, within P2server_max (50 ms) of a request, and after each 0x78 its answer or the next 0x78 within P2*server_max (5 s)."
+status = "draft"   # unmeasured: the application server never sends 0x78, and a parameter's durable write (REQ-DIAG-054) may outlast 50 ms
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+# ---- Sessions --------------------------------------------------------------------------------
+
+[[req]]
+id = "REQ-DIAG-003"
+title = "Default session at start"
+text = "The diagnostic server shall start in the default session, at power-on and after an ECU reset."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-021"
+title = "Session timing record"
+text = "The positive response to DiagnosticSessionControl shall carry the session and the timing record P2server_max = 50 ms and P2*server_max = 5000 ms."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-022"
+title = "Session timeout (S3)"
+text = "A non-default session that receives no request for the session timeout S3 shall return to the default session; S3 shall not run while a request is arriving or an answer is being sent."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-023"
+title = "Security relocks on a session change"
+text = "Every DiagnosticSessionControl request the server accepts, re-entry of the active session included, and every return to the default session by S3, shall relock security and void any outstanding seed."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-024"
+title = "Communication restored in the default session"
+text = "Returning to the default session, by request or by S3, shall re-enable the normal communication CommunicationControl disabled."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-025"
+title = "Programming session"
+text = "An application's server shall refuse the programming session with subFunctionNotSupported (0x12) unless the node has a bootloader handoff; with one, it shall answer the request and leave the reset into the bootloader to its owner, opening no session itself."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-027"
+title = "TesterPresent"
+text = "The server shall answer TesterPresent with subfunction 0x00 positively (or not at all when the suppress-positive-response bit is set), refuse any other subfunction with 0x12, and count it as a request that keeps the session alive."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-063"
+title = "Active session identifier"
+text = "The server shall answer ReadDataByIdentifier 0xF186 (ActiveDiagnosticSessionDataIdentifier) with the active session, in every session."
+status = "draft"   # NOT met: 0xF186 is not served
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+# ---- Reset and communication control ---------------------------------------------------------
+
+[[req]]
+id = "REQ-DIAG-007"
+title = "ECU reset"
+text = "The server shall serve ECUReset hardReset (01) and softReset (03), answering the request before the reset takes effect."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-028"
+title = "Never reset unanswered"
+text = "A reset whose answer is lost — refused by the transport, or abandoned before it left — shall not be performed."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-029"
+title = "Communication control"
+text = "CommunicationControl 00..03 for normal messages, served by default in the extended and programming sessions only, shall enable or disable the transmission and the reception of the ECU's own application messages as requested, without affecting diagnostic communication or traffic a gateway routes."
+status = "draft"   # its on-bus evidence (diag.lua) is not run in CI
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-030"
+title = "Communication control scope"
+text = "CommunicationControl shall refuse with requestOutOfRange (0x31) a communication type other than normal messages, a subnet other than the network the request arrived on, and the all-networks subnet on a node with more than one network."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+# ---- Data identifiers ------------------------------------------------------------------------
+
+[[req]]
+id = "REQ-DIAG-002"
+title = "Read live signal by identifier"
+text = "A ReadDataByIdentifier mapped to a live signal shall return that signal's current value, read from the same source the application sees."
+status = "draft"   # its on-bus evidence (diag.lua) is not run in CI
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-031"
+title = "Constant and writable identifiers"
+text = "A data identifier configured with a constant shall read as that constant; a writable one shall accept with WriteDataByIdentifier only a record of exactly its size (incorrectLength 0x13 otherwise), read back as written, and a read-only one shall refuse a write with requestOutOfRange (0x31)."
+status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
@@ -42,52 +233,164 @@ derives = "SYS-REQ-DIAG-001"
 id = "REQ-DIAG-005"
 title = "Several identifiers per read"
 text = "A ReadDataByIdentifier request naming several identifiers shall be answered with each supported identifier's record in request order, skipping unsupported ones, with requestOutOfRange only when none is supported and responseTooLong when the answer would exceed the response capacity."
-status = "draft"
+status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
 
 [[req]]
-id = "REQ-DIAG-006"
-title = "Functional requests"
-text = "The ECU shall serve diagnostic requests sent to a functional address, answering on its physical response address and withholding the negative responses serviceNotSupported, subFunctionNotSupported, requestOutOfRange, and the two not-supported-in-active-session codes."
-status = "draft"
+id = "REQ-DIAG-019"
+title = "Identifier access gates"
+text = "Each data identifier's read and write shall be served only in its configured sessions (requestOutOfRange 0x31 outside them) and behind its configured security level (securityAccessDenied 0x33 while locked)."
+status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
 
-[[req]]
-id = "REQ-DIAG-007"
-title = "ECU reset and communication control"
-text = "The diagnostic server shall answer an ECU reset request before the reset takes effect, and shall enable or disable the transmission and reception of normal application messages on request, in a non-default session only, without affecting diagnostic communication."
-status = "draft"
-method = "test"
-asil = "QM"
-derives = "SYS-REQ-DIAG-001"
+# ---- Security access -------------------------------------------------------------------------
 
 [[req]]
 id = "REQ-DIAG-008"
-title = "Security access"
-text = "The diagnostic server shall unlock a security level only for a key that matches the seed it most recently issued for that level, in a non-default session, with each seed usable for one key; shall refuse further seeds for a lockout delay after a configured number of wrong keys, keeping the count of wrong keys across an ECU reset so that a reset does not grant fresh attempts; shall ignore security access requests sent to a functional address; and shall obtain seeds and check keys through an injected interface, so that no key algorithm is fixed by the stack."
-status = "draft"
+title = "Seed and key"
+text = "The server shall unlock a security level only for a key that matches the seed it most recently issued for that level, each seed usable for one key; a key with no seed of its level outstanding shall be refused with requestSequenceError (0x24)."
+status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-032"
+title = "Wrong keys and lockout"
+text = "A wrong key shall be refused with invalidKey (0x35); the configured number of wrong keys for a level shall be refused with exceededNumberOfAttempts (0x36) and start the lockout delay, during which a seed request is refused with requiredTimeDelayNotExpired (0x37); wrong keys shall be counted per level."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-033"
+title = "Wrong keys survive a reset"
+text = "The count of wrong keys, and a lockout in progress, shall be kept across an ECU reset, so that a reset grants no fresh attempts."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-034"
+title = "Seed of an unlocked level"
+text = "A seed request for the level already unlocked shall be answered with an all-zero seed; a seed source that fails, or produces an all-zero seed for a locked level, shall be refused with conditionsNotCorrect (0x22)."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-035"
+title = "No security access by functional request"
+text = "A SecurityAccess request sent to the functional address shall be ignored: no seed issued, no key checked, nothing answered."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-036"
+title = "Injected seed and key"
+text = "The server shall obtain seeds and check keys through an injected interface, so that no key algorithm is fixed by the stack; a server with none injected shall not serve SecurityAccess."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+# ---- Fault memory ----------------------------------------------------------------------------
 
 [[req]]
 id = "REQ-DIAG-009"
 title = "Fault memory status"
-text = "The fault memory shall maintain, per configured DTC, the ISO 14229-1 status bits testFailed through testNotCompletedThisOperationCycle from debounced test results: a test result shall reach it as monotonic counters so that no qualification or completed test is lost to a reader slower than the producer; a DTC shall become confirmed after its configured number of failed operation cycles and age out after its configured number of passing ones; a clear shall ignore results produced before the producer applied it; and while DTC setting is off no status shall change, nor shall a result produced meanwhile be applied afterwards."
-status = "draft"
+text = "The fault memory shall maintain, per configured DTC, the ISO 14229-1 status bits testFailed through testNotCompletedThisOperationCycle from debounced test results."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-038"
+title = "Lossless test results"
+text = "A test result shall reach the fault memory as monotonic counters, so that no qualification or completed test is lost to a reader slower than the producer."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-039"
+title = "Confirmation and aging"
+text = "A DTC shall become confirmed after its configured number of failed operation cycles, and shall age out after its configured number of passing ones."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-040"
+title = "A clear ignores older results"
+text = "A clear shall ignore every test result produced before the producer applied it."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-041"
+title = "DTC setting off"
+text = "While DTC setting is off no DTC status shall change, and a result produced meanwhile shall not be applied once it is on again."
+status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
 
 [[req]]
 id = "REQ-DIAG-010"
-title = "Reading and clearing DTCs"
-text = "The diagnostic server shall report DTCs by status mask (count and list) and all supported DTCs with their status, clear all DTCs or a single one (refusing an unknown DTC), and switch DTC setting off and on in a non-default session only, restoring it to on on the transition to the default session (explicit or by S3) and on a reset."
-status = "draft"
+title = "DTCs by status mask"
+text = "ReadDTCInformation 01 and 02 shall report, for a status mask, the number of matching DTCs (with the DTC format identifier) and the matching DTCs with their status, each answer carrying the status availability mask."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-042"
+title = "Supported DTCs"
+text = "ReadDTCInformation 0A shall report every supported DTC with its status."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-043"
+title = "Clearing DTCs"
+text = "ClearDiagnosticInformation shall clear all DTCs, or a single one, refusing an unknown DTC with requestOutOfRange (0x31)."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-044"
+title = "Control DTC setting"
+text = "ControlDTCSetting shall switch DTC setting on (01) and off (02), in the sessions its service-table row allows — by default the extended and programming sessions only."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-045"
+title = "DTC setting restored"
+text = "DTC setting shall be switched on again on the transition to the default session, by request or by S3, and on an ECU reset."
+status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
@@ -97,8 +400,17 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-DIAG-011"
 title = "Faults from a signal's receive status"
-text = "A DTC may be declared on a received signal's reception deadline passing, its protection check failing, or its E2E sequence showing lost frames, and shall then be raised by the receiving side without application code; each such event shall be counted even when a later frame in the same processing pass overwrites the signal's status, and no result shall be recorded while reception is switched off by CommunicationControl."
-status = "draft"
+text = "A DTC may be declared on a received signal's reception deadline passing, its protection check failing, or its E2E sequence showing lost frames, and shall then be raised by the receiving side without application code; each such event shall be counted even when a later frame in the same processing pass overwrites the signal's status."
+status = "draft"   # its on-bus and bench evidence is not run in CI
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-046"
+title = "No fault results while reception is off"
+text = "No result of a receive-status fault shall be recorded while reception is switched off by CommunicationControl."
+status = "draft"   # its evidence is the bench suite rx_faults_zone_a.lua, not run in CI
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
@@ -107,7 +419,7 @@ derives = "SYS-REQ-DIAG-001"
 id = "REQ-DIAG-012"
 title = "Operation cycle source"
 text = "The fault memory's operation cycle shall begin when the node's network management wakes the network and end when it puts it to sleep, unless the configuration declares the cycle to follow a condition signal or the node's power cycle; a configuration declaring faults with none of these available shall be refused at generation."
-status = "draft"
+status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
@@ -115,8 +427,17 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-DIAG-013"
 title = "Fault snapshots"
-text = "A DTC configured with a snapshot shall have the values of its declared data identifiers, as a read of those identifiers returns them, stored in the first fault-memory pass after the occurrence that finds it with no stored snapshot — the values at storage, at most one fault-memory pass interval after the occurrence was reported; the snapshot shall be kept until the DTC is cleared, ages out, heals before confirming or is displaced, and shall be reported by the read-DTC snapshot identification and snapshot-record-by-DTC-number subfunctions. A snapshot shall name only identifiers readable in every session the read-DTC service is served in, behind no security level that service does not itself require."
-status = "draft"
+text = "A DTC configured with a snapshot shall have the values of its declared data identifiers, as a read of those identifiers returns them, stored in the first fault-memory pass after the occurrence that finds it with no stored snapshot — the values at storage, at most one fault-memory pass interval after the occurrence was reported; the snapshot shall be kept until the DTC is cleared, ages out, heals before confirming or is displaced, and shall be reported by the read-DTC snapshot identification and snapshot-record-by-DTC-number subfunctions."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-047"
+title = "Snapshot identifiers are readable"
+text = "A snapshot shall name only identifiers readable in every session the read-DTC service is served in, behind no security level that service does not itself require; a configuration naming another shall be refused at generation."
+status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
@@ -125,7 +446,7 @@ derives = "SYS-REQ-DIAG-001"
 id = "REQ-DIAG-014"
 title = "Fault extended data"
 text = "The diagnostic server shall report, per DTC and by extended data record number, its occurrence counter, its aging counter and its failed-operation-cycle counter, each with a fixed width that saturates at its maximum rather than wrapping, and shall refuse an unknown DTC or record number."
-status = "draft"
+status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
@@ -134,7 +455,7 @@ derives = "SYS-REQ-DIAG-001"
 id = "REQ-DIAG-015"
 title = "Snapshot displacement"
 text = "When every snapshot entry is taken, a new snapshot shall displace the least important stored one — among equals, one whose DTC is not currently failed before one that is, then the oldest — and never one more important than the new DTC, one whose DTC failed in the current operation cycle, or one whose DTC is failed and confirmed; when none may be displaced, the new snapshot is not stored, and a DTC without a snapshot keeps its status and counters."
-status = "draft"
+status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
@@ -142,17 +463,145 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-DIAG-016"
 title = "Persistent fault memory"
-text = "On a target the fault memory shall keep each DTC's pendingDTC, confirmedDTC, testNotCompletedSinceLastClear and testFailedSinceLastClear bits, its counters and its snapshot across a reset and a power loss, restore them by DTC number, and end the operation cycle a power loss interrupted with the results that cycle had collected. It shall write only when the stored content changes, never once per debounce step; acknowledge a clear only once the cleared state is stored; and, after a power loss at any point of a write, restore either the state before that write or the state it was writing, never doubling an occurrence nor claiming a snapshot it does not hold."
-status = "draft"
+text = "On a target the fault memory shall keep each DTC's pendingDTC, confirmedDTC, testNotCompletedSinceLastClear and testFailedSinceLastClear bits, its counters as last stored (an occurrence counted since the last write is stored at the next flush, an orderly reset's included) and its snapshot across a reset and a power loss."
+status = "draft"   # its bench evidence (faults_zone_a_persist.lua) is not run in CI
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
 
 [[req]]
+id = "REQ-DIAG-052"
+title = "Restored by DTC number"
+text = "A persisted fault memory shall be restored by DTC number, so a firmware that adds, removes or reorders DTCs keeps each remaining DTC's state."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-051"
+title = "Interrupted operation cycle"
+text = "At restore, the fault memory shall end the operation cycle a power loss interrupted, with the results that cycle had collected."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-048"
+title = "Writes only on change"
+text = "The fault memory shall write its stored state only when the stored content changes, never once per debounce step."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-049"
+title = "A clear is stored before it is answered"
+text = "A clear shall be acknowledged only once the cleared state is stored; a clear the storage refuses shall be answered generalProgrammingFailure (0x72) and change nothing."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-050"
+title = "Power loss during a write"
+text = "After a power loss at any point of a write, the fault memory shall restore either the state before that write or the state it was writing, never doubling an occurrence nor claiming a snapshot it does not hold."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+# ---- Parameters (variant coding) -------------------------------------------------------------
+
+[[req]]
 id = "REQ-DIAG-017"
 title = "Parameters (variant coding)"
-text = "A node shall carry declared parameters — values its FBs read as ordinary inputs and never write — each with a compiled default and a range, coded by a tester with 0x2E on the one DID that names it, behind that DID's session and security gates, and read back with 0x22. A write outside the range or of the wrong length shall be refused before anything is stored (0x31 / 0x13); an accepted write shall be durable before it is answered and before any FB sees it, a refused store answers 0x72 and changes nothing, and a write of the value already stored writes nothing. A parameter shall take effect at the FB's next dispatch, or at the next start when declared so. Each parameter's stored record shall be placed by an assigned identity (its DID, or a declared pin), never by a hash, so a retired parameter's record is never applied to another. At start each parameter is restored before any FB dispatches, and only when the stored record's structure — the field count, each field's type in order, and the parameter's declared version — matches this firmware's exactly, compared rather than hashed, fields identified by position: a renamed field keeps the coded value; a changed type at any position, a changed count or a bumped version is never applied; fields of the same type reordered without a version bump are taken by position; a stored value outside this firmware's range is not applied, and in both cases the compiled default runs and the parameter's status says so. After a power loss at any point of a write, a parameter shall restore either the value last acknowledged or the one being written."
-status = "draft"
+text = "A node shall carry declared parameters — values its FBs read as ordinary inputs and never write — each with a compiled default and a range, coded by a tester with 0x2E on the one DID that names it, behind that DID's session and security gates, kept across a reset and a power loss, and read back with 0x22."
+status = "draft"   # its bench evidence (param_zone_a.lua) is not run in CI
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-053"
+title = "A parameter write is validated first"
+text = "A parameter write outside its range, or of the wrong length, shall be refused (0x31 / 0x13) before anything is stored."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-054"
+title = "A parameter write is durable before it is answered"
+text = "An accepted parameter write shall be durable before it is answered and before any FB sees it; a write the storage refuses shall be answered generalProgrammingFailure (0x72) and change nothing."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-055"
+title = "An unchanged parameter writes nothing"
+text = "A write of the value a parameter already stores shall be answered positively and write nothing."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-056"
+title = "When a coded value takes effect"
+text = "A coded parameter shall take effect at the FB's next dispatch, or at the next start when declared so."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-057"
+title = "A parameter's stored identity"
+text = "Each parameter's stored record shall be placed by an assigned identity (its DID, or a declared pin), never by a hash, so a retired parameter's record is never applied to another."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-058"
+title = "A parameter is restored only under its exact structure"
+text = "At start a parameter shall be restored only when the stored record's structure — the field count, each field's type in order, and the parameter's declared version — matches this firmware's exactly, compared rather than hashed, fields identified by position: a renamed field keeps the coded value; a changed type at any position, a changed count or a bumped version is never applied; fields of the same type reordered without a version bump are taken by position. When it is not applied the compiled default runs and the parameter's status says so."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-059"
+title = "A restored parameter is revalidated"
+text = "A stored parameter value outside this firmware's range shall not be applied at restore: the compiled default runs and the parameter's status says so."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-060"
+title = "Power loss during a parameter write"
+text = "After a power loss at any point of a write, a parameter shall restore either the value last acknowledged or the one being written."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-061"
+title = "Parameters restored before any FB runs"
+text = "Every parameter shall be restored before any FB dispatches."
+status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"

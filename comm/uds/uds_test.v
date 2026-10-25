@@ -1,10 +1,14 @@
 module uds
 
-// @verifies REQ-BOOT-003 SYS-REQ-DIAG-001 REQ-DIAG-001 REQ-DIAG-003 REQ-DIAG-004 REQ-DIAG-005 REQ-DIAG-006 REQ-DIAG-007 REQ-DIAG-008
-// (service dispatch with positive/negative responses, unknown-service/DID NRCs, the
-//  suppressPosRspMsgIndicationBit silence; sessions + S3 (003), NRC order + session/security
-//  gating (004), multi-DID reads (005), functional-request silence (006), 0x11/0x28 (007),
-//  0x27 seed/key with attempt limit and lockout delay (008).)
+// @verifies REQ-BOOT-003 SYS-REQ-DIAG-001 REQ-DIAG-001 REQ-DIAG-003 REQ-DIAG-004 REQ-DIAG-005 REQ-DIAG-006 REQ-DIAG-007
+// @verifies REQ-DIAG-008 REQ-DIAG-018 REQ-DIAG-019 REQ-DIAG-020 REQ-DIAG-021 REQ-DIAG-022 REQ-DIAG-023 REQ-DIAG-024
+// @verifies REQ-DIAG-025 REQ-DIAG-026 REQ-DIAG-027 REQ-DIAG-030 REQ-DIAG-031 REQ-DIAG-032 REQ-DIAG-033 REQ-DIAG-034
+// @verifies REQ-DIAG-035 REQ-DIAG-036
+// (service dispatch with positive/negative responses and the suppress-positive-response bit; the
+//  service table; NRC order; sessions, their timing record, S3, relock and restore, the
+//  programming handoff; 0x3E; 0x11; 0x28's scope; constant, writable and gated DIDs, multi-DID
+//  reads; functional-request silence; 0x27 seed/key, wrong keys and lockout, the count across a
+//  reset, the unlocked level's zero seed, the injected interface.)
 
 fn call(mut s Server, req []u8) []u8 {
 	mut resp := [256]u8{}
@@ -76,8 +80,8 @@ fn test_tester_present_invalid_subfunction() {
 fn test_session_control() {
 	mut s := fixture()
 	r := call(mut s, [u8(0x10), 0x03])
-	assert r[0] == 0x50 && r[1] == 0x03
-	assert r.len == 6
+	// the session, then the timing record: P2server_max 50 ms, P2*server_max 0x01F4 x 10 ms = 5 s
+	assert r == [u8(0x50), 0x03, 0x00, 0x32, 0x01, 0xF4]
 	assert s.session == 0x03
 }
 
@@ -197,7 +201,7 @@ fn test_reset_and_comm_control_are_opt_in_per_owner() {
 	assert call(mut s, [u8(0x28), 0x01, 0xF1]) == [u8(0x7F), 0x28, 0x11]
 }
 
-// REQ-DIAG-003: a server starts in the default session and S3 returns it there.
+// REQ-DIAG-003 / 022: a server starts in the default session and S3 returns it there.
 fn test_init_enters_default_and_s3_returns_to_it() {
 	mut s := started()
 	assert s.session == session_default
@@ -215,7 +219,7 @@ fn test_init_enters_default_and_s3_returns_to_it() {
 	assert s.session == session_extended
 }
 
-// REQ-DIAG-003: every session transition relocks security; returning to default re-enables
+// REQ-DIAG-023 / 024: every session transition relocks security; returning to default re-enables
 // communication.
 fn test_session_transitions_relock_and_restore_communication() {
 	mut s := started()
@@ -232,7 +236,7 @@ fn test_session_transitions_relock_and_restore_communication() {
 	assert s.tx_enabled() && s.rx_enabled()
 }
 
-// REQ-DIAG-003: an application server without a bootloader refuses the programming session.
+// REQ-DIAG-025: an application server without a bootloader refuses the programming session.
 fn test_application_server_refuses_programming() {
 	mut s := started()
 	s.no_programming = true
@@ -371,7 +375,7 @@ fn test_nrc_evaluation_order() {
 	assert call(mut raw, [u8(0x28), 0x00, 0x01]) == [u8(0x7F), 0x28, 0x7F]
 }
 
-// REQ-DIAG-004: per-DID session and security gating.
+// REQ-DIAG-019: per-DID session and security gating.
 fn test_did_session_and_security_gating() {
 	mut s := started()
 	s.dids[1].write_sessions = in_extended
@@ -454,7 +458,7 @@ fn test_ecu_reset_is_recorded_not_performed() {
 	assert s.reset_req == 0x03
 }
 
-// REQ-DIAG-007: 0x28 per communication type, "this network" always, "all networks" only on a
+// REQ-DIAG-030: 0x28 per communication type, "this network" always, "all networks" only on a
 // single-network node.
 fn test_communication_control() {
 	mut s := started()
@@ -563,7 +567,7 @@ fn test_security_access_nrc_order() {
 	assert call(mut plain, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x11]
 }
 
-// REQ-DIAG-008: a wrong key spends its seed; the last allowed attempt answers
+// REQ-DIAG-032: a wrong key spends its seed; the last allowed attempt answers
 // exceededNumberOfAttempts, and no seed is issued until the lockout delay has passed.
 fn test_wrong_keys_spend_the_seed_and_lock_out() {
 	mut s := secured()
@@ -582,7 +586,7 @@ fn test_wrong_keys_spend_the_seed_and_lock_out() {
 	assert send_key(mut s, key_for(r[2..])) == [u8(0x67), 0x02]
 }
 
-// REQ-DIAG-008: a reset must not buy fresh attempts — with wrong keys counted it costs the lockout
+// REQ-DIAG-033: a reset must not buy fresh attempts — with wrong keys counted it costs the lockout
 // delay — while a clean reset (and a boot) unlocks at once.
 fn test_only_a_reset_after_wrong_keys_imposes_the_lockout() {
 	mut s := secured()
@@ -615,7 +619,7 @@ fn test_boot_imposes_no_lockout() {
 	assert call(mut s, [u8(0x27), 0x01])[0] == 0x67
 }
 
-// REQ-DIAG-008: failures are counted per level — unlocking a level whose key is known must not
+// REQ-DIAG-032: failures are counted per level — unlocking a level whose key is known must not
 // reset the count of wrong keys for another (codex #296: brute force through a known level).
 fn test_failed_keys_are_counted_per_level() {
 	mut s := secured()
@@ -632,7 +636,7 @@ fn test_failed_keys_are_counted_per_level() {
 	}
 }
 
-// REQ-DIAG-008 / REQ-DIAG-003: a session transition relocks and voids an outstanding seed.
+// REQ-DIAG-023: a session transition relocks and voids an outstanding seed.
 fn test_a_session_change_voids_the_seed() {
 	mut s := secured()
 	r := call(mut s, [u8(0x27), 0x01])
@@ -642,7 +646,7 @@ fn test_a_session_change_voids_the_seed() {
 	assert s.unlocked == 0
 }
 
-// REQ-DIAG-008: sendKey honours suppressPosRsp; a FUNCTIONAL 0x27 is ignored outright, so a
+// REQ-DIAG-018 / 035: sendKey honours suppressPosRsp; a FUNCTIONAL 0x27 is ignored outright, so a
 // broadcast can neither hand out seeds nor spend key attempts.
 fn test_security_access_suppression_and_functional() {
 	mut s := secured()
@@ -668,7 +672,7 @@ fn seed_zero(_ voidptr, out &u8, n int) bool {
 	return true
 }
 
-// REQ-DIAG-008: a seed source that fails, or that returns the all-zero "already unlocked" marker,
+// REQ-DIAG-034: a seed source that fails, or that returns the all-zero "already unlocked" marker,
 // gets conditionsNotCorrect — and no seed is left outstanding for a key to match.
 fn test_a_failed_or_zero_seed_is_refused() {
 	mut s := secured()
@@ -861,4 +865,64 @@ fn test_a_row_gates_its_service_by_security() {
 	assert call(mut s, [u8(0x2E), 0xF1, 0xAA, 0x01]) == [u8(0x6E), 0xF1, 0xAA]
 	call(mut s, [u8(0x10), 0x03]) // a session entry relocks
 	assert call(mut s, [u8(0x2E), 0xF1, 0xAA, 0x01]) == [u8(0x7F), 0x2E, 0x33]
+}
+
+// REQ-DIAG-023 / 024: S3 is a return to default like 0x10 01 — security relocked, an outstanding
+// seed voided, the communication 0x28 disabled enabled again
+fn test_s3_relocks_voids_the_seed_and_restores_communication() {
+	mut s := secured()
+	s.security_levels = 0x03 // levels 1 and 2
+	r := call(mut s, [u8(0x27), 0x01])
+	assert send_key(mut s, key_for(r[2..])) == [u8(0x67), 0x02]
+	assert call(mut s, [u8(0x27), 0x03])[0] == 0x67 // a level-2 seed outstanding
+	assert call(mut s, [u8(0x28), 0x03, 0xF1]) == [u8(0x68), 0x03]
+	assert s.unlocked == 1 && s.sa_level == 2 && !s.tx_enabled() && !s.rx_enabled()
+	s.tick(1_000_000 + default_s3_us + 1)
+	assert s.session == session_default
+	assert s.unlocked == 0 && s.sa_level == 0, 'S3 left security unlocked or a seed outstanding'
+	assert s.tx_enabled() && s.rx_enabled(), 'S3 left communication disabled'
+}
+
+// REQ-DIAG-019: a DID's READ behind a security level — 0x33 while locked, served once unlocked
+fn test_a_did_read_behind_a_level_needs_its_unlock() {
+	mut s := started()
+	call(mut s, [u8(0x10), 0x03])
+	s.dids[0].read_security = 1
+	assert call(mut s, [u8(0x22), 0xF1, 0x90]) == [u8(0x7F), 0x22, 0x33]
+	s.unlocked = 1
+	assert call(mut s, [u8(0x22), 0xF1, 0x90]) == [u8(0x62), 0xF1, 0x90, 0xAB, 0xCD]
+}
+
+// REQ-DIAG-035: a functional sendKey is ignored too — no key checked, no attempt spent, the
+// physical seed still outstanding and still good for its one key
+fn test_a_functional_send_key_checks_nothing() {
+	mut s := secured()
+	r := call(mut s, [u8(0x27), 0x01])
+	assert call_functional(mut s, [u8(0x27), 0x02, 0, 0, 0, 0]).len == 0
+	assert s.sa_level == 1 && s.sa_failed[0] == 0 && s.unlocked == 0
+	assert send_key(mut s, key_for(r[2..])) == [u8(0x67), 0x02]
+}
+
+// REQ-DIAG-008: a key answers the LATEST seed of ITS level — a key for level 1 while only a level-2
+// seed is outstanding is out of sequence, and a key computed from an earlier seed is wrong
+fn test_a_key_answers_the_latest_seed_of_its_level() {
+	mut s := secured()
+	s.security_levels = 0x03
+	assert call(mut s, [u8(0x27), 0x03])[0] == 0x67
+	assert send_key(mut s, [u8(0), 0, 0, 0]) == [u8(0x7F), 0x27, 0x24]
+	r1 := call(mut s, [u8(0x27), 0x01])
+	r2 := call(mut s, [u8(0x27), 0x01])
+	assert r1[2..] != r2[2..]
+	assert send_key(mut s, key_for(r1[2..])) == [u8(0x7F), 0x27, 0x35]
+	assert s.unlocked == 0
+}
+
+// REQ-DIAG-030: a specific subnet other than "this network" (0xF) is out of range
+fn test_communication_control_refuses_another_subnet() {
+	mut s := started()
+	s.single_network = true
+	call(mut s, [u8(0x10), 0x03])
+	assert call(mut s, [u8(0x28), 0x01, 0x11]) == [u8(0x7F), 0x28, 0x31]
+	assert call(mut s, [u8(0x28), 0x01, 0xE1]) == [u8(0x7F), 0x28, 0x31]
+	assert s.tx_enabled()
 }

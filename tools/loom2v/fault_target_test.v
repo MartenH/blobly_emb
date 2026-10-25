@@ -1,6 +1,6 @@
 module main
 
-// @verifies REQ-DIAG-012
+// @verifies REQ-DIAG-012 REQ-DIAG-047
 import os
 import tools.sysmodel
 
@@ -250,11 +250,12 @@ fn test_the_fault_memory_is_persisted_in_the_journal() {
 // A snapshot names this node's DIDs, at most max_freeze of them, each readable wherever 0x19 is —
 // never a side door around a DID's gate (docs/diagnostics.md §7) — and the entries are bounded.
 fn test_snapshot_declarations_are_checked() {
-	did := '[[did]]\nid    = 0xF190\nascii = "BLOBLY"\n[[did]]\nid    = 0xF191\nascii = "X"\nread  = { session = ["extended"] }\n'
+	did := '[[did]]\nid    = 0xF190\nascii = "BLOBLY"\n[[did]]\nid    = 0xF191\nascii = "X"\nread  = { session = ["extended"] }\n[[did]]\nid    = 0xF193\nascii = "Y"\nread  = { security = 1 }\n'
 	cases := {
 		'unknown':  ['freeze = [0xF1A9]', 'is not a [[did]] of this node']
 		'twice':    ['freeze = [0xF190, 0xF190]', 'names DID 0xf190 twice']
 		'gated':    ['freeze = [0xF191]', 'is not readable in every session 0x19 is served in']
+		'locked':   ['freeze = [0xF193]', 'which 0x19 does not demand']
 		'many':     ['freeze = [0xF190, 0xF191, 1, 2, 3]', 'a snapshot holds at most 4']
 		'priority': ['priority = 0', 'priority 0 must be 1']
 	}

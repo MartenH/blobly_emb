@@ -1,5 +1,5 @@
 -- @project diag_bench.blobnet
--- @verifies REQ-DIAG-013 REQ-DIAG-014 REQ-DIAG-016
+-- @verifies REQ-DIAG-016
 -- The PERSISTED fault memory on the target (docs/diagnostics.md §3.3, R6b): zone_a (H723, the
 -- edge bus) keeps its DTC, counters and snapshot in the NvM journal (boards/h723/bootmap.h, flash
 -- sectors 6 + 7). Same fault as faults_zone_a.lua: SteerLimiter fails VehicleSpeed above 250 km/h,

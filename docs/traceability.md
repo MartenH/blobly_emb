@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 228 | 136 | 33 | 59 | 0 |
+| 274 | 187 | 26 | 61 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -58,22 +58,68 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-010 | QM | test | verified | encode_test.v (pass), gen_test.v (pass), raw_range_test.v (pass), rx_target_test.v (pass), tx_saturation_test.v (pass) |
 | REQ-COM-011 | QM | test | verified | init_value_test.v (pass), pdu_init_test.v (pass) |
 | REQ-DIAG-001 | QM | test | verified | diag_test.v (pass), uds-on-target-domain (approved), uds-on-target-sysnode (approved), uds-on-target-zone-a (approved), uds_test.v (pass) |
+| REQ-DIAG-018 | QM | test | verified | uds_test.v (pass) |
+| REQ-DIAG-004 | QM | test | verified | uds_test.v (pass) |
+| REQ-DIAG-020 | QM | test | verified | uds_test.v (pass) |
+| REQ-DIAG-026 | QM | test | verified | uds_test.v (pass) |
+| REQ-DIAG-006 | QM | test | verified | diag_test.v (pass), uds_test.v (pass) |
+| REQ-DIAG-037 | QM | test | verified | diag_test.v (pass), step_test.v (pass) |
+| REQ-DIAG-062 | QM | test | uncovered | — |
+| REQ-DIAG-003 | QM | test | verified | uds_test.v (pass) |
+| REQ-DIAG-021 | QM | test | verified | uds_test.v (pass) |
+| REQ-DIAG-022 | QM | test | verified | diag_test.v (pass), uds_test.v (pass) |
+| REQ-DIAG-023 | QM | test | verified | uds_test.v (pass) |
+| REQ-DIAG-024 | QM | test | verified | uds_test.v (pass) |
+| REQ-DIAG-025 | QM | test | verified | uds_test.v (pass) |
+| REQ-DIAG-027 | QM | test | verified | uds_test.v (pass) |
+| REQ-DIAG-063 | QM | test | uncovered | — |
+| REQ-DIAG-007 | QM | test | verified | diag_test.v (pass), uds_test.v (pass) |
+| REQ-DIAG-028 | QM | test | verified | diag_test.v (pass), step_test.v (pass) |
+| REQ-DIAG-029 | QM | test | covered | diag.lua (pending), rx_target_test.v (pass) |
+| REQ-DIAG-030 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-002 | QM | test | covered | diag.lua (pending), diag_test.v (pass), uds-on-target-live-did (approved), uds-on-target-zone-a (approved) |
-| REQ-DIAG-003 | QM | test | covered | diag.lua (pending), diag_test.v (pass), uds_test.v (pass) |
-| REQ-DIAG-004 | QM | test | covered | diag.lua (pending), uds_test.v (pass) |
-| REQ-DIAG-005 | QM | test | covered | diag.lua (pending), uds_test.v (pass) |
-| REQ-DIAG-006 | QM | test | covered | diag.lua (pending), diag_test.v (pass), uds_test.v (pass) |
-| REQ-DIAG-007 | QM | test | covered | diag.lua (pending), diag_test.v (pass), uds_test.v (pass) |
-| REQ-DIAG-008 | QM | test | covered | diag.lua (pending), uds-on-target-reset (approved), uds_test.v (pass) |
+| REQ-DIAG-031 | QM | test | verified | uds_test.v (pass) |
+| REQ-DIAG-005 | QM | test | verified | uds_test.v (pass) |
+| REQ-DIAG-019 | QM | test | verified | uds_test.v (pass) |
+| REQ-DIAG-008 | QM | test | verified | uds-on-target-reset (approved), uds_test.v (pass) |
+| REQ-DIAG-032 | QM | test | verified | uds_test.v (pass) |
+| REQ-DIAG-033 | QM | test | verified | uds-on-target-reset (approved), uds_test.v (pass) |
+| REQ-DIAG-034 | QM | test | verified | uds_test.v (pass) |
+| REQ-DIAG-035 | QM | test | verified | uds_test.v (pass) |
+| REQ-DIAG-036 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-009 | QM | test | verified | fault_test.v (pass) |
+| REQ-DIAG-038 | QM | test | verified | fault_test.v (pass) |
+| REQ-DIAG-039 | QM | test | verified | fault_test.v (pass) |
+| REQ-DIAG-040 | QM | test | verified | fault_test.v (pass) |
+| REQ-DIAG-041 | QM | test | verified | fault_test.v (pass) |
 | REQ-DIAG-010 | QM | test | verified | fault_test.v (pass) |
+| REQ-DIAG-042 | QM | test | verified | fault_test.v (pass) |
+| REQ-DIAG-043 | QM | test | verified | fault_test.v (pass) |
+| REQ-DIAG-044 | QM | test | verified | fault_test.v (pass) |
+| REQ-DIAG-045 | QM | test | verified | fault_test.v (pass) |
 | REQ-DIAG-011 | QM | test | covered | faults.lua (pending), net_faults.lua (pending), pass_model_test.v (pass), rx_faults_zone_a.lua (pending), rx_target_test.v (pass) |
+| REQ-DIAG-046 | QM | test | covered | rx_faults_zone_a.lua (pending) |
 | REQ-DIAG-012 | QM | test | verified | fault_group_test.v (pass), fault_target_test.v (pass) |
-| REQ-DIAG-013 | QM | test | covered | faults.lua (pending), faults_zone_a_persist.lua (pending), records_test.v (pass) |
-| REQ-DIAG-014 | QM | test | covered | faults.lua (pending), faults_zone_a_persist.lua (pending), records_test.v (pass) |
-| REQ-DIAG-015 | QM | test | covered | faults.lua (pending), records_test.v (pass) |
+| REQ-DIAG-013 | QM | test | verified | records_test.v (pass) |
+| REQ-DIAG-047 | QM | test | verified | fault_target_test.v (pass) |
+| REQ-DIAG-014 | QM | test | verified | records_test.v (pass) |
+| REQ-DIAG-015 | QM | test | verified | records_test.v (pass) |
 | REQ-DIAG-016 | QM | test | covered | faults_zone_a_persist.lua (pending), persist_test.v (pass) |
+| REQ-DIAG-052 | QM | test | verified | persist_test.v (pass) |
+| REQ-DIAG-051 | QM | test | verified | persist_test.v (pass) |
+| REQ-DIAG-048 | QM | test | verified | persist_test.v (pass) |
+| REQ-DIAG-049 | QM | test | verified | persist_test.v (pass) |
+| REQ-DIAG-050 | QM | test | verified | persist_test.v (pass) |
 | REQ-DIAG-017 | QM | test | covered | ecucheck_test.v (pass), param_target_test.v (pass), param_test.v (pass), param_zone_a.lua (pending) |
+| REQ-DIAG-053 | QM | test | verified | param_test.v (pass) |
+| REQ-DIAG-054 | QM | test | verified | param_test.v (pass) |
+| REQ-DIAG-055 | QM | test | verified | param_test.v (pass) |
+| REQ-DIAG-056 | QM | test | verified | param_test.v (pass) |
+| REQ-DIAG-057 | QM | test | verified | param_target_test.v (pass), param_test.v (pass) |
+| REQ-DIAG-058 | QM | test | verified | param_test.v (pass) |
+| REQ-DIAG-059 | QM | test | verified | param_test.v (pass) |
+| REQ-DIAG-060 | QM | test | verified | param_test.v (pass) |
+| REQ-DIAG-061 | QM | test | verified | param_target_test.v (pass) |
 | REQ-E2E-001 | B | test | verified | e2e_test.v (pass) |
 | REQ-E2E-002 | B | test | verified | e2e_test.v (pass), rx_target_test.v (pass), rxmon_test.v (pass) |
 | REQ-E2E-003 | B | test | verified | e2e_test.v (pass) |
@@ -291,22 +337,68 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-010 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-COM-011 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-001 | ✓ | | | | | | | | ✓ | | | | | | | | ✓ | | ✓ | | | |
+| REQ-DIAG-018 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-004 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-020 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-026 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-006 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-037 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-062 | | | | | | | | | | | | | | | | | | | | | | |
+| REQ-DIAG-003 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-021 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-022 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-023 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-024 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-025 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-027 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-063 | | | | | | | | | | | | | | | | | | | | | | |
+| REQ-DIAG-007 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-028 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-029 | | | | | | | | | | | | | | | | | | · | ✓ | | | |
+| REQ-DIAG-030 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-002 | ✓ | | | | | | | | | | | | | | | | ✓ | · | ✓ | | | |
-| REQ-DIAG-003 | | | | | | | | | | | | | | | | | | · | ✓ | | | |
-| REQ-DIAG-004 | | | | | | | | | | | | | | | | | | · | ✓ | | | |
-| REQ-DIAG-005 | | | | | | | | | | | | | | | | | | · | ✓ | | | |
-| REQ-DIAG-006 | | | | | | | | | | | | | | | | | | · | ✓ | | | |
-| REQ-DIAG-007 | | | | | | | | | | | | | | | | | | · | ✓ | | | |
-| REQ-DIAG-008 | | | | | | | | | | | | | | | | | ✓ | · | ✓ | | | |
+| REQ-DIAG-031 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-005 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-019 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-008 | | | | | | | | | | | | | | | | | ✓ | | ✓ | | | |
+| REQ-DIAG-032 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-033 | | | | | | | | | | | | | | | | | ✓ | | ✓ | | | |
+| REQ-DIAG-034 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-035 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-036 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-009 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-038 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-039 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-040 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-041 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-010 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-042 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-043 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-044 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-045 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-011 | | | | | | | | | | | | | | | | | | · | ✓ | | | |
+| REQ-DIAG-046 | | | | | | | | | | | | | | | | | | · | | | | |
 | REQ-DIAG-012 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-DIAG-013 | | | | | | | | | | | | | | | | | | · | ✓ | | | |
-| REQ-DIAG-014 | | | | | | | | | | | | | | | | | | · | ✓ | | | |
-| REQ-DIAG-015 | | | | | | | | | | | | | | | | | | · | ✓ | | | |
+| REQ-DIAG-013 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-047 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-014 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-015 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-016 | | | | | | | | | | | | | | | | | | · | ✓ | | | |
+| REQ-DIAG-052 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-051 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-048 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-049 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-050 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-017 | | | | | | | | | | | | | | | | | | · | ✓ | | | |
+| REQ-DIAG-053 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-054 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-055 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-056 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-057 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-058 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-059 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-060 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-061 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-E2E-001 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-E2E-002 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-E2E-003 | | | | | | | | | | | | | | | | | | | ✓ | | | |

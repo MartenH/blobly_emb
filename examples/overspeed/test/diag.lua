@@ -1,7 +1,11 @@
 -- UDS (ISO 14229) over ISO-TP on vcan0: drive the diag connection (Request 0x101
 -- -> Response 0x102) with blobly_net's UDS client. Exercises the service dispatch
 -- AND multi-frame segmentation (the 19-byte and 20-byte DIDs span several frames).
--- @verifies REQ-DIAG-002 REQ-DIAG-003 REQ-DIAG-004 REQ-DIAG-005 REQ-DIAG-006 REQ-DIAG-007 REQ-DIAG-008
+-- @verifies REQ-DIAG-002 REQ-DIAG-029
+-- (Tagged only for what needs the generated bridge on a bus: the live DID and 0x28 silencing
+--  application frames. The sessions, S3, NRCs, multi-DID reads, functional requests, 0x11 and 0x27
+--  it also drives are verified by comm/uds and comm/diag's unit tests — tagging this pending suite
+--  with them would demote them; it is their on-bus evidence.)
 -- (the 0xF1A0 test injects VehicleSpeed=100 on the bus then reads the live DID back
 --  through UDS and asserts ~100 — the DID returns the current signal value from the
 --  same source the application sees. NOT REQ-NVM-008: 0xF1AA is a plain RAM cell, not
