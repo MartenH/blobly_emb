@@ -842,6 +842,18 @@ pub fn reference_key_ok(ctx voidptr, level u8, seed &u8, key &u8, n int) bool {
 	return true
 }
 
+// did_active_session is ISO 14229-1's ActiveDiagnosticSessionDataIdentifier: served by the server
+// itself (one byte, the active session) in every session and behind no level, so it is never a
+// [[did]] of the table — a write to it is out of range like any read-only DID's (REQ-DIAG-063).
+pub const did_active_session = u16(0xF186)
+
+// served_did_len: the record length of a DID the server serves itself, 0 for any other — the one
+// place read_did's sizing and writing passes take it from (an uninitialised server, session 0, has
+// no session to report).
+fn (s &Server) served_did_len(id u16) int {
+	return if id == did_active_session && s.session != 0 { 1 } else { 0 }
+}
+
 // find_did: the table index of `id`, or -1.
 fn (s &Server) find_did(id u16) int {
 	for i in 0 .. s.ndid {
@@ -852,11 +864,12 @@ fn (s &Server) find_did(id u16) int {
 	return -1
 }
 
-// read_did serves one or MORE DIDs per request (ISO 14229-1 0x22): each supported DID's record
-// is appended in request order. A DID that does not exist, or is not readable in the active
-// session, is simply not answered; only a request in which NONE is answered gets 0x31. A DID
-// that exists but needs a security level not unlocked denies the whole request with 0x33. The
-// response must fit the owner's buffer (0x14 otherwise) — checked before anything is written.
+// read_did serves one or MORE DIDs per request (ISO 14229-1 0x22): each supported DID's record —
+// the table's, or one the server serves itself (served_did_len) — is appended in request order. A
+// DID that does not exist, or is not readable in the active session, is simply not answered; only
+// a request in which NONE is answered gets 0x31. A DID that exists but needs a security level not
+// unlocked denies the whole request with 0x33. The response must fit the owner's buffer (0x14
+// otherwise) — checked before anything is written.
 fn (mut s Server) read_did(req &u8, req_len int, resp &u8) int {
 	if req_len < 3 || (req_len - 1) % 2 != 0 {
 		return negative(resp, 0x22, nrc_incorrect_length)
@@ -866,6 +879,12 @@ fn (mut s Server) read_did(req &u8, req_len int, resp &u8) int {
 	mut answered := 0
 	for k in 0 .. ndid {
 		id := unsafe { (u16(req[1 + 2 * k]) << 8) | u16(req[2 + 2 * k]) }
+		served := s.served_did_len(id)
+		if served > 0 {
+			total += 2 + served
+			answered++
+			continue
+		}
 		i := s.find_did(id)
 		if i < 0 || !in_mask(s.dids[i].read_sessions, s.session) {
 			continue
@@ -888,6 +907,16 @@ fn (mut s Server) read_did(req &u8, req_len int, resp &u8) int {
 	mut o := 1
 	for k in 0 .. ndid {
 		id := unsafe { (u16(req[1 + 2 * k]) << 8) | u16(req[2 + 2 * k]) }
+		served := s.served_did_len(id)
+		if served > 0 {
+			unsafe {
+				resp[o] = u8(id >> 8)
+				resp[o + 1] = u8(id)
+				resp[o + 2] = s.session // did_active_session, its one byte
+			}
+			o += 2 + served
+			continue
+		}
 		i := s.find_did(id)
 		if i < 0 || !in_mask(s.dids[i].read_sessions, s.session) {
 			continue

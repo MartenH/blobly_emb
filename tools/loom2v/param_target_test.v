@@ -1,6 +1,6 @@
 module main
 
-// @verifies REQ-DIAG-017 REQ-DIAG-057 REQ-DIAG-061
+// @verifies REQ-DIAG-017 REQ-DIAG-057 REQ-DIAG-061 REQ-DIAG-063
 import os
 import tools.sysmodel
 
@@ -270,6 +270,8 @@ fn test_what_generation_refuses() {
 			'version = 300 is out of range']
 		'duplicate did':    [pt_conn + pt_param + '\n[[did]]\nid = 0x0111\nbytes = "00"\nwrite = { session = ["default"] }\n',
 			'[[did]] 0x111 is declared twice']
+		'active session':   [pt_conn + pt_param + '\n[[did]]\nid = 0xF186\nbytes = "01"\n',
+			'[[did]] 0xf186 is the active session']
 		'no isotp':         [pt_conn.all_after('functional_id = 0x7DF') + pt_param.all_before('[[did]]'),
 			'declare the diagnostic server\'s [isotp] connection']
 	}

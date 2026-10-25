@@ -1090,6 +1090,9 @@ fn parse_dids(doc toml.Doc) []DidCfg {
 		if id == 0 {
 			continue
 		}
+		if id == uds.did_active_session {
+			panic('loom2v: [[did]] 0x${id.hex()} is the active session (ActiveDiagnosticSessionDataIdentifier), which the server serves itself in every session — drop the row')
+		}
 		mut bytes := []u8{}
 		if 'ascii' in m {
 			for ch in (m['ascii'] or { toml.Any('') }).string() {

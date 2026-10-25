@@ -3,7 +3,7 @@ module uds
 // @verifies REQ-BOOT-003 SYS-REQ-DIAG-001 REQ-DIAG-001 REQ-DIAG-003 REQ-DIAG-004 REQ-DIAG-005 REQ-DIAG-006 REQ-DIAG-007
 // @verifies REQ-DIAG-008 REQ-DIAG-018 REQ-DIAG-019 REQ-DIAG-020 REQ-DIAG-021 REQ-DIAG-022 REQ-DIAG-023 REQ-DIAG-024
 // @verifies REQ-DIAG-025 REQ-DIAG-026 REQ-DIAG-027 REQ-DIAG-030 REQ-DIAG-031 REQ-DIAG-032 REQ-DIAG-033 REQ-DIAG-034
-// @verifies REQ-DIAG-035 REQ-DIAG-036
+// @verifies REQ-DIAG-035 REQ-DIAG-036 REQ-DIAG-063
 // (service dispatch with positive/negative responses and the suppress-positive-response bit; the
 //  service table; NRC order; sessions, their timing record, S3, relock and restore, the
 //  programming handoff; 0x3E; 0x11; 0x28's scope; constant, writable and gated DIDs, multi-DID
@@ -926,3 +926,21 @@ fn test_communication_control_refuses_another_subnet() {
 	assert call(mut s, [u8(0x28), 0x01, 0xE1]) == [u8(0x7F), 0x28, 0x31]
 	assert s.tx_enabled()
 }
+
+// REQ-DIAG-063: 0xF186 is the active session, in every session, with no table row and no level;
+// it joins a multi-DID read in request order, and a write to it is out of range
+fn test_the_active_session_did() {
+	mut s := started()
+	assert call(mut s, [u8(0x22), 0xF1, 0x86]) == [u8(0x62), 0xF1, 0x86, 0x01]
+	call(mut s, [u8(0x10), 0x03])
+	assert call(mut s, [u8(0x22), 0xF1, 0x86]) == [u8(0x62), 0xF1, 0x86, 0x03]
+	assert call(mut s, [u8(0x22), 0xF1, 0x90, 0xF1, 0x86]) == [u8(0x62), 0xF1, 0x90, 0xAB, 0xCD,
+		0xF1, 0x86, 0x03]
+	assert call(mut s, [u8(0x2E), 0xF1, 0x86, 0x01]) == [u8(0x7F), 0x2E, 0x31]
+	assert call_functional(mut s, [u8(0x22), 0xF1, 0x86]) == [u8(0x62), 0xF1, 0x86, 0x03]
+	// an uninitialised server (session 0) has no session to report: unknown, like any other DID
+	mut raw := fixture()
+	raw.session = 0
+	assert call(mut raw, [u8(0x22), 0xF1, 0x86]) == [u8(0x7F), 0x22, 0x31]
+}
+

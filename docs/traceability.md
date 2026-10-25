@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 274 | 187 | 26 | 61 | 0 |
+| 275 | 189 | 26 | 60 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -64,7 +64,8 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-026 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-006 | QM | test | verified | diag_test.v (pass), uds_test.v (pass) |
 | REQ-DIAG-037 | QM | test | verified | diag_test.v (pass), step_test.v (pass) |
-| REQ-DIAG-062 | QM | test | uncovered | — |
+| REQ-DIAG-062 | QM | test | verified | journal_test.v (pass), param_test.v (pass), persist_test.v (pass) |
+| REQ-DIAG-064 | QM | test | uncovered | — |
 | REQ-DIAG-003 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-021 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-022 | QM | test | verified | diag_test.v (pass), uds_test.v (pass) |
@@ -72,7 +73,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-024 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-025 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-027 | QM | test | verified | uds_test.v (pass) |
-| REQ-DIAG-063 | QM | test | uncovered | — |
+| REQ-DIAG-063 | QM | test | verified | param_target_test.v (pass), uds_test.v (pass) |
 | REQ-DIAG-007 | QM | test | verified | diag_test.v (pass), uds_test.v (pass) |
 | REQ-DIAG-028 | QM | test | verified | diag_test.v (pass), step_test.v (pass) |
 | REQ-DIAG-029 | QM | test | covered | diag.lua (pending), rx_target_test.v (pass) |
@@ -343,7 +344,8 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-026 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-006 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-037 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-DIAG-062 | | | | | | | | | | | | | | | | | | | | | | |
+| REQ-DIAG-062 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-064 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-DIAG-003 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-021 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-022 | | | | | | | | | | | | | | | | | | | ✓ | | | |
@@ -351,7 +353,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-024 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-025 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-027 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-DIAG-063 | | | | | | | | | | | | | | | | | | | | | | |
+| REQ-DIAG-063 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-007 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-028 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-029 | | | | | | | | | | | | | | | | | | · | ✓ | | | |

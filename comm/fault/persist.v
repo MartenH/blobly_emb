@@ -260,7 +260,8 @@ pub fn (mut m Memory) persist(now u64, flush bool) bool {
 	}
 	m.retry_at = if refused { now + m.store.retry_us } else { u64(0) }
 	// a refusal since the last persist — this one's, or a 0x14's — stays visible to the owner,
-	// which may make room (a node without NM erases then)
+	// which makes room at its next quiet point (boot without NM, a sleep edge with it), never in the
+	// pass a request is served in (REQ-DIAG-062)
 	m.refused = refused || m.clear_refused
 	m.clear_refused = false
 	return !refused && !deferred

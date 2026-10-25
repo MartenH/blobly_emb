@@ -1,6 +1,6 @@
 module nvm
 
-// @verifies REQ-NVM-002, REQ-NVM-003
+// @verifies REQ-NVM-002, REQ-NVM-003, REQ-DIAG-062
 // The journal engine against RAM-backed FlashOps. The TestFlash enforces one
 // invariant EVERYWHERE: no flash word is ever programmed twice (double_prog
 // latches if any programmed byte wasn't erased) — the ECC-legality rule the
@@ -28,6 +28,8 @@ mut:
 	erase_cut bool
 	// invariant latch: some program touched a non-erased byte (ECC-illegal)
 	double_prog bool
+	// every erase call, so a test can show a path never erases
+	erases u32
 	// per-word touched metadata for the DFLASH-style blank hook
 	touched [64]bool
 	// simulate H7 weak charge: touched words whose cells hold no data READ as
@@ -47,6 +49,7 @@ fn tf_erase(ctx voidptr, addr u32, size u32) bool {
 	mut f := unsafe { &TestFlash(ctx) }
 	// erase_cut: the erase dies after wiping only the SECOND half — the head
 	// (where records live) survives, the classic partially-erased sector.
+	f.erases++
 	start := if f.erase_cut { size / 2 } else { u32(0) }
 	cut := f.erase_cut
 	f.erase_cut = false
@@ -660,6 +663,7 @@ fn test_no_erase_in_append_path() {
 	mut f := &TestFlash{}
 	mut j := new_journal(mut f)
 	putv(mut j, 1, 1)
+	erases := f.erases
 	for j.free_records() > 0 {
 		putv(mut j, 2, j.free_records())
 	}
@@ -670,6 +674,7 @@ fn test_no_erase_in_append_path() {
 	// active full AND partner dirty: the put must refuse, not erase inline
 	data := [u8(9), 0, 0, 0]
 	assert !j.put(2, &data[0], 4)
+	assert f.erases == erases, 'a put erased' // REQ-DIAG-062: no write a request causes waits on one
 	assert j.erase_pending() // the quiet point frees the partner
 	putv(mut j, 2, 888) // retry succeeds (compact without erase)
 	mut j2 := remount(mut f)
