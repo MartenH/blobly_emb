@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 276 | 190 | 26 | 60 | 0 |
+| 277 | 191 | 26 | 60 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -287,6 +287,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TP-017 | QM | test | verified | isotp_test.v (pass) |
 | REQ-TP-018 | QM | test | verified | isotp_test.v (pass), step_test.v (pass) |
 | REQ-TP-019 | QM | test | verified | diag_test.v (pass) |
+| REQ-TP-020 | QM | test | verified | diag_target_test.v (pass) |
 | REQ-WDG-001 | B | test | verified | wdg_test.v (pass) |
 | REQ-WDG-002 | B | test | verified | wdg_test.v (pass) |
 | REQ-WDG-003 | B | test | verified | wdg_test.v (pass) |
@@ -568,6 +569,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TP-017 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-TP-018 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-TP-019 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TP-020 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-WDG-001 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-WDG-002 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-WDG-003 | | | | | | | | | | | | | | | | | | | ✓ | | | |

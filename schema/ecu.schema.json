@@ -346,8 +346,8 @@
         "bus": {"type": "string", "description": "the CAN bus ([bus.*] name) the connection runs on"},
         "rx_id": {"type": "integer", "minimum": 0, "maximum": 2047, "description": "the CAN id physical requests arrive on (11-bit)"},
         "tx_id": {"type": "integer", "minimum": 0, "maximum": 2047, "description": "the CAN id responses are sent on (11-bit)"},
-        "bs": {"type": "integer", "default": 0, "description": "the block size granted in our Flow Control (0 = the whole message at once) Default: 0."},
-        "stmin_ms": {"type": "integer", "default": 0, "description": "the STmin (ms) we ask a sender to keep between consecutive frames Default: 0."},
+        "bs": {"type": "integer", "minimum": 0, "maximum": 255, "default": 0, "description": "the block size granted in our Flow Control, one byte on the wire (0 = the whole message at once) Default: 0."},
+        "stmin_ms": {"type": "integer", "minimum": 0, "maximum": 127, "default": 0, "description": "the STmin (ms) we ask a sender to keep between consecutive frames; ISO 15765-2 encodes milliseconds only up to 127 Default: 0."},
         "functional_id": {"type": "integer", "minimum": 0, "maximum": 2047, "description": "the functional (broadcast) request id, e.g. 0x7DF, single frames only; absent = none"}
       },
       "required": ["bus", "rx_id", "tx_id"],
