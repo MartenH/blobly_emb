@@ -3,7 +3,7 @@ REPO := .
 # every repo tool a target runs is built once into bin/ (tools/tools.mk), never `v run` (#333)
 include tools/tools.mk
 
-.PHONY: example run-example list check deps deps-cmsis deps-lvgl trace trace-check lint vcan clean demo demo-threadx bench v-pin unit
+.PHONY: example run-example list check deps deps-cmsis deps-lvgl trace trace-check coverage coverage-check lint vcan clean demo demo-threadx bench v-pin unit
 
 # ---- Examples ---------------------------------------------------------------
 # Each example is a self-contained app under examples/<NAME>/ with its own
@@ -119,6 +119,20 @@ trace: $(TOOL_trace)
 # CI gate: nonzero exit if any requirement's linked verification FAILED.
 trace-check: $(TOOL_trace)
 	$(TOOL_trace) --check
+
+# ---- Unit coverage ----------------------------------------------------------
+# Statement coverage of the image code (tools/cover's scope) from the host unit tests, per file
+# by its OWN module's tests and by any test, into docs/coverage.md. The file is a ratchet: CI
+# fails when it is stale, so a file whose coverage drops shows that drop in the PR's diff, and
+# coverage-check fails outright on a drop not yet recorded.
+COVER_DIRS := comm driver ecu loom nvm wdg bcrypto boot
+COVER_RUN = d=$$(mktemp -d) && trap 'rm -rf "$$d"' EXIT && \
+	VJOBS=$${VJOBS:-$$(nproc)} $(V) -cc $(HOST_CC) -nocache -enable-globals -no-skip-unused -coverage "$$d" test $(COVER_DIRS) && \
+	$(TOOL_cover) "$$d"
+coverage: $(TOOL_cover)
+	@$(COVER_RUN)
+coverage-check: $(TOOL_cover)
+	@$(COVER_RUN) --check
 
 # System-level validation (docs/multi-node.md): the cross-node checks over a
 # system.toml — single-writer per bus, identity uniqueness, NM cluster

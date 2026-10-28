@@ -141,6 +141,20 @@ jobs:
             exit 1
           fi
 
+      # Unit coverage as a ratchet (tools/cover): the host tests of the image code, instrumented
+      # (-coverage, -no-skip-unused so a function no test calls still counts), per file by its own
+      # module's tests. coverage-check fails on a drop the committed docs/coverage.md does not
+      # record; the porcelain check fails when the file is stale either way, so a drop or a gain
+      # lands only as a diff the review sees. Measured identical across runs and job counts.
+      - name: Unit coverage ratchet (make coverage-check)
+        run: |
+          make coverage-check
+          if [ -n "$(git status --porcelain -- docs/coverage.md)" ]; then
+            echo "::error::docs/coverage.md is out of date — run 'make coverage' and commit it"
+            git --no-pager diff -- docs/coverage.md
+            exit 1
+          fi
+
       # System-level validation: syscheck is to a system.toml what ecucheck is to an ecu.toml
       # (single-writer per bus, identity uniqueness, NM coherence, routes). Every committed
       # system config gets the same gate its per-node configs already have (codex #189).
