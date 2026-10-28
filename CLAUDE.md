@@ -184,7 +184,9 @@ value, and on the file being stale, so a drop lands only as a diff the review se
 `-no-skip-unused` is required — without it V drops a function no test calls from the build, and
 the report cannot tell "not tested" from "not built". Points are joined by LINE across builds,
 since each test build instruments a file with its own point list. Statement level only: V
-records no branches. About 40 s with four jobs.
+records no branches. About 40 s with four jobs. CI's unit-test step IS this run (the image code's
+tests run once, instrumented), plus a plain `v test tools` — `-no-skip-unused` miscompiles the
+`tools/loom2v` tests on the pinned V (an unqualified `seed_len` in `comm/diag`'s generated C).
 
 ### CI — what is and is NOT gated
 
@@ -192,11 +194,10 @@ records no branches. About 40 s with four jobs.
 feature branch runs only `guard`, so a green tick there is the identity check, NOT the test
 gate. Open the PR to get one.
 
-It runs more than the four you would run by hand: host unit tests
-(`v -cc cc -nocache -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot`), `make lint`,
+It runs more than the four you would run by hand: host unit tests (the image code's through
+`make coverage-check`, then `v -cc cc -nocache -enable-globals test tools`), `make lint`,
 `make check`, `make trace-check` (not `make trace`; it also holds `requirements/gaps.toml` — the
-uncovered and above-QM-unverified requirements — to exactly what it computes), `make coverage-check`
-(below), `syscheck`, `v -cc cc -nocache -enable-globals test
+uncovered and above-QM-unverified requirements — to exactly what it computes), `syscheck`, `v -cc cc -nocache -enable-globals test
 examples`, per-example host builds with generation, and a repo-wide **"Generated outputs are
 fresh"** gate. The last one is the usual surprise: a stale committed `gen/` output passes every
 local command and fails CI. Re-run generation before opening the PR.
