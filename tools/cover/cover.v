@@ -31,9 +31,12 @@ fn (c Cov) any_pct() f64 {
 	return if c.points == 0 { 100.0 } else { f64(c.any) * 100.0 / f64(c.points) }
 }
 
-// test_of is the _test.v a build was made for: the last word of its build options.
+// test_of is the _test.v a build was made for: the last argument of its build options, an
+// absolute path (taken from its last ' /', so a path with a space in it stays whole).
 fn test_of(build_options string) string {
-	return build_options.trim_space().all_after_last(' ')
+	o := build_options.trim_space()
+	i := o.last_index(' /') or { return o }
+	return o[i + 1..]
 }
 
 // hits reads every vcounters_*.csv in dir into fhash -> point indices with a nonzero count.
@@ -99,7 +102,7 @@ fn attribute(ms []Meta, hit map[string]map[int]bool, rel fn (string) string) map
 		for line in m.points {
 			all[r][line] = true
 		}
-		is_own := os.dir(m.file) == os.dir(test_of(m.build_options))
+		is_own := os.dir(os.real_path(m.file)) == os.dir(os.real_path(test_of(m.build_options)))
 		for idx, _ in hit[m.fhash] or { map[int]bool{} } {
 			if idx < 0 || idx >= m.points.len {
 				continue

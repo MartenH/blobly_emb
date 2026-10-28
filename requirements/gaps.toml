@@ -68,7 +68,7 @@ uncovered = [
 	"SYS-REQ-NET-002",
 ]
 
-# Above QM (an ASIL is set) and not verified — uncovered, pending or failed.
+# Above QM (ASIL A-D) and not verified — uncovered, pending or failed.
 asil_unverified = [
 	"REQ-INV-003",
 	"SYS-REQ-SAFE-003",

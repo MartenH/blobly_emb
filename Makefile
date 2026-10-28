@@ -125,10 +125,11 @@ trace-check: $(TOOL_trace)
 # by its OWN module's tests and by any test, into docs/coverage.md. The file is a ratchet: CI
 # fails when it is stale, so a file whose coverage drops shows that drop in the PR's diff, and
 # coverage-check fails outright on a drop not yet recorded.
-COVER_DIRS := comm driver ecu loom nvm wdg bcrypto boot
+# the image code: the unit directories but the build-time tools/
+COVER_DIRS = $(filter-out tools,$(UNIT_DIRS))
 COVER_RUN = d=$$(mktemp -d) && trap 'rm -rf "$$d"' EXIT && \
 	VJOBS=$${VJOBS:-$$(nproc)} $(V) -cc $(HOST_CC) -nocache -enable-globals -no-skip-unused -coverage "$$d" test $(COVER_DIRS) && \
-	$(TOOL_cover) "$$d"
+	$(TOOL_cover) "$$d" $(COVER_DIRS)
 coverage: $(TOOL_cover)
 	@$(COVER_RUN)
 coverage-check: $(TOOL_cover)
