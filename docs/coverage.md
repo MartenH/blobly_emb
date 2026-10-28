@@ -9,7 +9,7 @@ drops below what is recorded here, and CI fails when this file is stale.
 
 | files measured | not built by a host test | points | own | any |
 |---|---|---|---|---|
-| 44 | 9 | 3364 | 89.9% | 93.1% |
+| 44 | 6 | 3364 | 89.9% | 93.1% |
 
 | file | points | own covered | own | any |
 |---|---|---|---|---|
@@ -62,7 +62,4 @@ drops below what is recorded here, and CI fails when this file is stale.
 | ecu/modes.v | 13 | 13 | 100.0% | 100.0% |
 | loom/loom.v | 48 | 40 | 83.3% | 83.3% |
 | nvm/journal.v | 365 | 321 | 87.9% | 89.3% |
-| osal/osal.v | — | — | not built | not built |
-| osal/vrt/vrt.v | — | — | not built | not built |
-| osal/vrt/vrt_d_freestanding.v | — | — | not built | not built |
 | wdg/sentinel.v | 16 | 16 | 100.0% | 100.0% |
