@@ -175,15 +175,30 @@ Examples use classic CAN (`[bus] fd = false`) so blobly_net (classic) can drive
 them; the driver picks classic vs CAN-FD from that flag. Integration tests live in
 each example's `test/` (blobly_net project + Lua), run by `make test`.
 
+**Unit coverage is a ratchet** (`tools/cover`): `make coverage` runs the host tests of the image
+code (`comm driver ecu loom nvm wdg bcrypto boot`; `tools/` is build-time and not measured)
+under V's `-coverage` and writes `docs/coverage.md` — statement coverage per file, **own** (only
+the tests in the file's own directory, its V module) and **any** (every test). Commit it with the
+change: CI's `make coverage-check` fails on a file whose own coverage dropped below the recorded
+value, and on the file being stale, so a drop lands only as a diff the review sees.
+`-no-skip-unused` is required — without it V drops a function no test calls from the build, and
+the report cannot tell "not tested" from "not built". Points are joined by LINE across builds,
+since each test build instruments a file with its own point list. Statement level only: V
+records no branches. About 40 s with four jobs. CI's unit-test step IS this run (the image code's
+tests run once, instrumented), plus a plain `v test tools` — `-no-skip-unused` miscompiles the
+`tools/loom2v` tests on the pinned V (an unqualified `seed_len` in `comm/diag`'s generated C,
+vlang/v#31391; `tools/` joins the instrumented run once `.v-version` is past it).
+
 ### CI — what is and is NOT gated
 
 `.github/workflows/ci.yml` runs on **pushes to `main` and on pull requests** — a push to a
 feature branch runs only `guard`, so a green tick there is the identity check, NOT the test
 gate. Open the PR to get one.
 
-It runs more than the four you would run by hand: host unit tests
-(`v -cc cc -nocache -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot`), `make lint`,
-`make check`, `make trace-check` (not `make trace`), `syscheck`, `v -cc cc -nocache -enable-globals test
+It runs more than the four you would run by hand: host unit tests (the image code's through
+`make coverage-check`, then `v -cc cc -nocache -enable-globals test tools`), `make lint`,
+`make check`, `make trace-check` (not `make trace`; it also holds `requirements/gaps.toml` — the
+uncovered and above-QM-unverified requirements — to exactly what it computes), `syscheck`, `v -cc cc -nocache -enable-globals test
 examples`, per-example host builds with generation, and a repo-wide **"Generated outputs are
 fresh"** gate. The last one is the usual surprise: a stale committed `gen/` output passes every
 local command and fails CI. Re-run generation before opening the PR.
