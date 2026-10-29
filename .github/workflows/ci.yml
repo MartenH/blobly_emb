@@ -80,7 +80,8 @@ jobs:
       # does not record; the porcelain check fails when the file is stale either way, so a drop
       # or a gain lands only as a diff the review sees. Measured identical across runs and job
       # counts. tools/ runs plain: it is not image code, and -no-skip-unused miscompiles its
-      # loom2v tests on the pinned V (an unqualified `seed_len` in comm/diag's generated C).
+      # loom2v tests on the pinned V (an unqualified `seed_len` in comm/diag's generated C;
+      # vlang/v#31391 — fold tools/ into the instrumented run once .v-version is past it).
       - name: Unit tests + coverage ratchet (make coverage-check)
         run: |
           make coverage-check

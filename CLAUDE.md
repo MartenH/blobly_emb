@@ -186,7 +186,8 @@ the report cannot tell "not tested" from "not built". Points are joined by LINE 
 since each test build instruments a file with its own point list. Statement level only: V
 records no branches. About 40 s with four jobs. CI's unit-test step IS this run (the image code's
 tests run once, instrumented), plus a plain `v test tools` — `-no-skip-unused` miscompiles the
-`tools/loom2v` tests on the pinned V (an unqualified `seed_len` in `comm/diag`'s generated C).
+`tools/loom2v` tests on the pinned V (an unqualified `seed_len` in `comm/diag`'s generated C,
+vlang/v#31391; `tools/` joins the instrumented run once `.v-version` is past it).
 
 ### CI — what is and is NOT gated
 
