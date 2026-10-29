@@ -186,3 +186,12 @@ status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-TP-020"
+title = "Flow control parameters fit their byte"
+text = "The block size the transport grants shall be configurable as 0 to 255 and the STmin it asks for as 0 to 127 ms, the values ISO 15765-2 encodes them as in one flow control byte; a configuration outside either range shall be refused when the node is generated, never narrowed to another value."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"

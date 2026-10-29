@@ -1052,8 +1052,11 @@ fn parse_isotp(doc toml.Doc) []IsotpConn {
 		bus:           (m['bus'] or { toml.Any('') }).string()
 		rx_id:         toml_int(m, 'rx_id', 0, 0, 0x1FFFFFFF, '[isotp]')
 		tx_id:         toml_int(m, 'tx_id', 0, 0, 0x1FFFFFFF, '[isotp]')
-		bs:            int((m['bs'] or { toml.Any(0) }).int())
-		stmin:         int((m['stmin_ms'] or { toml.Any(0) }).int())
+		// both go out as one Flow Control byte (and the bootloader's as a uint8_t): a block size
+		// of 256 would wrap to 0, the whole message, and an STmin past 127 is a reserved or a
+		// microsecond code — refused here rather than narrowed (REQ-TP-020)
+		bs:            schema_int(m, 'isotp', 'bs', 0, '[isotp]')
+		stmin:         schema_int(m, 'isotp', 'stmin_ms', 0, '[isotp]')
 		functional_id: toml_int(m, 'functional_id', 0, 0, 0x1FFFFFFF, '[isotp]')
 	}
 	// the connection matches and sends its ids as standard frames: a wider value never matches

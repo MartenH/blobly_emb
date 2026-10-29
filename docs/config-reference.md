@@ -390,8 +390,8 @@ The diagnostic server's ISO 15765-2 connection on CAN (docs/diagnostics.md).
 | `bus` | string | yes | — |  | the CAN bus ([bus.*] name) the connection runs on |
 | `rx_id` | integer | yes | — | 0x0..0x7FF | the CAN id physical requests arrive on (11-bit) |
 | `tx_id` | integer | yes | — | 0x0..0x7FF | the CAN id responses are sent on (11-bit) |
-| `bs` | integer |  | `0` |  | the block size granted in our Flow Control (0 = the whole message at once) |
-| `stmin_ms` | integer |  | `0` |  | the STmin (ms) we ask a sender to keep between consecutive frames |
+| `bs` | integer |  | `0` | 0..255 | the block size granted in our Flow Control, one byte on the wire (0 = the whole message at once) |
+| `stmin_ms` | integer |  | `0` | 0..127 | the STmin (ms) we ask a sender to keep between consecutive frames; ISO 15765-2 encodes milliseconds only up to 127 |
 | `functional_id` | integer |  | — | 0x0..0x7FF | the functional (broadcast) request id, e.g. 0x7DF, single frames only; absent = none |
 
 <a id="ecu-uds"></a>

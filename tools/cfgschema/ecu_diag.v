@@ -13,8 +13,8 @@ fn ecu_diag_tables() []Table {
 			req('bus', .str).doc('the CAN bus ([bus.*] name) the connection runs on'),
 			req('rx_id', .int).range(0, 0x7FF).hex().doc('the CAN id physical requests arrive on (11-bit)'),
 			req('tx_id', .int).range(0, 0x7FF).hex().doc('the CAN id responses are sent on (11-bit)'),
-			k('bs', .int).d('0').doc('the block size granted in our Flow Control (0 = the whole message at once)'),
-			k('stmin_ms', .int).d('0').doc('the STmin (ms) we ask a sender to keep between consecutive frames'),
+			k('bs', .int).d('0').range(0, 255).doc('the block size granted in our Flow Control, one byte on the wire (0 = the whole message at once)'),
+			k('stmin_ms', .int).d('0').range(0, 127).doc('the STmin (ms) we ask a sender to keep between consecutive frames; ISO 15765-2 encodes milliseconds only up to 127'),
 			k('functional_id', .int).range(0, 0x7FF).hex().doc('the functional (broadcast) request id, e.g. 0x7DF, single frames only; absent = none'),
 		]),
 		tbl('uds', '[uds]', "The node's one ISO 14229 diagnostic server: session and security timing, the 0x27 key, the service table.", [

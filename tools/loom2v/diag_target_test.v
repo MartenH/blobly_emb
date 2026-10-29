@@ -192,6 +192,23 @@ fn test_a_diagnostic_id_in_the_nm_range_or_wider_than_11_bits_is_refused() {
 	assert out2.contains('tx_id 0x8100 must be a standard 11-bit id'), out2
 }
 
+// @verifies REQ-TP-020
+// bs and stmin_ms each go out as one Flow Control byte, and the bootloader's as a uint8_t: a
+// block size of 256 would wrap to 0 (the whole message) and an STmin past 127 ms is a reserved or a
+// microsecond code, so both are refused rather than narrowed; the largest of each still generates
+fn test_a_flow_control_value_past_its_byte_is_refused() {
+	tx := 'tx_id         = 0x7B8'
+	assert diag_conn.contains(tx), 'the fixture [isotp] changed shape — update this test'
+	for i, c in [['bs = 256', '[isotp] bs = 0x100 is out of range (0x0..0xff)'],
+		['bs = -1', '[isotp] bs = 0x'], ['stmin_ms = 128', '[isotp] stmin_ms = 0x80 is out of range (0x0..0x7f)']] {
+		code, out, _ := generate('fc_${i}', diag_conn.replace(tx, tx + '\n' + c[0]))
+		assert code != 0, 'loom2v accepted [isotp] ${c[0]}'
+		assert out.contains(c[1]) && out.contains('is out of range'), out
+	}
+	code, out, _ := generate('fc_max', diag_conn.replace(tx, tx + '\nbs = 255\nstmin_ms = 127'))
+	assert code == 0, out
+}
+
 // on ThreadX, [nm].bus is a label: NM runs on the comm thread's channel, so that is the bus checked
 fn test_the_nm_range_is_checked_on_the_comm_threads_channel() {
 	peers := 'peers = [0x500, 0x53F]'
