@@ -287,4 +287,18 @@ fn test_a_satellite_frame_may_be_longer_than_its_lanes_never_shorter() {
 	})
 	assert short.code != 0
 	assert short.output.contains('M4Count'), short.output
+	// what the lanes leave alone must still be representable: no multiplexing (no switch is set),
+	// and a trailing signal inside the frame (its initial value has nowhere else to be)
+	muxed := gen_scratch_dbc('dlc_mux', one_field, fn (d string) string {
+		return must_replace(d, ' SG_ M4Acc : 32|32@1+ (1,0) [0|4294967295] "" Tester',
+			' SG_ M4Sel M : 32|8@1+ (1,0) [0|255] "" Tester')
+	})
+	assert muxed.code != 0
+	assert muxed.output.contains('"M4Sel" is multiplexed'), muxed.output
+	outside := gen_scratch_dbc('dlc_out', one_field, fn (d string) string {
+		return must_replace(d, ' SG_ M4Acc : 32|32@1+ (1,0) [0|4294967295] "" Tester',
+			' SG_ M4Spare : 60|8@1+ (1,0) [1|10] "" Tester')
+	})
+	assert outside.code != 0
+	assert outside.output.contains('"M4Spare"'), outside.output
 }

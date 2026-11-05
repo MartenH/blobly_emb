@@ -5197,8 +5197,19 @@ fn dbc_msg_lane_issue(db candb.Database, signame string, nlanes int, widths []in
 			}
 			mut lanes_used := map[int]string{}
 			for sg in m.signals {
+				// the lane writer sets no switch: a multiplexed frame would carry the lanes under
+				// whatever selector its initial payload holds
+				if sg.is_multiplexor || sg.is_multiplexed {
+					return 'signal "${sg.name}" is multiplexed — the lane writer fills lanes, it sets no multiplexor'
+				}
 				if sg.start_bit >= 32 * nlanes {
-					continue // past the lanes: never written, the initial payload, as on the owner
+					// past the lanes: never written, the initial payload, as on the owner — so it
+					// must lie in the frame, or its initial value is nowhere
+					if sg.byte_order != candb.ByteOrder.little_endian
+						|| sg.start_bit + sg.length > 8 * m.dlc {
+						return 'signal "${sg.name}" (bits ${sg.start_bit}..${sg.start_bit + sg.length - 1}) past the lanes is not a little-endian signal inside the ${m.dlc}-byte frame'
+					}
+					continue
 				}
 				if sg.start_bit % 32 != 0 {
 					return 'signal "${sg.name}" starts at bit ${sg.start_bit} (not a 32-bit lane boundary)'
