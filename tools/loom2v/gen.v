@@ -394,10 +394,9 @@ fn emit_signals(sig_of map[string]SigInfo, sig_names []string, ecu string) []str
 		signals << '// §3.2). The ZERO value is never_received, so a signal nothing has published yet — and a'
 		signals << '// freestanding image, where no initialiser runs — reads as not-yet-received, never healthy.'
 		signals << 'pub enum RxStatus as u8 {'
-		signals << '\tnever_received // no good frame yet'
-		signals << '\tok // the value came from a good frame'
-		signals << '\ttimeout // the reception deadline passed (silence is the newest fact)'
-		signals << '\tintegrity // the newest frame failed its E2E CRC or its SecOC check'
+		for i, name in rx_status_names {
+			signals << '\t${name} // ${rx_status_notes[i]}'
+		}
 		signals << '}'
 	}
 	for name in sig_names {
@@ -1634,8 +1633,9 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	mut xcore_producers := []string{}
 	for sname in xcore_names {
 		si := sig_of[sname] or { continue }
-		if si.from !in xcore_producers {
-			xcore_producers << si.from
+		p := ep_part(part, si.from)
+		if p !in xcore_producers {
+			xcore_producers << p
 		}
 	}
 	// SPSC per remote channel, validated HERE (not only in the comm-thread walk, which a
@@ -1763,8 +1763,14 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	// the writer's local cell, as on one core, whatever its `to` names — readers decide
 	for sname in xd.names {
 		mut si := m.sig_of[sname] or { continue }
-		if !si.rx && !si.local && (m.fb_reads_owner[sname] or { 0 }) > 0 && si.from in part.core_of
-			&& !(part.external[si.from] or { false }) {
+		wp := ep_part(part, si.from)
+		owner_readers := fb_rws.filter(sname in it.reads && !(part.external[it.part] or { false }))
+		if !si.rx && !si.local && owner_readers.len > 0 && wp != '' && !(part.external[wp] or { false }) {
+			if owner_readers.any(it.part != wp) {
+				panic('loom2v: signal "${sname}" is written in partition "${wp}" and read by owner fb ' +
+					'"${owner_readers.filter(it.part != wp)[0].name}" in another partition — on this ' +
+					'target an owner signal is read in its writer\'s partition')
+			}
 			si.local = true
 			m.sig_of[sname] = si
 		}
@@ -3587,6 +3593,7 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 	mut ports := []string{}
 	mut glue := []string{}
 	mut all_regs := map[string][]string{}
+	iocb_of := rx_iocb_idx(m) // the byte-IOC numbering, once per pass
 	for part, clist in m.part.by_part {
 		if image_part == '' && m.part.external[part] {
 			continue // declared elsewhere: identity only, no generated code
@@ -3657,7 +3664,7 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 			}
 			for sname in m.sig_names {
 				si := m.sig_of[sname] or { continue }
-				if si.local && si.from == part {
+				if si.local && ep_part(m.part, si.from) == part {
 					if multi && (sig_writer_thr[sname] or { threads[0] }) != thr {
 						continue
 					}
@@ -3667,16 +3674,13 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 			// cross-core reader state, one array per signal this thread reads across cores
 			mut thr_reads := []string{}
 			for c in clist {
-				cm := c.as_map()
-				cname := (cm['name'] or { toml.Any('') }).string()
+				cname := (c.as_map()['name'] or { toml.Any('') }).string()
 				if fb_thr[cname] != thr && multi {
 					continue
 				}
-				for h in (cm['handler'] or { toml.Any([]toml.Any{}) }).array() {
-					for r in (h.as_map()['reads'] or { toml.Any([]toml.Any{}) }).array() {
-						if r.string() !in thr_reads {
-							thr_reads << r.string()
-						}
+				for r in m.fb_reads_by[cname] or { []string{} } {
+					if r !in thr_reads {
+						thr_reads << r
 					}
 				}
 			}
@@ -3792,9 +3796,9 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 							glue << '\tC.ioc_get(${idx}, &${snake(rn)}_a, &${snake(rn)}_b)'
 							glue << '\t${asn}'
 						}
-					} else if image_part != '' && rn in rx_iocb_idx(m) {
+					} else if image_part != '' && rn in iocb_of {
 						panic('loom2v: satellite partition "${part}" fb "${cname}" reads "${rn}", which has no owner->satellite channel (gen_xdown.v)')
-					} else if bidx := rx_iocb_idx(m)[rn] {
+					} else if bidx := iocb_of[rn] {
 						// a received signal crossing whole on the ThreadX target: the eth thread's
 						// unpacked struct (docs/someip.md), or a checked CAN frame's decoded signal
 						// with its status (gen_rx_target.v)
@@ -4003,7 +4007,7 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 	for part, _ in m.part.by_part {
 		for sname in m.sig_names {
 			si := m.sig_of[sname] or { continue }
-			if si.local && si.from == part {
+			if si.local && ep_part(m.part, si.from) == part {
 				has_local = true
 			}
 		}
@@ -4579,6 +4583,13 @@ fn main() {
 					// xioc slot; the comm producer polls it (xcore_produce_drain) — no owner IOC cell.
 					// The lean encode packs the {a, b} pair LE at bytes 0/4, so the frame must be
 					// exactly the fields' width (field order = DBC layout order by convention).
+					for f in si.fields {
+						if f.typ !in lane_field_types {
+							panic('loom2v: remote TX signal "${sname}" field "${f.name}" is ${f.typ}, but a ' +
+								'signal the comm thread sends carries a field as a u32 — use ' +
+								'${lane_field_types.join(' / ')} (as on one core)')
+						}
+					}
 					if si.dbc_lane_issue != '' {
 						panic('loom2v: remote TX signal "${sname}": DBC message "${si.dbc_msg}" cannot ' +
 							'carry the lane encode — ${si.dbc_lane_issue}. The lane writer fills whole ' +

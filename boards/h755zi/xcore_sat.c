@@ -30,6 +30,16 @@ int xcore_down_read(uint32_t off, uint32_t words, uint32_t *st) {
 		st[0] = nonce;
 		down_reset(words, st);
 	}
-	xioc_n_read((xioc_n_t *)(uintptr_t)(XCORE_OW_CH_ADDR + off), &st[1], &st[2], words);
+	if (xioc_n_read((xioc_n_t *)(uintptr_t)(XCORE_OW_CH_ADDR + off), &st[1], &st[2], words)) {
+		/* the gate again, after the copy: an owner re-init that began during it (it retracts the
+		 * ack first) must not leave a value accepted under the old nonce */
+		XIOC_DMB();
+		if (XIOC_LD((volatile uint32_t *)(uintptr_t)XCORE_OW_ACK_ADDR) != ack ||
+		    XIOC_LD((volatile uint32_t *)(uintptr_t)XCORE_OW_NONCE_ADDR) != nonce) {
+			st[0] = 0u;
+			down_reset(words, st);
+			return 0;
+		}
+	}
 	return st[1] != 0u;
 }

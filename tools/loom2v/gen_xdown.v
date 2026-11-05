@@ -21,6 +21,13 @@ import tools.ecumodel
 // tears across its two lanes.
 const xlane_types = ['bool', 'u8', 'u16', 'u32', 'i8', 'i16', 'i32', 'f32', 'u64', 'i64', 'f64']
 
+// rx_status_names: RxStatus in declaration order (its value is the index) — the ONE list the enum
+// (emit_signals) and its cross-core lane decode (xlane_helpers) are both written from
+const rx_status_names = ['never_received', 'ok', 'timeout', 'integrity']
+const rx_status_notes = ['no good frame yet', 'the value came from a good frame',
+	'the reception deadline passed (silence is the newest fact)',
+	'the newest frame failed its E2E CRC or its SecOC check']
+
 // xlane_max: lanes per channel — one 64 B PDU (xioc.h XIOC_MAX_WORDS).
 const xlane_max = 16
 
@@ -139,10 +146,12 @@ fn xlane_helpers(sigs []SigInfo) []string {
 		g << '// a received signal\'s RxStatus crosses cores as one lane (its enum value)'
 		g << 'fn xlane_rx_status(l u32) sig.RxStatus {'
 		g << '\treturn match l {'
-		g << '\t\t1 { .ok }'
-		g << '\t\t2 { .timeout }'
-		g << '\t\t3 { .integrity }'
-		g << '\t\telse { .never_received }'
+		for i, name in rx_status_names {
+			if i > 0 {
+				g << '\t\t${i} { .${name} }'
+			}
+		}
+		g << '\t\telse { .${rx_status_names[0]} }'
 		g << '\t}'
 		g << '}'
 	}
@@ -298,7 +307,9 @@ fn xdown_derive(sig_names []string, sig_of map[string]SigInfo, p PartMap, fbs []
 				'read it on the owner image')
 		}
 		if si.external && !si.rx {
-			continue // an owner TX signal also read by an fb: refused by the comm-thread walk, as on one core
+			return error('signal "${sname}" is sent on bus "${si.bus}" and read by satellite fb ' +
+				'"${sat[0].name}" — a signal the comm thread transmits is not also an fb input, on ' +
+				'one core or two; write a second signal for the reader')
 		}
 		lean := si.rx && si.dbc_msg !in checked
 		mut lanes := 1
@@ -453,12 +464,9 @@ fn xdown_reader_decls(m Model, part string) []string {
 // xdown_reads: whether an FB of `part` reads a down channel.
 fn xdown_reads(m Model, part string) bool {
 	for c in m.part.by_part[part] or { []toml.Any{} } {
-		for h in (c.as_map()['handler'] or { toml.Any([]toml.Any{}) }).array() {
-			for r in (h.as_map()['reads'] or { toml.Any([]toml.Any{}) }).array() {
-				if r.string() in m.xdown_off {
-					return true
-				}
-			}
+		name := (c.as_map()['name'] or { toml.Any('') }).string()
+		if (m.fb_reads_by[name] or { []string{} }).any(it in m.xdown_off) {
+			return true
 		}
 	}
 	return false

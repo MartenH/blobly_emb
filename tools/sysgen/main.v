@@ -591,7 +591,7 @@ mut:
 // partition with `image =` or `external = true`), else the first reader is kept.
 fn signal_partitions(doc toml.Doc) SigParts {
 	mut thread_part := map[string]string{}
-	mut own_image := map[string]bool{}
+	own_image := sysmodel.image_partitions_of(doc)
 	for p in (doc.value_opt('partition') or { toml.Any([]toml.Any{}) }).array() {
 		pm := p.as_map()
 		pname := (pm['name'] or { toml.Any('') }).string()
@@ -600,10 +600,6 @@ fn signal_partitions(doc toml.Doc) SigParts {
 			if tname != '' {
 				thread_part[tname] = pname
 			}
-		}
-		if (pm['image'] or { toml.Any('') }).string() != ''
-			|| (pm['external'] or { toml.Any(false) }).bool() {
-			own_image[pname] = true
 		}
 	}
 	mut out := SigParts{}

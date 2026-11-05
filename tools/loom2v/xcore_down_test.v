@@ -419,3 +419,18 @@ fn test_seams_are_linked_by_the_symbols_declared() {
 	assert sat.contains(r'$(BOARD_XCORE_SAT)')
 	assert glue_build_lines([], false) == 'LOOM_GLUE_SRCS :=\n'
 }
+
+fn test_a_signal_the_comm_thread_sends_is_not_a_satellite_input() {
+	mut s := down_sigs()
+	s['Speed2'] = SigInfo{
+		name:     'Speed2'
+		from:     'ctl'
+		to:       'can0'
+		external: true
+		bus:      'can0'
+		fields:   [sf('kph', 'u32')]
+	}
+	msg := refused(['Speed2'], s, [rw('Pt', 'ctl', 'fast', [], ['Speed2']),
+		rw('Dyn', 'sat', 'model', ['Speed2'], [])], [], '')
+	assert msg.contains('is sent on bus "can0" and read by satellite fb "Dyn"')
+}
