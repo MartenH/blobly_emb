@@ -52,7 +52,9 @@ ifneq ($(MAKECMDGOALS),clean)
 endif
 
 # how V is run for it — also its signature (tools/tools.mk v_sign)
-TRANSPILE_FLAGS = -freestanding -bare-builtin-dir osal/vrt/bare -arch arm32 -target-libc-headers -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) -path "@vlib|@vmodules|.|examples/$(NAME)"
+# the node's FBs are ONE app module, in the owner's folder (REQ-INV-007): an FB moves between
+# cores by its thread line, its source staying put; this image's own gen/ports/sig come first
+TRANSPILE_FLAGS = -freestanding -bare-builtin-dir osal/vrt/bare -arch arm32 -target-libc-headers -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) -path "@vlib|@vmodules|.|examples/$(NAME)|examples/h755_threadx"
 $(BUILD)/app.c: main.v gen/loom_gen.v $(call v_unrecorded,$(BUILD)/app.c) $(call v_sign,$(BUILD)/app.c,$(TRANSPILE_FLAGS)) | $(BUILD)
 	cd $(REPO) && $(V) $(TRANSPILE_FLAGS) $(call v_dump,$@) -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
 	$(call v_deps,$@)

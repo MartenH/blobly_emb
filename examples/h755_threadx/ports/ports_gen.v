@@ -40,3 +40,21 @@ pub mut:
 	// signal "Workload" — ch, transport double, app -> can0
 	workload sig.Workload
 }
+
+pub struct M4LoadIn {
+pub mut:
+}
+pub struct M4LoadOut {
+pub mut:
+	// signal "M4Count" — ch, transport double, m4 -> can0
+	m4_count sig.M4Count
+}
+
+pub struct M4ChurnIn {
+pub mut:
+}
+pub struct M4ChurnOut {
+pub mut:
+	// signal "M4Stress" — ch, transport double, m4 -> app
+	m4_stress sig.M4Stress
+}

@@ -226,6 +226,9 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 		p << 'module ports'
 		p << ''
 		p << 'import sig'
+		if sat_ports.join('\n').contains('fault.') {
+			p << 'import comm.fault' // an FB's fault port (every FB of the node is declared here)
+		}
 		p << sat_ports
 
 		// loom_build.mk: right-size the Scheduler tables to this image's per-thread max.

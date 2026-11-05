@@ -3598,6 +3598,73 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 	return glue
 }
 
+// fb_port_lines: one handler's port structs (module ports) — the FB's In, its Faults when it owns
+// any, and its Out. Every image of a node declares every FB's ports (emit_handlers), so the node's
+// one app module compiles on each core whichever FBs that core hosts (REQ-INV-007).
+fn fb_port_lines(m Model, cname string, hname string, reads []toml.Any, writes []toml.Any) []string {
+	mut ports := []string{}
+	ports << ''
+	ports << 'pub struct ${cname}In {'
+	ports << 'pub mut:'
+	for r in reads {
+		if p := param_of(m, r.string()) {
+			ports << '\t// parameter "${p.name}" — coded with 0x2E on DID 0x${p.did.hex()}, read-only'
+			ports << '\t${snake(p.name)} sig.${p.name}'
+			continue
+		}
+		ports << provenance(r.string(), m.sig_of)
+		// an input point's declared default becomes the port field's
+		// initial value — the FB sees it until the first real sample
+		// (docs/io.md); the acquire leaves the field untouched on no-data
+		mut dflt := ''
+		for pt in m.io_points {
+			if pt.name == r.string() && !pt.output && pt.has_default {
+				si_r := m.sig_of[r.string()] or { SigInfo{} }
+				// gpio default is bool; adc default is the numeric count (codex emb#152)
+				dval := if pt.kind == 'adc' { '${pt.default_u32}' } else { '${pt.default}' }
+				dflt = ' = sig.${r.string()}{ ${si_r.val_field}: ${dval} }'
+			}
+		}
+		ports << '\t${snake(r.string())} sig.${r.string()}${dflt}'
+	}
+	ports << '}'
+	hfaults := m.faults.filter(it.fb == cname && it.handler == hname)
+	if hfaults.len > 0 {
+		ports << 'pub struct ${cname}Faults {'
+		ports << 'pub mut:'
+		for f in hfaults {
+			ports << '\t${snake(f.name)} fault.TestResult // DTC 0x${f.dtc.hex()}: write the CURRENT result each dispatch, no latch (docs/diagnostics.md §3.3)'
+		}
+		ports << '}'
+	}
+	ports << 'pub struct ${cname}Out {'
+	ports << 'pub mut:'
+	for w in writes {
+		ports << provenance(w.string(), m.sig_of)
+		ports << '\t${snake(w.string())} sig.${w.string()}'
+	}
+	if hfaults.len > 0 {
+		ports << '\tfault ${cname}Faults'
+	}
+	ports << '}'
+	return ports
+}
+
+// partition_port_lines: the port structs of every FB in a partition this pass does not host
+fn partition_port_lines(m Model, clist []toml.Any) []string {
+	mut out := []string{}
+	for c in clist {
+		cm := c.as_map()
+		cname := (cm['name'] or { toml.Any('') }).string()
+		for h in (cm['handler'] or { toml.Any([]toml.Any{}) }).array() {
+			hm := h.as_map()
+			out << fb_port_lines(m, cname, (hm['name'] or { toml.Any('') }).string(),
+				(hm['reads'] or { toml.Any([]toml.Any{}) }).array(), (hm['writes'] or { toml.Any([]toml.Any{}) }).array())
+		}
+	}
+	return out
+}
+
 // emit_handlers emits, per partition: its state struct, each handler's port structs (module ports)
 // and dispatch glue (module gen), the host partition_<p>() runner, and builds all_regs (the
 // sched.every() lines the run() emitters reuse). Returns (ports, glue, all_regs); reads the Model,
@@ -3614,9 +3681,11 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 	iocb_of := rx_iocb_idx(m) // the byte-IOC numbering, once per pass
 	for part, clist in m.part.by_part {
 		if image_part == '' && m.part.external[part] {
+			ports << partition_port_lines(m, clist) // its FBs' ports: the node's app compiles here too
 			continue // declared elsewhere: identity only, no generated code
 		}
 		if image_part != '' && part != image_part {
+			ports << partition_port_lines(m, clist)
 			continue // the satellite pass emits exactly one partition
 		}
 		threads := m.part.threads_of[part] or { [''] }
@@ -3723,50 +3792,7 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 				writes := (hm['writes'] or { toml.Any([]toml.Any{}) }).array()
 
 				// --- port structs (module ports) ---
-				ports << ''
-				ports << 'pub struct ${cname}In {'
-				ports << 'pub mut:'
-				for r in reads {
-					if p := param_of(m, r.string()) {
-						ports << '\t// parameter "${p.name}" — coded with 0x2E on DID 0x${p.did.hex()}, read-only'
-						ports << '\t${snake(p.name)} sig.${p.name}'
-						continue
-					}
-					ports << provenance(r.string(), m.sig_of)
-					// an input point's declared default becomes the port field's
-					// initial value — the FB sees it until the first real sample
-					// (docs/io.md); the acquire leaves the field untouched on no-data
-					mut dflt := ''
-					for pt in m.io_points {
-						if pt.name == r.string() && !pt.output && pt.has_default {
-							si_r := m.sig_of[r.string()] or { SigInfo{} }
-							// gpio default is bool; adc default is the numeric count (codex emb#152)
-							dval := if pt.kind == 'adc' { '${pt.default_u32}' } else { '${pt.default}' }
-							dflt = ' = sig.${r.string()}{ ${si_r.val_field}: ${dval} }'
-						}
-					}
-					ports << '\t${snake(r.string())} sig.${r.string()}${dflt}'
-				}
-				ports << '}'
-				hfaults := m.faults.filter(it.fb == cname && it.handler == hname)
-				if hfaults.len > 0 {
-					ports << 'pub struct ${cname}Faults {'
-					ports << 'pub mut:'
-					for f in hfaults {
-						ports << '\t${snake(f.name)} fault.TestResult // DTC 0x${f.dtc.hex()}: write the CURRENT result each dispatch, no latch (docs/diagnostics.md §3.3)'
-					}
-					ports << '}'
-				}
-				ports << 'pub struct ${cname}Out {'
-				ports << 'pub mut:'
-				for w in writes {
-					ports << provenance(w.string(), m.sig_of)
-					ports << '\t${snake(w.string())} sig.${w.string()}'
-				}
-				if hfaults.len > 0 {
-					ports << '\tfault ${cname}Faults'
-				}
-				ports << '}'
+				ports << fb_port_lines(m, cname, hname, reads, writes)
 
 				// --- glue handler (module gen) ---
 				gname := 'handler_${part}_${field}_${hname}'
@@ -3986,6 +4012,16 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 			glue << '\t\tosal.sleep_us(1000)'
 			glue << '\t}'
 			glue << '}'
+		}
+	}
+	// a satellite partition with no FB left (all moved to another core) is still an image: its
+	// threads run the platform services, on an empty state
+	if image_part != '' && image_part !in m.part.by_part {
+		threads := m.part.threads_of[image_part] or { [''] }
+		for thr in threads {
+			sname := if threads.len > 1 { 'Thread_${thr}_state' } else { 'Partition_${image_part}_state' }
+			glue << ''
+			glue << 'struct ${sname} {}'
 		}
 	}
 	return ports, glue, all_regs

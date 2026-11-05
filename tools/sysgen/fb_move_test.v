@@ -38,15 +38,22 @@ struct MoveCase {
 fn stage_move(tag string) string {
 	dir := sysmodel.private_temp_dir('fb_move_${tag}') or { panic(err) }
 	for f in os.ls(move_full_dir) or { panic(err) } {
-		if f == 'system.toml' || f.ends_with('.dbc') {
+		if f == 'system.toml' || f.ends_with('.dbc') || f == 'main.v' {
 			os.cp(os.join_path(move_full_dir, f), os.join_path(dir, f)) or { panic(err) }
 		}
 	}
+	// each node's config, and the sources an image compiles: its FBs (app/) and entry (main.v)
 	for n in os.ls(os.join_path(move_full_dir, 'nodes')) or { panic(err) } {
-		src := os.join_path(move_full_dir, 'nodes', n, 'ecu.toml')
-		if os.is_file(src) {
-			os.mkdir_all(os.join_path(dir, 'nodes', n)) or { panic(err) }
-			os.cp(src, os.join_path(dir, 'nodes', n, 'ecu.toml')) or { panic(err) }
+		src := os.join_path(move_full_dir, 'nodes', n)
+		dst := os.join_path(dir, 'nodes', n)
+		os.mkdir_all(dst) or { panic(err) }
+		for f in ['ecu.toml', 'main.v'] {
+			if os.is_file(os.join_path(src, f)) {
+				os.cp(os.join_path(src, f), os.join_path(dst, f)) or { panic(err) }
+			}
+		}
+		if os.is_dir(os.join_path(src, 'app')) {
+			os.cp_all(os.join_path(src, 'app'), os.join_path(dst, 'app'), true) or { panic(err) }
 		}
 	}
 	return dir
@@ -104,6 +111,63 @@ fn move_fb(dir string, c MoveCase) {
 	}
 }
 
+// loom_tasks: an image's scheduler-table size, from the loom_build.mk its generation wrote
+fn loom_tasks(mk string) string {
+	text := os.read_file(mk) or { return '1' }
+	return text.all_after('loom_max_tasks=').all_before('\n').trim_space()
+}
+
+// v_check type-checks one image as its Makefile transpiles it (target flags, its module path)
+fn v_check(entry string, tasks string, paths []string) os.Result {
+	return os.exec([@VEXE, '-freestanding', '-bare-builtin-dir', 'osal/vrt/bare', '-arch', 'arm32',
+		'-target-libc-headers', '-gc', 'none', '-no-bounds-checking', '-enable-globals', '-d',
+		'loom_max_tasks=${tasks}', '-path', '@vlib|@vmodules|${@VMODROOT}|${paths.join('|')}', '-check',
+		entry])
+}
+
+// images_compile generates the moved node as its build does (dbc2cfg, loom2v) and type-checks the
+// owner's image and each satellite's against the node's one app module — "generates" is not
+// enough, the node must build (REQ-INV-007)
+fn images_compile(dir string, node string) string {
+	gen := os.join_path(dir, 'gen-${node}.toml')
+	doc := toml.parse_file(gen) or { panic(err) }
+	dbc := os.join_path(dir, (doc.value_opt('import.dbc') or { toml.Any('') }).string())
+	nd := os.join_path(dir, 'nodes', node)
+	for sub in ['sig', 'ports', 'gen'] {
+		os.mkdir_all(os.join_path(nd, sub)) or { panic(err) }
+	}
+	dbc2cfg := sysmodel.tool_binary('dbc2cfg') or { panic(err) }
+	d := os.exec([dbc2cfg, dbc, os.join_path(nd, 'gen', 'dbc_gen.v')])
+	if d.exit_code != 0 {
+		return 'dbc2cfg: ${d.output}'
+	}
+	loom2v := sysmodel.tool_binary('loom2v') or { panic(err) }
+	l := os.exec([loom2v, gen, dbc, os.join_path(nd, 'sig', 'signals_gen.v'), os.join_path(nd,
+		'ports', 'ports_gen.v'), os.join_path(nd, 'gen', 'loom_gen.v'), os.join_path(nd, 'gen',
+		'trace-manifest.csv')])
+	if l.exit_code != 0 {
+		return 'loom2v: ${l.output}'
+	}
+	owner_main := if os.is_file(os.join_path(nd, 'main.v')) { os.join_path(nd, 'main.v') } else { os.join_path(dir, 'main.v') }
+	o := v_check(owner_main, loom_tasks(os.join_path(nd, 'gen', 'loom_build.mk')), [nd])
+	if o.exit_code != 0 {
+		return 'owner image: ${o.output}'
+	}
+	for p in (doc.value_opt('partition') or { toml.Any([]toml.Any{}) }).array() {
+		img := (p.as_map()['image'] or { toml.Any('') }).string()
+		if img == '' {
+			continue
+		}
+		sd := os.join_path(dir, img)
+		sc := v_check(os.join_path(sd, 'main.v'), loom_tasks(os.join_path(sd, 'gen', 'loom_build.mk')),
+			[sd, nd])
+		if sc.exit_code != 0 {
+			return 'satellite image ${img}: ${sc.output}'
+		}
+	}
+	return ''
+}
+
 fn run_sysgen(dir string) os.Result {
 	bin := sysmodel.tool_binary('sysgen') or { panic(err) }
 	return os.exec([bin, os.join_path(dir, 'system.toml')])
@@ -126,10 +190,12 @@ fn test_every_fb_moves_to_the_other_core_or_is_refused_with_a_listed_reason() {
 		}
 		move_fb(dir, c)
 		r := run_sysgen(dir)
+		what := '${c.node}: moving fb ${c.fb} from thread ${c.from} to ${c.thread}'
 		if r.exit_code == 0 {
+			why := images_compile(dir, c.node)
+			assert why == '', '${what} generates but does not compile:\n${why}'
 			continue
 		}
-		what := '${c.node}: moving fb ${c.fb} from thread ${c.from} to ${c.thread}'
 		errs := refusals(r.output)
 		assert errs.len > 0, '${what} failed with no refusal sysgen names:\n${r.output}'
 		// EVERY refusal is one REQ-INV-007 lists; one unlisted beside a listed one is a new gap
@@ -156,6 +222,8 @@ fn test_the_co_processor_fb_moves_to_the_owner_core() {
 	move_fb(dir, c)
 	r := run_sysgen(dir)
 	assert r.exit_code == 0, r.output
+	why := images_compile(dir, 'domain')
+	assert why == '', why
 }
 
 // an endpoint that IS written stays a check: a move that leaves `from` naming the old partition is
@@ -174,4 +242,17 @@ fn test_a_stale_from_is_refused_naming_both_partitions() {
 	r := run_sysgen(dir)
 	assert r.exit_code != 0
 	assert r.output.contains('signal "TorqueEstimate" declares from = "dynamics", but fb "DynamicsModel" writes it in partition "powertrain"'), r.output
+}
+
+// the node as it is, both images type-checked: each compiles the node's one app module, so each
+// must declare every FB's ports, the other core's included
+fn test_the_unmoved_node_compiles_on_both_cores() {
+	dir := stage_move('unmoved')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	r := run_sysgen(dir)
+	assert r.exit_code == 0, r.output
+	why := images_compile(dir, 'domain')
+	assert why == '', why
 }
