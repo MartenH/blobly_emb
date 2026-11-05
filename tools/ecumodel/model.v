@@ -180,6 +180,9 @@ pub fn validate(doc toml.Doc) []string {
 			errs << 'a ${reserved_holder} is named "io" — reserved endpoint name (io points, docs/io.md)'
 		}
 	}
+	// every signal's endpoints, as written or derived from the FBs (endpoints.v, REQ-INV-007)
+	_, end_errs := signal_endpoints(doc)
+	errs << end_errs
 	errs << validate_io(doc, part_names, thread_part, bus_names)
 
 	// [someip] / eth buses — must also stay BEFORE [trace] (early return below).
@@ -478,11 +481,12 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 	mut sig_size := map[string]int{}
 	mut sig_mem := map[string]int{}
 	mut sig_badfield := map[string]string{}
+	ends, _ := signal_endpoints(doc) // its refusals are validate's to report
 	for sg in toml_arr(doc, 'signal') {
 		sm := sg.as_map()
 		sname := str_of(sm, 'name')
-		sig_from[sname] = str_of(sm, 'from')
-		sig_to[sname] = str_of(sm, 'to')
+		sig_from[sname] = (ends[sname] or { SigEnds{} }).from
+		sig_to[sname] = (ends[sname] or { SigEnds{} }).to
 		if f := sm['fields'] {
 			mut size := 0
 			// the IN-MEMORY struct size too (natural alignment, declaration
@@ -1136,11 +1140,12 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 	mut sig_nfields := map[string]int{}
 	mut sig_ftype := map[string]string{} // the single field's type when nfields == 1
 	mut sig_has_transport := map[string]bool{}
+	ends, _ := signal_endpoints(doc) // its refusals are validate's to report
 	for sg in toml_arr(doc, 'signal') {
 		sm := sg.as_map()
 		sname := str_of(sm, 'name')
-		sig_from[sname] = str_of(sm, 'from')
-		sig_to[sname] = str_of(sm, 'to')
+		sig_from[sname] = (ends[sname] or { SigEnds{} }).from
+		sig_to[sname] = (ends[sname] or { SigEnds{} }).to
 		sig_has_transport[sname] = 'transport' in sm
 		if f := sm['fields'] {
 			fm := f.as_map()

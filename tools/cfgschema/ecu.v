@@ -200,8 +200,8 @@ fn ecu_schema() Schema {
 		tbl('signal', '[[signal]]', 'A typed signal from one endpoint to another: a partition, a thread, a bus, or "io".', [
 			req('name', .str).doc('PascalCase; a signal a bus carries takes its DBC name'),
 			sub('fields', .str_map, '').required().doc("field name -> type, the signal's struct"),
-			req('from', .str).doc('the producer: a partition, thread, bus or "io"'),
-			req('to', .str).doc('the consumer: a partition, thread, bus or "io"'),
+			k('from', .str).doc('the producer: a partition, thread, bus or "io"; left out, the partition of the fb that writes it (REQ-INV-007)'),
+			k('to', .str).doc('the consumer: a partition, thread, bus or "io"; left out, the partition of an fb that reads it (REQ-INV-007)'),
 			k('transport', .str).d('"double"').one_of(['double', 'triple', 'seqlock', 'dma', 'hw_sem',
 				'mailbox']).doc('the IOC buffer between partitions (derived for io signals); the hardware ones are target backends, double on host'),
 			k('persist', .str).one_of(['now', 'shutdown']).doc('keep it in NvM: write-through, or flush at sleep — intent, not tuning (docs/nvm.md)'),

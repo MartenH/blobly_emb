@@ -11,6 +11,12 @@ or a bus — and that's all you say; the generator derives the transport from th
 | satellite partition → bus/partition | **xioc slot** (cross-core) | `C.xcore_pub(slot, ...)` |
 | owner partition or bus → a satellite FB's `reads` | **owner → satellite channel** (cross-core) | `C.xcore_opub_n(...)` / `C.xcore_down_read(...)` |
 
+A signal between FBs of one node may leave `from` and `to` out: they then follow the FB that writes
+it and the FBs that read it, so moving an FB to another core is its `thread` line alone
+(REQ-INV-007; what a moved FB can and cannot do is [fb-placement.md](../fb-placement.md)). A bus or
+`io` endpoint is always written. Written ones are checked against the FBs: a `from` naming another
+partition than the writer's, or a `to` no reading FB is in, is refused, naming both.
+
 ## 1. Declare it
 
 ```toml

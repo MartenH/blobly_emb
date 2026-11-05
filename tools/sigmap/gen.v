@@ -96,11 +96,12 @@ fn main() {
 	// value_opt so a config with no [[signal]] blocks yields an empty table (not one phantom
 	// row) — doc.value('signal') on a missing key returns a single empty element.
 	signals := if s := doc.value_opt('signal') { s.array() } else { []toml.Any{} }
+	ends, _ := ecumodel.signal_endpoints(doc) // as written or derived from the FBs (REQ-INV-007)
 	for ch in signals {
 		m := ch.as_map()
 		name := (m['name'] or { toml.Any('') }).string()
-		from := (m['from'] or { toml.Any('') }).string()
-		to := (m['to'] or { toml.Any('') }).string()
+		from := (ends[name] or { ecumodel.SigEnds{} }).from
+		to := (ends[name] or { ecumodel.SigEnds{} }).to
 		mut tr := (m['transport'] or { toml.Any('double') }).string()
 		if from == 'io' || to == 'io' {
 			tr = 'triple' // derived for io endpoints (docs/io.md), never configured

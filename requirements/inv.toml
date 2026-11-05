@@ -70,3 +70,19 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-COMMS-002"
+
+# User requirement, 2026-11-05: moving an FB to another core is a configuration change, nothing
+# more — the intent the cross-core work was built for, written down because without it the gaps
+# (no receive on a satellite until #425, the 4-slot pair pool, #424's list) built up one feature at
+# a time with nothing failing. Verified by the move test: every FB of every two-core example moved
+# to the other core in turn, generated, and either accepted or refused only with a reason on its
+# documented list (#424); that list shrinks as the gaps close, and a new gap fails CI the day it
+# lands. Timing is allowed to change (the cores differ in clock and pipeline); behaviour is not.
+[[req]]
+id = "REQ-INV-007"
+title = "An FB moves to another core by configuration alone"
+text = "An FB that generates in one partition shall generate, unchanged, in a partition on another core of the same node, with only its timing changed; anything it cannot yet do there shall be refused at generation, naming the reason."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-MC-001"

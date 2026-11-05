@@ -234,11 +234,14 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool, eth string) (m
 	mut sig_of := map[string]SigInfo{}
 	mut sig_names := []string{}
 	mut has_external := false
+	// endpoints as written, or derived from the FBs that write / read the signal (REQ-INV-007);
+	// ecucheck (ecumodel.validate) has already refused what cannot be settled
+	ends, _ := ecumodel.signal_endpoints(doc)
 	for s in ecumodel.toml_arr(doc, 'signal') {
 		m := s.as_map()
 		name := (m['name'] or { toml.Any('') }).string()
-		from := (m['from'] or { toml.Any('') }).string()
-		to := (m['to'] or { toml.Any('') }).string()
+		from := (ends[name] or { ecumodel.SigEnds{} }).from
+		to := (ends[name] or { ecumodel.SigEnds{} }).to
 
 		from_bus := from in buses
 		to_bus := to in buses
@@ -1585,6 +1588,22 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	mut xcore_xw_off := map[string]int{}
 	mut xcore_xw_total := 0
 	mut xcore_pair_n := 0
+	// fan-out across cores: a signal whose readers span images and include its writer's own
+	// partition is held in the writer's local cell AS WELL as crossing (REQ-PLACE-003) — readers
+	// decide, whatever `to` names; a signal read on one image only is left as it was declared
+	for sname in sig_names {
+		mut si := sig_of[sname] or { continue }
+		wp := ep_part(part, si.from)
+		if si.rx || si.local || wp == '' {
+			continue
+		}
+		readers := fb_rws.filter(sname in it.reads && it.part != '')
+		spans := readers.any((part.external[it.part] or { false }) != (part.external[wp] or { false }))
+		if spans && readers.any(it.part == wp) {
+			si.local = true
+			sig_of[sname] = si
+		}
+	}
 	for sname in sig_names {
 		mut si := sig_of[sname] or { continue }
 		// produced on a satellite (its `from` names a satellite partition or one of its threads):
@@ -1616,7 +1635,9 @@ fn build_model(doc toml.Doc, dbc string) Model {
 				'1..${xlane_max} u32 lanes (one PDU, 64 B); a bigger payload is bulk, not a signal ' +
 				'(docs/bulk-transport.md)')
 		}
-		si.wide = si.fields.len > 2 || si.fields.any(it.typ != 'u32')
+		// a 1-2 x u32 signal takes a pair slot while the board's pool has one; past it, a wide
+		// channel (same semantics, the larger window) — never an overflow the C build finds
+		si.wide = si.fields.len > 2 || si.fields.any(it.typ != 'u32') || xcore_pair_n >= xcore_pair_slots
 		if si.wide {
 			// xioc_n geometry (xioc_n_bytes): neighbouring channels never share a 32 B line
 			xcore_xw_off[sname] = xcore_xw_total
@@ -5990,6 +6011,10 @@ const nvm_glue_syms = ['nvm_map_a', 'nvm_map_b', 'nvm_map_size']
 const xcore_owner_syms = ['xcore_owner_begin', 'xcore_ow_init', 'xcore_owner_commit', 'xcore_opub_n']
 const xcore_sat_syms = ['xcore_down_read']
 const flash_driver_syms = ['bflash_erase', 'bflash_program', 'bflash_read', 'bflash_blank']
+
+// xcore_pair_slots: the board's satellite pair pool, xcore.h XCORE_IOC_N (pinned equal by
+// xcore_down_test.v) — a satellite signal past it rides a wide channel instead (REQ-PLACE-004)
+const xcore_pair_slots = 4
 
 // ioc_pool_n: comm_glue.c's IOC_POOL_N — the target IOC cells an image may use (pinned equal by
 // threadx_makefiles_test.v; a smaller pool silently dropped every index past it, #247).

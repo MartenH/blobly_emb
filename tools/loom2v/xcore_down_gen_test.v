@@ -3,7 +3,7 @@ module main
 import os
 import tools.sysmodel
 
-// @verifies REQ-INV-006
+// @verifies REQ-INV-006, REQ-PLACE-001, REQ-PLACE-002
 // Owner -> satellite signals end to end: loom2v run on a scratch copy of examples/h755_threadx
 // (an owner with a generated CM4 image) with signals added in each shape — a received signal read
 // on both cores, an owner FB output in the wider lane types, a wide satellite signal an owner FB
@@ -138,9 +138,9 @@ fn test_an_owner_local_signal_fans_out_to_a_multi_thread_satellite() {
 	assert r.sat.contains('inp.gain.k = i32(st.xr_gain[2])')
 }
 
-// SatLoc, written and declared local on the satellite; `owner_reads` adds an owner FB reader
+// SatLoc, written and read on the satellite (declared local there); `owner_reads` adds an owner reader
 fn satloc_edit(src string, owner_reads bool) string {
-	mut s := must_replace(src, 'writes    = ["M4Count"]', 'writes    = ["M4Count", "SatLoc"]')
+	mut s := must_replace(src, 'writes    = ["M4Count"]', 'reads     = ["SatLoc"]\nwrites    = ["M4Count", "SatLoc"]')
 	if owner_reads {
 		s = must_replace(s, '  name      = "on_10ms"\n  period_ms = 10\n', '  name      = "on_10ms"\n  period_ms = 10\n  reads     = ["SatLoc"] # trailing comment ends the nested table (vlang/v#27684)\n')
 	}
@@ -217,4 +217,38 @@ fn test_generated_lane_code_round_trips_every_type() {
 	os.rmdir_all(dir) or {}
 	assert r.exit_code == 0, r.output
 	assert r.output.contains('round trip ok')
+}
+
+// @verifies REQ-PLACE-004
+// a satellite with more 1-2 x u32 signals than the board's pair pool: the ones past it ride wide
+// channels, decided at generation — the C build's #error is only the backstop
+fn test_satellite_signals_past_the_pair_pool_ride_wide_channels() {
+	r := gen_scratch('pairs', fn (src string) string {
+		mut s := must_replace(src, 'writes    = ["M4Stress"]', 'writes    = ["M4Stress", "P3", "P4", "P5"]')
+		for n in ['P3', 'P4', 'P5'] {
+			s += '\n[[signal]]\nname   = "${n}"\nfields = { v = "u32" }\nfrom   = "m4"\nto     = "app"\n'
+		}
+		return s
+	})
+	assert r.code == 0, r.output
+	assert r.header.contains('#define XCORE_SLOT_P4 3')
+	assert r.header.contains('#define XCORE_GEN_SLOTS 4')
+	assert r.header.contains('#define XCORE_XW_P5_OFF ')
+	assert r.sat.contains('C.xcore_pub_n(')
+}
+
+// @verifies REQ-PLACE-003
+// a satellite FB's output read on the satellite AND by an owner FB, its endpoints left to follow
+// the FBs: the satellite keeps its cell and publishes up, the owner reads the channel
+fn test_a_satellite_output_fans_out_to_both_cores_with_derived_endpoints() {
+	r := gen_scratch('fanout_up', fn (src string) string {
+		mut s := must_replace(src, 'writes    = ["M4Count"]', 'reads     = ["Fan"]\nwrites    = ["M4Count", "Fan"]')
+		s = must_replace(s, '  name      = "on_10ms"\n  period_ms = 10\n', '  name      = "on_10ms"\n  period_ms = 10\n  reads     = ["Fan"] # trailing comment ends the nested table (vlang/v#27684)\n')
+		s += '\n[[signal]]\nname   = "Fan"\nfields = { v = "u32" }\n'
+		return s
+	})
+	assert r.code == 0, r.output
+	assert r.sat.contains('st.cell_fan = outp.fan')
+	assert r.sat.contains('C.xcore_pub(2, u32(outp.fan.v), u32(0))')
+	assert r.owner.contains('C.xcore_poll(2, &fan_a, &fan_b)')
 }

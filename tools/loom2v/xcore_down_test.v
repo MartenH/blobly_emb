@@ -1,6 +1,8 @@
 module main
 
-// @verifies REQ-INV-006
+import os
+
+// @verifies REQ-INV-006, REQ-PLACE-001, REQ-PLACE-002
 // Owner -> satellite channels (gen_xdown.v) on hand-built models: which signals get a down channel
 // (derived from the FBs that READ them), every refusal, the lane encode for each field type, the
 // layout id, and the shapes the owner and satellite images emit. The C mechanism under them is
@@ -433,4 +435,11 @@ fn test_a_signal_the_comm_thread_sends_is_not_a_satellite_input() {
 	msg := refused(['Speed2'], s, [rw('Pt', 'ctl', 'fast', [], ['Speed2']),
 		rw('Dyn', 'sat', 'model', ['Speed2'], [])], [], '')
 	assert msg.contains('is sent on bus "can0" and read by satellite fb "Dyn"')
+}
+
+fn test_the_pair_pool_size_matches_the_board() {
+	h := os.read_file(os.join_path(@VMODROOT, 'boards', 'h755zi', 'xcore.h')) or { panic(err) }
+	line := h.split_into_lines().filter(it.starts_with('#define XCORE_IOC_N '))
+	assert line.len == 1
+	assert line[0].all_after('XCORE_IOC_N').trim_space().int() == xcore_pair_slots
 }
