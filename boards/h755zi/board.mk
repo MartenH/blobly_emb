@@ -53,3 +53,7 @@ BOARD_LD_CM4_BARE     = $(BOARD_DIR)/cm4_bare.ld
 BOARD_BSP_CM4_THREADX = $(BOARD_COMMON)/crt0.S $(BOARD_COMMON)/vectors_h75x.S \
                         $(BOARD_COMMON)/weak_irq.c $(BOARD_COMMON)/tx_initialize_low_level.S
 BOARD_LD_CM4_THREADX  = $(BOARD_DIR)/cm4_threadx.ld
+# owner -> satellite signals (xcore.h owner-written window): the owner image links
+# BOARD_XCORE_OWNER, the satellite image BOARD_XCORE_SAT
+BOARD_XCORE_OWNER     = $(BOARD_DIR)/xcore_owner.c
+BOARD_XCORE_SAT       = $(BOARD_DIR)/xcore_sat.c

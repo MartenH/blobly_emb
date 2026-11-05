@@ -80,6 +80,48 @@ bus      = "compute"
 frame    = "HostLedFrame"
 cycle_ms = 100
 
+# Signals across the domain's TWO cores (docs/xcore.md), each CM7 -> CM4 shape once, read back off
+# the wire (test/xcore_domain.lua):
+# - DynCmd: a PROTECTED command (DynCmdFrame carries AUTOSAR E2E Profile 1 — Data ID 0x56, CRC byte
+#   4, counter byte 5 — and a 300 ms sender-loss timeout, in compute.dbc). The CM7 comm thread
+#   checks every frame and hands the value DOWN to the CM4 with its receive status (sysgen adds
+#   status and lost to a receiver of an E2E frame); DynamicsModel echoes it as DynEcho while the
+#   status is ok, and 0xFFFFFF00 | status otherwise (never received 0, timeout 2, integrity 3).
+#   No cycle_ms and no GenMsgCycleTime: the test sends it, the watch project's tester stays silent.
+# - HostLedLevel (above), read by PowertrainCtrl on the CM7 AND by DynamicsModel on the CM4: one
+#   lean decode feeds both; the CM4 echoes it as DynLed.
+# - PtState, a CM7 FB output the CM4 reads (node-internal, nodes/domain/ecu.toml): DynPt.
+[[signal]]
+name     = "DynCmd"
+fields   = { cmd = "u32" }
+producer = "tester"
+bus      = "compute"
+frame    = "DynCmdFrame"
+
+[[signal]]
+name     = "DynEcho"
+fields   = { cmd = "u32" }
+producer = "domain"
+bus      = "compute"
+frame    = "DynEchoFrame"
+cycle_ms = 100
+
+[[signal]]
+name     = "DynPt"
+fields   = { seq = "u32" }
+producer = "domain"
+bus      = "compute"
+frame    = "DynPtFrame"
+cycle_ms = 100
+
+[[signal]]
+name     = "DynLed"
+fields   = { permille = "u32" }
+producer = "domain"
+bus      = "compute"
+frame    = "DynLedFrame"
+cycle_ms = 100
+
 [[signal]]
 name     = "SteeringAngle"
 fields   = { deg = "u32" }

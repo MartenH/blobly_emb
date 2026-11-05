@@ -20,9 +20,12 @@
  *          exchange with its own t1/t3 and derives offset + error bound from the three.
  *   +0x20  cross-core IOC pool: xioc_t[XCORE_IOC_N] (96 B each, line-aligned — see
  *          boards/common/xioc.h: plain-store seq-stamped slots; ioc.h's exchange-based
- *          triple buffer is NOT cross-core safe on this fabric, measured 2026-07-12)
- *          slot 0 = the M4 FB's signal {n, acc}     (semantic, 100 Hz)
- *          slot 1 = the stress channel {n, n*K}     (max-rate, tear detection)
+ *          triple buffer is NOT cross-core safe on this fabric, measured 2026-07-12).
+ *          Satellite-written; slot assignments are generated (gen/xcore_gen.h XCORE_SLOT_*)
+ *   +0x1000 wide xioc_n channels, satellite-written (XCORE_XW_*)
+ *   +0x2000 cross-core bulk pools (XCORE_BULK_*)
+ *   +0xF000 owner-written window (XCORE_OW_*): the owner's layout ack + boot nonce, then the
+ *          owner -> satellite xioc_n channels (generated offsets, gen/xcore_gen.h XCORE_OW_*)
  */
 #ifndef BLOBLY_H755_XCORE_H
 #define BLOBLY_H755_XCORE_H
@@ -93,9 +96,48 @@ static inline void xcore_clk_take(void) {
  * [[bulk]] whose producer and consumer sit on DIFFERENT cores places its bulk_t pool in
  * this window instead of a per-image global, so both images address the SAME bytes. The
  * generator lays out per-pool offsets (32 B-aligned) and static-checks the total against
- * XCORE_BULK_MAX. Starts after the wide-xioc window and runs to the top of SRAM4 (0x38010000). */
+ * XCORE_BULK_MAX. Starts after the wide-xioc window and runs to the owner-written window. */
 #define XCORE_BULK_ADDR 0x38002000u
-#define XCORE_BULK_MAX  0xE000u
+#define XCORE_BULK_MAX  0xD000u
+
+/* Owner-written window (owner -> satellite signals): the top 4 KB of SRAM4, above the bulk pools.
+ * The OWNER is the only writer of every cell here; the satellite only reads. The gate:
+ *   NONCE  a retained per-owner-boot value, odd, new every boot (xcore_owner_begin)
+ *   ACK    xcore_ow_ack(NONCE ^ XCORE_LAYOUT_ID), written after every channel is initialised
+ *          (xcore_owner_commit); 0 = retracted (owner re-initialising, or a boot manager parked
+ *          the satellite). A reader opens the gate only on an exact match, so a different build
+ *          or a previous owner boot reads as never-fresh.
+ * The channels are xioc_n channels at generated 32 B-aligned offsets from XCORE_OW_CH_ADDR
+ * (gen/xcore_gen.h XCORE_OW_<SIG>_OFF), budgeted against XCORE_OW_MAX. The base is overridable so
+ * the host test can place the window in an ordinary array. */
+#ifndef XCORE_OW_BASE
+#define XCORE_OW_BASE 0x3800F000u
+#if XCORE_BULK_ADDR + XCORE_BULK_MAX > XCORE_OW_BASE
+#error "cross-core bulk window overlaps the owner-written window"
+#endif
+#if XCORE_OW_BASE + 0x1000u > 0x38010000u
+#error "owner-written window runs past the end of SRAM4"
+#endif
+#endif
+#define XCORE_OW_ACK_ADDR   (XCORE_OW_BASE + 0x00u) /* owner: xcore_ow_ack(nonce ^ LAYOUT_ID), 0 = retracted */
+#define XCORE_OW_NONCE_ADDR (XCORE_OW_BASE + 0x04u) /* owner: retained boot nonce, odd, new per boot */
+#define XCORE_OW_CH_ADDR    (XCORE_OW_BASE + 0x20u) /* xioc_n channels, generator offsets from here */
+#define XCORE_OW_MAX        0x0FE0u
+
+/* the ack value for nonce ^ layout id: never 0, which is the retraction */
+static inline uint32_t xcore_ow_ack(uint32_t v) {
+	return v != 0u ? v : 0x4C594F31u; /* 'LYO1' */
+}
+
+/* owner side (xcore_owner.c, board.mk BOARD_XCORE_OWNER): begin, init each channel, commit —
+ * all before xcore_clk_release; then publish */
+void xcore_owner_begin(void);
+void xcore_ow_init(uint32_t off, uint32_t words);
+void xcore_owner_commit(void);
+void xcore_opub_n(uint32_t off, const uint32_t *src);
+/* satellite side (xcore_sat.c, board.mk BOARD_XCORE_SAT): st = {owner nonce, rd_seq, lanes[words]};
+ * 1 = the lanes hold a value published in this owner boot, 0 = default (lanes zero) */
+int xcore_down_read(uint32_t off, uint32_t words, uint32_t *st);
 
 /* HSEM semaphore for the cross-core bulk doorbell: the CM4 releases it after each publish to
  * raise IRQ125 (HSEM1) on the CM7, whose ISR wakes the comm thread to drain the pool. ONE source

@@ -7,7 +7,7 @@
 
 xcore is everything two cores need to cooperate on an **AMP** part (one chip, independent kernels
 per core — e.g. the STM32H755's Cortex-M7 "owner" + Cortex-M4 "satellite"). It is *not* a message
-bus: it is a fixed shared-memory map plus two boot handshakes, and on top of those a small set of
+bus: it is a fixed shared-memory map plus three boot handshakes, and on top of those a small set of
 single-writer/single-reader primitives (signals, bulk, trace, load). One generator run
 (`ecu.toml` → loom2v) emits **both** images, so the two sides are matched by construction.
 
@@ -31,15 +31,18 @@ is claimed by either core's linker.
 | `+0x020` | IOC pool `xioc_t[N]` | sat → owner | cross-core **signals** (the {a,b} pair cell) |
 | `+0x200` | trace handoff cell + records | both | two-core **trace** dump |
 | `+0xC00` | bench burst flag + **load** slots (`u16[8]`) | mixed | bulkperf trigger; per-core **CpuLoad** |
-| `+0x1000` | wide-signal window (`XW`, 4 KB) | sat → owner | **wide** signals (>2 fields / sub-u32) |
-| `+0x2000` | **bulk** window (56 KB, to top of SRAM4) | producer → consumer | zero-copy **blocks** |
+| `+0x1000` | wide-signal window (`XW`, 4 KB) | sat → owner | **wide** signals (>2 fields, or a field not `u32`) |
+| `+0x2000` | **bulk** window (52 KB, to the owner window) | producer → consumer | zero-copy **blocks** |
+| `+0xF000` | owner **ACK** (`ack(nonce ^ LAYOUT_ID)`, 0 = retracted) | owner → sat | matched-images handshake #3 |
+| `+0xF004` | owner boot **nonce** (retained, odd, new per boot) | owner → sat | " |
+| `+0xF020` | owner-written window (`OW`, to top of SRAM4) | owner → sat | **down** signals (owner → satellite) |
 
 One HSEM semaphore (sem 0) is the bulk **doorbell**: the producing core releases it → IRQ125
 (HSEM1) on the owner → its comm thread drains the pool on publish instead of polling.
 
-## Two handshakes
+## Three handshakes
 
-Both exist because **SRAM4 is retained across resets** — a naive shared cell can carry a previous
+All three exist because **SRAM4 is retained across resets** — a naive shared cell can carry a previous
 boot's value into the next one.
 
 **#1 Clocks-ready — releasing the satellite.** On the H755 only the owner brings up the PLL. The
@@ -60,17 +63,42 @@ stale or differently-built satellite therefore reads as **never-fresh**, never a
 (signal A's bytes surfacing as signal B). The satellite zeroes ACK first thing at boot, so polling
 stops while it re-inits.
 
+**#3 Owner ACK — the down direction.** The same gate, mirrored, for what the owner writes. The
+owner's generated `boot()` retracts its ACK, bumps its own **retained odd nonce**, initialises every
+owner → satellite channel with a sequence seed derived from that nonce, and only then commits
+`ACK = ack(nonce ^ XCORE_LAYOUT_ID)` — all before it releases the satellite's clocks
+(`boards/h755zi/xcore_owner.c`). The satellite's reader checks the ACK on **every read**: a
+retracted or mismatched ACK reads as the port default, and a changed owner nonce resets the
+reader to the default, so a new owner boot never shows the previous boot's value. A boot manager
+that stays for programming retracts this ACK too (`boot_park_satellite`).
+
 ## The primitives
 
 - **Signals (`xioc`).** Plain-store, sequence-stamped slots (`boards/common/xioc.h`): the writer
   stamps a sequence, writes the payload, re-stamps; the reader retries on a torn stamp. `ioc.h`'s
   exchange-based triple buffer is **not** cross-core safe on this fabric (LDREX/STREX doesn't
-  arbitrate across cores here — 162/200k torn reads measured before this design). A `from = <sat>`
-  signal derives a slot; the satellite publishes via `xcore_pub`, the owner reads via `xcore_poll`.
-- **Wide signals (`xioc_n`).** Signals past the {a,b} pair — 3+ fields, sub-u32 types, or a
-  `valid` flag — ride size-proportional channels in the `XW` window; per-signal offsets are
-  generated and static-checked against the budget. Same plain-store discipline; a mismatched
-  writer reads as never-fresh (the layout handshake again).
+  arbitrate across cores here — 162/200k torn reads measured before this design). The direction
+  comes from where the FBs sit, never from config: a signal **produced on a satellite** derives an
+  up slot — the satellite publishes via `xcore_pub`, the owner reads via `xcore_poll` (the pool
+  holds `XCORE_IOC_N` = 4 pair slots; a fifth is a build error in `xcore_gen.h`); a signal
+  **produced on the owner** (an owner FB's output, or a frame the comm thread receives) that a
+  satellite FB **reads** derives a down channel in the `OW` window. Readers come from the FBs'
+  `reads`, not the signal's `to`, so an owner FB and a satellite FB may read one signal — its one
+  writer feeds both.
+- **Wide signals (`xioc_n`).** Signals past the {a,b} pair — 3+ fields, or any field not `u32` —
+  ride size-proportional channels in the `XW` window; per-signal offsets are generated and
+  static-checked against the budget. Same plain-store discipline; a mismatched writer reads as
+  never-fresh (the layout handshake again). Every down channel is an `xioc_n` channel.
+  A field takes one u32 **lane** (`bool`/`u8`/`u16`/`u32`/`i8`/`i16`/`i32`/`f32`; signed as two's
+  complement, `f32` by its bits) or two (`u64`/`i64`/`f64`, low word first); a channel carries
+  1..16 lanes and is copied whole under its sequence stamp, so a 64-bit field never tears. The
+  reader state lives in the reading thread's own state struct, so any number of reader threads is
+  safe (the owner reads a wide up signal the same way).
+- **Down writers.** A received signal is written by the comm thread: a lean frame as one lane
+  (the value field), a checked frame (deadline, E2E, SecOC, `status`/`lost`, several read signals,
+  a non-trivial layout, a fault source) as every field including its `RxStatus`, on receipt and on
+  timeout. An owner FB's output is written by that FB's thread. The owner allocates its IOC and
+  byte-IOC cells only for owner readers.
 - **Bulk.** A `[[bulk]]` whose producer and consumer sit on different cores places its SPSC pool
   (`boards/common/bulk.h`) in the bulk window instead of a per-image arena, so both images address
   the same bytes via the `xcore_bulk_base()` seam (glue-provided, never `#include`d by generated
@@ -89,11 +117,15 @@ stops while it re-inits.
 ## How the generator wires it
 
 `has_satellite(m)` (any `[[partition]]` with `image = <dir>`) drives everything: loom2v emits the
-satellite image, the owner's `boot()` release call, and the `xcore_gen.h` contract (`LAYOUT_ID` +
-the slot map) — the last is written for **every** satellite owner, even a bulk/CpuLoad-only node
+satellite image, the owner's `boot()` release call (preceded, when there is a down channel, by
+the owner-window bring-up of handshake #3), and the `xcore_gen.h` contract (`LAYOUT_ID` + the slot
+map, the down channels' `XCORE_OW_*` offsets included) — the last is written for **every** satellite owner, even a bulk/CpuLoad-only node
 with no cross-core signal, because the boot handshake needs `LAYOUT_ID`. The glue C provides the
 board seams (`xcore_bulk_base`, `xcore_clocks_ready`, the strong `xcore_load_get/pub`); generated
-code never includes the board header. See [multi-image.md](multi-image.md).
+code never includes the board header. The owner → satellite seams are shared board C instead
+(`boards/h755zi/xcore_owner.c` / `xcore_sat.c`, the board's `BOARD_XCORE_OWNER` /
+`BOARD_XCORE_SAT`), linked through the image's `gen/loom_build.mk` (`LOOM_GLUE_SRCS`) when its
+generated code declares them. See [multi-image.md](multi-image.md).
 
 ## Boundaries and known limits
 
@@ -105,12 +137,16 @@ code never includes the board header. See [multi-image.md](multi-image.md).
   satellite reset takes the whole system down (a system reset of *both* cores), not in-place
   recovery. The mechanism — a restart-unique clock request/ack mirroring the layout REQ/ACK nonce,
   and quiescing bulk before re-init — is tracked under ROADMAP *Fault handling & shutdown*, not
-  built. Until then, do not rely on a lone core restarting cleanly beside a live one.
+  built. Until then, do not rely on a lone core restarting cleanly beside a live one. The
+  owner-written window is the exception: its reader is gated on the owner ACK and resets on a new
+  owner nonce (handshake #3), so a down signal reads as the default across an owner reboot, never
+  as the previous boot's value.
 - **Platform telemetry uses raw slots, not IOC channels.** The heartbeat, clocks-ready, epoch,
   trace `svc_us`, and CpuLoad are single-writer/single-reader `volatile` cells, deliberately *not*
   routed through an `xioc`/OSAL channel. They are platform plumbing, not application signal data
   crossing a partition boundary — the same call as "bulk is not routed through IOC"
   ([memory-protection.md](memory-protection.md) draws the line). Application data crossing cores
   goes through `xioc`/bulk; platform state uses the map.
-- **One owner, N satellites.** The map assumes a single owner core arbitrating; satellite images
-  are peers of each other only through the owner.
+- **One owner, N satellites.** The map assumes a single owner core arbitrating. No channel runs
+  satellite to satellite: a value reaches another satellite only through an owner FB that reads it
+  and writes a signal of its own, which goes down.

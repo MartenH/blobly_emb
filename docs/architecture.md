@@ -196,16 +196,19 @@ up the clocks, owns the buses, and arbitrates. The other is a **satellite** — 
 own bank. The SRAM4 *map* anticipates more (the CpuLoad array is indexed by core; the naming is
 "N satellites"), but **today it is exactly one**: the layout-ack and IOC cells are singular
 (`XCORE_LAYOUT_ACK_ADDR`, `XCORE_IOC_ADDR`), and the model validator rejects a second satellite
-producer. Direction is one-way too: cross-core signals flow **satellite → owner**; the owner→satellite
-direction is rejected, and even satellite→owner only reaches an owner *bus* today — a satellite
-signal consumed by an owner **FB** is the rung-2b generator path (still landing), so the storage
-exists but no owner-FB reads it yet. Satellites are peers only *through* the owner.
+producer. Cross-core signals flow **both ways**, derived from where the FBs sit: a satellite's
+output goes up to an owner bus or an owner FB (xioc slots / wide channels the satellite writes),
+and an owner FB's output or a frame the owner receives goes down to a satellite FB that reads it
+(`xioc_n` channels in an owner-written window, behind an owner-side ack). No channel runs
+satellite to satellite: a value reaches another satellite only through an owner FB.
 
 **Boot — there is no boot thread.** Bring-up runs in bare `main()` / the generated `gen.boot()`,
 before any kernel:
 1. The **owner** boots from flash bank 1: `board_clock_init` (the PLL), then `gen.boot()`, whose
    first act — when it owns a satellite — is `xcore_clocks_ready`: it enables the inter-core HSEM
-   and writes the clocks-ready marker, **releasing** the parked satellites. Then `tx_kernel_enter`.
+   and writes the clocks-ready marker, **releasing** the parked satellites. (When a satellite reads
+   an owner signal, the owner-written window is initialised and its ack committed just before that
+   release — [xcore.md](xcore.md), handshake #3.) Then `tx_kernel_enter`.
 2. Each **satellite** auto-boots from its own bank and parks in `xcore_wait_clocks()` until that
    marker appears (so its SysTick is set against the *final* HCLK, not the reset clock), then starts
    its timebase, inits its xioc channels, and enters its own kernel. It **publishes a layout ack
@@ -214,16 +217,18 @@ before any kernel:
    (Warm-reset caveat: SRAM4 is retained, so a lone-core restart is not yet safe — see xcore.md.)
 
 **Bulk buffers, and sizing them.** Yes, the xcore region holds the cross-core **bulk** pools, in a
-dedicated window (`XCORE_BULK_ADDR`, budget `XCORE_BULK_MAX` — ~56 KB to the top of SRAM4). A pool's
+dedicated window (`XCORE_BULK_ADDR`, budget `XCORE_BULK_MAX` — 52 KB, up to the owner-written window
+at the top of SRAM4). A pool's
 footprint is *more* than `bufsz × nbuf`: each pool adds a 96-B header + a `12 × nbuf` descriptor
 area, then rounds to 32 B (`bulk_bytes()` in `gen_bulk.v`) — so size against that `BULK_BYTES`, not
 payload alone, or a pool that looks like it fits can fail generation. The generator packs all pools
 32-B-aligned and **static-checks the total against the budget** (overflow is a build error, not a
 silent stomp). To make a pool bigger, raise `bufsz`/`nbuf` in `ecu.toml`. Growing the *window* is more than one knob:
-`XCORE_BULK_MAX` (`0xE000`) is defined in the board's `xcore.h`, but the generator's `emit_bulk_glue`
-currently **hard-codes the same `0xE000`**, so both must change together — and SRAM4 physically ends
-at `0x38010000`, so the window can only extend *down* over the wide-signal region (if unused) before
-the linker layout itself has to move. Bulk is a **platform** service — the app never touches the pool
+`XCORE_BULK_MAX` (`0xD000`) is defined in the board's `xcore.h`, but the generator's `emit_bulk_glue`
+currently **hard-codes the same `0xD000`**, so both must change together — and the owner-written
+window sits above it (`XCORE_OW_BASE`, the last 4 KB; `xcore.h` refuses an overlap at compile time),
+so the window can only extend *down* over the wide-signal region (if unused) or take from the owner
+window. Bulk is a **platform** service — the app never touches the pool
 (docs/bulk-transport.md).
 
 ## Data-flow paths

@@ -118,9 +118,9 @@ fn test_the_fixture_is_a_valid_segment() {
 
 fn test_the_producer_gets_its_endpoint_service_and_event() {
 	sys := tel_system()
-	out := generate_someip_node(sys, sys.nodes[0], sys.buses[0], sysmodel.NodeView{}, {
+	out := generate_someip_node(sys, sys.nodes[0], sys.buses[0], sysmodel.NodeView{}, both({
 		'BenchLoad': 'app'
-	}, '[target]\nkind = "threadx"') or { panic(err) }
+	}), '[target]\nkind = "threadx"') or { panic(err) }
 	// its own address and port, and the service the BUS holds every member to
 	assert out.contains('interface = "192.168.0.51"')
 	assert out.contains('port    = 30490')
@@ -142,10 +142,10 @@ fn test_the_receiver_gets_the_event_without_a_tx_mode() {
 	view := sysmodel.NodeView{
 		fb_reads: ['BenchLoad']
 	}
-	out := generate_someip_node(sys, sys.nodes[1], sys.buses[0], view, {
+	out := generate_someip_node(sys, sys.nodes[1], sys.buses[0], view, both({
 		'BenchLoad': 'bench'
 		'LampCmd':   'bench'
-	}, '') or { panic(err) }
+	}), '') or { panic(err) }
 	assert out.contains('id      = 0x8001'), out
 	assert !out.contains('tx      ='), 'a receiving node must not declare a tx mode:\n${out}'
 	// ...and the direction is bus -> partition
@@ -251,11 +251,11 @@ fn test_an_event_no_member_reads_is_refused_on_a_larger_segment() {
 fn test_a_member_with_two_partners_gets_a_peer_per_event() {
 	sys := tel_system_of_three()
 	bench := sys.nodes[1]
-	out := generate_someip_node(sys, bench, sys.buses[0], bench.view, {
+	out := generate_someip_node(sys, bench, sys.buses[0], bench.view, both({
 		'LampCmd':   'bench'
 		'BenchLoad': 'bench'
 		'GwUptime':  'bench'
-	}, '') or { panic(err) }
+	}), '') or { panic(err) }
 	assert out.contains('peer    = "192.168.0.51:30490"'), out
 	gw := out.index('name    = "GwStatus"') or { panic('GwStatus not lowered:\n${out}') }
 	assert out[gw..].contains('peer    = "192.168.0.50:30490"'), out
@@ -264,9 +264,9 @@ fn test_a_member_with_two_partners_gets_a_peer_per_event() {
 	assert !out[tl..gw].contains('peer'), out
 	// ...and a member with ONE partner lowers exactly as a segment of two always has
 	g := sys.nodes[2]
-	gout := generate_someip_node(sys, g, sys.buses[0], g.view, {
+	gout := generate_someip_node(sys, g, sys.buses[0], g.view, both({
 		'GwUptime': 'gateway'
-	}, '') or { panic(err) }
+	}), '') or { panic(err) }
 	assert gout.contains('peer    = "192.168.0.190:30491"'), gout
 	assert gout.count('peer    =') == 1, gout
 }
@@ -328,11 +328,11 @@ fn test_a_whole_event_subscriber_declares_every_signal() {
 	view := sysmodel.NodeView{
 		fb_reads: ['BenchLoad', 'BenchTicks']
 	}
-	out := generate_someip_node(sys, sys.nodes[1], sys.buses[0], view, {
+	out := generate_someip_node(sys, sys.nodes[1], sys.buses[0], view, both({
 		'BenchLoad':  'bench'
 		'BenchTicks': 'bench'
 		'LampCmd':    'bench'
-	}, '') or { panic(err) }
+	}), '') or { panic(err) }
 	assert out.contains('name   = "BenchLoad"')
 	assert out.contains('name   = "BenchTicks"'), out
 }
@@ -342,9 +342,9 @@ fn test_a_whole_event_subscriber_declares_every_signal() {
 fn test_a_tx_table_without_a_mode_survives_lowering() {
 	mut sys := tel_system()
 	sys.frames[0].tx_mode = ''
-	out := generate_someip_node(sys, sys.nodes[0], sys.buses[0], sysmodel.NodeView{}, {
+	out := generate_someip_node(sys, sys.nodes[0], sys.buses[0], sysmodel.NodeView{}, both({
 		'BenchLoad': 'app'
-	}, '') or { panic(err) }
+	}), '') or { panic(err) }
 	assert out.contains('tx      = { cycle_ms = 300 }'), out
 }
 
@@ -530,9 +530,9 @@ fn test_a_can_route_gateway_may_be_a_someip_member() {
 fn test_a_gateway_member_is_lowered_with_both_halves() {
 	sys := gateway_member_system()
 	g := sys.nodes[2]
-	out := generate_gateway_node(sys, g, '[target]\nkind = "threadx"', g.view, {
+	out := generate_gateway_node(sys, g, '[target]\nkind = "threadx"', g.view, both({
 		'GwUptime': 'gateway'
-	}) or { panic(err) }
+	})) or { panic(err) }
 	// its CAN buses, and no CAN-shaped table for the segment
 	assert out.contains('[bus.can0]') && out.contains('[bus.can1]'), out
 	assert !out.contains('[bus.]'), out
@@ -955,17 +955,17 @@ fn test_the_doip_fixture_is_valid() {
 
 fn test_doip_is_lowered_at_the_endpoint_address() {
 	sys := doip_system()
-	out := generate_someip_node(sys, sys.nodes[0], sys.buses[0], sysmodel.NodeView{}, {
+	out := generate_someip_node(sys, sys.nodes[0], sys.buses[0], sysmodel.NodeView{}, both({
 		'BenchLoad': 'app'
-	}, '') or { panic(err) }
+	}), '') or { panic(err) }
 	assert out.contains('[doip]\naddress         = "192.168.0.51"\nlogical_address = 0x7A0\n'), out
 	assert !out.contains('functional_address'), out
 	// and only where it is declared
 	b := sys.nodes[1]
-	bout := generate_someip_node(sys, b, sys.buses[0], b.view, {
+	bout := generate_someip_node(sys, b, sys.buses[0], b.view, both({
 		'LampCmd':   'bench'
 		'BenchLoad': 'bench'
-	}, '') or { panic(err) }
+	}), '') or { panic(err) }
 	assert !bout.contains('[doip]'), bout
 }
 
@@ -976,13 +976,13 @@ fn test_the_subnet_is_lowered_beside_the_address() {
 	views := {
 		'BenchLoad': 'app'
 	}
-	plain := generate_someip_node(sys, sys.nodes[0], sys.buses[0], sysmodel.NodeView{}, views,
+	plain := generate_someip_node(sys, sys.nodes[0], sys.buses[0], sysmodel.NodeView{}, both(views),
 		'') or { panic(err) }
 	assert !plain.contains('netmask') && !plain.contains('gateway'), plain
 	sys.nodes[0].endpoint_netmask = '255.255.0.0'
 	sys.nodes[0].endpoint_gateway = '192.168.0.254'
 	assert seg_errs(sys).len == 0, seg_errs(sys).str()
-	out := generate_someip_node(sys, sys.nodes[0], sys.buses[0], sysmodel.NodeView{}, views,
+	out := generate_someip_node(sys, sys.nodes[0], sys.buses[0], sysmodel.NodeView{}, both(views),
 		'') or { panic(err) }
 	assert out.contains('[bus.eth0]\nkind      = "eth"\ninterface = "192.168.0.51"\nnetmask   = "255.255.0.0"\ngateway   = "192.168.0.254"\ncore      = 0\n'), out
 	assert out.contains('[doip]\naddress         = "192.168.0.51"\nnetmask         = "255.255.0.0"\ngateway         = "192.168.0.254"\nlogical_address = 0x7A0\n'), out
@@ -1757,16 +1757,16 @@ fn test_an_ip_host_needs_no_port_and_no_event() {
 	assert seg_errs(sys) == [], seg_errs(sys).str()
 	// not a member of the service: the segment is still the two members, each the other's peer
 	assert sys.someip_members('tel').map(it.name) == ['tcu', 'bench']
-	out := generate_someip_node(sys, sys.nodes[0], sys.buses[0], sysmodel.NodeView{}, {
+	out := generate_someip_node(sys, sys.nodes[0], sys.buses[0], sysmodel.NodeView{}, both({
 		'BenchLoad': 'app'
-	}, '') or { panic(err) }
+	}), '') or { panic(err) }
 	assert out.contains('peer    = "192.168.0.190:30491"'), out
 }
 
 fn test_an_ip_host_is_lowered_without_a_someip_half() {
 	mut sys := tel_system()
 	sys.nodes << ip_host()
-	out := generate_someip_node(sys, sys.nodes[2], sys.buses[0], sysmodel.NodeView{}, map[string]string{},
+	out := generate_someip_node(sys, sys.nodes[2], sys.buses[0], sysmodel.NodeView{}, both(map[string]string{}),
 		'[[partition]]\nname = "ota"') or { panic(err) }
 	assert !out.contains('[bus.eth0]') && !out.contains('[someip]') && !out.contains('[[frame]]'), out
 	assert out.contains('[[partition]]'), out
@@ -1894,4 +1894,12 @@ fn test_someip_on_a_composed_node_is_refused() {
 	sys.nodes << ip_host()
 	e := sysmodel.validate_system(sys).filter(it.severity == .error).map(it.msg)
 	assert e.any(it.contains('"ota_gw": endpoint `someip` is read by sysgen')), e.str()
+}
+
+// both: the same partition map for writers and readers, as these fixtures name one partition per signal.
+fn both(m map[string]string) SigParts {
+	return SigParts{
+		writer: m
+		reader: m
+	}
 }

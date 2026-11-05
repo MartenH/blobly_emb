@@ -269,12 +269,17 @@ fn rx_publish_block(m Model, msg string, bname string, list []string, p string, 
 		if pl == '' {
 			continue
 		}
+		// a publish may be several statements (the FBs' cell and the satellite's channel)
 		if !si.has_status && integ {
 			out << '${i}if ${p} != .integrity {'
-			out << '${i}\t${pl}'
+			for l in pl.split('\n') {
+				out << '${i}\t${l}'
+			}
 			out << '${i}}'
 		} else {
-			out << '${i}${pl}'
+			for l in pl.split('\n') {
+				out << '${i}${l}'
+			}
 		}
 	}
 	guard := if integ { '${p} != .integrity && ' } else { '' }

@@ -315,3 +315,26 @@ fn test_the_satellite_clock_release_is_consumed_and_retracted() {
 	assert park < (body.index('boot.decide(') or { -1 }), 'the satellite is parked after the boot decision — a jump to the app skips it'
 	assert park < (body.index('C.board_clock_init()') or { -1 }), 'the boot changes the clocks before parking the satellite'
 }
+
+// A generated satellite image (a CM4, image = <dir>) links what its generation asks for too: the
+// owner->satellite reader is shared board C named in its gen/loom_build.mk, which the owner's gen
+// writes — so the satellite's Makefile remakes it from there and lists $(LOOM_GLUE_SRCS).
+fn test_every_satellite_makefile_links_the_generated_glue() {
+	ex := os.join_path(@VMODROOT, 'examples')
+	mut mks := []string{}
+	for d in os.ls(ex) or { panic(err) } {
+		mks << os.join_path(ex, d, 'Makefile')
+		for n in os.ls(os.join_path(ex, d, 'nodes')) or { []string{} } {
+			mks << os.join_path(ex, d, 'nodes', n, 'Makefile')
+		}
+	}
+	mks = mks.filter(os.is_file(it) && (os.read_file(it) or { '' }).contains('BOARD_BSP_CM4_THREADX'))
+	assert mks.len >= 2, 'found only ${mks.len} satellite Makefiles: ${mks}'
+	for mk in mks {
+		src := os.read_file(mk) or { panic(err) }
+		assert src.contains('\n-include gen/loom_build.mk'), '${mk}: does not include gen/loom_build.mk'
+		// the owner's gen makes both: a missing fragment runs it, never an empty recipe
+		assert src.contains('\ngen/loom_gen.v gen/loom_build.mk:\n\t$(MAKE) -C '), '${mk}: gen/loom_build.mk is not remade by the owner\'s gen — a build without it links without the reader'
+		assert bsp_definition(src).contains('$(LOOM_GLUE_SRCS)'), '${mk}: BSP does not list $(LOOM_GLUE_SRCS)'
+	}
+}

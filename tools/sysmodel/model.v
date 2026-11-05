@@ -428,6 +428,9 @@ pub mut:
 	// signal name -> the distinct partitions whose FBs read it (a cross-node RX
 	// signal read from >1 partition = concurrent readers of one SPSC IOC channel).
 	read_partitions map[string][]string
+	// partitions built as their OWN image (`image = ...` or `external = true`): a satellite core.
+	// Every other partition of the node is the owner image.
+	image_partitions map[string]bool
 	// a dissolved partial is INTERNALS-ONLY for BUS wiring: it must declare no
 	// bus-endpoint [[signal]], no [[frame]], no [[route]] (the system owns those).
 	// NODE-LOCAL signals — an io point or a node-internal cross-partition signal,
@@ -965,6 +968,20 @@ pub fn load_node(path string) !NodeView {
 // parse_node_view extracts the system-relevant slice of a node's ecu.toml — the
 // PURE parse with NO external gate. load_node adds the ecucheck; the DISSOLUTION
 // generator (tools/sysgen) runs this directly on a partial node's internals.
+// image_partitions_of: the partitions of a node's ecu.toml that are their own image — a generated
+// satellite (`image = ...`) or a hand-written one (`external = true`), loom2v's rule; every other
+// partition is the owner image. The one statement sysmodel's checks and sysgen both read.
+pub fn image_partitions_of(doc toml.Doc) map[string]bool {
+	mut out := map[string]bool{}
+	for p in (doc.value_opt('partition') or { toml.Any([]toml.Any{}) }).array() {
+		pm := p.as_map()
+		if m_str(pm, 'image') != '' || m_bool(pm, 'external') {
+			out[m_str(pm, 'name')] = true
+		}
+	}
+	return out
+}
+
 pub fn parse_node_view(doc toml.Doc) NodeView {
 	mut v := NodeView{}
 	// [bus.<name>] — the node's local bus tables. The table KEY is the node's
@@ -1067,6 +1084,7 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 			thread_part[m_str(t.as_map(), 'name')] = pname
 		}
 	}
+	v.image_partitions = image_partitions_of(doc)
 	if fbv := doc.value_opt('fb') {
 		for fb in fbv.array() {
 			fm := fb.as_map()

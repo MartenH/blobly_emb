@@ -53,10 +53,16 @@ int boot_rng(uint8_t *out, int n) {
 /* boot_park_satellite: on a dual-core part (the board has an xcore.h), retract the satellite's
  * clock release before the boot touches the clocks — SRAM4 survives the reset that brought us here,
  * and a release left in it would start the CM4's kernel under clocks about to change. The CM7
- * application releases it again once it has set them. A single-core board has nothing to park. */
+ * application releases it again once it has set them. It also retracts the owner-written window's
+ * ack, so a satellite running beside a boot manager reads its owner signals as never-fresh rather
+ * than a previous owner boot's values. A single-core board has nothing to park. */
 #if __has_include("xcore.h")
 #include "xcore.h"
-void boot_park_satellite(void) { xcore_clk_retract(); }
+void boot_park_satellite(void) {
+	xcore_clk_retract();
+	*(volatile uint32_t *)XCORE_OW_ACK_ADDR = 0u;
+	__asm__ volatile("dsb");
+}
 #else
 void boot_park_satellite(void) {}
 #endif

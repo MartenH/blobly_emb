@@ -1,11 +1,15 @@
 # domain (H755 dual-core) — Powertrain & Dynamics + persistence.
 #
 #   CM7 (core 0, "powertrain") — PowertrainCtrl: reads SteeringAngle (from zone_a via the
-#     gateway) + the CM4's TorqueEstimate; writes VehicleSpeed + HeadlightCmd; owns DriveMode,
-#     a persisted calibration that survives resets (NvM journal, docs/nvm.md).
+#     gateway) + the CM4's TorqueEstimate; writes VehicleSpeed + HeadlightCmd + PtState (down to
+#     the CM4); owns DriveMode, a persisted calibration that survives resets (NvM journal,
+#     docs/nvm.md).
 #   CM4 (core 1, "dynamics")   — DynamicsModel co-processor: a high-rate torque estimate
 #     published cross-core (xioc) to the control loop, PLUS a bulk model-detail stream the CM7
 #     platform consumes. bulkperf (shell) bursts that stream to measure raw cross-core throughput.
+#     It also reads three owner -> satellite signals and reports each back on the bus: DynCmd (a
+#     protected frame the CM7 comm thread checks, with its receive status) as DynEcho, HostLedLevel
+#     (read by PowertrainCtrl too) as DynLed, and PtState (a CM7 FB output) as DynPt.
 #
 # NOTE: no inline comments inside [[...]] tables — a comment in a nested table trips V's TOML
 # parser (drops the next key). See vlang/v#27684.
@@ -52,12 +56,22 @@ persist = "now"
 # TorqueEstimate: the CM4 "dynamics" co-processor's output, read by the CM7 control loop — a
 # CROSS-CORE signal into an owner FB. from = "dynamics" (core 1) derives an xioc slot; PowertrainCtrl
 # reads it via the xioc seam, layout-gated (docs/xcore.md). This is the cross-core signal FEEDING the
-# control loop (rung 1 deferred it: the owner-FB read emitted host-only osal — fixed in loom2v rung 2b).
+# control loop.
 [[signal]]
 name   = "TorqueEstimate"
 fields = { nm = "u32" }
 from   = "dynamics"
 to     = "powertrain"
+
+# PtState: the other direction — a CM7 FB output the CM4 reads (owner -> satellite, an xioc_n
+# channel in the owner-written window, docs/xcore.md). Two lanes written together: seq = the CM7
+# tick count, inv = its complement, so the CM4 reports DynPt = seq only when both lanes came from
+# one publish (0xFFFFFFFF if they ever tore) — a bench reads the rate and the integrity off 0x12A.
+[[signal]]
+name   = "PtState"
+fields = { seq = "u32", inv = "u32" }
+from   = "powertrain"
+to     = "dynamics"
 
 [[fb]]
 name   = "PowertrainCtrl"
@@ -67,7 +81,7 @@ thread = "fast"
   name      = "on_50ms"
   period_ms = 50
   reads     = ["SteeringAngle", "TorqueEstimate", "DriveMode", "HostLedLevel"]
-  writes    = ["VehicleSpeed", "HeadlightCmd", "LedLevel", "HostLed", "DriveMode"] # trailing comment terminates nested block (vlang/v#27684)
+  writes    = ["VehicleSpeed", "HeadlightCmd", "LedLevel", "HostLed", "DriveMode", "PtState"] # trailing comment terminates nested block (vlang/v#27684)
 
 [target]
 kind    = "threadx"
@@ -188,10 +202,14 @@ bufsz    = 256
 nbuf     = 4
 
 # --- the CM4 co-processor (satellite image, docs/multi-image.md): an ORDINARY partition whose
-# image the generator emits into examples/system_full/nodes/domain_m4 (image = <dir>). For rung 1
-# it exists to run the platform BULK producer (m4_glue.c, the "model" pool) + a self-contained
-# co-processor FB. A cross-core SIGNAL into the CM7 control loop (xioc) is rung 2 — the owner-FB
-# read path (osal.ioc_acquire2) is host-only today. Keep nested tables comment-free (vlang/v#27684).
+# image the generator emits into examples/system_full/nodes/domain_m4 (image = <dir>). It runs the
+# platform BULK producer (m4_glue.c, the "model" pool) and DynamicsModel, whose signals cross the
+# cores both ways (docs/xcore.md): TorqueEstimate UP into the CM7 control loop (an xioc pair slot),
+# DynEcho, DynLed and DynPt UP onto the bus (the CM7 comm thread transmits them), and DynCmd,
+# HostLedLevel and PtState DOWN from the CM7 (owner -> satellite channels in the owner-written
+# window) — DynCmd as the comm thread checked it (value, status, lost), HostLedLevel as it decoded
+# it for PowertrainCtrl too, PtState as PowertrainCtrl wrote it. Keep nested tables comment-free
+# (vlang/v#27684).
 [[partition]]
 name  = "dynamics"
 core  = 1
@@ -208,4 +226,5 @@ thread = "model"
   [[fb.handler]]
   name      = "on_5ms"
   period_ms = 5
-  writes    = ["TorqueEstimate"]
+  reads     = ["DynCmd", "HostLedLevel", "PtState"]
+  writes    = ["TorqueEstimate", "DynEcho", "DynLed", "DynPt"] # trailing comment terminates nested block (vlang/v#27684)

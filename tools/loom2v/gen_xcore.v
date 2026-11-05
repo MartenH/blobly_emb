@@ -57,6 +57,9 @@ fn xcore_gen_h(m Model) []string {
 		pairs++
 	}
 	g << '#define XCORE_GEN_SLOTS ${pairs}'
+	g << '#if defined(XCORE_IOC_N) && (XCORE_GEN_SLOTS > XCORE_IOC_N)'
+	g << '#error "cross-core pair signals overflow the board pool — grow XCORE_IOC_N (xcore.h) or make one wide"'
+	g << '#endif'
 	g << '/* the layout id: an FNV-1a hash of the WHOLE slot/offset/schema map. The'
 	g << ' * satellite acks it against the owner boot nonce (xcore.h REQ/ACK cells) after'
 	g << ' * init; the owner polls nothing until the ack matches — two images from'
@@ -72,13 +75,14 @@ fn xcore_gen_h(m Model) []string {
 			}
 			u := snake(sname).to_upper()
 			g << '#define XCORE_XW_${u}_OFF ${m.xcore_xw_off[sname] or { 0 }}u'
-			g << '#define XCORE_XW_${u}_WORDS ${si.fields.len}u'
+			g << '#define XCORE_XW_${u}_WORDS ${sig_lanes(si)}u'
 		}
 		g << '#define XCORE_XW_TOTAL ${m.xcore_xw_total}u'
 		g << '#if defined(XCORE_XW_MAX) && (XCORE_XW_TOTAL > XCORE_XW_MAX)'
 		g << '#error "wide xioc channels overflow the board window — grow XCORE_XW_MAX (xcore.h) or shed signals"'
 		g << '#endif'
 	}
+	g << xdown_gen_h(m)
 	g << '#endif'
 	return g
 }
@@ -104,11 +108,13 @@ fn xcore_layout_id(m Model) u32 {
 			fs += '${f.name}=${f.typ},'
 		}
 		if si.wide {
-			desc += '${sname}:xw+${m.xcore_xw_off[sname] or { 0 }}:${si.fields.len}[${fs}]|'
+			desc += '${sname}:xw+${m.xcore_xw_off[sname] or { 0 }}:${sig_lanes(si)}[${fs}]|'
 		} else {
 			desc += '${sname}:${m.xcore_idx[sname] or { 0 }}[${fs}]|'
 		}
 	}
+	// the owner -> satellite channels follow, marked by direction (gen_xdown.v)
+	desc += xdown_layout_desc(m)
 	mut h := u32(2166136261)
 	for b in desc.bytes() {
 		h = (h ^ u32(b)) * 16777619
@@ -147,7 +153,7 @@ fn xcore_comm_locals(m Model) []string {
 				// wide reader state: the seq + lane buffer xcore_poll_n commits into
 				// (last-good retention — on a stale poll the lanes stay untouched)
 				g << '\tmut xcore_${snake(sname)}_seq := u32(0)'
-				g << '\tmut xcore_${snake(sname)}_lanes := [${si.fields.len}]u32{}'
+				g << '\tmut xcore_${snake(sname)}_lanes := [${sig_lanes(si)}]u32{}'
 			} else {
 				g << '\tmut xcore_${snake(sname)}_a := u32(0)'
 				g << '\tmut xcore_${snake(sname)}_b := u32(0)'
@@ -195,9 +201,9 @@ fn xcore_produce_drain(m Model) []string {
 			// classic comm thread rejects it there, loudly).
 			off := m.xcore_xw_off[sname] or { 0 }
 			g << '\t\tif ${nm_gate(m)}${diag_tx_gate(m)}C.xcore_layout_ok() != 0 && t1 - xcore_${n}_last >= u64(${cyc}) && ch.tx_ready()'
-			g << '\t\t\t&& C.xcore_poll_n(u32(${off}), ${si.fields.len}, &xcore_${n}_seq, &xcore_${n}_lanes[0]) != 0 {' // REQ-COM-007
+			g << '\t\t\t&& C.xcore_poll_n(u32(${off}), ${sig_lanes(si)}, &xcore_${n}_seq, &xcore_${n}_lanes[0]) != 0 {' // REQ-COM-007
 			mut lanes := []string{}
-			for j in 0 .. si.fields.len {
+			for j in 0 .. sig_lanes(si) {
 				lanes << 'xcore_${n}_lanes[${j}]'
 			}
 			g << lane_send_lines(si, lanes, '\t\t\t')

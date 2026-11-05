@@ -23,7 +23,7 @@ cell."* Sending bulk as a signal is the mistake this page exists to prevent.
 |---|---|---|---|
 | same thread | plain struct field | — | ✅ derived |
 | thread → thread, **same core** | IOC cell (`boards/common/ioc.h`) — the *crossing* is derived, the algorithm is the signal's `transport` (**default `double`**; `triple`/`seqlock` selectable) | **64 B** (`IOC_MAX`) | ✅ derived |
-| **core → core**, same chip | xioc slot or wide `xioc_n` channel (`boards/common/xioc.h`) — **satellite → owner image only**, and generated end-to-end **only when the destination is a bus** (the owner drain transmits it, layout-handshake-gated); a satellite → owner-*partition* signal allocates a slot/channel that platform C reads via the contract header — no FB consumer is generated. owner→satellite and satellite→satellite have no path | **≤16 fields of `u32`/`u16`/`u8`/`bool`** (one u32 lane each; to a bus: DLC = 4×lanes, >2 lanes needs FD — see below); the wider shapes (`u64`, signed ints, floats, >16 narrow fields) are the #212 packing decision | ✅ derived (to-bus) |
+| **core → core**, same chip | xioc slot or wide `xioc_n` channel (`boards/common/xioc.h`), **both directions**, derived from where the FBs sit: satellite → owner (to a bus — the owner drain transmits it — or to an owner FB that reads it) and owner → satellite (an owner FB's output, or a frame the owner's comm thread receives, to a satellite FB that reads it — `xioc_n` channels in the owner-written window). Layout-handshake-gated both ways; satellite → satellite has no path | **1..16 u32 lanes** (one PDU): `bool`/`u8`/`u16`/`u32`/`i8`/`i16`/`i32`/`f32` one lane each, `u64`/`i64`/`f64` two; to a bus only what the comm thread encodes (`bool`…`i32`), DLC = 4×lanes, >2 lanes needs FD — see below | ✅ derived |
 | **core → core**, bulk | `xcore.h` dtrace-style cell: shared-window owner buffer + req/ack handshake | RAM-bound (trace uses 2 KB) | ❌ **hand-written**; planned generated form = the loan/publish ring below |
 | ECU → ECU, one frame | CAN frame (`driver/can`) | 8 B classic / **64 B** FD | ✅ derived |
 | ECU → ECU, a PDU | COM (`comm/com`) | **64 B** (`com.max_pdu`) | ✅ derived |
@@ -45,7 +45,7 @@ map one-to-one, because both stacks ultimately bow to the same frames:
 | large `ComSignalLength` byte-arrays (`UINT8_N`/`UINT8_DYN`) — FlexRay-sized L-PDUs (~254 B) **or** a COM signal carried over a TP | any I-PDU, incl. TP-backed | **not a signal here.** No FlexRay (its niche moved to CAN FD / Ethernet), and a COM-signal-over-TP maps to the *bulk* side: ISO-TP / the bootloader block transfer today, the loan/publish ring next — "signal" never exceeds one PDU |
 | **CanTp** (ISO-TP) message | 4095 B (2³²−1 with the 2016 escape) | **520 B** (`isotp.max_payload`) — a deliberate no-alloc cap sized to the largest real message; raise it consciously, every link's buffer grows |
 | **LdCom** — a payload passed whole, no signal packing | transparent, TP-segmented | the gap this page keeps pointing at: modules own links today; the loan/publish **bulk ring** is the planned equivalent ([../bulk-transport.md](../bulk-transport.md)) |
-| **OS IOC** cross-core | size is whatever the generator is configured to emit | derived — mechanism AND generator shipped (`xioc_n` + the loom2v lane derivation, REQ-INV-006): a remote signal carries up to 16 `u32`/`u16`/`u8`/`bool` fields as u32 lanes. Placement-independence holds **satellite→bus within that shape**; the reverse move (a multi-field producer relocating ONTO the owner core) still rejects loudly until the local/remote encode paths unify — that unification, plus u64/signed/float/packed-narrow, is the one #212 packing decision. Silicon tear re-run at wide widths bench-queued |
+| **OS IOC** cross-core | size is whatever the generator is configured to emit | derived — mechanism AND generator shipped (`xioc_n` + the loom2v lane derivation, REQ-INV-006): a cross-core signal carries up to 16 u32 lanes, both directions. Placement-independence holds **FB to FB** for every lane type up to 16 lanes, and **satellite→bus** within the bus encode's types; it does not hold for more than 16 narrow fields (legal on one core, but packing several fields into one lane is not done), nor for the reverse move of a bus-bound signal (a multi-field producer relocating ONTO the owner core), which rejects loudly until the local/remote encode paths unify. Silicon: tear re-run at wide widths bench-queued, the owner → satellite direction bench-pending |
 | **SecOC / E2E** on a protected PDU | in-PDU protection fields at profile-defined positions | same — `[[frame]].e2e` / `.secoc` with explicit `crc_pos`/`counter_pos`/`fresh_pos`/`mac_pos` (not necessarily trailing bytes), re-protected on gateway re-encode |
 | J1939 TP / big diag transfers | 1785 B / TP-paced | the bootloader's UDS `0x34`/`0x36`×N block transfer — image-sized, block-paced |
 
@@ -68,7 +68,8 @@ the generator picks the mechanism from where they sit. See
 
 ## "I want to send object data between two cores"
 
-**If it is ≤16 fields of `u32`/`u16`/`u8`/`bool`, it is a signal.** A worked example
+**If it fits in 16 lanes, it is a signal** (a lane per `bool`/`u8`/`u16`/`u32`/`i8`/`i16`/
+`i32`/`f32` field, two per `u64`/`i64`/`f64`; either direction between the cores). A worked example
 that builds end-to-end today (2 lanes → DLC 8, classic CAN):
 
 ```toml
@@ -97,10 +98,11 @@ frame can carry; pad the signal to the next valid count or keep it to-partition)
 And the ThreadX comm thread still rejects FD entirely, so **3+ lanes to a bus waits
 for the FD comm owner** (the generator says so loudly).
 
-What still rejects, deliberately, pending the **#212 packing decision**: `u64`, every
-**signed** integer (`i8`..`i64`), floats, >16 narrow fields — and multi-field/`valid`
-signals from a **local** producer (the local encode carries only the value field —
-placement must never *silently* change bytes, so it changes them loudly instead).
+What still rejects, deliberately: more than 16 lanes (packing several narrow fields into
+one lane is not done); on a bus, `f32` and the 64-bit types (the comm thread's encode
+carries `bool`…`i32`, the same rule on one core) — and multi-field/`valid` bus signals
+from a **local** producer (the local encode carries only the value field — placement must
+never *silently* change bytes, so it changes them loudly instead).
 
 **If it does not fit, there is no supported *application* path today — full stop.** The
 one worked example in the tree, the **cross-core trace handoff** in

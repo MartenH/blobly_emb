@@ -52,13 +52,16 @@ asil = "QM"
 # the MECHANISM half only — the requirement closes when the loom2v wide derivation
 # lands (feat/wide-remote-signals) and the silicon tear re-run passes (bench queue);
 # until then the report's "verified" reads as mechanism-level evidence, status stays draft.
-# SCOPE NOTE (deliberate, tracked as issue #212 — a USER design decision, not an
-# oversight): the shipped lane derivation carries <=16 fields of u32/u16/u8/bool
-# (one u32 lane per field). The remaining legal 64-byte shapes — i32/f32, u64 split
-# across lanes, >16 narrow fields packed by width — plus unifying the local/remote
-# encode paths are one packing-rule decision, made once, not accreted per review
-# round. Until #212 is decided the generator REJECTS those shapes loudly; status
-# stays draft and the ledger stays 'covered' behind the pending silicon review.
+# SCOPE NOTE (issue #212, a USER design decision): lane types decided 2026-11-05, the
+# same in both directions between the cores — bool/u8/u16/u32/i8/i16/i32/f32 one u32
+# lane each (signed as two's complement, f32 by its bits), u64/i64/f64 two lanes (low
+# word first); a channel carries 1..16 lanes and is copied whole under its sequence
+# stamp, so a 64-bit field never tears. A signal sent on a CAN bus by the comm thread
+# still carries only bool/u8/u16/u32/i8/i16/i32, as on one core. Still undecided:
+# packing several narrow fields into one lane (past 16 lanes is REJECTED loudly), and
+# unifying the local/remote bus encode paths (a multi-field local bus producer is
+# REJECTED loudly). Built and host-tested only; status stays draft and the ledger stays
+# 'covered' behind the pending silicon review.
 [[req]]
 id = "REQ-INV-006"
 title = "Signal capacity is placement-independent"

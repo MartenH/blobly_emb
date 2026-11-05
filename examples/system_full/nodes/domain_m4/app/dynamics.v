@@ -2,8 +2,11 @@ module app
 
 // The CM4 "dynamics" co-processor FB (system_full domain satellite). It burns a bounded LCG
 // window (so the CM4 shows a REAL load in the cross-core CpuLoad frame) and publishes the result
-// as TorqueEstimate — a CROSS-CORE signal the CM7 control loop reads. The point is the cross-core
-// paths (load telemetry, the bulk model-stream, and now the signal into the loop), not real dynamics.
+// as TorqueEstimate — a CROSS-CORE signal the CM7 control loop reads. It also reads three signals
+// the CM7 hands DOWN to it — DynCmd (a protected bus frame, with its receive status), HostLedLevel
+// (a bus signal the CM7 reads too) and PtState (a CM7 FB output) — and reports them on the bus as
+// DynEcho, DynLed and DynPt. The point is the cross-core paths (load telemetry, the bulk
+// model-stream, the signals both ways), not real dynamics.
 
 import ports
 
@@ -25,4 +28,22 @@ pub fn (mut fb DynamicsModel) on_5ms(inp ports.DynamicsModelIn, mut out ports.Dy
 	// publish the estimate cross-core (xioc slot) — the CM7 PowertrainCtrl reads it. This is also
 	// the observable sink that keeps the burn from being dead-code-eliminated (no __global needed).
 	out.torque_estimate.nm = a % 500
+	// DynEcho: the command the CM7 comm thread checked and handed down, sent back while its receive
+	// status is ok; otherwise 0xFFFFFF00 | status (never received 0, timeout 2, integrity 3)
+	out.dyn_echo.cmd = if inp.dyn_cmd.status == .ok {
+		inp.dyn_cmd.cmd
+	} else {
+		u32(0xFFFFFF00) | u32(u8(inp.dyn_cmd.status))
+	}
+	// DynLed: the LED level as the CM4 sees it (the CM7 drives LD3 from the same decode)
+	out.dyn_led.permille = inp.host_led_level.permille
+	// DynPt: the CM7 FB's sequence when both PtState lanes came from one publish, 0 before the
+	// first one (the port default), 0xFFFFFFFF for lanes that do not belong together.
+	out.dyn_pt.seq = if inp.pt_state.seq == 0 && inp.pt_state.inv == 0 {
+		u32(0)
+	} else if inp.pt_state.inv == ~inp.pt_state.seq {
+		inp.pt_state.seq
+	} else {
+		u32(0xFFFFFFFF)
+	}
 }

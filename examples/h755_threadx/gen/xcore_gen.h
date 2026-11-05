@@ -6,6 +6,9 @@
 #define XCORE_SLOT_M4_COUNT 0
 #define XCORE_SLOT_M4_STRESS 1
 #define XCORE_GEN_SLOTS 2
+#if defined(XCORE_IOC_N) && (XCORE_GEN_SLOTS > XCORE_IOC_N)
+#error "cross-core pair signals overflow the board pool — grow XCORE_IOC_N (xcore.h) or make one wide"
+#endif
 /* the layout id: an FNV-1a hash of the WHOLE slot/offset/schema map. The
  * satellite acks it against the owner boot nonce (xcore.h REQ/ACK cells) after
  * init; the owner polls nothing until the ack matches — two images from
