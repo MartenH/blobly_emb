@@ -17,7 +17,6 @@ const move_full_dir = os.join_path(@VMODROOT, 'examples', 'system_full')
 // requirement it leaves unmet (requirements/placement.toml, docs/fb-placement.md, #424)
 const deferred_on_satellite = {
 	'REQ-PLACE-006 persist':       'the owner journal cannot serve a satellite'
-	'REQ-PLACE-007 parameter':     'a parameter reaches FBs on the image that owns the journal'
 	'REQ-PLACE-008 fault':         'lives in a partition this image does not generate'
 	'REQ-PLACE-009 live DID':      'a live DID reads only what this node TRANSMITS on CAN from a local FB'
 	'REQ-PLACE-010 io point':      'cannot reach a satellite FB'

@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 290 | 197 | 26 | 67 | 0 |
+| 290 | 197 | 26 | 66 | 1 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -210,7 +210,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NVM-007 | QM | test | uncovered | — |
 | REQ-NVM-008 | QM | test | uncovered | — |
 | REQ-NVM-009 | QM | test | uncovered | — |
-| REQ-NVM-010 | QM | analysis | verified | persist_test.v (pass), wear_test.v (pass) |
+| REQ-NVM-010 | QM | analysis | failed | persist_test.v (pass), wear_test.v (fail) |
 | REQ-NVM-011 | QM | analysis | uncovered | — |
 | REQ-NVM-012 | QM | test | uncovered | — |
 | REQ-NVM-013 | QM | test | verified | journal_test.v (pass) |
@@ -222,7 +222,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-PLACE-004 | QM | test | verified | xcore_down_gen_test.v (pass) |
 | REQ-PLACE-005 | QM | test | verified | xcore_down_gen_test.v (pass), xcore_wide_test.v (pass) |
 | REQ-PLACE-006 | QM | test | uncovered | — |
-| REQ-PLACE-007 | QM | test | uncovered | — |
+| REQ-PLACE-007 | QM | test | verified | xcore_down_gen_test.v (pass), xcore_down_test.v (pass) |
 | REQ-PLACE-008 | QM | test | uncovered | — |
 | REQ-PLACE-009 | QM | test | uncovered | — |
 | REQ-PLACE-010 | QM | test | uncovered | — |
@@ -505,7 +505,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NVM-007 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-NVM-008 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-NVM-009 | | | | | | | | | | | | | | | | | | | | | | |
-| REQ-NVM-010 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-NVM-010 | | | | | | | | | | | | | | | | | | | ✗ | | | |
 | REQ-NVM-011 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-NVM-012 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-NVM-013 | | | | | | | | | | | | | | | | | | | ✓ | | | |
@@ -517,7 +517,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-PLACE-004 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-PLACE-005 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-PLACE-006 | | | | | | | | | | | | | | | | | | | | | | |
-| REQ-PLACE-007 | | | | | | | | | | | | | | | | | | | | | | |
+| REQ-PLACE-007 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-PLACE-008 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-PLACE-009 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-PLACE-010 | | | | | | | | | | | | | | | | | | | | | | |

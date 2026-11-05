@@ -271,9 +271,10 @@ fn validate_params(mut m Model, doc toml.Doc) {
 			panic('loom2v: [[did]] 0x${d.id.hex()} names parameter "${d.param}", which is not a [[param]]')
 		}
 	}
-	// who reads it: FB handlers on this image, all on one thread (the cell has one reader context),
-	// and nobody writes it
+	// who reads it: on the owner image FB handlers of one thread (the cell has one reader context),
+	// on a satellite any (each reader holds its own channel state); nobody writes it
 	mut reader_thr := map[string]string{}
+	mut sat_read := map[string]bool{}
 	for fb in ecumodel.toml_arr(doc, 'fb') {
 		fm := fb.as_map()
 		fbname := (fm['name'] or { toml.Any('') }).string()
@@ -291,7 +292,8 @@ fn validate_params(mut m Model, doc toml.Doc) {
 					continue
 				}
 				if m.part.external[part] or { false } {
-					panic('loom2v: fb "${fbname}" reads parameter "${r.string()}" from partition "${part}", whose image is built elsewhere — a parameter reaches FBs on the image that owns the journal')
+					sat_read[r.string()] = true // its own owner->satellite channel (xdown_derive)
+					continue
 				}
 				if prev := reader_thr[r.string()] {
 					if prev != thr {
@@ -303,7 +305,7 @@ fn validate_params(mut m Model, doc toml.Doc) {
 		}
 	}
 	for p in m.params {
-		if p.name !in reader_thr {
+		if p.name !in reader_thr && p.name !in sat_read {
 			panic('loom2v: [[param]] "${p.name}" is read by no FB handler — a parameter nothing reads codes nothing; add it to a handler\'s `reads`')
 		}
 	}
@@ -405,7 +407,18 @@ fn param_fns(m Model, ioc_idx map[string]int) []string {
 		'\tmatch i {',
 	]
 	for i, p in m.params {
-		g << '\t\t${i} { C.ioc_pub(${ioc_idx[p.name] or { panic('loom2v: parameter "${p.name}" has no IOC cell') }}, a, b) } // ${p.name}'
+		cell := ioc_idx[p.name] or { panic('loom2v: parameter "${p.name}" has no IOC cell') }
+		if off := m.xdown_off[p.name] {
+			// a satellite FB reads it too: the same value down its owner->satellite channel
+			lanes := if p.fields.len > 1 { '[a, b]!' } else { '[a]!' }
+			g << '\t\t${i} { // ${p.name}'
+			g << '\t\t\tC.ioc_pub(${cell}, a, b)'
+			g << '\t\t\tl := ${lanes}'
+			g << '\t\t\tC.xcore_opub_n(u32(${off}), &l[0])'
+			g << '\t\t}'
+		} else {
+			g << '\t\t${i} { C.ioc_pub(${cell}, a, b) } // ${p.name}'
+		}
 	}
 	g << '\t\telse {}'
 	g << '\t}'

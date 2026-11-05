@@ -3,7 +3,7 @@ module main
 import os
 import tools.sysmodel
 
-// @verifies REQ-INV-006, REQ-PLACE-001, REQ-PLACE-002, REQ-PLACE-005
+// @verifies REQ-INV-006, REQ-PLACE-001, REQ-PLACE-002, REQ-PLACE-005, REQ-PLACE-007
 // Owner -> satellite signals end to end: loom2v run on a scratch copy of examples/h755_threadx
 // (an owner with a generated CM4 image) with signals added in each shape — a received signal read
 // on both cores, an owner FB output in the wider lane types, a wide satellite signal an owner FB
@@ -19,6 +19,7 @@ struct GenRun {
 	sat    string // the satellite image's gen/loom_gen.v
 	header string // gen/xcore_gen.h
 	build  string // the satellite image's gen/loom_build.mk
+	satsig string // the satellite image's sig/signals_gen.v
 }
 
 // gen_scratch copies the owner example into a fresh directory, edits its ecu.toml, runs loom2v
@@ -51,6 +52,7 @@ fn gen_scratch_dbc(name string, edit fn (string) string, edit_dbc fn (string) st
 		sat:    os.read_file(os.join_path(sat, 'loom_gen.v')) or { '' }
 		header: os.read_file(os.join_path(tmp, 'xcore_gen.h')) or { '' }
 		build:  os.read_file(os.join_path(sat, 'loom_build.mk')) or { '' }
+		satsig: os.read_file(os.join_path(tmp, 'h755_m4_app', 'sig', 'signals_gen.v')) or { '' }
 	}
 	os.rmdir_all(tmp) or {}
 	return out
@@ -301,4 +303,36 @@ fn test_a_satellite_frame_may_be_longer_than_its_lanes_never_shorter() {
 	})
 	assert outside.code != 0
 	assert outside.output.contains('"M4Spare"'), outside.output
+}
+
+// a parameter read on both cores: the owner's cell and a down channel, both written by param_pub
+fn param_both_cores(src string) string {
+	mut s := must_replace(src, '  reads     = ["Command", "LoadCmd"]', '  reads     = ["Command", "LoadCmd", "M4Gain"]')
+	s = must_replace(s, 'writes    = ["M4Count"]', 'reads     = ["M4Gain"]\nwrites    = ["M4Count"]')
+	s += '\n[isotp]\nbus   = "can0"\nrx_id = 0x7B0\ntx_id = 0x7B8\n'
+	s += '\n[[param]]\nname    = "M4Gain"\nfields  = { k = "i16", on = "bool" }\ndefault = { k = -3, on = true }\n'
+	s += '\n[[did]]\nid    = 0x0130\nparam = "M4Gain"\nwrite = { session = ["extended"] }\n'
+	return s
+}
+
+fn test_a_parameter_reaches_satellite_fbs_through_its_publish_point() {
+	r := gen_scratch('param', param_both_cores)
+	assert r.code == 0, r.output
+	assert r.header.contains('#define XCORE_OW_M4_GAIN_WORDS 2u') // one lane per field
+	// owner: the one publish point writes the owner cell and the channel
+	assert r.owner.contains('\t\t\tC.ioc_pub(')
+	assert r.owner.contains('\t\t\tl := [a, b]!\n\t\t\tC.xcore_opub_n(u32(0), &l[0])')
+	// owner boot: the window up, the journal restored and published, THEN the satellite released
+	c := r.owner.index('\tC.xcore_owner_commit()') or { -1 }
+	res := r.owner.index('\tg_param.restore(') or { -1 }
+	rel := r.owner.index('\tC.xcore_clocks_ready()') or { -1 }
+	k := r.owner.index('\tC._tx_initialize_kernel_enter()') or { -1 }
+	assert c >= 0 && c < res && res < rel && rel < k
+	// satellite: each field from its lane, the declared default when nothing of this boot is there
+	assert r.sat.contains('if C.xcore_down_read(u32(0), u32(2), &st.xr_m4_gain[0]) != 0 {')
+	assert r.sat.contains('\t\tinp.m4_gain.k = i16(st.xr_m4_gain[2])')
+	assert r.sat.contains('\t\tinp.m4_gain.on = st.xr_m4_gain[3] != 0')
+	assert r.sat.contains('\t} else {\n\t\tinp.m4_gain.k = i16(-3)\n\t\tinp.m4_gain.on = true\n\t}')
+	assert !r.sat.contains('ioc_get') // never the owner's cell
+	assert r.satsig.contains('pub struct M4Gain {')
 }

@@ -9,7 +9,8 @@
 #     platform consumes. bulkperf (shell) bursts that stream to measure raw cross-core throughput.
 #     It also reads three owner -> satellite signals and reports each back on the bus: DynCmd (a
 #     protected frame the CM7 comm thread checks, with its receive status) as DynEcho, HostLedLevel
-#     (read by PowertrainCtrl too) as DynLed, and PtState (a CM7 FB output) as DynPt.
+#     (read by PowertrainCtrl too) as DynLed — held to the DynLedCap parameter the CM7 journal keeps —
+#     and PtState (a CM7 FB output) as DynPt.
 #
 # NOTE: no inline comments inside [[...]] tables — a comment in a nested table trips V's TOML
 # parser (drops the next key). See vlang/v#27684.
@@ -65,6 +66,17 @@ fields = { nm = "u32" }
 [[signal]]
 name   = "PtState"
 fields = { seq = "u32", inv = "u32" }
+
+# DynLedCap: a calibration PARAMETER (docs/diagnostics.md §3.4) the CM4's DynamicsModel reads — the
+# most it reports as DynLed. Coded with 0x2E on DID 0x0130 (below), kept in the CM7's NvM journal,
+# and handed to the CM4 by the one publish point, at the restore and on every 0x2E (an
+# owner->satellite channel, docs/fb-placement.md REQ-PLACE-007). next_dispatch: a coded cap holds
+# from the CM4's next 5 ms dispatch; 1000 caps nothing (HostLedLevel is a permille).
+[[param]]
+name    = "DynLedCap"
+fields  = { permille = "u16" }
+default = { permille = 1000 }
+range   = { permille = { min = 0, max = 1000 } }
 
 [[fb]]
 name   = "PowertrainCtrl"
@@ -176,6 +188,12 @@ id    = 0x0102
 bytes = "00"
 write = { session = ["extended"], security = 1 }
 
+# DynLedCap (above): coded in extended with level 1 unlocked, read back with 0x22
+[[did]]
+id    = 0x0130
+param = "DynLedCap"
+write = { session = ["extended"], security = 1 }
+
 # Persistence storage ([nvm], docs/nvm.md): the journal engine over a sector pair the node's comm
 # glue maps (nvm_map_* -> boards flash driver). DriveMode above is the persisted signal.
 [nvm]
@@ -199,9 +217,10 @@ nbuf     = 4
 # platform BULK producer (m4_glue.c, the "model" pool) and DynamicsModel, whose signals cross the
 # cores both ways (docs/xcore.md): TorqueEstimate UP into the CM7 control loop (an xioc pair slot),
 # DynEcho, DynLed and DynPt UP onto the bus (the CM7 comm thread transmits them), and DynCmd,
-# HostLedLevel and PtState DOWN from the CM7 (owner -> satellite channels in the owner-written
-# window) — DynCmd as the comm thread checked it (value, status, lost), HostLedLevel as it decoded
-# it for PowertrainCtrl too, PtState as PowertrainCtrl wrote it. Keep nested tables comment-free
+# HostLedLevel, PtState and the DynLedCap parameter DOWN from the CM7 (owner -> satellite channels
+# in the owner-written window) — DynCmd as the comm thread checked it (value, status, lost),
+# HostLedLevel as it decoded it for PowertrainCtrl too, PtState as PowertrainCtrl wrote it,
+# DynLedCap as the journal restored it or a tester coded it. Keep nested tables comment-free
 # (vlang/v#27684).
 [[partition]]
 name  = "dynamics"
@@ -219,5 +238,5 @@ thread = "model"
   [[fb.handler]]
   name      = "on_5ms"
   period_ms = 5
-  reads     = ["DynCmd", "HostLedLevel", "PtState"]
+  reads     = ["DynCmd", "HostLedLevel", "PtState", "DynLedCap"]
   writes    = ["TorqueEstimate", "DynEcho", "DynLed", "DynPt"] # trailing comment terminates nested block (vlang/v#27684)

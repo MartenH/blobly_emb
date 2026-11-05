@@ -10,6 +10,9 @@
 --   PtState is a CM7 FB output (seq = its tick count, inv = the complement, two lanes of one
 --     channel); the CM4 reports DynPt = seq when the lanes agree, 0xFFFFFFFF when they tore,
 --     0 before the first publish (0x12A).
+--   DynLedCap is a PARAMETER (DID 0x0130, 0x2E in extended + level 1): the CM7's journal keeps it
+--     and its publish point hands it down, at the restore and on every 0x2E; the CM4 caps DynLed
+--     at it. The suite leaves it uncoded-equivalent (1000).
 -- Bench only (the flashed board on the CANsub), so not in CI.
 --
 -- Not the watch project (../system_full.blobnet): its tester simulation transmits tester frames
@@ -106,6 +109,54 @@ test("xcore: one lean decode feeds the CM7 and the CM4", function()
   local s = bus.send_message_cyclic(CH, "HostLedFrame", { HostLedLevel = v }, 100)
   expect_signal(CH, 0x12B, "DynLed", v, 1000)
   s:stop()
+end)
+
+-- DynLedCap, a parameter the CM7 journal keeps, coded with 0x2E and handed down by its one publish
+-- point: the CM4 holds DynLed to it from its next dispatch (apply = next_dispatch), and after a reset
+-- from its first — the restore publishes before the CM4 is released
+local CAP_DID, NO_CAP = 0x0130, 1000
+local function coder()
+  local d = uds.open(CH, { tx = 0x7B0, rx = 0x7B8 })
+  d:session(0x03)
+  d:security_access(1) -- the domain's bench key is blobly_net's reference key
+  return d
+end
+local function u16(v) return frombytes({ (v >> 8) & 0xFF, v & 0xFF }) end
+
+test("xcore: a parameter coded on the CM7 reaches the CM4 at once", function()
+  local l = bus.send_message_cyclic(CH, "HostLedFrame", { HostLedLevel = 777 }, 100)
+  local d = coder()
+  d:write_did(CAP_DID, u16(NO_CAP))
+  expect_signal(CH, 0x12B, "DynLed", 777, 1000)
+  local t0 = now_ms()
+  d:write_did(CAP_DID, u16(300))
+  expect_signal(CH, 0x12B, "DynLed", 300, 1000)
+  log(string.format("DynLed held to the coded cap within %.1f ms of the 0x2E answer", now_ms() - t0))
+  check.equal(tohex(d:read_did(CAP_DID)), tohex(u16(300)))
+  d:write_did(CAP_DID, u16(NO_CAP))
+  expect_signal(CH, 0x12B, "DynLed", 777, 1000)
+  l:stop()
+end)
+
+test("xcore: a coded parameter is the CM4's from its first dispatch after a reset", function()
+  local d = coder()
+  d:write_did(CAP_DID, u16(250))
+  check.equal(tohex(d:raw("\x11\x01")), "51 01")
+  local l = bus.send_message_cyclic(CH, "HostLedFrame", { HostLedLevel = 900 }, 20)
+  sleep_ms(2500)
+  drain()
+  -- every DynLed after the restart is at most the restored cap; 900 would be the default reaching
+  -- the CM4 before the restore did
+  local seen = 0
+  for _ = 1, 20 do
+    local v = value(0x12B, "DynLed", 1000)
+    check.truthy(v <= 250, "DynLed " .. v .. " after the reset: the CM4 ran on the default cap")
+    if v == 250 then seen = seen + 1 end
+  end
+  check.truthy(seen > 0, "DynLed never reached the restored cap")
+  l:stop()
+  d = coder()
+  d:write_did(CAP_DID, u16(NO_CAP))
 end)
 
 -- seq is the CM7 FB tick (50 ms), so it rises ~20 a second; 0xFFFFFFFF would be a read that mixed

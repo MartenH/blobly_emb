@@ -204,11 +204,13 @@ satellite to satellite: a value reaches another satellite only through an owner 
 
 **Boot — there is no boot thread.** Bring-up runs in bare `main()` / the generated `gen.boot()`,
 before any kernel:
-1. The **owner** boots from flash bank 1: `board_clock_init` (the PLL), then `gen.boot()`, whose
-   first act — when it owns a satellite — is `xcore_clocks_ready`: it enables the inter-core HSEM
-   and writes the clocks-ready marker, **releasing** the parked satellites. (When a satellite reads
-   an owner signal, the owner-written window is initialised and its ack committed just before that
-   release — [xcore.md](xcore.md), handshake #3.) Then `tx_kernel_enter`.
+1. The **owner** boots from flash bank 1: `board_clock_init` (the PLL), then `gen.boot()`. When it
+   owns a satellite, its first act is the owner-written window (retracted, every channel
+   initialised, its ack committed — [xcore.md](xcore.md), handshake #3); then the IOC cells, the
+   NvM mount and every restore, a parameter published down its channel among them; and its last
+   act is `xcore_clocks_ready`: it enables the inter-core HSEM and writes the clocks-ready marker,
+   **releasing** the parked satellites, so a satellite FB's first dispatch reads the restored value
+   as an owner FB's does. Then `tx_kernel_enter`.
 2. Each **satellite** auto-boots from its own bank and parks in `xcore_wait_clocks()` until that
    marker appears (so its SysTick is set against the *final* HCLK, not the reset clock), then starts
    its timebase, inits its xioc channels, and enters its own kernel. It **publishes a layout ack

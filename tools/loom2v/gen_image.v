@@ -242,8 +242,10 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 		for sub in ['sig', 'ports', 'gen'] {
 			os.mkdir_all(os.join_path(img, sub)) or { panic('mkdir ${img}/${sub}: ${err}') }
 		}
-		write_out(os.join_path(img, 'sig/signals_gen.v'), emit_signals(m.sig_of, m.sig_names,
-			ecu))
+		// the parameters too: every image declares every FB's ports, which name their types
+		mut isig := emit_signals(m.sig_of, m.sig_names, ecu)
+		isig << param_sig_structs(m)
+		write_out(os.join_path(img, 'sig/signals_gen.v'), isig)
 		write_out(os.join_path(img, 'ports/ports_gen.v'), p)
 		write_out(os.join_path(img, 'gen/loom_gen.v'), g)
 		write_out(os.join_path(img, 'gen/loom_build.mk'), [

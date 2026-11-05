@@ -250,13 +250,14 @@ mut:
 	off   map[string]int
 	lanes map[string]int
 	lean  map[string]bool
+	param map[string]bool // a [[param]]'s channel: its fields as param_pub publishes them
 	total int
 }
 
 // xdown_derive decides which signals need a down channel and lays them out, or says why a
-// satellite reader cannot be served. `checked` is the set of received DBC messages the comm
+// satellite reader cannot be served. `params` are the node's [[param]]s. `checked` is the set of received DBC messages the comm
 // thread runs through the COM receive rule (rx_checked_msgs); `eth` the eth bus name ('' = none).
-fn xdown_derive(sig_names []string, sig_of map[string]SigInfo, p PartMap, fbs []FbRW, checked []string, eth string) !XDown {
+fn xdown_derive(sig_names []string, sig_of map[string]SigInfo, params []ParamCfg, p PartMap, fbs []FbRW, checked []string, eth string) !XDown {
 	mut d := XDown{}
 	for sname in sig_names {
 		si := sig_of[sname] or { continue }
@@ -326,6 +327,25 @@ fn xdown_derive(sig_names []string, sig_of map[string]SigInfo, p PartMap, fbs []
 		d.lean[sname] = lean
 		d.total += xioc_n_bytes(lanes)
 	}
+	// a parameter a satellite FB reads: one lane per field, as param_pub publishes it (REQ-PLACE-007)
+	for pc in params {
+		sat := fbs.filter(pc.name in it.reads && (p.external[it.part] or { false }))
+		if sat.len == 0 {
+			continue
+		}
+		for r in sat {
+			if (p.image[r.part] or { '' }) == '' {
+				return error('parameter "${pc.name}" is read by fb "${r.name}" in partition "${r.part}", ' +
+					'a hand-written satellite (external = true) — owner->satellite channels are ' +
+					'generated for image = partitions only (docs/multi-image.md)')
+			}
+		}
+		d.names << pc.name
+		d.off[pc.name] = d.total
+		d.lanes[pc.name] = pc.fields.len
+		d.param[pc.name] = true
+		d.total += xioc_n_bytes(pc.fields.len)
+	}
 	return d
 }
 
@@ -358,8 +378,15 @@ fn xdown_gen_h(m Model) []string {
 fn xdown_layout_desc(m Model) string {
 	mut desc := ''
 	for sname in m.xdown_names {
-		si := m.sig_of[sname] or { continue }
 		mut fs := ''
+		if pc := param_of(m, sname) {
+			for f in pc.fields {
+				fs += '${f.name}=${f.typ},'
+			}
+			desc += 'o:${sname}:ow+${m.xdown_off[sname] or { 0 }}:${m.xdown_lanes[sname] or { 0 }}[p:${fs}]|'
+			continue
+		}
+		si := m.sig_of[sname] or { continue }
 		if m.xdown_lean[sname] or { false } {
 			fs = '${si.val_field}=${si.val_type},'
 		} else {
@@ -410,8 +437,8 @@ fn xdown_boot_lines(m Model) []string {
 fn xdown_pub_fns(m Model) []string {
 	mut g := []string{}
 	for sname in m.xdown_names {
-		if m.xdown_lean[sname] or { false } {
-			continue
+		if (m.xdown_lean[sname] or { false }) || (m.xdown_param[sname] or { false }) {
+			continue // the comm thread's lean decode, or param_pub, writes these
 		}
 		si := m.sig_of[sname] or { continue }
 		n := snake(sname)
@@ -476,12 +503,33 @@ fn xreader_state_fields(m Model, reads []string, image_part string) []string {
 
 // xdown_read_lines: a satellite FB wrapper's read of down channel `rn` into `inp`.
 fn xdown_read_lines(m Model, rn string) []string {
-	si := m.sig_of[rn] or { SigInfo{} }
 	n := snake(rn)
 	lanes := m.xdown_lanes[rn] or { 0 }
-	mut g := ['\t// ${rn} from the owner image: the port default until the owner publishes in this boot']
+	mut g := ['\t// ${rn} from the owner image: the port default (a parameter\'s declared one) until the owner publishes in this boot']
 	g << '\tif C.xcore_down_read(u32(${m.xdown_off[rn] or { 0 }}), u32(${lanes}), &st.xr_${n}[0]) != 0 {'
-	g << lane_unpack_lines(si, 'st.xr_${n}', 2, 'inp.${n}', m.xdown_lean[rn] or { false }, '\t\t')
+	if pc := param_of(m, rn) {
+		// param_pub's lanes: each field as the parameter cell holds it (two's complement)
+		for i, f in pc.fields {
+			src := 'st.xr_${n}[${2 + i}]'
+			g << if f.typ == 'bool' {
+				'\t\tinp.${n}.${snake(f.name)} = ${src} != 0'
+			} else {
+				'\t\tinp.${n}.${snake(f.name)} = ${f.typ}(${src})'
+			}
+		}
+		// no value of this owner boot (a build the gate refuses): what an uncoded vehicle runs
+		g << '\t} else {'
+		for f in pc.fields {
+			g << if f.typ == 'bool' {
+				'\t\tinp.${n}.${snake(f.name)} = ${f.def != 0}'
+			} else {
+				'\t\tinp.${n}.${snake(f.name)} = ${f.typ}(${f.def})'
+			}
+		}
+	} else {
+		si := m.sig_of[rn] or { SigInfo{} }
+		g << lane_unpack_lines(si, 'st.xr_${n}', 2, 'inp.${n}', m.xdown_lean[rn] or { false }, '\t\t')
+	}
 	g << '\t}'
 	return g
 }

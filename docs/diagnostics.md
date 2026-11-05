@@ -652,7 +652,10 @@ param_status = true                         # one byte per parameter: 0 default,
   `to` — the reads are the one statement of who consumes it, and a second list could disagree with
   them. A parameter no handler reads is refused (it codes nothing), as is a handler that writes one.
   Its value rides one IOC cell `{a, b}` (so at most two fields), the comm thread its one writer; the
-  readers sit on one thread (the cell's one reader context) on the image that owns the journal.
+  owner image's readers sit on one thread (the cell's one reader context). A reader on a satellite
+  core gets the same `{a, b}` down an owner->satellite channel, written by the same publish point
+  at the restore and on every 0x2E, and the satellite is released only after the restore — so its
+  first dispatch reads the restored value too ([fb-placement.md](fb-placement.md), REQ-PLACE-007).
 - **Identity — exact, never hashed.** One journal record per parameter: `[format | the parameter's
   version | field count | each field's type code | each field big-endian at its width]`, ≤ 13 B —
   one record. The block id is ASSIGNED, never derived: the parameter's DID — a unique 16-bit id,

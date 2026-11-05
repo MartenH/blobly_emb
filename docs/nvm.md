@@ -206,8 +206,9 @@ outside the model: a fault, not traffic.
 
 system_full at the default assumptions (`tools/loom2v/wear_test.v` prints and pins these):
 
-- **domain** — DriveMode floored at 10 s on an NM node: 375 records/h of puts and choreography
-  flushes plus 375 clean markers = 750 records/h, 12.5 years.
+- **domain** — DriveMode floored at 10 s on an NM node, one parameter: 376 records/h of puts and
+  choreography flushes (a coding in bus sleep is one more run) plus 376 clean markers and the
+  parameter 1 = 753 records/h, 12.4 years.
 - **zone_a** — power cycles, 4 DTCs (one with a snapshot), one parameter: the status image (42 B =
   3 records, 89 writes/h) 267 records/h, snapshots 16, the parameter 1, the resets' markers 1 =
   285 records/h, 16.4 years.
