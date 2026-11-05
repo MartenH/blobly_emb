@@ -48,8 +48,11 @@ identity only: manifest rows + handler ids, no generated code.)
   target), an `@[export: 'blob_entry'] fn entry() { gen.boot() }` that crt0 jumps to, and
   `fn main() { entry() }`, which V requires and never runs on target
   ([h755_m4_app/main.v](../../examples/h755_m4_app/main.v) is one).
-- **`app/`** — its FBs, ports convention, exactly like any FB
-  ([add-an-fb.md](add-an-fb.md)).
+- **No `app/` of its own.** A node's FBs are ONE `app` module, in the owner's folder; the
+  satellite's Makefile resolves `app` there, after its own `gen`/`ports`/`sig` (`-path
+  "…|$(MOD)|<owner dir>"`), and every image declares every FB's ports. So an FB moves between
+  cores by its `thread` line, its source staying put (REQ-INV-007,
+  [fb-placement.md](../fb-placement.md)); the linker drops the code of FBs an image does not host.
 - **Glue C** (`m4_glue.c`) — the platform contract the generated code calls:
   `xcore_wait_clocks` (park until the owner's clocks-ready flag), `board_timebase_init` /
   `board_now_us` (this core's DWT µs), `xcore_ioc_init` + `xcore_pub` (the xioc pool at the

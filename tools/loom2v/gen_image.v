@@ -7,8 +7,8 @@
 // pool init, this core's OWN trace recorder (trace_hooks.c, armed from boot), one kernel
 // thread + Loom scheduler per [[partition.thread]], handler wrappers whose remote writes
 // publish via xcore_pub, and the dtrace handoff serviced from the first (highest-priority)
-// thread's loop. The example keeps main.v (a gen.boot() shim), its app/ FBs, its glue C,
-// and its Makefile — exactly the split every example has.
+// thread's loop. The example keeps main.v (a gen.boot() shim), its glue C and its Makefile; its
+// FBs are the node's one app module, in the owner's folder, which every image of the node compiles.
 //
 // Nothing here is core-kind-specific: arch flags live in the satellite's Makefile/boards
 // layer; this emitter only knows partitions, threads, and signal crossings. A future SMP

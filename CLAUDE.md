@@ -24,7 +24,8 @@ CAN/OSAL backend seam for a new target).
 ```
 examples/<name>/   a FREESTANDING app (own Makefile, `make all`):
    ecu.toml bus.dbc   configuration
-   app/ (module app)   Function Blocks       hand-written (app)
+   app/ (module app)   Function Blocks       hand-written (app) — ONE per node, in the owner's
+                       folder: a satellite image resolves it there (REQ-INV-007, fb-placement.md)
    main.v (module main) entry: open CAN + gen.run  platform (hand, tiny)
    sig/ (module sig)   signal types          ┐ GENERATED (from [[signal]].fields)
    ports/ (module ports) In/Out structs      │

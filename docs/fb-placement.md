@@ -34,6 +34,10 @@ it reads and writes in. Every gap below is a route of that kind not generated ye
 the design — and the order they close in is: the CAN send semantics (REQ-PLACE-005), NvM and
 parameters (006, 007), then faults and DIDs (008, 009).
 
+An FB's source does not move either: a node's FBs are one `app` module, in the platform owner's
+folder, which every image of the node compiles (each declares every FB's ports; the linker drops
+the FBs an image does not host).
+
 A node-internal signal may leave `from` and `to` out: they then follow the FBs that write and read
 it, which is what makes a move one line. Written, they are checked against the FBs — a stale one is
 refused naming both partitions, never generated wrong.
