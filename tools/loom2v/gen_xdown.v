@@ -508,15 +508,12 @@ fn xdown_read_lines(m Model, rn string) []string {
 	mut g := ['\t// ${rn} from the owner image: the port default (a parameter\'s declared one) until the owner publishes in this boot']
 	g << '\tif C.xcore_down_read(u32(${m.xdown_off[rn] or { 0 }}), u32(${lanes}), &st.xr_${n}[0]) != 0 {'
 	if pc := param_of(m, rn) {
-		// param_pub's lanes: each field as the parameter cell holds it (two's complement)
-		for i, f in pc.fields {
-			src := 'st.xr_${n}[${2 + i}]'
-			g << if f.typ == 'bool' {
-				'\t\tinp.${n}.${snake(f.name)} = ${src} != 0'
-			} else {
-				'\t\tinp.${n}.${snake(f.name)} = ${f.typ}(${src})'
-			}
+		// param_pub's lanes, decoded as the owner's cell is
+		mut lanes_of := []string{}
+		for i in 0 .. pc.fields.len {
+			lanes_of << 'st.xr_${n}[${2 + i}]'
 		}
+		g << param_field_lines(pc, lanes_of, '\t\t')
 		// no value of this owner boot (a build the gate refuses): what an uncoded vehicle runs
 		g << '\t} else {'
 		for f in pc.fields {

@@ -4294,6 +4294,7 @@ fn main() {
 		m.xdown_off.clear()
 		m.xdown_lanes.clear()
 		m.xdown_lean.clear()
+		m.xdown_param.clear()
 		m.xdown_total = 0
 	}
 	if m.trace.on && m.target.threadx {
@@ -4740,9 +4741,12 @@ fn main() {
 		for sname in m.nvm_names {
 			ioc_idx[sname] = ioc_idx.len
 		}
-		// [[param]]: each parameter reaches its FBs through one cell the comm thread writes
+		// [[param]]: each parameter reaches its owner FBs through one cell the comm thread writes
+		// (a satellite reader has its own channel, xdown_derive)
 		for p in m.params {
-			ioc_idx[p.name] = ioc_idx.len
+			if (m.fb_reads_owner[p.name] or { 0 }) > 0 {
+				ioc_idx[p.name] = ioc_idx.len
+			}
 		}
 	}
 	// io points on the ThreadX target: the io thread and the FB thread(s) are different
