@@ -19,7 +19,7 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 | **Mixed classic↔CAN-FD backbone**: edge bus is CAN-FD (500k/2M), gateway forwards classic⇄FD | `sysnode` (H735 FDCAN2) + `zone_a` | ⏳ builds; **bench-pending** (PLL2 80 MHz FDCAN kernel + FD timing, #266) |
 | NvM persistence (`DriveMode` survives resets) | `domain` | ✅ |
 | Cross-core **bulk** + **CpuLoad** (AMP, CM7↔CM4) | `domain` + `domain_m4` | ✅ (bulkperf ~28 MB/s over CAN) |
-| Cross-core **signals both ways**: the CM4's `TorqueEstimate` up into the CM7 loop; down to the CM4 a protected `DynCmd` (checked by the CM7 comm thread, with its receive status), `HostLedLevel` (read on both cores) and `PtState` (a CM7 FB output), reported back as `DynEcho` / `DynLed` / `DynPt` | `domain` + `domain_m4` | ⏳ builds; **bench-pending** (`test/xcore_domain.lua`, both banks flashed from one build) |
+| Cross-core **signals both ways**: the CM4's `TorqueEstimate` up into the CM7 loop; down to the CM4 a protected `DynCmd` (checked by the CM7 comm thread, with its receive status), `HostLedLevel` (read on both cores) and `PtState` (a CM7 FB output), reported back as `DynEcho` / `DynLed` / `DynPt` | `domain` + `domain_m4` | ✅ bench 2026-11-05: `test/xcore_domain.lua` 7/7 on the H755 (both banks flashed from one build) |
 | Two-core **trace** (thread/ISR/FB, one timeline) | `domain` | ✅ |
 | CAN **shell** (`bulkperf`, `ps`, `bmc`) | `domain` | ✅ |
 | Network Management (coordinated sleep/wake + NvM flush) | `compute` bus | ✅ |

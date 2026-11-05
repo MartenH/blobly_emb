@@ -171,8 +171,9 @@ the protocol arms race was stopped.
 **Verification honesty.** Host: generator-level tests + the committed example regen;
 the xioc_n mechanism itself is host-tear-tested (tools/xioc), and the down direction's
 seams are host-tested over a fake SRAM4 (`tools/xioc/xcore_down_test.v`; the derivation in
-`tools/loom2v/xcore_down_test.v`). The down direction is built, not yet run on silicon
-(`examples/system_full` `test/xcore_domain.lua`). Runtime on silicon —
+`tools/loom2v/xcore_down_test.v`). The down direction ran on the H755 on 2026-11-05
+(`examples/system_full` `test/xcore_domain.lua`, 7/7: the checked, lean fan-out and FB → FB
+shapes, the deadline and a corrupt frame seen on the CM4, a reset; not a tear stress). Runtime on silicon —
 the H755 re-run of the tear harness at real widths — is a bench-queue item; until
 then the wide path is compile-verified only and no in-tree config enables it on
 the bench demo.

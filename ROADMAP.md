@@ -31,7 +31,7 @@ Rungs — each folds a feature-set AND retires the matching examples, one review
    matching state-struct name mismatch. Retiring h755_threadx/h755_m4_app waits for rung 2.
 2. 🧭 **domain two-core trace + xioc signals** — the owner-FB cross-core read shipped (#238), and
    signals cross the domain's cores both ways (`DynCmd`/`HostLedLevel`/`PtState` down, `DynEcho`/`DynLed`/`DynPt` up;
-   bench pending, see *Owner → satellite signals*) → retire trace_multicore, gw_xcore, then
+   on the H755 2026-11-05, see *Owner → satellite signals*) → retire trace_multicore, gw_xcore, then
    h755_threadx + h755_m4_app
 3. 🧭 **domain nm + nvm/persist** (nm + persist already landed in rung 1)
 4. 🧭 **zone_a IO** (GPIO/ADC/PWM) → retire io_*
@@ -88,7 +88,7 @@ no H735 image carries them until sysnode gains a `[shell]` / `[trace]`.
   packing several narrow fields per lane + local/remote encode unification
   (**user call**); H755 tear re-run at wide widths bench-queued
   (`wide-xioc-derivation-and-silicon`).
-- ✅ **Owner → satellite signals** (built + host-tested, **bench pending**) — an
+- ✅ **Owner → satellite signals** (built, host-tested, run on the H755 2026-11-05) — an
   owner FB's output, or a frame the owner's comm thread receives, read by a
   satellite FB rides an `xioc_n` channel in the H755's owner-written window
   (`xcore.h` `XCORE_OW_*`; the bulk window shrank to 52 KB for it), gated by an
@@ -98,8 +98,8 @@ no H735 image carries them until sysnode gains a `[shell]` / `[trace]`.
   a satellite signal is generated the same way. Shared seams
   `boards/h755zi/xcore_owner.c` / `xcore_sat.c`. `examples/system_full` domain:
   an E2E-checked `DynCmd` (status and timeouts included), a lean `HostLedLevel` read on both
-  cores, and `PtState` down; `DynEcho`/`DynLed`/`DynPt` back (`test/xcore_domain.lua`, not yet
-  run). Not yet, each refused at generation: parameters read on a satellite, faults
+  cores, and `PtState` down; `DynEcho`/`DynLed`/`DynPt` back (`test/xcore_domain.lua`, 7/7 on the
+  bench; a CM7 -> CM4 tear stress at rate is still to run). Not yet, each refused at generation: parameters read on a satellite, faults
   owned by a satellite FB, persisted signals written there, io/eth endpoints in a
   satellite, live DIDs on satellite values. Follow-ups: a CM4 HSEM doorbell for
   drain-on-publish; moving the hand-written xcore seams (`xcore_pub`/`poll`/
@@ -332,8 +332,8 @@ decided 2026-11-05; the packing / encode-unification half remains).
 
 **Bench queue (on return):** xioc-route silicon check (H755); wide-width tear
 re-run + layout REQ/ACK handshake on silicon (`wide-xioc-derivation-and-silicon`);
-CM7 → CM4 down channels — tear, latency and the owner-reset default
-(`system_full` `test/xcore_domain.lua`);
+CM7 → CM4 down channels — `test/xcore_domain.lua` passed 2026-11-05; still to run: a
+tear stress at rate and the latency stamps;
 bulk ring on silicon (`bulk-ring-silicon`); FD data-timing harmonization; canif
 FD recv-flag; target multi-bus comm owner → the **3-node silicon run**
 (H755+H735+H723, all wired); REQ-TRACE-011 silicon sign-off.
