@@ -3,6 +3,44 @@ module ports
 
 import sig
 
+pub struct LoadFastIn {
+pub mut:
+}
+pub struct LoadFastOut {
+pub mut:
+}
+
+pub struct LoadMidIn {
+pub mut:
+}
+pub struct LoadMidOut {
+pub mut:
+}
+
+pub struct GovernorIn {
+pub mut:
+	// signal "Command" — ch, transport double, can0 -> app
+	command sig.Command
+	// signal "LoadCmd" — local cell in partition "app"
+	load_cmd sig.LoadCmd
+}
+pub struct GovernorOut {
+pub mut:
+	// signal "LoadCmd" — local cell in partition "app"
+	load_cmd sig.LoadCmd
+}
+
+pub struct LoadSlowIn {
+pub mut:
+	// signal "LoadCmd" — local cell in partition "app"
+	load_cmd sig.LoadCmd
+}
+pub struct LoadSlowOut {
+pub mut:
+	// signal "Workload" — ch, transport double, app -> can0
+	workload sig.Workload
+}
+
 pub struct M4LoadIn {
 pub mut:
 }

@@ -234,11 +234,14 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool, eth string) (m
 	mut sig_of := map[string]SigInfo{}
 	mut sig_names := []string{}
 	mut has_external := false
+	// endpoints as written, or derived from the FBs that write / read the signal (REQ-INV-007);
+	// ecucheck (ecumodel.validate) has already refused what cannot be settled
+	ends, _ := ecumodel.signal_endpoints(doc)
 	for s in ecumodel.toml_arr(doc, 'signal') {
 		m := s.as_map()
 		name := (m['name'] or { toml.Any('') }).string()
-		from := (m['from'] or { toml.Any('') }).string()
-		to := (m['to'] or { toml.Any('') }).string()
+		from := (ends[name] or { ecumodel.SigEnds{} }).from
+		to := (ends[name] or { ecumodel.SigEnds{} }).to
 
 		from_bus := from in buses
 		to_bus := to in buses
@@ -1564,7 +1567,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	}
 	frames := parse_frames(doc, eth, buses, bus_kind, db, carries_signals)
 	part := parse_partitions(doc)
-	fb_rws := fb_rw_list(doc, part)
+	fb_rws := fb_rw_list(doc)
 	io_points, io_core := parse_io(doc, sig_of)
 	// P1 generates the SAME-core transport derivation only (triple): the io thread
 	// and every io-signal endpoint must share [io].core (docs/io.md).
@@ -1585,6 +1588,31 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	mut xcore_xw_off := map[string]int{}
 	mut xcore_xw_total := 0
 	mut xcore_pair_n := 0
+	// fan-out across cores: a signal whose readers span images and include its writer's own
+	// partition is held in the writer's local cell AS WELL as crossing (REQ-PLACE-003) — readers
+	// decide, whatever `to` names; a signal read on one image only is left as it was declared
+	for sname in sig_names {
+		mut si := sig_of[sname] or { continue }
+		wp := ep_part(part, si.from)
+		if si.rx || si.local || wp == '' {
+			continue
+		}
+		readers := fb_rws.filter(sname in it.reads && it.part != '')
+		w_img := part.external[wp] or { false }
+		spans := readers.any((part.external[it.part] or { false }) != w_img)
+		if spans && readers.any(it.part == wp) {
+			// the cell is the writer partition's: a reader in another partition of its image has none
+			for r in readers {
+				if r.part != wp && (part.external[r.part] or { false }) == w_img {
+					panic('loom2v: signal "${sname}" is written in partition "${wp}" and read by fb ' +
+						'"${r.name}" in partition "${r.part}" of the same image while it also crosses ' +
+						'cores — its cell is "${wp}"\'s: read it there')
+				}
+			}
+			si.local = true
+			sig_of[sname] = si
+		}
+	}
 	for sname in sig_names {
 		mut si := sig_of[sname] or { continue }
 		// produced on a satellite (its `from` names a satellite partition or one of its threads):
@@ -1616,7 +1644,9 @@ fn build_model(doc toml.Doc, dbc string) Model {
 				'1..${xlane_max} u32 lanes (one PDU, 64 B); a bigger payload is bulk, not a signal ' +
 				'(docs/bulk-transport.md)')
 		}
-		si.wide = si.fields.len > 2 || si.fields.any(it.typ != 'u32')
+		// a 1-2 x u32 signal takes a pair slot while the board's pool has one; past it, a wide
+		// channel (same semantics, the larger window) — never an overflow the C build finds
+		si.wide = si.fields.len > 2 || si.fields.any(it.typ != 'u32') || xcore_pair_n >= xcore_pair_slots
 		if si.wide {
 			// xioc_n geometry (xioc_n_bytes): neighbouring channels never share a 32 B line
 			xcore_xw_off[sname] = xcore_xw_total
@@ -1763,22 +1793,6 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	m.xdown_lanes = xd.lanes
 	m.xdown_lean = xd.lean
 	m.xdown_total = xd.total
-	// an owner FB's output that an owner FB reads too (beside the satellite reader) is held in
-	// the writer's local cell, as on one core, whatever its `to` names — readers decide
-	for sname in xd.names {
-		mut si := m.sig_of[sname] or { continue }
-		wp := ep_part(part, si.from)
-		owner_readers := fb_rws.filter(sname in it.reads && !(part.external[it.part] or { false }))
-		if !si.rx && !si.local && owner_readers.len > 0 && wp != '' && !(part.external[wp] or { false }) {
-			if owner_readers.any(it.part != wp) {
-				panic('loom2v: signal "${sname}" is written in partition "${wp}" and read by owner fb ' +
-					'"${owner_readers.filter(it.part != wp)[0].name}" in another partition — on this ' +
-					'target an owner signal is read in its writer\'s partition')
-			}
-			si.local = true
-			m.sig_of[sname] = si
-		}
-	}
 	validate_signal_routes_model(m, doc)
 	validate_uds(m)
 	validate_live_dids(m)
@@ -3584,6 +3598,73 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 	return glue
 }
 
+// fb_port_lines: one handler's port structs (module ports) — the FB's In, its Faults when it owns
+// any, and its Out. Every image of a node declares every FB's ports (emit_handlers), so the node's
+// one app module compiles on each core whichever FBs that core hosts (REQ-INV-007).
+fn fb_port_lines(m Model, cname string, hname string, reads []toml.Any, writes []toml.Any) []string {
+	mut ports := []string{}
+	ports << ''
+	ports << 'pub struct ${cname}In {'
+	ports << 'pub mut:'
+	for r in reads {
+		if p := param_of(m, r.string()) {
+			ports << '\t// parameter "${p.name}" — coded with 0x2E on DID 0x${p.did.hex()}, read-only'
+			ports << '\t${snake(p.name)} sig.${p.name}'
+			continue
+		}
+		ports << provenance(r.string(), m.sig_of)
+		// an input point's declared default becomes the port field's
+		// initial value — the FB sees it until the first real sample
+		// (docs/io.md); the acquire leaves the field untouched on no-data
+		mut dflt := ''
+		for pt in m.io_points {
+			if pt.name == r.string() && !pt.output && pt.has_default {
+				si_r := m.sig_of[r.string()] or { SigInfo{} }
+				// gpio default is bool; adc default is the numeric count (codex emb#152)
+				dval := if pt.kind == 'adc' { '${pt.default_u32}' } else { '${pt.default}' }
+				dflt = ' = sig.${r.string()}{ ${si_r.val_field}: ${dval} }'
+			}
+		}
+		ports << '\t${snake(r.string())} sig.${r.string()}${dflt}'
+	}
+	ports << '}'
+	hfaults := m.faults.filter(it.fb == cname && it.handler == hname)
+	if hfaults.len > 0 {
+		ports << 'pub struct ${cname}Faults {'
+		ports << 'pub mut:'
+		for f in hfaults {
+			ports << '\t${snake(f.name)} fault.TestResult // DTC 0x${f.dtc.hex()}: write the CURRENT result each dispatch, no latch (docs/diagnostics.md §3.3)'
+		}
+		ports << '}'
+	}
+	ports << 'pub struct ${cname}Out {'
+	ports << 'pub mut:'
+	for w in writes {
+		ports << provenance(w.string(), m.sig_of)
+		ports << '\t${snake(w.string())} sig.${w.string()}'
+	}
+	if hfaults.len > 0 {
+		ports << '\tfault ${cname}Faults'
+	}
+	ports << '}'
+	return ports
+}
+
+// partition_port_lines: the port structs of every FB in a partition this pass does not host
+fn partition_port_lines(m Model, clist []toml.Any) []string {
+	mut out := []string{}
+	for c in clist {
+		cm := c.as_map()
+		cname := (cm['name'] or { toml.Any('') }).string()
+		for h in (cm['handler'] or { toml.Any([]toml.Any{}) }).array() {
+			hm := h.as_map()
+			out << fb_port_lines(m, cname, (hm['name'] or { toml.Any('') }).string(),
+				(hm['reads'] or { toml.Any([]toml.Any{}) }).array(), (hm['writes'] or { toml.Any([]toml.Any{}) }).array())
+		}
+	}
+	return out
+}
+
 // emit_handlers emits, per partition: its state struct, each handler's port structs (module ports)
 // and dispatch glue (module gen), the host partition_<p>() runner, and builds all_regs (the
 // sched.every() lines the run() emitters reuse). Returns (ports, glue, all_regs); reads the Model,
@@ -3600,9 +3681,11 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 	iocb_of := rx_iocb_idx(m) // the byte-IOC numbering, once per pass
 	for part, clist in m.part.by_part {
 		if image_part == '' && m.part.external[part] {
+			ports << partition_port_lines(m, clist) // its FBs' ports: the node's app compiles here too
 			continue // declared elsewhere: identity only, no generated code
 		}
 		if image_part != '' && part != image_part {
+			ports << partition_port_lines(m, clist)
 			continue // the satellite pass emits exactly one partition
 		}
 		threads := m.part.threads_of[part] or { [''] }
@@ -3709,50 +3792,7 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 				writes := (hm['writes'] or { toml.Any([]toml.Any{}) }).array()
 
 				// --- port structs (module ports) ---
-				ports << ''
-				ports << 'pub struct ${cname}In {'
-				ports << 'pub mut:'
-				for r in reads {
-					if p := param_of(m, r.string()) {
-						ports << '\t// parameter "${p.name}" — coded with 0x2E on DID 0x${p.did.hex()}, read-only'
-						ports << '\t${snake(p.name)} sig.${p.name}'
-						continue
-					}
-					ports << provenance(r.string(), m.sig_of)
-					// an input point's declared default becomes the port field's
-					// initial value — the FB sees it until the first real sample
-					// (docs/io.md); the acquire leaves the field untouched on no-data
-					mut dflt := ''
-					for pt in m.io_points {
-						if pt.name == r.string() && !pt.output && pt.has_default {
-							si_r := m.sig_of[r.string()] or { SigInfo{} }
-							// gpio default is bool; adc default is the numeric count (codex emb#152)
-							dval := if pt.kind == 'adc' { '${pt.default_u32}' } else { '${pt.default}' }
-							dflt = ' = sig.${r.string()}{ ${si_r.val_field}: ${dval} }'
-						}
-					}
-					ports << '\t${snake(r.string())} sig.${r.string()}${dflt}'
-				}
-				ports << '}'
-				hfaults := m.faults.filter(it.fb == cname && it.handler == hname)
-				if hfaults.len > 0 {
-					ports << 'pub struct ${cname}Faults {'
-					ports << 'pub mut:'
-					for f in hfaults {
-						ports << '\t${snake(f.name)} fault.TestResult // DTC 0x${f.dtc.hex()}: write the CURRENT result each dispatch, no latch (docs/diagnostics.md §3.3)'
-					}
-					ports << '}'
-				}
-				ports << 'pub struct ${cname}Out {'
-				ports << 'pub mut:'
-				for w in writes {
-					ports << provenance(w.string(), m.sig_of)
-					ports << '\t${snake(w.string())} sig.${w.string()}'
-				}
-				if hfaults.len > 0 {
-					ports << '\tfault ${cname}Faults'
-				}
-				ports << '}'
+				ports << fb_port_lines(m, cname, hname, reads, writes)
 
 				// --- glue handler (module gen) ---
 				gname := 'handler_${part}_${field}_${hname}'
@@ -3972,6 +4012,16 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 			glue << '\t\tosal.sleep_us(1000)'
 			glue << '\t}'
 			glue << '}'
+		}
+	}
+	// a satellite partition with no FB left (all moved to another core) is still an image: its
+	// threads run the platform services, on an empty state
+	if image_part != '' && image_part !in m.part.by_part {
+		threads := m.part.threads_of[image_part] or { [''] }
+		for thr in threads {
+			sname := if threads.len > 1 { 'Thread_${thr}_state' } else { 'Partition_${image_part}_state' }
+			glue << ''
+			glue << 'struct ${sname} {}'
 		}
 	}
 	return ports, glue, all_regs
@@ -5990,6 +6040,10 @@ const nvm_glue_syms = ['nvm_map_a', 'nvm_map_b', 'nvm_map_size']
 const xcore_owner_syms = ['xcore_owner_begin', 'xcore_ow_init', 'xcore_owner_commit', 'xcore_opub_n']
 const xcore_sat_syms = ['xcore_down_read']
 const flash_driver_syms = ['bflash_erase', 'bflash_program', 'bflash_read', 'bflash_blank']
+
+// xcore_pair_slots: the board's satellite pair pool, xcore.h XCORE_IOC_N (pinned equal by
+// xcore_down_test.v) — a satellite signal past it rides a wide channel instead (REQ-PLACE-004)
+const xcore_pair_slots = 4
 
 // ioc_pool_n: comm_glue.c's IOC_POOL_N — the target IOC cells an image may use (pinned equal by
 // threadx_makefiles_test.v; a smaller pool silently dropped every index past it, #247).

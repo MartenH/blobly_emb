@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 277 | 191 | 26 | 60 | 0 |
+| 290 | 196 | 26 | 68 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -142,6 +142,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-INV-004 | QM | analysis | verified | noalloc-driver-lint (pass) |
 | REQ-INV-005 | QM | review | covered | naming-review (pending) |
 | REQ-INV-006 | QM | test | covered | wide-xioc-derivation-and-silicon (pending), xcore_down_gen_test.v (pass), xcore_down_test.v (pass), xcore_wide_test.v (pass), xioc_test.v (pass) |
+| REQ-INV-007 | QM | test | verified | endpoints_test.v (pass), fb_move_test.v (pass) |
 | REQ-IO-001 | QM | test | verified | e2e_test.v (pass) |
 | REQ-IO-002 | QM | test | verified | e2e_test.v (pass) |
 | REQ-IO-003 | QM | review | uncovered | — |
@@ -215,6 +216,18 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NVM-013 | QM | test | verified | journal_test.v (pass) |
 | REQ-NVM-014 | QM | test | uncovered | — |
 | REQ-NVM-015 | QM | test | verified | fault_target_test.v (pass), param_target_test.v (pass) |
+| REQ-PLACE-001 | QM | test | verified | xcore_down_gen_test.v (pass), xcore_down_test.v (pass) |
+| REQ-PLACE-002 | QM | test | verified | xcore_down_gen_test.v (pass), xcore_down_test.v (pass) |
+| REQ-PLACE-003 | QM | test | verified | xcore_down_gen_test.v (pass) |
+| REQ-PLACE-004 | QM | test | verified | xcore_down_gen_test.v (pass) |
+| REQ-PLACE-005 | QM | test | uncovered | — |
+| REQ-PLACE-006 | QM | test | uncovered | — |
+| REQ-PLACE-007 | QM | test | uncovered | — |
+| REQ-PLACE-008 | QM | test | uncovered | — |
+| REQ-PLACE-009 | QM | test | uncovered | — |
+| REQ-PLACE-010 | QM | test | uncovered | — |
+| REQ-PLACE-011 | QM | test | uncovered | — |
+| REQ-PLACE-012 | QM | test | uncovered | — |
 | REQ-SEC-001 | QM | test | verified | secoc_test.v (pass) |
 | REQ-SEC-002 | QM | test | uncovered | — |
 | REQ-SEC-003 | QM | test | uncovered | — |
@@ -424,6 +437,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-INV-004 | | | | | | | | | | | | | | | | | | | | | ✓ | |
 | REQ-INV-005 | | | | | | | | | | | | | | | | | | | | · | | |
 | REQ-INV-006 | | | | | | | | | | | | | | | · | | | | ✓ | | | |
+| REQ-INV-007 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-IO-001 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-IO-002 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-IO-003 | | | | | | | | | | | | | | | | | | | | | | |
@@ -497,6 +511,18 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NVM-013 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-NVM-014 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-NVM-015 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-PLACE-001 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-PLACE-002 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-PLACE-003 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-PLACE-004 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-PLACE-005 | | | | | | | | | | | | | | | | | | | | | | |
+| REQ-PLACE-006 | | | | | | | | | | | | | | | | | | | | | | |
+| REQ-PLACE-007 | | | | | | | | | | | | | | | | | | | | | | |
+| REQ-PLACE-008 | | | | | | | | | | | | | | | | | | | | | | |
+| REQ-PLACE-009 | | | | | | | | | | | | | | | | | | | | | | |
+| REQ-PLACE-010 | | | | | | | | | | | | | | | | | | | | | | |
+| REQ-PLACE-011 | | | | | | | | | | | | | | | | | | | | | | |
+| REQ-PLACE-012 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-SEC-001 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-SEC-002 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-SEC-003 | | | | | | | | | | | | | | | | | | | | | | |

@@ -33,6 +33,7 @@ fn main() {
 	// --- IOC channels: cross-partition signals only (from != to). Local signals
 	//     (from == to) route through a partition cell and get no channel. ---
 	sigs := doc.value('signal').array()
+	ends, _ := ecumodel.signal_endpoints(doc) // as written or derived from the FBs (REQ-INV-007)
 	mut transports := []string{}
 	mut chcount := 0
 	b << ''
@@ -40,8 +41,8 @@ fn main() {
 	for s in sigs {
 		m := s.as_map()
 		name := (m['name'] or { toml.Any('') }).string()
-		from := (m['from'] or { toml.Any('') }).string()
-		to := (m['to'] or { toml.Any('') }).string()
+		from := (ends[name] or { ecumodel.SigEnds{} }).from
+		to := (ends[name] or { ecumodel.SigEnds{} }).to
 		if from == to {
 			continue // local signal — no IOC channel
 		}

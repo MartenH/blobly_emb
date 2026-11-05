@@ -39,7 +39,6 @@ core = 0
 [[signal]]
 name = "HostLed"
 fields = { duty = "u32" }
-from = "powertrain"
 to   = "io"
 
 # DriveMode: a persisted powertrain calibration ("now") — restored before the first control tick,
@@ -48,20 +47,16 @@ to   = "io"
 [[signal]]
 name = "DriveMode"
 fields = { mode = "u32" }
-from = "powertrain"
-to   = "powertrain"
 transport = "double"
 persist = "now"
 
 # TorqueEstimate: the CM4 "dynamics" co-processor's output, read by the CM7 control loop — a
-# CROSS-CORE signal into an owner FB. from = "dynamics" (core 1) derives an xioc slot; PowertrainCtrl
-# reads it via the xioc seam, layout-gated (docs/xcore.md). This is the cross-core signal FEEDING the
-# control loop.
+# CROSS-CORE signal into an owner FB, through an xioc slot, layout-gated (docs/xcore.md). The node's
+# internal signals name no partition: each follows the FBs that write and read it, so moving an FB
+# to the other core is its `thread` line alone (REQ-INV-007).
 [[signal]]
 name   = "TorqueEstimate"
 fields = { nm = "u32" }
-from   = "dynamics"
-to     = "powertrain"
 
 # PtState: the other direction — a CM7 FB output the CM4 reads (owner -> satellite, an xioc_n
 # channel in the owner-written window, docs/xcore.md). Two lanes written together: seq = the CM7
@@ -70,8 +65,6 @@ to     = "powertrain"
 [[signal]]
 name   = "PtState"
 fields = { seq = "u32", inv = "u32" }
-from   = "powertrain"
-to     = "dynamics"
 
 [[fb]]
 name   = "PowertrainCtrl"

@@ -604,12 +604,18 @@ fn trace_fb_hooks(m Model, doc toml.Doc, app_threads []string, multi bool, io_he
 		// runtime's _vinit, which a freestanding image never runs — the array would read junk.
 		g << ''
 		g << 'fn trace_fb_hook_${thr}(ctx voidptr, idx int, start_us u64, dt_us u64) {'
-		g << '\thid := match idx {'
-		for li, h in hids[thr] or { []int{} } {
-			g << '\t\t${li} { u32(${h}) }'
+		local := hids[thr] or { []int{} }
+		if local.len == 0 {
+			// a thread with no handler (its FBs moved to another core): nothing to map
+			g << '\thid := u32(0x3fff) // no handler on this thread — the 14-bit id space top'
+		} else {
+			g << '\thid := match idx {'
+			for li, h in local {
+				g << '\t\t${li} { u32(${h}) }'
+			}
+			g << '\t\telse { u32(0x3fff) } // unknown local idx — the 14-bit id space top'
+			g << '\t}'
 		}
-		g << '\t\telse { u32(0x3fff) } // unknown local idx — the 14-bit id space top'
-		g << '\t}'
 		g << '\tC.trace_fb(hid, start_us, u32(dt_us))'
 		g << '}'
 	}

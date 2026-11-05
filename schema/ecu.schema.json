@@ -266,13 +266,13 @@
       "properties": {
         "name": {"type": "string", "description": "PascalCase; a signal a bus carries takes its DBC name"},
         "fields": {"type": "object", "additionalProperties": {"type": "string"}, "description": "field name -> type, the signal's struct"},
-        "from": {"type": "string", "description": "the producer: a partition, thread, bus or \"io\""},
-        "to": {"type": "string", "description": "the consumer: a partition, thread, bus or \"io\""},
+        "from": {"type": "string", "description": "the producer: a partition, thread, bus or \"io\"; left out, the partition of the fb that writes it (REQ-INV-007)"},
+        "to": {"type": "string", "description": "the consumer: a partition, thread, bus or \"io\"; left out, the partition of an fb that reads it (REQ-INV-007)"},
         "transport": {"type": "string", "enum": ["double", "triple", "seqlock", "dma", "hw_sem", "mailbox"], "default": "double", "description": "the IOC buffer between partitions (derived for io signals); the hardware ones are target backends, double on host Default: \"double\"."},
         "persist": {"type": "string", "enum": ["now", "shutdown"], "description": "keep it in NvM: write-through, or flush at sleep — intent, not tuning (docs/nvm.md)"},
         "nvm_id": {"type": "integer", "minimum": 0, "maximum": 65534, "default": 0, "description": "pins the NvM record id (0 = derived; only to resolve a reported collision) Default: 0."}
       },
-      "required": ["name", "fields", "from", "to"],
+      "required": ["name", "fields"],
       "additionalProperties": false
     },
     "frame": {

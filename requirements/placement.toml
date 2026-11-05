@@ -1,0 +1,116 @@
+# PLACEMENT — what an FB can do on each core of a node (docs/fb-placement.md, the matrix).
+# REQ-INV-007 says an FB moves to another core by its `thread` line alone; these are what that
+# promise is made of, one capability each, so a gap is a requirement with no verification rather
+# than a sentence in a doc. Terms (docs/fb-placement.md): the PLATFORM OWNER is the core that brings
+# the chip up and releases the others (the H755's CM7); a SATELLITE is any other core; the BUS
+# OWNER of a bus is the core whose comm thread drives it (today always the platform owner). The
+# status of each on the bench, 2026-11-05, is in the doc; a gap is refused at generation naming its
+# reason (tools/sysgen/fb_move_test.v lists them) and tracked in #424.
+
+[[req]]
+id = "REQ-PLACE-001"
+title = "A received signal reaches an FB on any core"
+text = "An FB on any core of a node shall read a signal its node receives on a bus — from a lean frame, or a checked one (deadline, E2E, SecOC) with the receive status and the lost count."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "REQ-INV-007"
+
+[[req]]
+id = "REQ-PLACE-002"
+title = "An FB's output reaches an FB on another core"
+text = "A signal one FB writes shall reach an FB reading it on another core of the node, in either direction, for every lane type (bool, u8..u32, i8..i32, f32 in one lane; u64, i64, f64 in two)."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "REQ-INV-007"
+
+[[req]]
+id = "REQ-PLACE-003"
+title = "One output read on its own core and another"
+text = "A signal one FB writes shall reach FBs reading it on its own core and on another core at once (fan-out), in either direction."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "REQ-INV-007"
+
+[[req]]
+id = "REQ-PLACE-004"
+title = "Cross-core signal count bounded by the shared window"
+text = "The number of signals crossing between two cores shall be bounded only by the shared window's size, and a layout that does not fit shall be refused at generation, never at the image's compile."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "REQ-INV-007"
+
+[[req]]
+id = "REQ-PLACE-005"
+title = "A signal sent on a bus behaves the same from any core"
+text = "A signal an FB writes and the bus owner sends on a CAN bus shall be accepted with the same frame layouts (DLC, field types) and sent the same way (cyclic from boot with its initial payload) whichever core the FB runs on."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "REQ-INV-007"
+
+[[req]]
+id = "REQ-PLACE-006"
+title = "A persisted signal written from any core"
+text = "A persisted signal (persist = now / shutdown) shall be writable by an FB on any core of the node, journalled and restored by the node's NvM as for an FB on the platform owner."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "REQ-INV-007"
+
+[[req]]
+id = "REQ-PLACE-007"
+title = "A calibration parameter read on any core"
+text = "A calibration parameter ([[param]], coded with 0x2E) shall be readable by an FB on any core of the node, with the coded value restored before the FB's first dispatch."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "REQ-INV-007"
+
+[[req]]
+id = "REQ-PLACE-008"
+title = "A fault owned by an FB on any core"
+text = "An FB on any core of the node shall own [[fault]]s — debounced on its own core, reported to the node's fault memory, and controlled by 0x85 / 0x14 as an FB on the platform owner is."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "REQ-INV-007"
+
+[[req]]
+id = "REQ-PLACE-009"
+title = "A live DID or snapshot on a value from any core"
+text = "A live DID, and a fault snapshot that freezes one, shall read a value an FB on any core of the node produces."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "REQ-INV-007"
+
+[[req]]
+id = "REQ-PLACE-010"
+title = "An io point read or written from any core"
+text = "An io point (GPIO, ADC, PWM) shall be readable or writable by an FB on any core of the node, the io thread staying the point's one owner."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "REQ-INV-007"
+
+[[req]]
+id = "REQ-PLACE-011"
+title = "A SOME/IP signal sent or received on any core"
+text = "A SOME/IP signal shall be sendable and receivable by an FB on any core of the node, the eth thread staying its one owner."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "REQ-INV-007"
+
+[[req]]
+id = "REQ-PLACE-012"
+title = "A bus owned by a satellite core"
+text = "A bus may be owned by a satellite core — its comm thread receiving and sending there — with its signals reaching FBs on any core of the node as a platform-owner bus's do."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "REQ-INV-007"

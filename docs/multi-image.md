@@ -179,6 +179,8 @@ the bench demo.
 
 ## Owner → satellite signals (the down direction)
 
+What an FB can and cannot do on each core, as a matrix of requirements: [fb-placement.md](fb-placement.md).
+
 A signal produced on the owner image — an owner FB's output, or a frame the owner's comm
 thread receives — that a satellite FB reads gets a **down channel**: an `xioc_n` channel in
 the owner-written window (`xcore.h` `XCORE_OW_*`, offsets in `xcore_gen.h`), 1..16 lanes by

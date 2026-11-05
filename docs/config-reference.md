@@ -307,8 +307,8 @@ A typed signal from one endpoint to another: a partition, a thread, a bus, or "i
 |---|---|---|---|---|---|
 | `name` | string | yes | — |  | PascalCase; a signal a bus carries takes its DBC name |
 | `fields` | table of strings | yes | — |  | field name -> type, the signal's struct |
-| `from` | string | yes | — |  | the producer: a partition, thread, bus or "io" |
-| `to` | string | yes | — |  | the consumer: a partition, thread, bus or "io" |
+| `from` | string |  | — |  | the producer: a partition, thread, bus or "io"; left out, the partition of the fb that writes it (REQ-INV-007) |
+| `to` | string |  | — |  | the consumer: a partition, thread, bus or "io"; left out, the partition of an fb that reads it (REQ-INV-007) |
 | `transport` | string |  | `"double"` | `"double"`, `"triple"`, `"seqlock"`, `"dma"`, `"hw_sem"`, `"mailbox"` | the IOC buffer between partitions (derived for io signals); the hardware ones are target backends, double on host |
 | `persist` | string |  | — | `"now"`, `"shutdown"` | keep it in NvM: write-through, or flush at sleep — intent, not tuning (docs/nvm.md) |
 | `nvm_id` | integer |  | `0` | 0..65534 | pins the NvM record id (0 = derived; only to resolve a reported collision) |
