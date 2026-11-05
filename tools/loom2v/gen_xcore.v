@@ -6,7 +6,7 @@
 //   - gen/xcore_gen.h — the ONE contract header both images compile against (the satellite
 //     publishes via xcore_pub(XCORE_SLOT_<NAME>, ...); the bus owner polls the same slots;
 //     slot numbers appear nowhere else),
-//   - the bus-owning image's reader->CAN wiring: a fresh-gated, period-paced transmit of
+//   - the bus-owning image's reader->CAN wiring: a period-paced transmit from boot, as an owner FB's, of
 //     each frame-bound remote signal inside the comm loop (via C.xcore_poll, the xioc
 //     reader living in the node's target_ext.c),
 //   - the satellite trace forwarding (dtrace handoff cell: arm / freeze+snapshot / import)
@@ -149,6 +149,7 @@ fn xcore_comm_locals(m Model) []string {
 		si := m.sig_of[sname] or { continue }
 		if si.external {
 			g << '\tmut xcore_${snake(sname)}_last := u64(0)'
+			g << '\tmut xcore_${snake(sname)}_have := false // a value has come from the satellite'
 			if si.wide {
 				// wide reader state: the seq + lane buffer xcore_poll_n commits into
 				// (last-good retention — on a stale poll the lanes stay untouched)
@@ -173,7 +174,8 @@ fn xcore_encodes(m Model) bool {
 }
 
 // xcore_produce_drain: poll each slot and transmit frame-bound signals on their period,
-// fresh-gated — a stale satellite (or a dead core) simply goes quiet on the bus.
+// sent as an owner FB's signal is: from boot, the initial payload until the first value, then the
+// last value — a satellite that stops publishing repeats it, as a stalled owner FB does.
 fn xcore_produce_drain(m Model) []string {
 	if !xcore_on(m) {
 		return []string{}
@@ -189,37 +191,29 @@ fn xcore_produce_drain(m Model) []string {
 			cyc = 100000 // default cyclic 100 ms if no [[frame]].tx.cycle_ms
 		}
 		n := snake(sname)
-		// ORDER MATTERS, twice over: the poll consumes the slot's freshness, so
-		// every OTHER gate must fail first. NM sleep (emb#135) and now pacing +
-		// tx_ready too (codex #211 r3) — polling first ate a fresh value that
-		// arrived off-cycle or under backpressure, and with no later publish it
-		// never transmitted. Short-circuit keeps it unconsumed until eligible.
+		// sent like an owner FB's signal (REQ-PLACE-005): every period from boot, the initial
+		// payload until the satellite's first value, then its latest — the poll on each period,
+		// behind the layout gate, keeps the last-good value (xioc), so a satellite that stops
+		// publishing repeats its last value as a stalled owner FB does
+		g << '\t\tif ${nm_gate(m)}${diag_tx_gate(m)}t1 - xcore_${n}_last >= u64(${cyc}) && ch.tx_ready() { // REQ-COM-007'
+		g << '\t\t\txcore_${n}_last = t1'
+		mut lanes := []string{}
 		if si.wide {
-			// wide (xioc_n): the poll commits the lanes as a unit; each u32 lane is encoded
-			// into the DBC signal at byte 4*lane — same contract the pair path has, generalized
-			// (DLC == 4 * lanes is validated in the comm-thread walk; > 8 needs FD and the
-			// classic comm thread rejects it there, loudly).
 			off := m.xcore_xw_off[sname] or { 0 }
-			g << '\t\tif ${nm_gate(m)}${diag_tx_gate(m)}C.xcore_layout_ok() != 0 && t1 - xcore_${n}_last >= u64(${cyc}) && ch.tx_ready()'
-			g << '\t\t\t&& C.xcore_poll_n(u32(${off}), ${sig_lanes(si)}, &xcore_${n}_seq, &xcore_${n}_lanes[0]) != 0 {' // REQ-COM-007
-			mut lanes := []string{}
+			g << '\t\t\tif C.xcore_layout_ok() != 0 && C.xcore_poll_n(u32(${off}), ${sig_lanes(si)}, &xcore_${n}_seq, &xcore_${n}_lanes[0]) != 0 {'
 			for j in 0 .. sig_lanes(si) {
 				lanes << 'xcore_${n}_lanes[${j}]'
 			}
-			g << lane_send_lines(si, lanes, '\t\t\t')
-			g << '\t\t\txcore_${n}_last = t1'
-			g << '\t\t}'
-			continue
+		} else {
+			g << '\t\t\tif C.xcore_layout_ok() != 0 && C.xcore_poll(${m.xcore_idx[sname] or { 0 }}, &xcore_${n}_a, &xcore_${n}_b) != 0 {'
+			lanes << 'xcore_${n}_a'
+			if si.fields.len > 1 {
+				lanes << 'xcore_${n}_b'
+			}
 		}
-		slot := m.xcore_idx[sname] or { 0 }
-		g << '\t\tif ${nm_gate(m)}${diag_tx_gate(m)}C.xcore_layout_ok() != 0 && t1 - xcore_${n}_last >= u64(${cyc}) && ch.tx_ready()'
-		g << '\t\t\t&& C.xcore_poll(${slot}, &xcore_${n}_a, &xcore_${n}_b) != 0 {' // REQ-COM-007
-		mut pair := ['xcore_${n}_a']
-		if si.fields.len > 1 {
-			pair << 'xcore_${n}_b'
-		}
-		g << lane_send_lines(si, pair, '\t\t\t')
-		g << '\t\t\txcore_${n}_last = t1'
+		g << '\t\t\t\txcore_${n}_have = true'
+		g << '\t\t\t}'
+		g << lane_send_lines(si, lanes, 'xcore_${n}_have', '\t\t\t')
 		g << '\t\t}'
 	}
 	return g
@@ -334,13 +328,16 @@ fn xcore_manifest(m Model) []string {
 // lane_send_lines: a remote signal's frame from its polled u32 lanes — lane j is field j, encoded
 // into bytes 4j..4j+3 (lane_encode_lines: the one send encode) — sent, and its saturations counted
 // once the channel accepts it.
-fn lane_send_lines(si SigInfo, lanes []string, ind string) []string {
+fn lane_send_lines(si SigInfo, lanes []string, have string, ind string) []string {
 	mut g := ['${ind}xcore_txf.id = u32(0x${si.dbc_id.hex()})', '${ind}xcore_txf.len = ${si.dbc_dlc}']
 	g << pdu_init_lines(si, 'xcore_txf', ind)
 	g << '${ind}mut xcore_sat := u32(0)'
+	// until the satellite's first value the frame goes out at its initial payload, nothing encoded
+	g << '${ind}if ${have} {'
 	for j, lane in lanes {
-		g << lane_encode_lines(si, j, si.fields[j].typ, lane, 'xcore_txf', 'xcore_sat', ind)
+		g << lane_encode_lines(si, j, si.fields[j].typ, lane, 'xcore_txf', 'xcore_sat', ind + '\t')
 	}
+	g << '${ind}}'
 	g << '${ind}if ch.send(xcore_txf) {'
 	g << '${ind}\ttx_sat.add(xcore_sat)'
 	g << '${ind}}'

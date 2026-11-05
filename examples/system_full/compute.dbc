@@ -32,7 +32,7 @@ BO_ 297 DynEchoFrame: 4 domain
 BO_ 298 DynPtFrame: 4 domain
  SG_ DynPt : 0|32@1+ (1,0) [0|4294967295] "" tester
 
-BO_ 299 DynLedFrame: 4 domain
+BO_ 299 DynLedFrame: 8 domain
  SG_ DynLed : 0|32@1+ (1,0) [0|1000] "permille" tester
 
 BA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;

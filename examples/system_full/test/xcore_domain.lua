@@ -51,10 +51,15 @@ local function commander(x)
   return bus.send_message_cyclic(CH, "DynCmdFrame", { DynCmd = x }, 50)
 end
 
+-- the CM4's frames go out from boot like any other (the initial payload until its first value), so
+-- what shows the CM4 running is DynPt ADVANCING: it carries the CM7's tick through the CM4, and only
+-- a running CM4 of the same build (the layout gate) moves it
 test("xcore: the CM4 is up and both banks are one build", function()
-  -- 0x129 goes out only after a fresh CM4 publish, behind the layout gate
-  local ok = pcall(expect, CH, 0x129, 1000)
-  check.truthy(ok, "no DynEchoFrame: the CM4 is not running, or the banks are from different builds (flash both)")
+  local a = value(0x12A, "DynPt", 1000)
+  sleep_ms(500)
+  drain()
+  local b = value(0x12A, "DynPt", 1000)
+  check.truthy(b > a and b ~= 0xFFFFFFFF, string.format("DynPt %d then %d: the CM4 is not running, or the banks are from different builds (flash both)", a, b))
 end)
 
 test("xcore: a protected bus command crosses to the CM4 and back", function()

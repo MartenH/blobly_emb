@@ -4641,10 +4641,12 @@ fn main() {
 							'carry the lane encode — ${si.dbc_lane_issue}. The lane writer fills whole ' +
 							'4-byte lanes; every SG in the frame must own one (codex #211)')
 					}
-					if si.dbc_dlc != 4 * sig_lanes(si) {
-						panic('loom2v: remote TX signal "${sname}" has ${si.fields.len} u32 field(s) ' +
+					// the lanes fill bytes 0 .. 4 x lanes; any bytes past them keep the frame's
+					// initial payload, as an owner producer's frame does (REQ-PLACE-005)
+					if si.dbc_dlc < 4 * sig_lanes(si) {
+						panic('loom2v: remote TX signal "${sname}" takes ${sig_lanes(si)} lane(s) ' +
 							'but DBC message "${si.dbc_msg}" DLC is ${si.dbc_dlc} — the xioc encode packs ' +
-							'4 bytes per lane (expect DLC ${4 * sig_lanes(si)})')
+							'4 bytes per lane (expect DLC >= ${4 * sig_lanes(si)})')
 					}
 					continue
 				}
