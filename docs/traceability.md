@@ -141,7 +141,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-INV-003 | B | analysis | uncovered | — |
 | REQ-INV-004 | QM | analysis | verified | noalloc-driver-lint (pass) |
 | REQ-INV-005 | QM | review | covered | naming-review (pending) |
-| REQ-INV-006 | QM | test | covered | wide-xioc-derivation-and-silicon (pending), xcore_down_gen_test.v (pass), xcore_down_test.v (pass), xcore_wide_test.v (pass), xioc_test.v (pass) |
+| REQ-INV-006 | QM | test | covered | wide-xioc-derivation-and-silicon (pending), xcore-owner-to-sat-silicon (pending), xcore_down_gen_test.v (pass), xcore_down_test.v (pass), xcore_wide_test.v (pass), xioc_test.v (pass) |
 | REQ-INV-007 | QM | test | verified | endpoints_test.v (pass), fb_move_test.v (pass) |
 | REQ-IO-001 | QM | test | verified | e2e_test.v (pass) |
 | REQ-IO-002 | QM | test | verified | e2e_test.v (pass) |

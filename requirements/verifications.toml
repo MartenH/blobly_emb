@@ -446,6 +446,24 @@ verifies = ["REQ-INV-006"]
 approved_by = ""
 date = ""
 
+# Owner -> satellite signals on silicon (#425): examples/system_full/test/xcore_domain.lua on the
+# H755 (domain CM7 + domain_m4 CM4, both banks flashed from one build of 6fe66e4) via CANsub.4 ch2,
+# 2026-11-05, 7/7: an E2E-protected DynCmd checked by the CM7 comm thread and handed down with its
+# receive status, echoed by the CM4 within 100.5 ms; the CM7's 300 ms deadline seen on the CM4 at
+# 300 ms; a corrupt CRC seen there as integrity; a lean HostLedLevel decoded once for both cores;
+# PtState (a CM7 FB output, two lanes) at 19.9 per second, never torn; and a 0x11 reset bringing
+# back none of the retained window. Regression the same session: diag_domain.lua 14/14, bulkperf
+# 33,052 KB/s at 256 B (the bulk window now 52 KB), CpuLoad CM4 16-20 %. Not a tear stress (PtState
+# changes every 50 ms) and not the wide widths, so REQ-INV-006 stays with the pending sign-off below;
+# this review is pending for the same reason.
+[[review]]
+id = "xcore-owner-to-sat-silicon"
+method = "review"
+context = "h755/dual-core"
+verifies = ["REQ-INV-006"]
+approved_by = ""
+date = ""
+
 # REQ-TRACE-011 (cross-core time correlation): the host tests round-trip the offset record
 # and inject offsets via set_core_offset, but the requirement's substance — the offset is
 # RE-MEASURED per dump over the real request/ack exchange — only executes on the dual-core
