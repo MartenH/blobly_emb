@@ -29,9 +29,10 @@ Rungs — each folds a feature-set AND retires the matching examples, one review
    in the frame) + `[shell]` + nvm/persist `DriveMode` + the NM cluster it needs. Fixed two real
    loom2v bugs: a single-thread satellite registered no FBs (ran an empty scheduler) and the
    matching state-struct name mismatch. Retiring h755_threadx/h755_m4_app waits for rung 2.
-2. 🧭 **domain two-core trace + xioc signals** — incl. fixing the owner-FB cross-core-signal read
-   (emits host-only `osal.ioc_acquire2` for the target today) → retire trace_multicore, gw_xcore,
-   then h755_threadx + h755_m4_app
+2. 🧭 **domain two-core trace + xioc signals** — the owner-FB cross-core read shipped (#238), and
+   signals cross the domain's cores both ways (`DynCmd`/`HostLedLevel`/`PtState` down, `DynEcho`/`DynLed`/`DynPt` up;
+   bench pending, see *Owner → satellite signals*) → retire trace_multicore, gw_xcore, then
+   h755_threadx + h755_m4_app
 3. 🧭 **domain nm + nvm/persist** (nm + persist already landed in rung 1)
 4. 🧭 **zone_a IO** (GPIO/ADC/PWM) → retire io_*
 5. 🧭 **sysnode protected routes + ext-id + FD payloads** → retire gw_*
@@ -78,13 +79,32 @@ no H735 image carries them until sysnode gains a `[shell]` / `[trace]`.
 - ✅ **ISO-TP / UDS** — beyond the boot-loader's request path: the generated diagnostic
   server, on the host so far (see *Diagnostics & variant coding*)
 - ✅ **Wide cross-core signals** (`#211` — the derivation rung; **REQ-INV-006
-  itself stays draft/covered**, closing only when the #212 shapes land and the
-  silicon review signs off) — a remote signal carries ≤16 fields of
-  `u32`/`u16`/`u8`/`bool` as u32 lanes (`xioc_n`), pair cell preserved; layout
-  REQ/ACK handshake makes a stale/restarting satellite read as never-fresh,
-  never as cross-talk. Residue: the #212 packing decision (u64/signed/float/
-  packed-narrow + local/remote encode unification, **user call**); H755 tear
-  re-run at wide widths bench-queued (`wide-xioc-derivation-and-silicon`).
+  itself stays draft/covered**, closing only when the silicon review signs off) —
+  a cross-core signal carries 1..16 u32 lanes (`xioc_n`), pair cell preserved:
+  `bool`/`u8`/`u16`/`u32`/`i8`/`i16`/`i32`/`f32` one lane each, `u64`/`i64`/`f64`
+  two (the #212 type decision, user, 2026-11-05; a bus-bound signal still carries
+  the comm thread's `bool`…`i32`); layout REQ/ACK handshake makes a
+  stale/restarting satellite read as never-fresh, never as cross-talk. Residue:
+  packing several narrow fields per lane + local/remote encode unification
+  (**user call**); H755 tear re-run at wide widths bench-queued
+  (`wide-xioc-derivation-and-silicon`).
+- ✅ **Owner → satellite signals** (built + host-tested, **bench pending**) — an
+  owner FB's output, or a frame the owner's comm thread receives, read by a
+  satellite FB rides an `xioc_n` channel in the H755's owner-written window
+  (`xcore.h` `XCORE_OW_*`; the bulk window shrank to 52 KB for it), gated by an
+  owner ack + retained boot nonce committed before the CM4 is released, so a new
+  owner boot never shows the previous boot's value. Readers derive from FB `reads`
+  (fan-out to an owner and a satellite FB from one writer); the owner's wide read of
+  a satellite signal is generated the same way. Shared seams
+  `boards/h755zi/xcore_owner.c` / `xcore_sat.c`. `examples/system_full` domain:
+  an E2E-checked `DynCmd` (status and timeouts included), a lean `HostLedLevel` read on both
+  cores, and `PtState` down; `DynEcho`/`DynLed`/`DynPt` back (`test/xcore_domain.lua`, not yet
+  run). Not yet, each refused at generation: parameters read on a satellite, faults
+  owned by a satellite FB, persisted signals written there, io/eth endpoints in a
+  satellite, live DIDs on satellite values. Follow-ups: a CM4 HSEM doorbell for
+  drain-on-publish; moving the hand-written xcore seams (`xcore_pub`/`poll`/
+  `layout_*`/`clocks_ready` in each example's `target_ext.c` / `m4_glue.c`) into
+  shared code.
 - ✅ **Bulk P1 portable core** (`#213`, REQ-BULK-001..003) — `boards/common/bulk.h`
   pool + SPSC descriptor rings, fallible counted loans, host-proven cross-process
   (fork+`MAP_SHARED`); `bulk-ring-silicon` closed on the H755 (`#228`, below).
@@ -307,11 +327,13 @@ on two vcans), wide remote signals ✅ (`#211`), bulk P1 ✅ (`#213`) + measured
 (`#216`), the full blind-merge codex backlog worked through (`#203` → 10 PRs
 merged), CI hardened twice over (`#209`/`#215`). Remaining host items wait on
 **user calls**: `#191` (trace raw-mode restore — also unblocks the
-`trace_comm`/`trace_multicore` builds the CI gate skips) and `#212` (the wide
-packing / encode-unification decision).
+`trace_comm`/`trace_multicore` builds the CI gate skips) and `#212` (its lane-type half
+decided 2026-11-05; the packing / encode-unification half remains).
 
 **Bench queue (on return):** xioc-route silicon check (H755); wide-width tear
 re-run + layout REQ/ACK handshake on silicon (`wide-xioc-derivation-and-silicon`);
+CM7 → CM4 down channels — tear, latency and the owner-reset default
+(`system_full` `test/xcore_domain.lua`);
 bulk ring on silicon (`bulk-ring-silicon`); FD data-timing harmonization; canif
 FD recv-flag; target multi-bus comm owner → the **3-node silicon run**
 (H755+H735+H723, all wired); REQ-TRACE-011 silicon sign-off.

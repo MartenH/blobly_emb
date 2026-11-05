@@ -161,7 +161,7 @@ fn emit_bulk_glue(pools []BulkPoolCfg, part PartMap, image_part string) []string
 	// Lay cross-core pools out in the shared window, in declaration order, 32 B-aligned. This
 	// runs over ALL pools regardless of image_part, so the owner and a satellite agree on the
 	// offset of every shared pool.
-	xcore_bulk_max := 0xE000 // keep in sync with boards/h755zi/xcore.h XCORE_BULK_MAX
+	xcore_bulk_max := 0xD000 // keep in sync with boards/h755zi/xcore.h XCORE_BULK_MAX
 	mut xcore_off := map[string]int{}
 	mut off := 0
 	for p in pools {

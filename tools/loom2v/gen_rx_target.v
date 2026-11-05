@@ -90,7 +90,7 @@ fn rx_iocb_idx(m Model) map[string]int {
 	sigs := rx_target_sigs(m)
 	for msg in rx_checked_msgs(m) {
 		for sname in sigs[msg] or { []string{} } {
-			if (m.fb_reads[sname] or { 0 }) > 0 && sname !in idx {
+			if (m.fb_reads_owner[sname] or { 0 }) > 0 && sname !in idx {
 				names << sname
 			}
 		}
@@ -186,15 +186,21 @@ fn rx_target_on(m Model) bool {
 // server's 0x28 gate, NM's sleep, the byte IOC.
 fn rx_target_owner(m Model) RxOwner {
 	idx := rx_iocb_idx(m)
+	down := m.xdown_names.filter(!(m.xdown_lean[it] or { false }))
 	return RxOwner{
 		fmem: 'g_fmem'
 		rx_on: if m.isotp_conns.len > 0 { 'g_diag.server.rx_enabled()' } else { '' }
 		awake: if m.nm.on && rx_checked_msgs(m).len > 0 { 'g_nm.awake()' } else { '' }
 		faults: m.faults.any(it.signal != '')
-		publish: fn [idx] (si SigInfo, fld string) string {
+		publish: fn [idx, down] (si SigInfo, fld string) string {
+			mut lines := []string{}
 			if i := idx[si.name] {
-				return 'C.iocb_pub(${i}, &${fld}) // to the FBs, status and all'
-			}return ''
+				lines << 'C.iocb_pub(${i}, &${fld}) // to the FBs, status and all'
+			}
+			if si.name in down {
+				lines << 'xdown_pub_${snake(si.name)}(${fld}) // to the satellite readers, status and all'
+			}
+			return lines.join('\n')
 		}
 	}
 }
@@ -362,6 +368,9 @@ fn validate_rx_target(m Model) {
 		}
 		mut threads := []string{}
 		for fb, thr in m.part.fb_thread {
+			if m.part.external[m.part.thread_part[thr] or { '' }] or { false } {
+				continue // a satellite reader has its owner->satellite channel, not this cell
+			}
 			if sname in (m.fb_reads_by[fb] or { []string{} }) && thr !in threads {
 				threads << thr
 			}

@@ -428,6 +428,9 @@ pub mut:
 	// signal name -> the distinct partitions whose FBs read it (a cross-node RX
 	// signal read from >1 partition = concurrent readers of one SPSC IOC channel).
 	read_partitions map[string][]string
+	// partitions built as their OWN image (`image = ...` or `external = true`): a satellite core.
+	// Every other partition of the node is the owner image.
+	image_partitions map[string]bool
 	// a dissolved partial is INTERNALS-ONLY for BUS wiring: it must declare no
 	// bus-endpoint [[signal]], no [[frame]], no [[route]] (the system owns those).
 	// NODE-LOCAL signals — an io point or a node-internal cross-partition signal,
@@ -1065,6 +1068,9 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 		pname := m_str(pm, 'name')
 		for t in (pm['thread'] or { toml.Any([]toml.Any{}) }).array() {
 			thread_part[m_str(t.as_map(), 'name')] = pname
+		}
+		if m_str(pm, 'image') != '' || m_bool(pm, 'external') {
+			v.image_partitions[pname] = true
 		}
 	}
 	if fbv := doc.value_opt('fb') {

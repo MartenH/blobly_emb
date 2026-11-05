@@ -37,4 +37,8 @@ pub fn (mut fb PowertrainCtrl) on_50ms(inp ports.PowertrainCtrlIn, mut out ports
 		m = (m + 1) % 4
 	}
 	out.drive_mode.mode = m
+	// PtState: down to the CM4 (owner -> satellite). Two lanes the CM4 cross-checks, so a read
+	// that mixed two publishes shows as DynPt = 0xFFFFFFFF on the bus.
+	out.pt_state.seq = fb.ticks
+	out.pt_state.inv = ~fb.ticks
 }

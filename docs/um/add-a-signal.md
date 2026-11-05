@@ -9,6 +9,7 @@ or a bus — and that's all you say; the generator derives the transport from th
 | bus → partition | COM decode → IOC cell | `C.ioc_get(n, ...)` in the wrapper |
 | partition → bus | IOC cell → cyclic tx in the comm loop | `C.ioc_pub(n, ...)` + a producer |
 | satellite partition → bus/partition | **xioc slot** (cross-core) | `C.xcore_pub(slot, ...)` |
+| owner partition or bus → a satellite FB's `reads` | **owner → satellite channel** (cross-core) | `C.xcore_opub_n(...)` / `C.xcore_down_read(...)` |
 
 ## 1. Declare it
 
@@ -119,11 +120,16 @@ bookkeeping, not safety. See [system-from-nodes.md](system-from-nodes.md).
 
 Nothing new to learn: give `from` a partition that lives on another core (one declared
 with `image =` or `external = true`) and the generator allocates an xioc slot — or, past
-the {a, b} pair shape, a wide `xioc_n` channel — instead of an IOC cell. Constraints:
-up to 16 fields of `u32`/`u16`/`u8`/`bool` (1–2 plain u32s without `valid` keep the
-bench-verified pair cell); to a bus, `DLC = 4 × lanes` with the full lane contract of
-[move-data.md](move-data.md), and 3+ lanes waits for the FD comm owner. `u64`, signed
-ints, floats and >16 narrow fields are the pending #212 packing decision. See
+the {a, b} pair shape, a wide `xioc_n` channel — instead of an IOC cell. The other way
+works the same: a signal produced on the owner (an owner FB's output, or one received from
+a bus) that an FB on a generated satellite (`image =`) lists in its `reads` gets an owner →
+satellite channel. Readers come from the FBs' `reads`, not from `to`, so an owner FB and a
+satellite FB may both read it. Constraints: up to 16 u32 lanes — `bool`/`u8`/`u16`/`u32`/
+`i8`/`i16`/`i32`/`f32` one lane each, `u64`/`i64`/`f64` two (1–2 plain u32s without `valid`
+keep the bench-verified pair cell); to a bus, `DLC = 4 × lanes` with the full lane contract
+of [move-data.md](move-data.md), only the types the comm thread encodes (`bool`…`i32`), and
+3+ lanes waits for the FD comm owner. Not generated on a satellite yet: reading a parameter,
+owning a fault, writing a persisted signal, an io or eth endpoint. See
 [add-a-core.md](add-a-core.md) and [../multi-image.md](../multi-image.md).
 
 ```toml
@@ -134,8 +140,9 @@ from   = "m4"                  # satellite partition -> xioc slot, owner transmi
 to     = "can0"
 ```
 
-A cross-core signal `to = "<owner partition>"` gets a slot but no generated consumer —
-that's for platform C readers (the `iocx` health check reads one this way).
+An owner FB that reads a satellite's signal gets it unpacked into its `In` struct. A
+satellite signal no FB reads still gets its slot — that's for platform C readers (the
+`iocx` health check reads one this way).
 
 ## Verify
 

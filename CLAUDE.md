@@ -235,6 +235,10 @@ The job then links one shape no committed image has, a **multi-thread gateway**
 ThreadX image links ONE generic glue, `boards/common/comm_glue.c`, through `gen/loom_build.mk`'s
 `LOOM_GLUE_SRCS` — never named in a Makefile; a node's own C (shell commands, the H755 xcore
 handoff) is its `target_ext.c` and redefines nothing of it (`threadx_makefiles_test.v`, #359).
+The owner -> satellite signal seams are board C on the same list — `$(BOARD_XCORE_OWNER)` /
+`$(BOARD_XCORE_SAT)` (`boards/h755zi/xcore_owner.c`, `xcore_sat.c`), picked by the symbols the
+generated code declares — so a satellite Makefile lists `$(LOOM_GLUE_SRCS)` too and remakes
+`gen/loom_build.mk` from the owner's gen (docs/multi-image.md "Owner → satellite signals").
 The same list carries `boards/common/boot_handoff.c` into a node that declares **`[boot]`** — it
 runs behind the bootloader, so its server's `0x10 02` is the programming handoff (answered, then
 the boot request cell and the reset by 0x11's path; docs/bootloader.md "App → boot, as built").

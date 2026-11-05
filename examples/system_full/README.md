@@ -19,6 +19,7 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 | **Mixed classic↔CAN-FD backbone**: edge bus is CAN-FD (500k/2M), gateway forwards classic⇄FD | `sysnode` (H735 FDCAN2) + `zone_a` | ⏳ builds; **bench-pending** (PLL2 80 MHz FDCAN kernel + FD timing, #266) |
 | NvM persistence (`DriveMode` survives resets) | `domain` | ✅ |
 | Cross-core **bulk** + **CpuLoad** (AMP, CM7↔CM4) | `domain` + `domain_m4` | ✅ (bulkperf ~28 MB/s over CAN) |
+| Cross-core **signals both ways**: the CM4's `TorqueEstimate` up into the CM7 loop; down to the CM4 a protected `DynCmd` (checked by the CM7 comm thread, with its receive status), `HostLedLevel` (read on both cores) and `PtState` (a CM7 FB output), reported back as `DynEcho` / `DynLed` / `DynPt` | `domain` + `domain_m4` | ⏳ builds; **bench-pending** (`test/xcore_domain.lua`, both banks flashed from one build) |
 | Two-core **trace** (thread/ISR/FB, one timeline) | `domain` | ✅ |
 | CAN **shell** (`bulkperf`, `ps`, `bmc`) | `domain` | ✅ |
 | Network Management (coordinated sleep/wake + NvM flush) | `compute` bus | ✅ |
@@ -40,7 +41,7 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 |---|---|---|---|---|
 | `sysnode` | STM32H735G-DK | Gateway: routes 4 signals `compute` ↔ `edge`; publishes `GwStatus` on `tel`; DoIP entity `0x07A0` at `192.168.77.50` | `compute` (can0/FDCAN1), `edge` (can1/FDCAN2), `tel` (Ethernet) | ✅ |
 | `domain` | NUCLEO-H755ZI-Q (CM7) | Powertrain + persistence + AMP owner; NvM, bulk, trace, shell | `compute` (can0) | ✅ |
-| `domain_m4` | …the H755's **CM4** | `domain`'s co-processor **satellite** (bulk producer + CpuLoad); a `[[partition]] image=`, flashed to flash **bank 2** (`0x08100000`) | — (built by `domain`'s gen) | — (a satellite, not a node) |
+| `domain_m4` | …the H755's **CM4** | `domain`'s co-processor **satellite** (bulk producer + CpuLoad; `DynamicsModel` reads `DynCmd`, `HostLedLevel` and `PtState` from the CM7 and writes `TorqueEstimate`, `DynEcho`, `DynLed`, `DynPt`); a `[[partition]] image=`, flashed to flash **bank 2** (`0x08100000`) | — (built by `domain`'s gen) | — (a satellite, not a node) |
 | `zone_a` | NUCLEO-H723ZG | Front zone: sensor→limiter FB pipeline + **physical GPIO + PWM**; checks `chassis`'s protected `SafetyCmd` (R5) | `edge` (can1) | ✅ |
 | `tcu` | NUCLEO-H723ZG | **Telematics/connectivity — SOME/IP-over-Ethernet** at `192.168.77.51` | `tel` (Ethernet) | ✅ |
 | `chassis` | — (nothing built) | **Declaration-only**: an absent edge-bus ECU — produces the E2E-protected `SafetyCmd` for `zone_a` and reads back `SafetyView`; blobly_net restbus-simulates it and breaks it on purpose (`test/rx_faults.blobnet`) | `edge` (can1) | ✅ |
@@ -70,7 +71,7 @@ The lowering is behaviour-preserving by construction: `tcu.bin` built from the s
 
 ### The tester is a node
 
-Every real system has a tester on the bus, so `system_full` declares one: `tester` (`nodes/tester/ecu.toml` — a **declaration only**: one FB writing `HostLedLevel`, so the model's single-writer rule has its producer). Nothing is built for it: **blobly_net restbus-simulates it** (`simulation: tester` in the `.blobnet`, keyed on the DBC transmitter name — blobly_net reads `compute.dbc`, never the node) exactly as it would any absent ECU. Nothing in the model knows or cares that the node is "the tool" — no off-system concept, single-writer and reachability hold as for any node. It carries no `nm`: a tester is not an NM node.
+Every real system has a tester on the bus, so `system_full` declares one: `tester` (`nodes/tester/ecu.toml` — a **declaration only**: one FB writing each signal it produces — `HostLedLevel`, `DynCmd` — so the model's single-writer rule has its producer). Nothing is built for it: **blobly_net restbus-simulates it** (`simulation: tester` in the `.blobnet`, keyed on the DBC transmitter name — blobly_net reads `compute.dbc`, never the node) exactly as it would any absent ECU. Nothing in the model knows or cares that the node is "the tool" — no off-system concept, single-writer and reachability hold as for any node. It carries no `nm`: a tester is not an NM node.
 
 *(The same is true of `domain_m4`: it's a CM4 **satellite image**, a `[[partition]] image=` inside `domain`'s own config, not a system-level node — so it isn't in `system.toml` either.)*
 
@@ -86,9 +87,15 @@ All four routes are **layout-identical** (same signal position/scale/DLC on both
 | `HeadlightCmd` | `domain` (compute) | `compute` → `edge` | `zone_a` | `0x123` → `0x131` | 100 ms |
 | `LedLevel` | `domain` (compute) | `compute` → `edge` | `zone_a` | `0x126` → `0x133` | 100 ms |
 | `HostLedLevel` | `tester` (compute; blobly_net on the bench) | — (consumed on `compute`) | `domain` | `0x127` | 100 ms |
+| `DynCmd` | `tester` (compute; `test/xcore_domain.lua` on the bench), E2E Profile 1 (Data ID 0x56, 300 ms timeout) | — (consumed on `compute`) | `domain` (its CM4, handed down by the CM7 with its receive status) | `0x124` | on demand (no cycle) |
+| `DynEcho` | `domain` (its CM4: `DynCmd` sent back while its status is ok, else `0xFFFFFF00` \| status) | — (consumed on `compute`) | `tester` | `0x129` | 100 ms |
+| `DynPt` | `domain` (its CM4: the CM7's `PtState.seq`, `0xFFFFFFFF` if its lanes tore) | — (consumed on `compute`) | `tester` | `0x12A` | 100 ms |
+| `DynLed` | `domain` (its CM4: `HostLedLevel` as the CM4 sees it) | — (consumed on `compute`) | `tester` | `0x12B` | 100 ms |
 | `SteeringAngle` | `zone_a` (edge) | `edge` → `compute` | `domain` | `0x132` → `0x125` | 50 ms |
 | `SafetyCmd` | `chassis` (edge; blobly_net on the bench) | — (consumed on `edge`) | `zone_a` | `0x128`, E2E Profile 1 | 50 ms |
 | `SafetyView` | `zone_a` (edge) | — (consumed on `edge`) | `chassis` | `0x134` | 100 ms |
+
+These cross the domain's two cores rather than the gateway, each CM7 → CM4 shape once (owner → satellite channels in the owner-written SRAM4 window, [docs/xcore.md](../../docs/xcore.md)). The CM7 comm thread checks `DynCmd` (E2E and its deadline) and hands the CM4 the value with its receive status, so the CM4's `DynEcho` shows a stopped sender (`0xFFFFFF02`) and a corrupt frame (`0xFFFFFF03`) as well as the command. `HostLedLevel` is decoded once for PowertrainCtrl (LD3) and the CM4, which sends it back as `DynLed`. `PtState` — `{ seq, inv }`, the CM7 tick and its complement, a node-internal signal not in `system.toml` — comes back as `DynPt`, so a read mixing two publishes shows on the wire. `DynCmdFrame` has no `GenMsgCycleTime`, so the watch project's tester simulation never sends it.
 
 This closes a **bidirectional** loop through the H735: `domain` switches its headlights on `zone_a`'s routed steering (`headlight_cmd = steering > 90`), and `zone_a` clamps its steering by the `VehicleSpeed` it receives from `domain`. Every cross-bus hop goes through the gateway's forwarder.
 
@@ -139,4 +146,5 @@ The CAN nodes link the generated comm thread against the shared `boards/common/c
 - **Ethernet (`tcu`)**: on WSL, the board's UDP events land on the **Windows** side (mirrored networking), so validate SOME/IP with a `powershell.exe` listener, not a WSL socket. `ping` works from WSL because ICMP is shared. The RPC probe is `nodes/tcu/bench_test.sh` (`--flash` builds and writes tcu only given `BLOB_TCU_SERIAL`, so `make hwtest` never replaces zone_a on the bench H723 by accident; without it, it probes whatever answers at tcu's address). The E2E receive legs are `test/tcu_e2e.lua`, run through blobly_net's headless runner (`BLOBLY_NET=…; v -enable-globals run $BLOBLY_NET/cmd/script/run.v test/tcu_e2e.lua`). Both bind the tester's port 30491 and send first, since the Windows firewall drops an unsolicited inbound datagram until the host has sent to that endpoint.
 - **Watch the CAN traffic**: [`system_full.blobnet`](system_full.blobnet) is a [blobly_net](https://github.com/MartenH/blobly_net) monitor for this bench — it taps both buses (`can0` = compute, `can1` = edge) and decodes them with the DBCs, so you can see the gateway forward. Run it from the blobly_net repo:
   `BLOBLY_PROJECT=/path/to/blobly_emb/examples/system_full/system_full.blobnet ./scripts/run_gui.sh`.
-- **Diagnostics (UDS)**: every CAN node serves UDS over ISO-TP on the ids `system.toml` allocates — domain 0x7B0/0x7B8 and sysnode 0x7A0/0x7A8 on compute, zone_a 0x7C0/0x7C8 on edge (classic-sized ISO-TP on the CAN-FD bus), 0x7DF functional. `test/diag_domain.lua` runs against the watch project; `test/diag_nodes.lua` against [`test/diag_bench.blobnet`](test/diag_bench.blobnet), which transmits on edge too. After `st-flash --connect-under-reset`, clear the core-reset vector catch before an ECUReset test (the note in `diag_nodes.lua`), or 0x11 parks the node at its reset vector.
+- **Diagnostics (UDS)**: every CAN node serves UDS over ISO-TP on the ids `system.toml` allocates — domain 0x7B0/0x7B8 and sysnode 0x7A0/0x7A8 on compute, zone_a 0x7C0/0x7C8 on edge (classic-sized ISO-TP on the CAN-FD bus), 0x7DF functional. `test/diag_domain.lua` runs against the watch project; `test/diag_nodes.lua` against [`test/diag_bench.blobnet`](test/diag_bench.blobnet), which transmits on edge too.
+- **Cross-core signals**: `test/xcore_domain.lua` (on `test/diag_bench.blobnet`, which simulates no tester) sends `DynCmd` (stamped, stopped, corrupted) and `HostLedLevel`, checks the CM4's `DynEcho`, `DynLed` and `DynPt`, and resets the node to show the retained SRAM4 window does not bring old values back. Flash **both** H755 banks from one build first — the layout id gates every cross-core channel, so a mismatched pair shows as no `DynEchoFrame` at all. After `st-flash --connect-under-reset`, clear the core-reset vector catch before an ECUReset test (the note in `diag_nodes.lua`), or 0x11 parks the node at its reset vector.

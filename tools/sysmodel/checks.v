@@ -710,10 +710,11 @@ fn check_signals_dissolved(s System) []Issue {
 				msg:      'node "${n.name}": FB reads "${r}" which is neither a system signal nor a node-local (io) signal'
 			}
 		}
-		// a cross-node RX signal read from >1 partition = concurrent readers of the
-		// one bus-to-partition SPSC IOC channel sysgen emits (a race). REQ-TOPO-001.
+		// a cross-node RX signal read from >1 partition of ONE image = concurrent readers of the
+		// one bus-to-partition SPSC IOC channel sysgen emits (a race). One reader on the owner
+		// image plus one on a satellite image is fed by one writer per image. REQ-TOPO-001.
 		for sig, parts in n.view.read_partitions {
-			if parts.len > 1 && s.signal_by_name(sig) != none {
+			if reader_images_shared(parts, n.view.image_partitions) && s.signal_by_name(sig) != none {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-001'
@@ -723,6 +724,20 @@ fn check_signals_dissolved(s System) []Issue {
 		}
 	}
 	return issues
+}
+
+// reader_images_shared: do two of these reader partitions sit on one image? A partition in
+// `own_image` is its own image; every other partition is the owner image.
+fn reader_images_shared(parts []string, own_image map[string]bool) bool {
+	mut seen := map[string]bool{}
+	for p in parts {
+		img := if own_image[p] { p } else { '' }
+		if seen[img] {
+			return true
+		}
+		seen[img] = true
+	}
+	return false
 }
 
 // The system contract must be well-formed before the semantic checks trust it:

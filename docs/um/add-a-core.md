@@ -55,15 +55,19 @@ identity only: manifest rows + handler ids, no generated code.)
   `board_now_us` (this core's DWT µs), `xcore_ioc_init` + `xcore_pub` (the xioc pool at the
   board's shared-SRAM map, `boards/<board>/xcore.h`), `xcore_trace_service` (the dump
   handoff), and an ISR stub for any vector the shared table names but this core never
-  enables.
+  enables. The owner → satellite seams are not glue: they are shared board C
+  (`boards/<board>/xcore_owner.c` on the owner, `xcore_sat.c` on the satellite), linked
+  automatically through `gen/loom_build.mk`'s `LOOM_GLUE_SRCS` when the generated code
+  declares them. The seams above stay hand-written per example.
 - **`Makefile`** — the right kernel port + flags for the core's architecture
   (`MCU_CM4`, ThreadX `ports/cortex_m4/gnu`, `TX_ENABLE_EXECUTION_CHANGE_NOTIFY`),
-  `-I` the owner's `gen/` (for `xcore_gen.h`), `boards/common/trace_hooks.c`, and a gen
-  dependency on the owner:
+  `-I` the owner's `gen/` (for `xcore_gen.h`), `$(LOOM_GLUE_SRCS)` in its sources,
+  `boards/common/trace_hooks.c`, and a gen dependency on the owner:
 
   ```make
   gen/loom_gen.v:
   	$(MAKE) -C ../h755_threadx gen
+  gen/loom_build.mk: gen/loom_gen.v ;
   -include gen/loom_build.mk
   ```
 

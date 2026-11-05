@@ -2961,6 +2961,43 @@ fn test_dissolved_cross_partition_reader() {
 	assert issue_msgs(validate_system_gen(s)).any(it.contains('read from 2 partitions'))
 }
 
+// REQ-TOPO-001: one reader on the owner image plus one on a satellite image is allowed.
+fn test_dissolved_owner_and_satellite_readers() {
+	mut s := clean_dissolved()
+	s.nodes[1].view.read_partitions = {
+		'Speed': ['ctl', 'sat']
+	}
+	s.nodes[1].view.image_partitions = {
+		'sat': true
+	}
+	assert !issue_msgs(validate_system_gen(s)).any(it.contains('single reader partition'))
+}
+
+// REQ-TOPO-001: two readers on the owner image stay refused beside a satellite reader.
+fn test_dissolved_two_owner_readers_beside_satellite() {
+	mut s := clean_dissolved()
+	s.nodes[1].view.read_partitions = {
+		'Speed': ['ctlA', 'sat', 'ctlB']
+	}
+	s.nodes[1].view.image_partitions = {
+		'sat': true
+	}
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('read from 3 partitions')
+		&& it.contains('single reader partition'))
+}
+
+// the image of a partition is read from the node file: `image =` or `external = true`.
+fn test_parse_node_view_image_partitions() {
+	doc := toml.parse_text('[[partition]]\nname = "own"\nthread = [{ name = "t0" }]\n\n[[partition]]\nname = "sat"\nimage = "../m4"\nthread = [{ name = "t1" }]\n\n[[partition]]\nname = "ext"\nexternal = true\nthread = [{ name = "t2" }]\n') or {
+		panic(err)
+	}
+	v := parse_node_view(doc)
+	assert v.image_partitions == {
+		'sat': true
+		'ext': true
+	}
+}
+
 // REQ-TOPO-003: a bus DBC with two BO_ sharing one CAN id is ambiguous — the
 // generator would emit both transmitters under one wire id.
 fn test_dissolved_dbc_duplicate_frame_id_is_error() {

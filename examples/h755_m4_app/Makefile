@@ -35,7 +35,7 @@ TX_C   = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
          $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
 
-BSP = $(BOARD_BSP_CM4_THREADX) $(BOARD_BSP_CM4_BARE) m4_glue.c \
+BSP = $(BOARD_BSP_CM4_THREADX) $(BOARD_BSP_CM4_BARE) $(LOOM_GLUE_SRCS) m4_glue.c \
       $(REPO)/boards/common/trace_hooks.c
 
 all: $(BUILD)/$(NAME).bin
@@ -44,6 +44,9 @@ all: $(BUILD)/$(NAME).bin
 # declares this whole node — partition "m4", image = "../h755_m4_app"): regenerate there.
 gen/loom_gen.v:
 	$(MAKE) -C ../h755_threadx gen
+# loom2v writes gen/loom_build.mk beside it (LOOM_VDEFS, LOOM_GLUE_SRCS): a from-clean build
+# makes it through the owner's gen, then make restarts with it read.
+gen/loom_build.mk: gen/loom_gen.v ;
 
 # loom's fixed Scheduler tables, right-sized to this image's real per-thread handler count.
 # (not for clean, which would otherwise regenerate everything before deleting it)

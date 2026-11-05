@@ -1511,6 +1511,13 @@ mut:
 	// xcore_xw_total is the window budget consumed (checked against XCORE_XW_MAX in xcore_gen.h).
 	xcore_xw_off   map[string]int
 	xcore_xw_total int
+	// OWNER -> SATELLITE channels (gen_xdown.v): a signal produced on this image that a satellite
+	// FB reads, laid out in the board's owner-written window — derived, never configured.
+	xdown_names []string
+	xdown_off   map[string]int
+	xdown_lanes map[string]int
+	xdown_lean  map[string]bool // a lean received signal: one lane, the comm thread's lean decode
+	xdown_total int
 	// [nvm] (gen_nvm.v): persistent-signal names in declaration order + their
 	// schema-identity block ids — all derived, never configured beyond intent.
 	nvm       NvmCfg
@@ -1524,6 +1531,7 @@ mut:
 	fault_grace_us  u64 // the cycle-end barrier: twice the longest period of a fault-testing handler
 	bulk      []BulkPoolCfg
 	fb_reads    map[string]int      // signal -> how many FB handlers read it
+	fb_reads_owner map[string]int   // signal -> how many FBs on THIS image read it (owner cells are for them)
 	fb_reads_by map[string][]string // fb -> the signals its handlers read
 }
 
@@ -1579,12 +1587,10 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	mut xcore_pair_n := 0
 	for sname in sig_names {
 		mut si := sig_of[sname] or { continue }
-		from_ext := part.external[si.from] or { false }
-		to_ext := part.external[si.to] or { false }
-		if to_ext {
-			panic('loom2v: signal "${sname}" flows INTO satellite partition "${si.to}" — a ' +
-				'satellite-side consumer is not generated yet; satellites only publish (from = "${si.to}")')
-		}
+		// produced on a satellite (its `from` names a satellite partition or one of its threads):
+		// the up direction. Owner-produced signals a satellite FB reads get a down channel after
+		// the model is built (xdown_derive), from the FBs' reads.
+		from_ext := part.external[ep_part(part, si.from)] or { false }
 		if !from_ext {
 			continue
 		}
@@ -1595,24 +1601,22 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		// xioc_n channel (words = field count, <= one PDU). 64-bit fields stay rejected
 		// until a signal earns them; past one PDU it is not a signal on ANY transport —
 		// that is the bulk ring's job.
-		if si.fields.len < 1 || si.fields.len > 16 {
-			panic('loom2v: remote signal "${sname}" has ${si.fields.len} fields — lanes carry ' +
-				'1..16 u32 lanes (one PDU, 64 B); a bigger payload is bulk, not a signal ' +
-				'(docs/bulk-transport.md)')
-		}
 		for f in si.fields {
-			if f.typ !in ['u32', 'u16', 'u8', 'bool'] {
-				panic('loom2v: remote signal "${sname}" field "${f.name}" is ${f.typ} — a lane ' +
-					'carries a <=32-bit field (u32/u16/u8/bool)')
+			issue := lane_type_issue(sname, f, false)
+			if issue != '' {
+				panic('loom2v: ${issue}')
 			}
+		}
+		if sig_lanes(si) < 1 || sig_lanes(si) > xlane_max {
+			panic('loom2v: remote signal "${sname}" takes ${sig_lanes(si)} lanes — a channel carries ' +
+				'1..${xlane_max} u32 lanes (one PDU, 64 B); a bigger payload is bulk, not a signal ' +
+				'(docs/bulk-transport.md)')
 		}
 		si.wide = si.fields.len > 2 || si.fields.any(it.typ != 'u32')
 		if si.wide {
-			// xioc_n geometry: 32 B header + XIOC_SLOTS(4) x (1 seq + lanes) u32s, rounded up
-			// to the 32 B line so neighbouring channels never share one.
+			// xioc_n geometry (xioc_n_bytes): neighbouring channels never share a 32 B line
 			xcore_xw_off[sname] = xcore_xw_total
-			ch_bytes := 32 + 4 * 4 * (1 + si.fields.len)
-			xcore_xw_total += (ch_bytes + 31) & ~31
+			xcore_xw_total += xioc_n_bytes(sig_lanes(si))
 		} else {
 			xcore_idx[sname] = xcore_pair_n
 			xcore_pair_n++
@@ -1691,7 +1695,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 			panic('loom: cross-core signal "${sname}" is read by ${ctxs.len} owner threads ' +
 				'(${ctxs.join(', ')}) — xcore_poll holds ONE shared reader state per slot, so ' +
 				'multiple owner readers would tear the last-good value; keep its readers on one ' +
-				'thread, or wait for FB-held reader state (rung 2c)')
+				'thread, or make it a wide signal (whose reader state each thread holds)')
 		}
 	}
 	if xcore_producers.len > 1 {
@@ -1700,7 +1704,8 @@ fn build_model(doc toml.Doc, dbc string) Model {
 			'(${xcore_producers.join(', ')}) — the cross-core layout handshake carries ONE ' +
 			'satellite today (generated or hand-written); see the per-cell design note here')
 	}
-	m := Model{
+	fb_rws := fb_rw_list(doc, part)
+	mut m := Model{
 		buses:        buses
 		bus_core:     bus_core
 		sig_of:       sig_of
@@ -1743,6 +1748,26 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		bulk:         parse_bulk(doc)
 		fb_reads:     fb_read_counts(doc)
 		fb_reads_by:  fb_reads_of(doc)
+		fb_reads_owner: fb_reads_owner(fb_rws, part)
+	}
+	// owner -> satellite channels: needs the built model (which received frames are checked)
+	xd := xdown_derive(m.sig_names, m.sig_of, m.part, fb_rws, rx_checked_msgs(m), m.eth) or {
+		panic('loom2v: ${err}')
+	}
+	m.xdown_names = xd.names
+	m.xdown_off = xd.off
+	m.xdown_lanes = xd.lanes
+	m.xdown_lean = xd.lean
+	m.xdown_total = xd.total
+	// an owner FB's output that an owner FB reads too (beside the satellite reader) is held in
+	// the writer's local cell, as on one core, whatever its `to` names — readers decide
+	for sname in xd.names {
+		mut si := m.sig_of[sname] or { continue }
+		if !si.rx && !si.local && (m.fb_reads_owner[sname] or { 0 }) > 0 && si.from in part.core_of
+			&& !(part.external[si.from] or { false }) {
+			si.local = true
+			m.sig_of[sname] = si
+		}
 	}
 	validate_signal_routes_model(m, doc)
 	validate_uds(m)
@@ -2458,6 +2483,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << trace_c_decls(m)
 			glue << shell_c_decls(m)
 			glue << xcore_c_decls(m)
+			glue << xdown_owner_decls(m)
+			glue << xlane_helpers(xcore_sigs(m))
+			glue << xdown_pub_fns(m)
 			glue << display_c_decls(m)
 			if has_satellite(m) {
 				// boot() calls this to release the parked satellite. Keyed on has_satellite, NOT
@@ -3117,6 +3145,18 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 									glue << '\t\t\t\tC.ioc_pub(${idx}, g_rx_last, u32(0))'
 								}
 							}
+							// a satellite FB reads it: the same decoded value to its owner->satellite
+							// channel, under the same reception gate (gen_xdown.v)
+							dpub := xdown_lean_pub(m, si.dbc_id)
+							if dpub != '' {
+								if m.isotp_conns.len > 0 {
+									glue << '\t\t\t\tif st.rxg.on {'
+									glue << '\t\t\t\t\t${dpub}'
+									glue << '\t\t\t\t}'
+								} else {
+									glue << '\t\t\t\t${dpub}'
+								}
+							}
 							glue << '\t\t\t}'
 						}
 						glue << rx_target_arms(m)
@@ -3363,6 +3403,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// (xcore_wait_clocks). main.v has already run board_clock_init, so the satellite's
 				// SysTick is set against the final HCLK. Generator-owned so any owner — a shared
 				// main.v (system_full) or a hand-written one — releases its satellite (codex #235).
+				// The owner->satellite channels are initialised first: the satellite must never see
+				// a channel of this boot before it is ready (gen_xdown.v).
+				glue << xdown_boot_lines(m)
 				glue << '\tC.xcore_clocks_ready()'
 			}
 			if ioc_idx.len > 0 {
@@ -3621,6 +3664,23 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 					glue << '\tcell_${snake(sname)} sig.${sname} // local FB->FB signal'
 				}
 			}
+			// cross-core reader state, one array per signal this thread reads across cores
+			mut thr_reads := []string{}
+			for c in clist {
+				cm := c.as_map()
+				cname := (cm['name'] or { toml.Any('') }).string()
+				if fb_thr[cname] != thr && multi {
+					continue
+				}
+				for h in (cm['handler'] or { toml.Any([]toml.Any{}) }).array() {
+					for r in (h.as_map()['reads'] or { toml.Any([]toml.Any{}) }).array() {
+						if r.string() !in thr_reads {
+							thr_reads << r.string()
+						}
+					}
+				}
+			}
+			glue << xreader_state_fields(m, thr_reads, image_part)
 			glue << '}'
 		}
 
@@ -3698,7 +3758,11 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 						})
 						continue
 					}
-					if si.local {
+					if image_part != '' && rn in m.xdown_off {
+						// SATELLITE FB reads a signal produced on the owner image (owner -> satellite),
+						// whatever the owner side holds it in (a local cell, an IOC cell, a byte IOC)
+						glue << xdown_read_lines(m, rn)
+					} else if si.local {
 						glue << '\tinp.${snake(rn)} = st.cell_${snake(rn)} // local'
 					} else if idx := ioc_idx[rn] {
 						// bus -> comm(decode) -> target IOC cell ${idx} -> this FB input (6b-2b). One
@@ -3728,6 +3792,8 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 							glue << '\tC.ioc_get(${idx}, &${snake(rn)}_a, &${snake(rn)}_b)'
 							glue << '\t${asn}'
 						}
+					} else if image_part != '' && rn in rx_iocb_idx(m) {
+						panic('loom2v: satellite partition "${part}" fb "${cname}" reads "${rn}", which has no owner->satellite channel (gen_xdown.v)')
 					} else if bidx := rx_iocb_idx(m)[rn] {
 						// a received signal crossing whole on the ThreadX target: the eth thread's
 						// unpacked struct (docs/someip.md), or a checked CAN frame's decoded signal
@@ -3739,11 +3805,12 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 						// holds static per-slot state, so a/b carry the last-good value — latest-value
 						// semantics: a satellite that stops publishing keeps its last value). Gate on the
 						// layout handshake: until the satellite acks a MATCHED build, keep the port default
-						// rather than trust another build's slot bytes (same gate as the comm tx). Scalar
-						// (<=2 field) only — a wide cross-core FB read needs FB-held reader state (rung 2c).
+						// rather than trust another build's slot bytes (same gate as the comm tx). A wide
+						// signal is read the same way, its reader state in this thread's state struct.
 						if si.wide {
-							panic('loom2v: owner fb "${cname}" reads WIDE cross-core signal "${rn}" — not ' +
-								'wired (scalar xioc only); make it a scalar signal or transmit it on a bus')
+							// wide: reader state in this thread's own state struct (xreader_state_fields)
+							glue << xup_wide_read_lines(m, rn)
+							continue
 						}
 						glue << '\tif C.xcore_layout_ok() != 0 { // trust cross-core slots only once the satellite acks a matched build'
 						glue << '\t\tmut ${snake(rn)}_a := u32(0)'
@@ -3764,8 +3831,8 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 					} else {
 						if image_part != '' {
 							panic('loom2v: satellite partition "${part}" fb "${cname}" reads signal ' +
-								'"${rn}", which is not thread-local — an owner->satellite transport is ' +
-								'not generated yet (docs/multi-image.md)')
+								'"${rn}", which is neither thread-local nor carried from the owner image ' +
+								'(nothing on the owner produces it) — docs/multi-image.md')
 						}
 						glue << '\tosal.${acquire_fn(si.transport)}(${snake(rn)}_ch, &inp.${snake(rn)}, u8(sizeof(inp.${snake(rn)})))'
 					}
@@ -3788,18 +3855,18 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 							}
 							glue << '\tC.ioc_pub(${ioc_idx[wn]}, ${f0}, ${f1}) // persist staging'
 						}
+						if image_part == '' && wn in m.xdown_off {
+							glue << '\txdown_pub_${snake(wn)}(outp.${snake(wn)}) // and to the satellite readers'
+						}
+					} else if image_part == '' && wn in m.xdown_off {
+						// owner FB output a satellite FB reads (owner -> satellite channel)
+						glue << '\txdown_pub_${snake(wn)}(outp.${snake(wn)})'
 					} else if xoff := m.xcore_xw_off[wn] {
 						// wide remote signal (xioc_n): one u32 lane per field, lane order =
 						// field order = wire order — packed into the signal's channel in the
 						// board wide window (xcore_gen.h XCORE_XW_*_OFF; boot init'd this side).
-						glue << '\tmut xw_${snake(wn)} := [${si.fields.len}]u32{}'
-						for fi, f in si.fields {
-							if f.typ == 'bool' {
-								glue << '\txw_${snake(wn)}[${fi}] = if outp.${snake(wn)}.${snake(f.name)} { u32(1) } else { u32(0) }'
-							} else {
-								glue << '\txw_${snake(wn)}[${fi}] = u32(outp.${snake(wn)}.${snake(f.name)})'
-							}
-						}
+						glue << '\tmut xw_${snake(wn)} := [${sig_lanes(si)}]u32{}'
+						glue << lane_pack_lines(si, 'outp.${snake(wn)}', 'xw_${snake(wn)}', '\t')
 						glue << '\tC.xcore_pub_n(u32(${xoff}), &xw_${snake(wn)}[0])'
 					} else if dslot := m.xcore_idx[wn] {
 						// remote (cross-image) signal: publish the {a, b} pair into its xioc slot —
@@ -4165,6 +4232,15 @@ fn main() {
 		m.xcore_xw_off.clear()
 		m.xcore_xw_total = 0
 	}
+	if m.xdown_names.len > 0 && !(m.target.threadx) {
+		eprintln('loom2v: WARNING: owner->satellite signals need the ThreadX target (satellite ' +
+			'images are generated for it only). Building WITHOUT the owner->satellite channels.')
+		m.xdown_names.clear()
+		m.xdown_off.clear()
+		m.xdown_lanes.clear()
+		m.xdown_lean.clear()
+		m.xdown_total = 0
+	}
 	if m.trace.on && m.target.threadx {
 		validate_trace_threadx(m)
 	} else if m.trace.on && !trace_owns_run {
@@ -4508,10 +4584,10 @@ fn main() {
 							'carry the lane encode — ${si.dbc_lane_issue}. The lane writer fills whole ' +
 							'4-byte lanes; every SG in the frame must own one (codex #211)')
 					}
-					if si.dbc_dlc != 4 * si.fields.len {
+					if si.dbc_dlc != 4 * sig_lanes(si) {
 						panic('loom2v: remote TX signal "${sname}" has ${si.fields.len} u32 field(s) ' +
 							'but DBC message "${si.dbc_msg}" DLC is ${si.dbc_dlc} — the xioc encode packs ' +
-							'4 bytes per field (expect DLC ${4 * si.fields.len})')
+							'4 bytes per lane (expect DLC ${4 * sig_lanes(si)})')
 					}
 					continue
 				}
@@ -4583,10 +4659,14 @@ fn main() {
 						'${msg_read_sigs[si.dbc_msg]} rx signals read by FBs, but the lean whole-frame decode ' +
 						'publishes one per frame — per-signal decode needs the codec (phase 6b-2b+)')
 				}
-				ioc_idx[sname] = ioc_idx.len
-				// Key the publish off the READ signal's DBC id, not the de-duped rx_sigs
-				// representative (which may be an un-read signal that happens to sort first).
-				msg_ioc_idx[si.dbc_id] = ioc_idx[sname]
+				// a cell only for readers on THIS image: a satellite reader gets its owner->satellite
+				// channel instead (gen_xdown.v), published beside this cell from the same decode
+				if (m.fb_reads_owner[sname] or { 0 }) > 0 {
+					ioc_idx[sname] = ioc_idx.len
+					// Key the publish off the READ signal's DBC id, not the de-duped rx_sigs
+					// representative (which may be an un-read signal that happens to sort first).
+					msg_ioc_idx[si.dbc_id] = ioc_idx[sname]
+				}
 			}
 		}
 		validate_diag_live_dids(m, tx_cells)
@@ -5897,6 +5977,11 @@ const boot_glue_syms = ['boot_handoff_request', 'boot_handoff_ok', 'boot_image_v
 // names the two sectors); the flash driver behind it is the board's own (board.mk BOARD_FLASH,
 // the bootloader's driver too)
 const nvm_glue_syms = ['nvm_map_a', 'nvm_map_b', 'nvm_map_size']
+
+// the owner->satellite seams (gen_xdown.v): the board's owner writer and satellite reader, linked
+// through its board.mk variables
+const xcore_owner_syms = ['xcore_owner_begin', 'xcore_ow_init', 'xcore_owner_commit', 'xcore_opub_n']
+const xcore_sat_syms = ['xcore_down_read']
 const flash_driver_syms = ['bflash_erase', 'bflash_program', 'bflash_read', 'bflash_blank']
 
 // ioc_pool_n: comm_glue.c's IOC_POOL_N — the target IOC cells an image may use (pinned equal by
@@ -5931,6 +6016,12 @@ fn glue_build_lines(glue []string, doip bool) string {
 	}
 	if flash_driver_syms.any(declared[it]) {
 		srcs << r'$(BOARD_FLASH)'
+	}
+	if xcore_owner_syms.any(declared[it]) {
+		srcs << r'$(BOARD_XCORE_OWNER)'
+	}
+	if xcore_sat_syms.any(declared[it]) {
+		srcs << r'$(BOARD_XCORE_SAT)'
 	}
 	if srcs.len == 0 {
 		return 'LOOM_GLUE_SRCS :=\n'

@@ -393,10 +393,10 @@ only and bump no generation, so no old-generation drain is needed on the host (a
 boundary can land one pass late). The persistence-grade cycle-END barrier
 remains R6's (§7). The
 per-fault generations are bounded by the cell too, which caps the faults one FB may own (8). A
-producer on a **satellite core** needs the same cell to flow owner → satellite, which the target does
-not support today (loom2v rejects any signal INTO a satellite partition); R6 adds that reverse xioc
-path, or faults are declared owner-core-only until it exists (as built in R6a: owner-core only — a
-fault on a satellite partition is refused, as is one in a multi-thread partition). Enable conditions are evaluated on the producer
+producer on a **satellite core** needs the same cell to flow owner → satellite. Owner → satellite
+signals now exist ([xcore.md](xcore.md)), but the fault cells are not carried on them yet, so faults
+stay owner-core-only (as built in R6a: a fault on a satellite partition is refused, as is one in a
+multi-thread partition). Enable conditions are evaluated on the producer
 itself — they are signals, readable there like any input — so a fault whose condition is false stops
 counting instead of qualifying the moment the condition returns.
 

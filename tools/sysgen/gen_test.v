@@ -384,3 +384,106 @@ thread = "t"
 	plain := out.all_after('name   = "Plain"').all_before('[[')
 	assert !plain.contains('RxStatus') && !plain.contains('lost'), out
 }
+
+// two-image node for the partition tests: `own` is the owner image, `sat` a satellite image.
+fn two_image_node(dir string, fbs []string) sysmodel.System {
+	os.write_file(os.join_path(dir, 'compute.dbc'), 'VERSION ""\nBU_: dom src\n' +
+		'BO_ 288 SpeedFrame: 4 dom\n SG_ Speed : 0|32@1+ (1,0) [0|0] "" src\n' +
+		'BO_ 289 CmdFrame: 4 src\n SG_ Cmd : 0|32@1+ (1,0) [0|0] "" dom\n') or { panic(err) }
+	os.write_file(os.join_path(dir, 'dom.toml'), '
+[[partition]]
+name = "own"
+core = 0
+
+  [[partition.thread]]
+  name = "t0"
+
+[[partition]]
+name  = "sat"
+core  = 1
+image = "../m4"
+
+  [[partition.thread]]
+  name = "t1"
+' + fbs.join('\n')) or {
+		panic(err)
+	}
+	return sysmodel.System{
+		dir:     dir
+		buses:   [sysmodel.Bus{
+			name:      'compute'
+			interface: 'can0'
+			dbc:       'compute.dbc'
+		}]
+		nodes:   [sysmodel.Node{
+			name:  'dom'
+			ecu:   'dom.toml'
+			buses: ['compute']
+		}]
+		signals: [sysmodel.SysSignal{
+			name:     'Speed'
+			fields:   {
+				'v': 'u32'
+			}
+			producer: 'dom'
+			bus:      'compute'
+			frame:    'SpeedFrame'
+		}, sysmodel.SysSignal{
+			name:     'Cmd'
+			fields:   {
+				'v': 'u32'
+			}
+			producer: 'src'
+			bus:      'compute'
+			frame:    'CmdFrame'
+		}]
+	}
+}
+
+fn fb_block(name string, thr string, rw string) string {
+	return '
+[[fb]]
+name   = "${name}"
+thread = "${thr}"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  ${rw} # trailing comment terminates the nested block (vlang/v#27684)
+'
+}
+
+// REQ-TOPO-005: a produced signal takes its WRITER partition — a satellite FB reading it, declared
+// after the owner FB writing it, does not move the TX `from`.
+fn test_a_satellite_reader_does_not_move_the_tx_from() {
+	dir := os.join_path(os.temp_dir(), 'sysgen_txfrom_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	sys := two_image_node(dir, [fb_block('Ctl', 't0', 'writes = ["Speed"]'),
+		fb_block('Probe', 't1', 'reads  = ["Speed"]')])
+	out := generate_node(sys, sys.nodes[0]) or { panic(err) }
+	speed := out.all_after('name   = "Speed"').all_before('[[')
+	assert speed.contains('from   = "own"') && speed.contains('to     = "can0"'), out
+}
+
+// REQ-TOPO-005: a bus RX signal read on both images is one [[signal]] whose `to` is the owner-image
+// reader, whichever FB is declared first.
+fn test_a_bus_rx_signal_read_on_both_images_goes_to_the_owner() {
+	dir := os.join_path(os.temp_dir(), 'sysgen_rxboth_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	writer := fb_block('Out', 't0', 'writes = ["Speed"]')
+	own := fb_block('Ctl', 't0', 'reads  = ["Cmd"]')
+	sat := fb_block('Probe', 't1', 'reads  = ["Cmd"]')
+	for fbs in [[writer, own, sat], [writer, sat, own]] {
+		sys := two_image_node(dir, fbs)
+		out := generate_node(sys, sys.nodes[0]) or { panic(err) }
+		assert out.count('name   = "Cmd"') == 1, out
+		cmd := out.all_after('name   = "Cmd"').all_before('[[')
+		assert cmd.contains('from   = "can0"') && cmd.contains('to     = "own"'), out
+	}
+}

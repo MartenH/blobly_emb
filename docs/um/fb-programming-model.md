@@ -58,8 +58,8 @@ An acronym is a word of its own, so `ABSActive` is `abs_active` and `LED5State` 
 
 | ... | in `ecu.toml` | in the FB | host | ThreadX target |
 |---|---|---|---|---|
-| use another FB's value | `[[signal]] from = "<its partition>"`, `to = "<mine>"`; list it in `reads` | `inp.x.field` | ✅ | ✅ — but not INTO a satellite core's partition yet (satellite → owner only) |
-| give a value to another FB | the same signal, in my `writes` | `out.x.field = v` | ✅ | ✅ — but not INTO a satellite core's partition yet (satellite → owner only) |
+| use another FB's value | `[[signal]] from = "<its partition>"`, `to = "<mine>"`; list it in `reads` | `inp.x.field` | ✅ | ✅ — across cores too, either way ([../xcore.md](../xcore.md)) |
+| give a value to another FB | the same signal, in my `writes` | `out.x.field = v` | ✅ | ✅ — across cores too, either way |
 | send a value on CAN | `to = "can0"`; the signal name is the DBC signal; `[[frame]]` sets timing / E2E / SecOC | `out.x.field = v` (physical units) | ✅ | cyclic tx, plain u32 layouts, no E2E / SecOC yet |
 | receive a value from CAN | `from = "can0"` | `inp.x.field` | ✅ | plain u32 layouts only |
 | … and know if it is fresh | add `status = "RxStatus"`, and give its frame a deadline | `inp.x.status` | ✅ | not yet (R5) |

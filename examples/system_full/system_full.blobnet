@@ -17,6 +17,11 @@
 #     0x123 HeadlightCmdFrame (domain)   ─┤  copies ├─► 0x131 HeadlightCmdFrame_E on edge
 #     0x126 LedLevelFrame     (domain)   ─┘         └─► 0x133 LedLevelFrame_E     on edge
 #     0x125 SteeringFrame_C   ◄── gateway forwards zone_a's steering here
+#     0x124 DynCmdFrame       (tester)   ── E2E-protected, no cycle: the simulation below never
+#                                           sends it; test/xcore_domain.lua does, on diag_bench.blobnet
+#     0x129 DynEchoFrame      (domain)   ── the H755 CM4 echoing DynCmd, handed down by the CM7
+#     0x12A DynPtFrame        (domain)   ── the CM4 reporting the CM7's PtState.seq (0xFFFFFFFF = torn)
+#     0x12B DynLedFrame       (domain)   ── the CM4 reporting HostLedLevel, decoded once for both cores
 #     0x7E0/0x7E1 sysnode telemetry, 0x7E2/0x7E3 domain telemetry (raw — not in the DBC)
 #   edge bus (SocketCAN can1):
 #     0x132 SteeringFrame     (zone_a)   ──── gateway ───► 0x125 on compute
