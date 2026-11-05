@@ -1567,7 +1567,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	}
 	frames := parse_frames(doc, eth, buses, bus_kind, db, carries_signals)
 	part := parse_partitions(doc)
-	fb_rws := fb_rw_list(doc, part)
+	fb_rws := fb_rw_list(doc)
 	io_points, io_core := parse_io(doc, sig_of)
 	// P1 generates the SAME-core transport derivation only (triple): the io thread
 	// and every io-signal endpoint must share [io].core (docs/io.md).
@@ -1598,8 +1598,17 @@ fn build_model(doc toml.Doc, dbc string) Model {
 			continue
 		}
 		readers := fb_rws.filter(sname in it.reads && it.part != '')
-		spans := readers.any((part.external[it.part] or { false }) != (part.external[wp] or { false }))
+		w_img := part.external[wp] or { false }
+		spans := readers.any((part.external[it.part] or { false }) != w_img)
 		if spans && readers.any(it.part == wp) {
+			// the cell is the writer partition's: a reader in another partition of its image has none
+			for r in readers {
+				if r.part != wp && (part.external[r.part] or { false }) == w_img {
+					panic('loom2v: signal "${sname}" is written in partition "${wp}" and read by fb ' +
+						'"${r.name}" in partition "${r.part}" of the same image while it also crosses ' +
+						'cores — its cell is "${wp}"\'s: read it there')
+				}
+			}
 			si.local = true
 			sig_of[sname] = si
 		}
@@ -1784,22 +1793,6 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	m.xdown_lanes = xd.lanes
 	m.xdown_lean = xd.lean
 	m.xdown_total = xd.total
-	// an owner FB's output that an owner FB reads too (beside the satellite reader) is held in
-	// the writer's local cell, as on one core, whatever its `to` names — readers decide
-	for sname in xd.names {
-		mut si := m.sig_of[sname] or { continue }
-		wp := ep_part(part, si.from)
-		owner_readers := fb_rws.filter(sname in it.reads && !(part.external[it.part] or { false }))
-		if !si.rx && !si.local && owner_readers.len > 0 && wp != '' && !(part.external[wp] or { false }) {
-			if owner_readers.any(it.part != wp) {
-				panic('loom2v: signal "${sname}" is written in partition "${wp}" and read by owner fb ' +
-					'"${owner_readers.filter(it.part != wp)[0].name}" in another partition — on this ' +
-					'target an owner signal is read in its writer\'s partition')
-			}
-			si.local = true
-			m.sig_of[sname] = si
-		}
-	}
 	validate_signal_routes_model(m, doc)
 	validate_uds(m)
 	validate_live_dids(m)

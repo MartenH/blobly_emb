@@ -205,37 +205,16 @@ struct FbRW {
 	writes []string
 }
 
-// fb_rw_list: every [[fb]] with its partition, thread, reads and writes.
-fn fb_rw_list(doc toml.Doc, p PartMap) []FbRW {
-	mut out := []FbRW{}
-	for fb in ecumodel.toml_arr(doc, 'fb') {
-		fm := fb.as_map()
-		name := (fm['name'] or { toml.Any('') }).string()
-		thr := p.fb_thread[name] or { name }
-		mut reads := []string{}
-		mut writes := []string{}
-		for h in (fm['handler'] or { toml.Any([]toml.Any{}) }).array() {
-			hm := h.as_map()
-			for r in (hm['reads'] or { toml.Any([]toml.Any{}) }).array() {
-				if r.string() !in reads {
-					reads << r.string()
-				}
-			}
-			for w in (hm['writes'] or { toml.Any([]toml.Any{}) }).array() {
-				if w.string() !in writes {
-					writes << w.string()
-				}
-			}
-		}
-		out << FbRW{
-			name:   name
-			part:   p.thread_part[thr] or { '' }
-			thread: thr
-			reads:  reads
-			writes: writes
-		}
-	}
-	return out
+// fb_rw_list: every [[fb]] with its partition, thread, reads and writes (ecumodel.fb_places, the
+// one walk of the FBs placement reads)
+fn fb_rw_list(doc toml.Doc) []FbRW {
+	return ecumodel.fb_places(doc).map(FbRW{
+		name:   it.name
+		part:   it.part
+		thread: it.thread
+		reads:  it.reads
+		writes: it.writes
+	})
 }
 
 // ep_part: the partition a signal endpoint names — a partition itself, or the partition of the

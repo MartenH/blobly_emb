@@ -968,18 +968,10 @@ pub fn load_node(path string) !NodeView {
 // parse_node_view extracts the system-relevant slice of a node's ecu.toml — the
 // PURE parse with NO external gate. load_node adds the ecucheck; the DISSOLUTION
 // generator (tools/sysgen) runs this directly on a partial node's internals.
-// image_partitions_of: the partitions of a node's ecu.toml that are their own image — a generated
-// satellite (`image = ...`) or a hand-written one (`external = true`), loom2v's rule; every other
-// partition is the owner image. The one statement sysmodel's checks and sysgen both read.
+// image_partitions_of: ecumodel's rule (a partition with `image =` or `external = true` is its
+// own image), the one statement sysmodel's checks and sysgen read
 pub fn image_partitions_of(doc toml.Doc) map[string]bool {
-	mut out := map[string]bool{}
-	for p in (doc.value_opt('partition') or { toml.Any([]toml.Any{}) }).array() {
-		pm := p.as_map()
-		if m_str(pm, 'image') != '' || m_bool(pm, 'external') {
-			out[m_str(pm, 'name')] = true
-		}
-	}
-	return out
+	return ecumodel.image_partitions_of(doc)
 }
 
 pub fn parse_node_view(doc toml.Doc) NodeView {
@@ -1107,7 +1099,7 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 		}
 	}
 	// [[signal]] from/to a bus = consume/produce on that bus (keyed by interface)
-	sig_ends, _ := ecumodel.signal_endpoints(doc)
+	sig_ends := ends.clone()
 	if sv := doc.value_opt('signal') {
 		for s in sv.array() {
 			m := s.as_map()

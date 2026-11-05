@@ -17,6 +17,7 @@ import os
 import time
 import toml
 import sysmodel
+import tools.ecumodel
 import tools.candb
 
 fn main() {
@@ -590,43 +591,25 @@ mut:
 // writer is kept, and a reader on the owner image wins over one on a satellite image (a
 // partition with `image =` or `external = true`), else the first reader is kept.
 fn signal_partitions(doc toml.Doc) SigParts {
-	mut thread_part := map[string]string{}
-	own_image := sysmodel.image_partitions_of(doc)
-	for p in (doc.value_opt('partition') or { toml.Any([]toml.Any{}) }).array() {
-		pm := p.as_map()
-		pname := (pm['name'] or { toml.Any('') }).string()
-		for t in (pm['thread'] or { toml.Any([]toml.Any{}) }).array() {
-			tname := (t.as_map()['name'] or { toml.Any('') }).string()
-			if tname != '' {
-				thread_part[tname] = pname
+	own_image := ecumodel.image_partitions_of(doc)
+	mut out := SigParts{}
+	mut readers := map[string][]string{} // signal -> reader partitions, FB order
+	for fb in ecumodel.fb_places(doc) {
+		if fb.part == '' {
+			continue
+		}
+		for name in fb.reads {
+			readers[name] << fb.part
+		}
+		for name in fb.writes {
+			if name !in out.writer {
+				out.writer[name] = fb.part
 			}
 		}
 	}
-	mut out := SigParts{}
-	for fb in (doc.value_opt('fb') or { toml.Any([]toml.Any{}) }).array() {
-		fm := fb.as_map()
-		thr := (fm['thread'] or { toml.Any('') }).string()
-		part := thread_part[thr] or { '' }
-		if part == '' {
-			continue
-		}
-		for h in (fm['handler'] or { toml.Any([]toml.Any{}) }).array() {
-			hm := h.as_map()
-			for r in (hm['reads'] or { toml.Any([]toml.Any{}) }).array() {
-				name := r.string()
-				have := out.reader[name] or { '' }
-				// loom2v derives every reader from FB reads, so one `to` is enough: the owner-image one
-				if have == '' || (own_image[have] && !own_image[part]) {
-					out.reader[name] = part
-				}
-			}
-			for w in (hm['writes'] or { toml.Any([]toml.Any{}) }).array() {
-				name := w.string()
-				if name !in out.writer {
-					out.writer[name] = part
-				}
-			}
-		}
+	// the one rule a lowered `to` and a node-internal derived one both take (ecumodel)
+	for name, rs in readers {
+		out.reader[name] = ecumodel.consumer_partition('', rs, own_image)
 	}
 	return out
 }

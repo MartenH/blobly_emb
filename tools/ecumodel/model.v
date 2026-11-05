@@ -181,12 +181,12 @@ pub fn validate(doc toml.Doc) []string {
 		}
 	}
 	// every signal's endpoints, as written or derived from the FBs (endpoints.v, REQ-INV-007)
-	_, end_errs := signal_endpoints(doc)
+	ends, end_errs := signal_endpoints(doc)
 	errs << end_errs
-	errs << validate_io(doc, part_names, thread_part, bus_names)
+	errs << validate_io(doc, ends, part_names, thread_part, bus_names)
 
 	// [someip] / eth buses — must also stay BEFORE [trace] (early return below).
-	errs << validate_someip(doc, part_names, thread_part, bus_names)
+	errs << validate_someip(doc, ends, part_names, thread_part, bus_names)
 
 	// [bulk] — bulk transport pools (docs/bulk-transport.md). Must stay BEFORE [trace].
 	errs << validate_bulk(doc, part_names, thread_part, part_core)
@@ -456,7 +456,7 @@ pub fn eth_layouts(doc toml.Doc) []EthLayoutCell {
 // event-class ids unique across bindings, the signals list with its canonical
 // fixed-width layout, one direction per frame, and the shared 64-byte PDU
 // bound (comm.com max_pdu — the codec/router path is sized for it).
-fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[string]string, bus_names map[string]bool) []string {
+fn validate_someip(doc toml.Doc, ends map[string]SigEnds, part_names map[string]bool, thread_part map[string]string, bus_names map[string]bool) []string {
 	mut errs := []string{}
 	mut eth_buses := []string{}
 	if bv := doc.value_opt('bus') {
@@ -481,7 +481,6 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 	mut sig_size := map[string]int{}
 	mut sig_mem := map[string]int{}
 	mut sig_badfield := map[string]string{}
-	ends, _ := signal_endpoints(doc) // its refusals are validate's to report
 	for sg in toml_arr(doc, 'signal') {
 		sm := sg.as_map()
 		sname := str_of(sm, 'name')
@@ -1115,7 +1114,7 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 // P1: GPIO only, single consumer). Every rule here failed loudly in design review
 // before it could fail silently on a bench — keep them exhaustive.
 
-fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]string, bus_names map[string]bool) []string {
+fn validate_io(doc toml.Doc, ends map[string]SigEnds, part_names map[string]bool, thread_part map[string]string, bus_names map[string]bool) []string {
 	mut errs := []string{}
 	// gather points across the io kinds (gpio/adc/pwm), tagged so kind-specific
 	// rules (field type, direction, pwm carrier) branch while the shared rules
@@ -1140,7 +1139,6 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 	mut sig_nfields := map[string]int{}
 	mut sig_ftype := map[string]string{} // the single field's type when nfields == 1
 	mut sig_has_transport := map[string]bool{}
-	ends, _ := signal_endpoints(doc) // its refusals are validate's to report
 	for sg in toml_arr(doc, 'signal') {
 		sm := sg.as_map()
 		sname := str_of(sm, 'name')

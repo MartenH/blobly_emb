@@ -109,24 +109,40 @@ fn run_sysgen(dir string) os.Result {
 	return os.exec([bin, os.join_path(dir, 'system.toml')])
 }
 
+// refusals: each error line sysgen reports — the system checks, a node's lowering, and the
+// ecucheck / loom2v gate on the generated node — never its progress or summary lines
+fn refusals(output string) []string {
+	return output.split_into_lines().filter(it.starts_with('sysgen: ERROR')
+		|| it.starts_with('sysgen: generated ') || it.starts_with('sysgen: node "'))
+}
+
 fn test_every_fb_moves_to_the_other_core_or_is_refused_with_a_listed_reason() {
 	cases := move_cases()
 	assert cases.len >= 2, 'system_full has no two-core node with FBs to move'
 	for c in cases {
 		dir := stage_move('${c.node}_${c.fb}_${c.thread}')
+		defer {
+			os.rmdir_all(dir) or {}
+		}
 		move_fb(dir, c)
 		r := run_sysgen(dir)
 		if r.exit_code == 0 {
 			continue
 		}
-		mut listed := ''
-		for why, frag in deferred_on_satellite {
-			if c.to_sat && r.output.contains(frag) {
-				listed = why
-				break
+		what := '${c.node}: moving fb ${c.fb} from thread ${c.from} to ${c.thread}'
+		errs := refusals(r.output)
+		assert errs.len > 0, '${what} failed with no refusal sysgen names:\n${r.output}'
+		// EVERY refusal is one REQ-INV-007 lists; one unlisted beside a listed one is a new gap
+		for e in errs {
+			mut listed := false
+			for _, frag in deferred_on_satellite {
+				if c.to_sat && e.contains(frag) {
+					listed = true
+					break
+				}
 			}
+			assert listed, '${what} was refused for a reason REQ-INV-007 does not list:\n${e}'
 		}
-		assert listed != '', '${c.node}: moving fb ${c.fb} from thread ${c.from} to ${c.thread} was refused for a reason REQ-INV-007 does not list:\n${r.output}'
 	}
 }
 
@@ -134,6 +150,9 @@ fn test_every_fb_moves_to_the_other_core_or_is_refused_with_a_listed_reason() {
 fn test_the_co_processor_fb_moves_to_the_owner_core() {
 	c := MoveCase{'domain', 'DynamicsModel', 'model', 'fast', false}
 	dir := stage_move('dyn_owner')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
 	move_fb(dir, c)
 	r := run_sysgen(dir)
 	assert r.exit_code == 0, r.output
@@ -143,6 +162,9 @@ fn test_the_co_processor_fb_moves_to_the_owner_core() {
 // refused with both names, never generated with the old core's code
 fn test_a_stale_from_is_refused_naming_both_partitions() {
 	dir := stage_move('stale_from')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
 	p := os.join_path(dir, 'nodes', 'domain', 'ecu.toml')
 	text := os.read_file(p) or { panic(err) }
 	old := 'name   = "TorqueEstimate"\nfields = { nm = "u32" }\n'
