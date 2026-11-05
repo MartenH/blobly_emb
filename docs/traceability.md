@@ -220,7 +220,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-PLACE-002 | QM | test | verified | xcore_down_gen_test.v (pass), xcore_down_test.v (pass) |
 | REQ-PLACE-003 | QM | test | verified | xcore_down_gen_test.v (pass) |
 | REQ-PLACE-004 | QM | test | verified | xcore_down_gen_test.v (pass) |
-| REQ-PLACE-005 | QM | test | verified | xcore_wide_test.v (pass) |
+| REQ-PLACE-005 | QM | test | verified | xcore_down_gen_test.v (pass), xcore_wide_test.v (pass) |
 | REQ-PLACE-006 | QM | test | uncovered | — |
 | REQ-PLACE-007 | QM | test | uncovered | — |
 | REQ-PLACE-008 | QM | test | uncovered | — |

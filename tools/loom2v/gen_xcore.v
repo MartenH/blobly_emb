@@ -330,16 +330,26 @@ fn xcore_manifest(m Model) []string {
 // once the channel accepts it.
 fn lane_send_lines(si SigInfo, lanes []string, have string, ind string) []string {
 	mut g := ['${ind}xcore_txf.id = u32(0x${si.dbc_id.hex()})', '${ind}xcore_txf.len = ${si.dbc_dlc}']
-	g << pdu_init_lines(si, 'xcore_txf', ind)
-	g << '${ind}mut xcore_sat := u32(0)'
-	// until the satellite's first value the frame goes out at its initial payload, nothing encoded
-	g << '${ind}if ${have} {'
+	mut enc := []string{}
 	for j, lane in lanes {
-		g << lane_encode_lines(si, j, si.fields[j].typ, lane, 'xcore_txf', 'xcore_sat', ind + '\t')
+		enc << lane_encode_lines(si, j, si.fields[j].typ, lane, 'xcore_txf', 'xcore_sat', ind + '\t')
 	}
+	g << tx_send_lines(si, 'xcore_txf', 'xcore_sat', have, enc, ind)
+	return g
+}
+
+// tx_send_lines: one sent frame `fr` of signal `si` after its header — the initial payload, the
+// value encoded only once `have` says one exists (`enc`, counting saturations in `satv`), the send,
+// the saturations counted once the driver took it. The ONE body an owner FB's frame and a
+// satellite's are sent by (REQ-PLACE-005).
+fn tx_send_lines(si SigInfo, fr string, satv string, have string, enc []string, ind string) []string {
+	mut g := pdu_init_lines(si, fr, ind)
+	g << '${ind}mut ${satv} := u32(0)'
+	g << '${ind}if ${have} {'
+	g << enc
 	g << '${ind}}'
-	g << '${ind}if ch.send(xcore_txf) {'
-	g << '${ind}\ttx_sat.add(xcore_sat)'
+	g << '${ind}if ch.send(${fr}) {'
+	g << '${ind}\ttx_sat.add(${satv})'
 	g << '${ind}}'
 	return g
 }

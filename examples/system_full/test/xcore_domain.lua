@@ -18,7 +18,8 @@
 --
 -- Prerequisites: BOTH banks flashed from ONE build — domain (bank 1) and domain_m4 (bank 2,
 -- 0x08100000). The layout id gates every cross-core channel, so a mismatched pair shows as the
--- first test failing (no DynEchoFrame at all), never as wrong values:
+-- first test failing (DynPt never advances: the CM4's frames go out at their initial payload),
+-- never as wrong values:
 --   make -C examples/system_full/nodes/domain    flash SERIAL=<H755 sn>
 --   make -C examples/system_full/nodes/domain_m4 flash SERIAL=<H755 sn>
 -- After flashing with `st-flash --connect-under-reset`, clear the core-reset vector catch before
@@ -76,8 +77,10 @@ test("xcore: a protected bus command crosses to the CM4 and back", function()
 end)
 
 test("xcore: the CM7's timeout reaches the CM4 when the sender stops", function()
-  local s = commander(fresh())
-  expect(CH, 0x129, 1000)
+  local x = fresh()
+  local s = commander(x)
+  -- the echo of THIS command: DynEchoFrame goes out from boot, so a bare frame proves nothing
+  expect_signal(CH, 0x129, "DynEcho", x, 1000)
   sleep_ms(200)
   s:stop()
   local t0 = now_ms()

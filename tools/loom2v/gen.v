@@ -3271,16 +3271,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\t\t\tid:  u32(0x${si.dbc_id.hex()})'
 					glue << '\t\t\t\tlen: ${si.dbc_dlc}'
 					glue << '\t\t\t}'
-					glue << pdu_init_lines(si, 'tf', '\t\t\t')
-					glue << '\t\t\tmut tf_sat := u32(0)'
 					// until the FB's first publish the cell holds no value, only its zero: the frame
 					// goes out at its initial payload, and nothing is encoded or counted
-					glue << '\t\t\tif C.ioc_get_ever(${idx}, &tv_a, &tv_b) != 0 {'
-					glue << lane_encode_lines(si, 0, si.val_type, 'tv_a', 'tf', 'tf_sat', '\t\t\t\t')
-					glue << '\t\t\t}'
-					glue << '\t\t\tif ch.send(tf) {'
-					glue << '\t\t\t\ttx_sat.add(tf_sat)'
-					glue << '\t\t\t}'
+					glue << tx_send_lines(si, 'tf', 'tf_sat', 'C.ioc_get_ever(${idx}, &tv_a, &tv_b) != 0',
+						lane_encode_lines(si, 0, si.val_type, 'tv_a', 'tf', 'tf_sat', '\t\t\t\t'), '\t\t\t')
 					glue << '\t\t}'
 				}
 				glue << trace_produce_drain(m)
@@ -4627,8 +4621,9 @@ fn main() {
 				if si.remote {
 					// remote TX (satellite -> bus): the satellite image publishes into the signal's
 					// xioc slot; the comm producer polls it (xcore_produce_drain) — no owner IOC cell.
-					// The lean encode packs the {a, b} pair LE at bytes 0/4, so the frame must be
-					// exactly the fields' width (field order = DBC layout order by convention).
+					// Each field is one u32 lane LE at byte 4 * lane, so the frame must hold at
+					// least the lanes; bytes past them keep the initial payload, as on the owner
+					// (field order = DBC layout order by convention).
 					for f in si.fields {
 						if f.typ !in lane_field_types {
 							panic('loom2v: remote TX signal "${sname}" field "${f.name}" is ${f.typ}, but a ' +
@@ -5202,6 +5197,9 @@ fn dbc_msg_lane_issue(db candb.Database, signame string, nlanes int, widths []in
 			}
 			mut lanes_used := map[int]string{}
 			for sg in m.signals {
+				if sg.start_bit >= 32 * nlanes {
+					continue // past the lanes: never written, the initial payload, as on the owner
+				}
 				if sg.start_bit % 32 != 0 {
 					return 'signal "${sg.name}" starts at bit ${sg.start_bit} (not a 32-bit lane boundary)'
 				}

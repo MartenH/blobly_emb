@@ -23,7 +23,7 @@ cell."* Sending bulk as a signal is the mistake this page exists to prevent.
 |---|---|---|---|
 | same thread | plain struct field | — | ✅ derived |
 | thread → thread, **same core** | IOC cell (`boards/common/ioc.h`) — the *crossing* is derived, the algorithm is the signal's `transport` (**default `double`**; `triple`/`seqlock` selectable) | **64 B** (`IOC_MAX`) | ✅ derived |
-| **core → core**, same chip | xioc slot or wide `xioc_n` channel (`boards/common/xioc.h`), **both directions**, derived from where the FBs sit: satellite → owner (to a bus — the owner drain transmits it — or to an owner FB that reads it) and owner → satellite (an owner FB's output, or a frame the owner's comm thread receives, to a satellite FB that reads it — `xioc_n` channels in the owner-written window). Layout-handshake-gated both ways; satellite → satellite has no path | **1..16 u32 lanes** (one PDU): `bool`/`u8`/`u16`/`u32`/`i8`/`i16`/`i32`/`f32` one lane each, `u64`/`i64`/`f64` two; to a bus only what the comm thread encodes (`bool`…`i32`), DLC = 4×lanes, >2 lanes needs FD — see below | ✅ derived |
+| **core → core**, same chip | xioc slot or wide `xioc_n` channel (`boards/common/xioc.h`), **both directions**, derived from where the FBs sit: satellite → owner (to a bus — the owner drain transmits it — or to an owner FB that reads it) and owner → satellite (an owner FB's output, or a frame the owner's comm thread receives, to a satellite FB that reads it — `xioc_n` channels in the owner-written window). Layout-handshake-gated both ways; satellite → satellite has no path | **1..16 u32 lanes** (one PDU): `bool`/`u8`/`u16`/`u32`/`i8`/`i16`/`i32`/`f32` one lane each, `u64`/`i64`/`f64` two; to a bus only what the comm thread encodes (`bool`…`i32`), DLC ≥ 4×lanes, >2 lanes needs FD — see below | ✅ derived |
 | **core → core**, bulk | `xcore.h` dtrace-style cell: shared-window owner buffer + req/ack handshake | RAM-bound (trace uses 2 KB) | ❌ **hand-written**; planned generated form = the loan/publish ring below |
 | ECU → ECU, one frame | CAN frame (`driver/can`) | 8 B classic / **64 B** FD | ✅ derived |
 | ECU → ECU, a PDU | COM (`comm/com`) | **64 B** (`com.max_pdu`) | ✅ derived |
@@ -88,8 +88,9 @@ bench evidence until then. A stale or restarting satellite reads as *never-fresh
 layout REQ/ACK handshake + exact-geometry checks), never as blended values.
 
 **The DBC side of a bus-bound remote signal** (pair AND wide — the same lane contract):
-`DLC = 4 × lanes`; the `[[signal]].name` SG anchored at bit 0 (lane 0); **every** lane
-owned by exactly one SG; each SG unsigned, little-endian, factor 1 / offset 0, ≤32 bits,
+`DLC ≥ 4 × lanes` (bytes past the lanes keep the frame's initial payload, as an owner FB's
+frame does, and an SG there is not held to the lane rules); the `[[signal]].name` SG anchored
+at bit 0 (lane 0); **every** lane owned by exactly one SG; each SG unsigned, little-endian, factor 1 / offset 0, ≤32 bits,
 and at least as wide as the field its lane carries. Anything else panics with the exact
 violation. Past 2 lanes the DLC exceeds 8, which means an FD frame — and CAN-FD only
 has discrete lengths (12/16/20/24/32/48/64 B), so **bus-bound lane counts are limited

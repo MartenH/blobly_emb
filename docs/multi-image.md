@@ -147,7 +147,8 @@ thin wrappers (`xcore_pub_n` / `xcore_poll_n` over `xioc_n_write/read`); the pai
 **Destinations.** Satellite → bus: the comm drain polls the wide channel (`xcore_poll_n`,
 per-signal seq + lane buffer in the comm loop; the reader passes its OWN lane count, so
 a stale satellite image with different geometry reads as never-fresh instead of
-overrunning the buffer) and encodes one u32 lane per 4 bytes, DLC = `4 × lanes`.
+overrunning the buffer) and encodes one u32 lane per 4 bytes into a frame of DLC ≥ `4 × lanes`,
+sent every period from boot like an owner FB's frame (its initial payload until the first value).
 **Reachable today up to 2 lanes** (classic DLC 8 — e.g. a `{u16, u16}` or `{u32, valid}`
 signal): 3+ lanes need an FD frame, and the ThreadX comm thread still rejects both FD
 buses and DLC > 8, so that emitter path is exercised by the generator tests only until
