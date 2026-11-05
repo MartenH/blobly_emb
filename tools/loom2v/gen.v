@@ -1564,6 +1564,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	}
 	frames := parse_frames(doc, eth, buses, bus_kind, db, carries_signals)
 	part := parse_partitions(doc)
+	fb_rws := fb_rw_list(doc, part)
 	io_points, io_core := parse_io(doc, sig_of)
 	// P1 generates the SAME-core transport derivation only (triple): the io thread
 	// and every io-signal endpoint must share [io].core (docs/io.md).
@@ -1591,6 +1592,10 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		// the model is built (xdown_derive), from the FBs' reads.
 		from_ext := part.external[ep_part(part, si.from)] or { false }
 		if !from_ext {
+			continue
+		}
+		// local to the satellite (from = to) and read on no other image: no channel
+		if si.local && !fb_rws.any(sname in it.reads && !(part.external[it.part] or { false })) {
 			continue
 		}
 		si.remote = true
@@ -1704,7 +1709,6 @@ fn build_model(doc toml.Doc, dbc string) Model {
 			'(${xcore_producers.join(', ')}) — the cross-core layout handshake carries ONE ' +
 			'satellite today (generated or hand-written); see the per-cell design note here')
 	}
-	fb_rws := fb_rw_list(doc, part)
 	mut m := Model{
 		buses:        buses
 		bus_core:     bus_core
@@ -3629,7 +3633,11 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 				for h in (cm['handler'] or { toml.Any([]toml.Any{}) }).array() {
 					for r in (h.as_map()['reads'] or { toml.Any([]toml.Any{}) }).array() {
 						rsi := m.sig_of[r.string()] or { continue }
-						if rsi.local && (sig_writer_thr[r.string()] or { '' }) != fb_thr[cname] {
+						// a signal read across cores (a down channel here, an up channel on the
+						// owner) is not a cross-thread local signal on this image
+						if rsi.local && (sig_writer_thr[r.string()] or { '' }) != fb_thr[cname]
+							&& !(image_part != '' && r.string() in m.xdown_off)
+							&& !(image_part == '' && rsi.remote) {
 							panic('loom2v: local signal "${r.string()}" is written on thread ' +
 								'"${sig_writer_thr[r.string()]}" but read by fb "${cname}" on thread ' +
 								'"${fb_thr[cname]}" — cross-thread signals need the IOC fan-out (not ' +
@@ -3766,7 +3774,7 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 						// SATELLITE FB reads a signal produced on the owner image (owner -> satellite),
 						// whatever the owner side holds it in (a local cell, an IOC cell, a byte IOC)
 						glue << xdown_read_lines(m, rn)
-					} else if si.local {
+					} else if si.local && !(image_part == '' && si.remote) {
 						glue << '\tinp.${snake(rn)} = st.cell_${snake(rn)} // local'
 					} else if idx := ioc_idx[rn] {
 						// bus -> comm(decode) -> target IOC cell ${idx} -> this FB input (6b-2b). One
@@ -3862,26 +3870,14 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 						if image_part == '' && wn in m.xdown_off {
 							glue << '\txdown_pub_${snake(wn)}(outp.${snake(wn)}) // and to the satellite readers'
 						}
+						if image_part != '' && si.remote {
+							glue << up_pub_lines(m, si, wn) // and to the owner readers
+						}
 					} else if image_part == '' && wn in m.xdown_off {
 						// owner FB output a satellite FB reads (owner -> satellite channel)
 						glue << '\txdown_pub_${snake(wn)}(outp.${snake(wn)})'
-					} else if xoff := m.xcore_xw_off[wn] {
-						// wide remote signal (xioc_n): one u32 lane per field, lane order =
-						// field order = wire order — packed into the signal's channel in the
-						// board wide window (xcore_gen.h XCORE_XW_*_OFF; boot init'd this side).
-						glue << '\tmut xw_${snake(wn)} := [${sig_lanes(si)}]u32{}'
-						glue << lane_pack_lines(si, 'outp.${snake(wn)}', 'xw_${snake(wn)}', '\t')
-						glue << '\tC.xcore_pub_n(u32(${xoff}), &xw_${snake(wn)}[0])'
-					} else if dslot := m.xcore_idx[wn] {
-						// remote (cross-image) signal: publish the {a, b} pair into its xioc slot —
-						// the bus owner polls it (xcore_produce_drain / platform C). Field order = wire
-						// order (validated against the DBC in the comm-thread walk).
-						b_expr := if si.fields.len > 1 {
-							'u32(outp.${snake(wn)}.${snake(si.fields[1].name)})'
-						} else {
-							'u32(0)'
-						}
-						glue << '\tC.xcore_pub(${dslot}, u32(outp.${snake(wn)}.${snake(si.fields[0].name)}), ${b_expr})'
+					} else if wn in m.xcore_xw_off || wn in m.xcore_idx {
+						glue << up_pub_lines(m, si, wn)
 					} else if idx := ioc_idx[wn] {
 						// external TX (app -> bus) or io output (app -> pin): publish the value into its
 						// IOC cell; the consumer (comm thread / io thread) reads it each period. Value

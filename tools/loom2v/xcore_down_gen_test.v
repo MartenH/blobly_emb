@@ -111,8 +111,60 @@ fn test_the_unchanged_example_generates_no_owner_window() {
 	})
 	assert r.code == 0, r.output
 	assert !r.header.contains('XCORE_OW_')
-	assert !r.owner.contains('xcore_owner_begin')
+	assert !r.owner.contains('xcore_ow_init')
+	// every satellite owner still retracts and re-acks the window: a satellite built for down
+	// channels this owner no longer has must read never-fresh, not a retained ack
+	b := r.owner.index('\tC.xcore_owner_begin()') or { -1 }
+	c := r.owner.index('\tC.xcore_owner_commit()') or { -1 }
+	rel := r.owner.index('\tC.xcore_clocks_ready()') or { -1 }
+	assert b >= 0 && b < c && c < rel
 	assert r.build.contains('LOOM_GLUE_SRCS :=')
+}
+
+// an owner FB output read on the owner (its writer's thread) AND by a satellite with two threads:
+// the owner keeps its local cell, and the satellite's thread check leaves the down channel alone
+fn test_an_owner_local_signal_fans_out_to_a_multi_thread_satellite() {
+	r := gen_scratch('fanout_local', fn (src string) string {
+		mut s := must_replace(src, '  writes    = ["LoadCmd"]', '  writes    = ["LoadCmd", "Gain"]')
+		s = must_replace(s, '  reads     = ["LoadCmd"]\n', '  reads     = ["LoadCmd", "Gain"]\n')
+		s = must_replace(s, 'writes    = ["M4Count"]', 'reads     = ["Gain"]\nwrites    = ["M4Count"]')
+		s += '\n[[signal]]\nname   = "Gain"\nfields = { k = "i32" }\nfrom   = "app"\nto     = "app"\n'
+		return s
+	})
+	assert r.code == 0, r.output
+	assert r.owner.contains('st.cell_gain = outp.gain')
+	assert r.owner.contains('xdown_pub_gain(outp.gain) // and to the satellite readers')
+	assert r.sat.contains('if C.xcore_down_read(u32(0), u32(1), &st.xr_gain[0]) != 0 {')
+	assert r.sat.contains('inp.gain.k = i32(st.xr_gain[2])')
+}
+
+// SatLoc, written and declared local on the satellite; `owner_reads` adds an owner FB reader
+fn satloc_edit(src string, owner_reads bool) string {
+	mut s := must_replace(src, 'writes    = ["M4Count"]', 'writes    = ["M4Count", "SatLoc"]')
+	if owner_reads {
+		s = must_replace(s, '  name      = "on_10ms"\n  period_ms = 10\n', '  name      = "on_10ms"\n  period_ms = 10\n  reads     = ["SatLoc"] # trailing comment ends the nested table (vlang/v#27684)\n')
+	}
+	s += '\n[[signal]]\nname   = "SatLoc"\nfields = { v = "u32" }\nfrom   = "m4"\nto     = "m4"\n'
+	return s
+}
+
+// a satellite-local signal an owner FB reads too: the satellite writes its cell AND the up channel,
+// and the owner reads the channel; with no owner reader it gets no channel at all
+fn test_a_satellite_local_signal_read_on_the_owner_rides_an_up_channel() {
+	r := gen_scratch('satloc', fn (src string) string {
+		return satloc_edit(src, true)
+	})
+	assert r.code == 0, r.output
+	assert r.header.contains('#define XCORE_SLOT_SAT_LOC ')
+	assert r.sat.contains('st.cell_sat_loc = outp.sat_loc')
+	assert r.sat.contains('C.xcore_pub(2, u32(outp.sat_loc.v), u32(0))')
+	assert r.owner.contains('C.xcore_poll(')
+	assert !r.owner.contains('st.cell_sat_loc')
+	quiet := gen_scratch('satloc_quiet', fn (src string) string {
+		return satloc_edit(src, false)
+	})
+	assert quiet.code == 0, quiet.output
+	assert !quiet.header.contains('SAT_LOC')
 }
 
 // the generated encode and decode, compiled and run on extreme values of every lane type

@@ -333,7 +333,8 @@ fn test_every_satellite_makefile_links_the_generated_glue() {
 	for mk in mks {
 		src := os.read_file(mk) or { panic(err) }
 		assert src.contains('\n-include gen/loom_build.mk'), '${mk}: does not include gen/loom_build.mk'
-		assert src.contains('\ngen/loom_build.mk: gen/loom_gen.v'), '${mk}: no remake rule for gen/loom_build.mk — a first build links without the reader'
+		// the owner's gen makes both: a missing fragment runs it, never an empty recipe
+		assert src.contains('\ngen/loom_gen.v gen/loom_build.mk:\n\t$(MAKE) -C '), '${mk}: gen/loom_build.mk is not remade by the owner\'s gen — a build without it links without the reader'
 		assert bsp_definition(src).contains('$(LOOM_GLUE_SRCS)'), '${mk}: BSP does not list $(LOOM_GLUE_SRCS)'
 	}
 }

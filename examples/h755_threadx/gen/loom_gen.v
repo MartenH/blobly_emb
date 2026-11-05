@@ -86,6 +86,8 @@ fn C.shell_iocx(&u8, int) int
 fn C.shell_boot(&u8, int) int
 fn C.xcore_poll(int, &u32, &u32) int // xioc reader (target_ext.c): 1 = fresh value
 fn C.xcore_layout_ok() int // layout-id handshake: 0 = satellite absent or a DIFFERENT build
+fn C.xcore_owner_begin() // owner->satellite window: retract the ack, new boot nonce
+fn C.xcore_owner_commit() // publish the ack: the satellite may read the down channels
 fn C.xcore_clocks_ready() // release the parked satellite: final HCLK + HSEM en + XCORE_CLK_MAGIC (xcore.h)
 // [nvm]: the journal storage map + flash driver (boards layer / example glue)
 fn C.nvm_map_a() u32
@@ -687,6 +689,8 @@ fn nvm_fl_read(_ voidptr, addr u32, out &u8, len u32) bool {
 	return C.bflash_read(addr, out, len) != 0
 }
 pub fn boot() {
+	C.xcore_owner_begin() // owner->satellite window: retract, then init, then publish
+	C.xcore_owner_commit()
 	C.xcore_clocks_ready()
 	C.ioc_pool_init() // init the cross-thread signal IOC cells before any thread runs
 	// [nvm]: mount + restore BEFORE the kernel — the single-threaded window.

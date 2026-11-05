@@ -394,22 +394,28 @@ fn xdown_layout_desc(m Model) string {
 }
 
 // xdown_owner_decls: the owner's seams (boards/<board>/xcore_owner.c).
+// Every satellite owner declares begin/commit, channels or not: its boot retracts and re-acks the
+// window, so a satellite built for down channels this owner no longer has reads never-fresh.
 fn xdown_owner_decls(m Model) []string {
-	if !xdown_on(m) {
+	if !has_satellite(m) {
 		return []string{}
 	}
-	return [
+	mut g := [
 		'fn C.xcore_owner_begin() // owner->satellite window: retract the ack, new boot nonce',
-		'fn C.xcore_ow_init(u32, u32) // one down channel (window offset, lanes), seeded per boot',
 		'fn C.xcore_owner_commit() // publish the ack: the satellite may read the down channels',
-		'fn C.xcore_opub_n(u32, &u32) // down channel writer (window offset, &lanes[0])',
 	]
+	if xdown_on(m) {
+		g << 'fn C.xcore_ow_init(u32, u32) // one down channel (window offset, lanes), seeded per boot'
+		g << 'fn C.xcore_opub_n(u32, &u32) // down channel writer (window offset, &lanes[0])'
+	}
+	return g
 }
 
 // xdown_boot_lines: the owner's window bring-up, emitted in boot() BEFORE the satellite is
-// released, so the satellite never sees a channel of this boot before it is initialised.
+// released, so the satellite never sees a channel of this boot before it is initialised — on every
+// satellite owner, so the retained ack of an earlier build is always retracted.
 fn xdown_boot_lines(m Model) []string {
-	if !xdown_on(m) {
+	if !has_satellite(m) {
 		return []string{}
 	}
 	mut g := ['\tC.xcore_owner_begin() // owner->satellite window: retract, then init, then publish']
@@ -513,4 +519,18 @@ fn xup_wide_read_lines(m Model, rn string) []string {
 	g << '\t\t}'
 	g << '\t}'
 	return g
+}
+
+// up_pub_lines: a satellite FB wrapper's publish of up signal `wn` (satellite -> owner) — the wide
+// channel's lanes, or the {a, b} pair slot. Field order = lane order = wire order.
+fn up_pub_lines(m Model, si SigInfo, wn string) []string {
+	n := snake(wn)
+	if xoff := m.xcore_xw_off[wn] {
+		mut g := ['\tmut xw_${n} := [${sig_lanes(si)}]u32{}']
+		g << lane_pack_lines(si, 'outp.${n}', 'xw_${n}', '\t')
+		g << '\tC.xcore_pub_n(u32(${xoff}), &xw_${n}[0])'
+		return g
+	}
+	b_expr := if si.fields.len > 1 { 'u32(outp.${n}.${snake(si.fields[1].name)})' } else { 'u32(0)' }
+	return ['\tC.xcore_pub(${m.xcore_idx[wn] or { 0 }}, u32(outp.${n}.${snake(si.fields[0].name)}), ${b_expr})']
 }

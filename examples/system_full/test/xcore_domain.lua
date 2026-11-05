@@ -32,7 +32,7 @@
 
 local CH = "compute"
 -- DynEcho when the CM4 has no good command: 0xFFFFFF00 | the RxStatus it was handed
-local NEVER, TIMEOUT, INTEGRITY = 0xFFFFFF00, 0xFFFFFF02, 0xFFFFFF03
+local TIMEOUT, INTEGRITY = 0xFFFFFF02, 0xFFFFFF03
 
 local function drain()
   while bus.recv(CH, 0) do end
@@ -135,8 +135,10 @@ test("xcore: a reset does not bring back the retained values", function()
   check.equal(tohex(d:raw("\x11\x01")), "51 01")
   sleep_ms(2500)
   drain()
+  -- the new boot arms the 300 ms deadline at once, so with nothing sent since the CM4 holds
+  -- timeout — never the command the window held before the reset
   for _ = 1, 10 do
-    check.equal((value(0x129, "DynEcho", 1000)), NEVER, "DynEcho right after the reset, nothing sent since")
+    check.equal((value(0x129, "DynEcho", 1000)), TIMEOUT, "DynEcho after the reset, nothing sent since")
   end
   check.equal((value(0x12B, "DynLed", 1000)), 0, "DynLed right after the reset, nothing sent since")
   -- and the gate the new boot opened carries a new command
