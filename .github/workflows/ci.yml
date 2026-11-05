@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40 # ~20 min on V3; a hung job otherwise holds an account-wide slot for 6 h
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # PINNED to the V3 commit in .v-version, built from source with the vlang/vc bootstrap
       # pinned in .vc-version — kept the pair blobly_net pins, so one ~/v builds both repos. No V
@@ -218,7 +218,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 75 # ~40 min on V3 (the cross builds and the dependency checks most of it), more when apt is slow; a hung job otherwise holds an account-wide slot for 6 h
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # PINNED to the V3 commit in .v-version, built from source with the vlang/vc bootstrap
       # pinned in .vc-version — kept the pair blobly_net pins, so one ~/v builds both repos. No V
@@ -234,8 +234,19 @@ jobs:
       - name: Set up pinned V (cached)
         uses: ./.github/actions/setup-v
 
+      # Bounded and retried: one install hung for 50 minutes and took a main run with it.
       - name: Install the ARM toolchain
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-arm-none-eabi
+        timeout-minutes: 12
+        run: |
+          for try in 1 2 3; do
+            if timeout 240 sudo apt-get update -qq &&
+               timeout 300 sudo apt-get install -y -qq gcc-arm-none-eabi; then
+              exit 0
+            fi
+            echo "apt-get failed (try $try of 3)"
+            sleep $((15 * try))
+          done
+          exit 1
 
       # ALL of them. `make deps` clones CMSIS, ThreadX and NetX Duo in about ten seconds
       # together — the "minutes, not seconds" this job was originally scoped around was simply

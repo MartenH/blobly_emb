@@ -27,7 +27,7 @@ jobs:
     permissions:
       pull-requests: write
     steps:
-      - uses: actions/github-script@v7
+      - uses: actions/github-script@v8
         with:
           script: |
             const n = context.payload.pull_request.number
@@ -62,7 +62,7 @@ jobs:
       # committer to GitHub's own address, so it must be allowed or every merge fails the gate.
       ALLOWED_COMMITTERS: marten.hildell@gmail.com noreply@github.com
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Scanner self-test
