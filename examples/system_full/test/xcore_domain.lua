@@ -51,7 +51,7 @@ end
 -- nonzero, below the latch commands (0xFE......) and the status codes, and different every run, so
 -- nothing left from an earlier run can pass
 local function fresh()
-  return (math.floor(now_ms()) * 2654435761) % 0xFE000000 + 1
+  return (math.floor(now_ms()) * 2654435761) % 0xFDFFFFFF + 1
 end
 -- the protected command, sent every 50 ms (inside the 300 ms timeout), E2E stamped per frame
 local function commander(x)
@@ -76,7 +76,7 @@ test("xcore: a protected bus command crosses to the CM4 and back", function()
   local s = commander(x)
   expect_signal(CH, 0x129, "DynEcho", x, 1000)
   log(string.format("DynCmd 0x%08X echoed within %.1f ms", x, now_ms() - t0))
-  local y = (x ~ 0x5A5A5A5A) % 0xFE000000 + 1
+  local y = (x ~ 0x5A5A5A5A) % 0xFDFFFFFF + 1
   s:update({ DynCmd = y })
   expect_signal(CH, 0x129, "DynEcho", y, 1000)
   s:stop()
