@@ -270,3 +270,434 @@ from     = "DynamicsModel.on_5ms"
 debounce = { kind = "counter", fail = 3, pass = 3 }
 confirm  = 1
 freeze   = [0xF1A2]
+
+# --- Load FBs: 20 on the CM7's fast thread (MainLoadA..T) and 10 on the CM4's model thread
+# (SatLoadA..J), each a 10 ms handler burning a bounded LCG window (app/load_main.v,
+# app/load_sat.v) — signals flowing through the node for the per-core load `ps` reports. Each
+# passes a hop count on: MainLoadA takes HostLedLevel off the bus, the CM7 chain runs on one core,
+# MainLdJ goes down to start the CM4 chain and MainLdO down into its middle (checked there against
+# the CM4's own SatLdE, the same hop count), SatLdC, SatLdG and SatLdJ come back up, and
+# LoadOutA..E (system.toml) put five points of it on the compute bus — with HostLedLevel x they
+# read x+13, x+10, x+17, x+20 and x+20 (test/load_fbs.lua). Every load
+# signal is three u32 lanes (value, sequence, check), so on whichever core its FBs sit it rides a
+# wide channel and never takes one of the four pair slots.
+
+[[signal]]
+name   = "MainLdA"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "MainLdB"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "MainLdC"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "MainLdD"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "MainLdE"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "MainLdF"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "MainLdG"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "MainLdH"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "MainLdI"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "MainLdJ"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "MainLdK"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "MainLdL"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "MainLdM"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "MainLdN"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "MainLdO"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "MainLdP"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "MainLdQ"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "MainLdR"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "MainLdS"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "MainLdT"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "SatLdA"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "SatLdB"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "SatLdC"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "SatLdD"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "SatLdE"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "SatLdF"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "SatLdG"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "SatLdH"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "SatLdI"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[signal]]
+name   = "SatLdJ"
+fields = { v = "u32", seq = "u32", chk = "u32" }
+
+[[fb]]
+name   = "MainLoadA"
+thread = "fast"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["HostLedLevel"]
+  writes    = ["MainLdA"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "MainLoadB"
+thread = "fast"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["MainLdA"]
+  writes    = ["MainLdB"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "MainLoadC"
+thread = "fast"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["MainLdB"]
+  writes    = ["MainLdC"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "MainLoadD"
+thread = "fast"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["MainLdC"]
+  writes    = ["MainLdD"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "MainLoadE"
+thread = "fast"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["MainLdD", "SatLdC"]
+  writes    = ["MainLdE", "LoadOutA"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "MainLoadF"
+thread = "fast"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["MainLdE"]
+  writes    = ["MainLdF"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "MainLoadG"
+thread = "fast"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["MainLdF"]
+  writes    = ["MainLdG"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "MainLoadH"
+thread = "fast"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["MainLdG"]
+  writes    = ["MainLdH"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "MainLoadI"
+thread = "fast"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["MainLdH"]
+  writes    = ["MainLdI"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "MainLoadJ"
+thread = "fast"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["MainLdI"]
+  writes    = ["MainLdJ", "LoadOutB"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "MainLoadK"
+thread = "fast"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["MainLdJ"]
+  writes    = ["MainLdK"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "MainLoadL"
+thread = "fast"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["MainLdK", "SatLdG"]
+  writes    = ["MainLdL", "LoadOutC"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "MainLoadM"
+thread = "fast"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["MainLdL"]
+  writes    = ["MainLdM"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "MainLoadN"
+thread = "fast"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["MainLdM"]
+  writes    = ["MainLdN"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "MainLoadO"
+thread = "fast"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["MainLdN"]
+  writes    = ["MainLdO"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "MainLoadP"
+thread = "fast"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["MainLdO"]
+  writes    = ["MainLdP"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "MainLoadQ"
+thread = "fast"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["MainLdP"]
+  writes    = ["MainLdQ"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "MainLoadR"
+thread = "fast"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["MainLdQ", "SatLdJ"]
+  writes    = ["MainLdR", "LoadOutD"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "MainLoadS"
+thread = "fast"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["MainLdR"]
+  writes    = ["MainLdS"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "MainLoadT"
+thread = "fast"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["MainLdS"]
+  writes    = ["MainLdT", "LoadOutE"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "SatLoadA"
+thread = "model"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["MainLdJ"]
+  writes    = ["SatLdA"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "SatLoadB"
+thread = "model"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["SatLdA"]
+  writes    = ["SatLdB"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "SatLoadC"
+thread = "model"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["SatLdB"]
+  writes    = ["SatLdC"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "SatLoadD"
+thread = "model"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["SatLdC"]
+  writes    = ["SatLdD"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "SatLoadE"
+thread = "model"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["SatLdD"]
+  writes    = ["SatLdE"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "SatLoadF"
+thread = "model"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["SatLdE", "MainLdO"]
+  writes    = ["SatLdF"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "SatLoadG"
+thread = "model"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["SatLdF"]
+  writes    = ["SatLdG"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "SatLoadH"
+thread = "model"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["SatLdG"]
+  writes    = ["SatLdH"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "SatLoadI"
+thread = "model"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["SatLdH"]
+  writes    = ["SatLdI"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "SatLoadJ"
+thread = "model"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["SatLdI"]
+  writes    = ["SatLdJ"] # trailing comment terminates nested block (vlang/v#27684)
