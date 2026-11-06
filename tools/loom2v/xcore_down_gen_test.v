@@ -3,7 +3,7 @@ module main
 import os
 import tools.sysmodel
 
-// @verifies REQ-INV-006, REQ-PLACE-001, REQ-PLACE-002, REQ-PLACE-005, REQ-PLACE-007
+// @verifies REQ-INV-006, REQ-PLACE-001, REQ-PLACE-002, REQ-PLACE-005, REQ-PLACE-006, REQ-PLACE-007
 // Owner -> satellite signals end to end: loom2v run on a scratch copy of examples/h755_threadx
 // (an owner with a generated CM4 image) with signals added in each shape — a received signal read
 // on both cores, an owner FB output in the wider lane types, a wide satellite signal an owner FB
@@ -335,4 +335,66 @@ fn test_a_parameter_reaches_satellite_fbs_through_its_publish_point() {
 	assert r.sat.contains('\t} else {\n\t\tinp.m4_gain.k = i16(-3)\n\t\tinp.m4_gain.on = true\n\t}')
 	assert !r.sat.contains('ioc_get') // never the owner's cell
 	assert r.satsig.contains('pub struct M4Gain {')
+}
+
+// two persisted signals a satellite FB writes: M4Keep (one u32, a pair slot up) floored "now", and
+// M4Mode (u8 + u16, a wide channel up) at "shutdown" — the floor raised so the wear check passes
+fn persist_on_satellite(src string) string {
+	mut s := must_replace(src, 'writes    = ["M4Count"]', 'reads     = ["M4Keep", "M4Mode"]\nwrites    = ["M4Count", "M4Keep", "M4Mode"]')
+	s = must_replace(s, 'min_write_ms   = 10000', 'min_write_ms   = 40000')
+	s += '\n[[signal]]\nname    = "M4Keep"\nfields  = { n = "u32" }\npersist = "now"\n'
+	s += '\n[[signal]]\nname    = "M4Mode"\nfields  = { lo = "u8", hi = "u16" }\npersist = "shutdown"\n'
+	return s
+}
+
+fn test_a_persisted_signal_written_on_a_satellite_is_journalled_and_restored() {
+	r := gen_scratch('persist', persist_on_satellite)
+	assert r.code == 0, r.output
+	// up for the journal, down for the restore
+	assert r.header.contains('#define XCORE_SLOT_M4_KEEP '), r.header
+	assert r.header.contains('#define XCORE_XW_M4_MODE_WORDS 2u'), r.header
+	assert r.header.contains('#define XCORE_OW_M4_KEEP_WORDS 1u'), r.header
+	assert r.header.contains('#define XCORE_OW_M4_MODE_WORDS 2u'), r.header
+	// owner boot: the window up, the journal restored down the channels, THEN the satellite released
+	c := r.owner.index('\tC.xcore_owner_commit()') or { -1 }
+	keep := r.owner.index('&l[0]) // M4Keep -> the satellite') or { -1 }
+	mode := r.owner.index('&l[0]) // M4Mode -> the satellite') or { -1 }
+	rel := r.owner.index('\tC.xcore_clocks_ready()') or { -1 }
+	assert c >= 0 && c < keep && c < mode && keep < rel && mode < rel
+	// owner comm thread: the journal reads the up channels, the restored value until the first
+	assert r.owner.contains('C.xcore_layout_ok() != 0 && C.xcore_poll(')
+	assert r.owner.contains('&nvm_m4_keep_xa, &nvm_m4_keep_xb) != 0 {')
+	assert r.owner.contains('C.xcore_poll_n(') && r.owner.contains('&nvm_m4_mode_seq, &nvm_m4_mode_lanes[0]) != 0 {')
+	assert r.owner.contains('\ta = nvm_m4_keep_a // nothing from the satellite yet: unchanged')
+	assert r.owner.contains('\tif g_nvmres_m4_keep_n == 4 {')
+	assert !r.owner.contains('&nvm_m4_keep_a, &nvm_m4_keep_b)') // no owner staging cell
+	assert r.owner.contains('{ // persist "now": M4Keep')
+	assert !r.owner.contains('{ // persist "now": M4Mode') // "shutdown": the flush alone
+	assert r.owner.contains('{ // flush M4Mode')
+	// satellite: the cell seeded from the restore before the scheduler runs, then the FB's own
+	seed := r.sat.index('{ // M4Keep: the value the owner\'s journal restored') or { -1 }
+	sched := r.sat.index('\tmut sched := &g_sched_') or { -1 }
+	assert seed >= 0 && seed < sched, r.sat
+	assert r.sat.contains('\t\t\tst.cell_m4_keep.n = xr[2]')
+	assert r.sat.contains('\t\t\tst.cell_m4_mode.lo = u8(xr[2])\n\t\t\tst.cell_m4_mode.hi = u16(xr[3])')
+	assert r.sat.contains('\tinp.m4_keep = st.cell_m4_keep // local') // never a down-channel input
+	assert !r.sat.contains('xr_m4_keep')
+	assert r.sat.contains('C.xcore_pub_n(') && r.sat.contains('&xw_m4_mode[0])')
+}
+
+fn test_a_satellite_persisted_signal_has_the_journal_as_its_one_owner_reader() {
+	r := gen_scratch('persist_owner_reader', fn (src string) string {
+		s := persist_on_satellite(src)
+		return must_replace(s, '  reads     = ["Command", "LoadCmd"]', '  reads     = ["Command", "LoadCmd", "M4Keep"]')
+	})
+	assert r.code != 0
+	assert r.output.contains('persistent signal "M4Keep" is written on satellite partition "m4" and read by an owner FB'), r.output
+}
+
+fn test_a_persisted_signal_on_a_hand_written_satellite_is_refused() {
+	r := gen_scratch('persist_external', fn (src string) string {
+		return must_replace(persist_on_satellite(src), 'image = "../h755_m4_app"', 'external = true')
+	})
+	assert r.code != 0
+	assert r.output.contains('persistent signal "M4Keep" is local to partition "m4", a hand-written satellite'), r.output
 }

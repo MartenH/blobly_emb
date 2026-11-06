@@ -464,6 +464,22 @@ verifies = ["REQ-INV-006"]
 approved_by = ""
 date = ""
 
+# Placement on silicon (#428, #429, REQ-PLACE-006): examples/system_full/test/xcore_domain.lua on
+# the H755 (both banks flashed from one build) via CANsub.4 ch2, 2026-11-06, 10/10: the seven above,
+# plus DynLedCap coded on the CM7 and applied by the CM4 at once (99 ms after the 0x2E answer) and
+# through a 0x11 reset, and DynKept — a persisted signal the CM4 writes — latched from a command,
+# kept once the command stopped, and back from the first CM4 frame after a 0x11 reset. Separately,
+# a DynKept latched and left past the 30 s floor came back after an st-flash hard reset (no flush):
+# the floored put from the CM4's up channel, not the ECUReset flush. The generator tests verify the
+# wiring; this review is pending the bench sign-off.
+[[review]]
+id = "placement-silicon"
+method = "review"
+context = "h755/dual-core"
+verifies = ["REQ-PLACE-006", "REQ-PLACE-007"]
+approved_by = ""
+date = ""
+
 # REQ-TRACE-011 (cross-core time correlation): the host tests round-trip the offset record
 # and inject offsets via set_core_offset, but the requirement's substance — the offset is
 # RE-MEASURED per dump over the real request/ack exchange — only executes on the dual-core

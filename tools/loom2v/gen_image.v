@@ -124,6 +124,7 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 			sname := if threads.len > 1 { 'Thread_${thr}_state' } else { 'Partition_${part}_state' }
 			g << '\tg_st_${thr} = ${sname}{} // the FB field defaults, at entry: bss is all zero'
 			g << '\tmut st := &g_st_${thr}'
+			g << nvm_sat_restore_lines(m, doc, thr)
 			g << '\tmut sched := &g_sched_${thr} // module-sized: lives in bss, not this lifetime frame'
 			// emit_handlers keys registrations by part/thread only for a MULTI-thread partition;
 			// a single-thread one stores them under the bare part (gen.v all_regs[part]). The owner

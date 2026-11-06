@@ -251,7 +251,10 @@ mut:
 	lanes map[string]int
 	lean  map[string]bool
 	param map[string]bool // a [[param]]'s channel: its fields as param_pub publishes them
-	total int
+	// a persisted signal a satellite FB writes: the journal's restore, read once by the writer's
+	// thread before its first dispatch (REQ-PLACE-006) — never an FB input
+	persist map[string]bool
+	total   int
 }
 
 // xdown_derive decides which signals need a down channel and lays them out, or says why a
@@ -346,7 +349,30 @@ fn xdown_derive(sig_names []string, sig_of map[string]SigInfo, params []ParamCfg
 		d.param[pc.name] = true
 		d.total += xioc_n_bytes(pc.fields.len)
 	}
+	// a persisted signal a satellite FB writes: the restored value, one lane per field, written by
+	// the owner's boot before the satellite is released (REQ-PLACE-006)
+	for sname in sig_names {
+		si := sig_of[sname] or { continue }
+		if si.persist == '' {
+			continue
+		}
+		wp := ep_part(p, si.from)
+		if wp == '' || (p.image[wp] or { '' }) == '' {
+			continue // on the owner, or a hand-written satellite (derive_nvm refuses it)
+		}
+		d.names << sname
+		d.off[sname] = d.total
+		d.lanes[sname] = sig_lanes(si)
+		d.persist[sname] = true
+		d.total += xioc_n_bytes(sig_lanes(si))
+	}
 	return d
+}
+
+// xdown_fb_input: whether an FB on a satellite reads `name` from a down channel each dispatch —
+// every down channel but a persisted signal's restore, which seeds the writer's cell once.
+fn xdown_fb_input(m Model, name string) bool {
+	return name in m.xdown_off && !(m.xdown_persist[name] or { false })
 }
 
 // xdown_on: any owner -> satellite channel in the model.
@@ -387,6 +413,9 @@ fn xdown_layout_desc(m Model) string {
 			continue
 		}
 		si := m.sig_of[sname] or { continue }
+		if m.xdown_persist[sname] or { false } {
+			fs = 'n:' // the journal's restore, not an FB input
+		}
 		if m.xdown_lean[sname] or { false } {
 			fs = '${si.val_field}=${si.val_type},'
 		} else {
@@ -437,8 +466,9 @@ fn xdown_boot_lines(m Model) []string {
 fn xdown_pub_fns(m Model) []string {
 	mut g := []string{}
 	for sname in m.xdown_names {
-		if (m.xdown_lean[sname] or { false }) || (m.xdown_param[sname] or { false }) {
-			continue // the comm thread's lean decode, or param_pub, writes these
+		if (m.xdown_lean[sname] or { false }) || (m.xdown_param[sname] or { false })
+			|| (m.xdown_persist[sname] or { false }) {
+			continue // the comm thread's lean decode, param_pub, or the journal's restore writes these
 		}
 		si := m.sig_of[sname] or { continue }
 		n := snake(sname)
@@ -491,7 +521,7 @@ fn xdown_reads(m Model, part string) bool {
 fn xreader_state_fields(m Model, reads []string, image_part string) []string {
 	mut g := []string{}
 	for rn in reads {
-		if image_part != '' && rn in m.xdown_off {
+		if image_part != '' && xdown_fb_input(m, rn) {
 			g << '\txr_${snake(rn)} [${(m.xdown_lanes[rn] or { 0 }) + 2}]u32 // ${rn}: owner nonce, seq, lanes (xcore_down_read)'
 		} else if image_part == '' && m.target.threadx && rn in m.xcore_xw_off {
 			si := m.sig_of[rn] or { continue }

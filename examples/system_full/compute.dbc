@@ -35,6 +35,9 @@ BO_ 298 DynPtFrame: 4 domain
 BO_ 299 DynLedFrame: 8 domain
  SG_ DynLed : 0|32@1+ (1,0) [0|1000] "permille" tester
 
+BO_ 300 DynKeptFrame: 4 domain
+ SG_ DynKeptOut : 0|32@1+ (1,0) [0|16777215] "" tester
+
 BA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;
 BA_DEF_ BO_ "E2ECounterSignal" STRING;
 BA_DEF_ BO_ "E2ECrcSignal" STRING;
@@ -50,6 +53,7 @@ BA_ "GenMsgCycleTime" BO_ 293 50;
 BA_ "GenMsgCycleTime" BO_ 297 100;
 BA_ "GenMsgCycleTime" BO_ 298 100;
 BA_ "GenMsgCycleTime" BO_ 299 100;
+BA_ "GenMsgCycleTime" BO_ 300 100;
 BA_ "E2ECounterSignal" BO_ 292 "DynCmdCounter";
 BA_ "E2ECrcSignal" BO_ 292 "DynCmdCrc";
 BA_ "E2EProfile" BO_ 292 "P01";

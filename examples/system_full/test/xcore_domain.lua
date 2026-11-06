@@ -10,6 +10,9 @@
 --   PtState is a CM7 FB output (seq = its tick count, inv = the complement, two lanes of one
 --     channel); the CM4 reports DynPt = seq when the lanes agree, 0xFFFFFFFF when they tore,
 --     0 before the first publish (0x12A).
+--   DynKept is a persisted signal the CM4 WRITES: a DynCmd of 0xFE000000 | v sets it to v, the CM7's
+--     journal keeps it (from the CM4's up channel) and restores it down a channel before the CM4
+--     starts; the CM4 reports it as DynKeptOut (0x12C).
 --   DynLedCap is a PARAMETER (DID 0x0130, 0x2E in extended + level 1): the CM7's journal keeps it
 --     and its publish point hands it down, at the restore and on every 0x2E; the CM4 caps DynLed
 --     at it. The suite leaves it uncoded-equivalent (1000).
@@ -45,10 +48,10 @@ local function value(id, signal, ms)
   local f = expect(CH, id, ms or 500)
   return decode(CH, f.id, f.data, f.ext)[signal], f
 end
--- nonzero, below the status codes, and different every run, so nothing left from an earlier run
--- can pass
+-- nonzero, below the latch commands (0xFE......) and the status codes, and different every run, so
+-- nothing left from an earlier run can pass
 local function fresh()
-  return (math.floor(now_ms()) * 2654435761) % 0xFFFFFE00 + 1
+  return (math.floor(now_ms()) * 2654435761) % 0xFDFFFFFF + 1
 end
 -- the protected command, sent every 50 ms (inside the 300 ms timeout), E2E stamped per frame
 local function commander(x)
@@ -73,7 +76,7 @@ test("xcore: a protected bus command crosses to the CM4 and back", function()
   local s = commander(x)
   expect_signal(CH, 0x129, "DynEcho", x, 1000)
   log(string.format("DynCmd 0x%08X echoed within %.1f ms", x, now_ms() - t0))
-  local y = (x ~ 0x5A5A5A5A) % 0xFFFFFE00 + 1
+  local y = (x ~ 0x5A5A5A5A) % 0xFDFFFFFF + 1
   s:update({ DynCmd = y })
   expect_signal(CH, 0x129, "DynEcho", y, 1000)
   s:stop()
@@ -167,6 +170,27 @@ test("xcore: a coded parameter holds on the CM4 through a reset", function()
     check.truthy(seen > 0, "DynLed never reached the restored cap")
   end)
   l:stop()
+end)
+
+-- DynKept, written by the CM4 and journalled by the CM7: latched from a command, kept by the CM4
+-- once the command stops, and back from the first CM4 frame after a reset (0x11 flushes the
+-- journal before it resets, then the restore goes down before the CM4 is released)
+test("xcore: a value the CM4 persists holds through a reset", function()
+  local k = (math.floor(now_ms()) * 2654435761) % 0xFFFFFF + 1 -- 24 bits, different every run
+  local s = commander(0xFE000000 | k)
+  expect_signal(CH, 0x12C, "DynKeptOut", k, 1000)
+  s:stop()
+  sleep_ms(500) -- past the command's 300 ms timeout: the CM4 keeps what it latched
+  drain()
+  check.equal((value(0x12C, "DynKeptOut", 1000)), k, "DynKeptOut once the command stopped")
+  local d = uds.open(CH, { tx = 0x7B0, rx = 0x7B8 })
+  d:session(0x03)
+  check.equal(tohex(d:raw("\x11\x01")), "51 01")
+  sleep_ms(2500)
+  drain()
+  for _ = 1, 10 do
+    check.equal((value(0x12C, "DynKeptOut", 1000)), k, "DynKeptOut after the reset: the journal's value did not reach the CM4")
+  end
 end)
 
 -- seq is the CM7 FB tick (50 ms), so it rises ~20 a second; 0xFFFFFFFF would be a read that mixed

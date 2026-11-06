@@ -28,6 +28,9 @@
 //
 // P2 cut: persistent signals are LOCAL (written and read on one thread) with
 // 1..2 unsigned fields (<= 8 packed bytes — they stage through one ioc cell).
+// A satellite FB's (REQ-PLACE-006) stages through its up channel instead, and its
+// restore goes down a channel before the satellite is released (nvm_read_lines,
+// nvm_sat_restore_lines).
 // Wider/chained persistent signals arrive with a seqlock stage; the JOURNAL
 // already handles chains (platform blocks use them today).
 module main
@@ -146,10 +149,16 @@ fn derive_nvm(mut m Model, doc toml.Doc) ([]string, map[string]u16) {
 			panic('loom2v: persistent signal "${sname}" is not thread-local (from "${si.from}" ' +
 				'to "${si.to}") — P2 persists local signals; bus/cross-core persistence is not designed')
 		}
-		if m.part.external[si.from] or { false } {
-			panic('loom2v: persistent signal "${sname}" is local to partition "${si.from}", whose ' +
-				'image is generated/provided elsewhere — the owner journal cannot serve a satellite ' +
-				'partition\'s local state (persist it on the owner, or wait for cross-core persist)')
+		wp := ep_part(m.part, si.from)
+		if (m.part.external[wp] or { false }) && (m.part.image[wp] or { '' }) == '' {
+			panic('loom2v: persistent signal "${sname}" is local to partition "${wp}", a ' +
+				'hand-written satellite (external = true) — the owner journal serves a generated ' +
+				'satellite (image =) only, through the channels it generates for both images')
+		}
+		if (m.xdown_persist[sname] or { false }) && (m.fb_reads_owner[sname] or { 0 }) > 0 {
+			panic('loom2v: persistent signal "${sname}" is written on satellite partition "${wp}" ' +
+				'and read by an owner FB — the journal service reads its up channel, and an owner FB ' +
+				'reading it as well is not generated; write a second signal for the owner reader')
 		}
 		if !m.nm.on {
 			panic('loom2v: persistent signals need [nm] — the NM prepare-bus-sleep edge IS the ' +
@@ -551,8 +560,16 @@ fn nvm_boot_lines(m Model, ioc_idx map[string]int) []string {
 		g << '\t\t// pinned id) truncates to packed+1 != packed and is refused'
 		g << '\t\tif ${cond} {'
 		g << '\t\t\tg_nvmres_${n}_n = ${packed}'
-		g << '\t\t\tC.ioc_pub(${cell}, ${nvm_unpack_expr(si, 0, 'g_nvmres_${n}')}, ${nvm_unpack_expr(si,
-			1, 'g_nvmres_${n}')})'
+		if m.xdown_persist[sname] or { false } {
+			// written by a satellite FB: down its channel, before the satellite is released, which
+			// seeds the writer's cell before its first dispatch (REQ-PLACE-006)
+			g << '\t\t\tl := [${nvm_unpack_expr(si, 0, 'g_nvmres_${n}')}, ${nvm_unpack_expr(si, 1,
+				'g_nvmres_${n}')}]!'
+			g << '\t\t\tC.xcore_opub_n(u32(${m.xdown_off[sname] or { 0 }}), &l[0]) // ${sname} -> the satellite'
+		} else {
+			g << '\t\t\tC.ioc_pub(${cell}, ${nvm_unpack_expr(si, 0, 'g_nvmres_${n}')}, ${nvm_unpack_expr(si,
+				1, 'g_nvmres_${n}')})'
+		}
 		g << '\t\t}'
 	}
 	g << '\t}'
@@ -590,8 +607,8 @@ fn nvm_restore_lines(m Model, sig_writer_thr map[string]string, thr string, mult
 	for sname in m.nvm_names {
 		si := m.sig_of[sname] or { continue }
 		owner := sig_writer_thr[sname] or { '' }
-		if multi && owner != thr {
-			continue
+		if (multi && owner != thr) || (m.xdown_persist[sname] or { false }) {
+			continue // another thread's, or a satellite FB's (nvm_sat_restore_lines)
 		}
 		n := snake(sname)
 		g << '\tif g_nvmres_${n}_n == ${si.packed_size()} { // restored before first dispatch'
@@ -617,7 +634,24 @@ fn nvm_comm_locals(m Model, ioc_idx map[string]int) []string {
 		cell := ioc_idx[sname] or { 0 }
 		g << '\tmut nvm_${n}_a := u32(0)'
 		g << '\tmut nvm_${n}_b := u32(0)'
-		g << '\tC.ioc_get(${cell}, &nvm_${n}_a, &nvm_${n}_b)'
+		if m.xdown_persist[sname] or { false } {
+			// a satellite FB's: the restored value, and its up channel's reader state
+			si := m.sig_of[sname] or { continue }
+			g << '\tif g_nvmres_${n}_n == ${si.packed_size()} {'
+			g << '\t\tnvm_${n}_a = ${nvm_unpack_expr(si, 0, 'g_nvmres_${n}')}'
+			g << '\t\tnvm_${n}_b = ${nvm_unpack_expr(si, 1, 'g_nvmres_${n}')}'
+			g << '\t}'
+			g << '\tmut nvm_${n}_have := false // a value has come up from the satellite'
+			if si.wide {
+				g << '\tmut nvm_${n}_seq := u32(0)'
+				g << '\tmut nvm_${n}_lanes := [${sig_lanes(si)}]u32{}'
+			} else {
+				g << '\tmut nvm_${n}_xa := u32(0)'
+				g << '\tmut nvm_${n}_xb := u32(0)'
+			}
+		} else {
+			g << '\tC.ioc_get(${cell}, &nvm_${n}_a, &nvm_${n}_b)'
+		}
 		g << '\tmut nvm_${n}_t := u64(0) // first change persists after ONE floor from boot: chosen pacing'
 	}
 	if m.nm.on {
@@ -647,9 +681,7 @@ fn nvm_service(m Model, ioc_idx map[string]int) []string {
 		cell := ioc_idx[sname] or { 0 }
 		id := m.nvm_ids[sname] or { 0 }
 		g << '\t\t{ // persist "now": ${sname}'
-		g << '\t\t\tmut a := u32(0)'
-		g << '\t\t\tmut b := u32(0)'
-		g << '\t\t\tC.ioc_get(${cell}, &a, &b)'
+		g << nvm_read_lines(m, cell, sname, 'a', 'b', '\t\t\t')
 		g << '\t\t\tif (a != nvm_${n}_a || b != nvm_${n}_b) && t1 - nvm_${n}_t >= u64(${floor_us}) {'
 		g << nvm_pack_lines(si, 4)
 		g << '\t\t\t\tif g_nvm.put(${id}, &nvm_pack[0], ${si.packed_size()}) {'
@@ -691,6 +723,65 @@ fn nvm_service(m Model, ioc_idx map[string]int) []string {
 }
 
 
+// nvm_read_lines: the latest value of persisted signal `sname` into new `va` / `vb` — its staging
+// IOC cell, or for a satellite FB's signal its up channel behind the layout gate: the last
+// journaled value until the satellite's first value of a matched build, so its absence never reads
+// as a change (REQ-PLACE-006). The comm thread is the channel's one owner reader (derive_nvm).
+fn nvm_read_lines(m Model, cell int, sname string, va string, vb string, ind string) []string {
+	mut g := ['${ind}mut ${va} := u32(0)', '${ind}mut ${vb} := u32(0)']
+	if !(m.xdown_persist[sname] or { false }) {
+		g << '${ind}C.ioc_get(${cell}, &${va}, &${vb})'
+		return g
+	}
+	si := m.sig_of[sname] or { return g }
+	n := snake(sname)
+	mut lane_a := 'nvm_${n}_xa'
+	mut lane_b := 'nvm_${n}_xb'
+	if si.wide {
+		g << '${ind}if C.xcore_layout_ok() != 0 && C.xcore_poll_n(u32(${m.xcore_xw_off[sname] or { 0 }}), ${sig_lanes(si)}, &nvm_${n}_seq, &nvm_${n}_lanes[0]) != 0 {'
+		lane_a = 'nvm_${n}_lanes[0]'
+		lane_b = if si.fields.len > 1 { 'nvm_${n}_lanes[1]' } else { 'u32(0)' }
+	} else {
+		g << '${ind}if C.xcore_layout_ok() != 0 && C.xcore_poll(${m.xcore_idx[sname] or { 0 }}, &nvm_${n}_xa, &nvm_${n}_xb) != 0 {'
+		if si.fields.len < 2 {
+			lane_b = 'u32(0)'
+		}
+	}
+	g << '${ind}\tnvm_${n}_have = true'
+	g << '${ind}}'
+	g << '${ind}if nvm_${n}_have {'
+	g << '${ind}\t${va} = ${lane_a}'
+	g << '${ind}\t${vb} = ${lane_b}'
+	g << '${ind}} else {'
+	g << '${ind}\t${va} = nvm_${n}_a // nothing from the satellite yet: unchanged'
+	g << '${ind}\t${vb} = nvm_${n}_b'
+	g << '${ind}}'
+	return g
+}
+
+// nvm_sat_restore_lines: on a satellite image, the restored value of each persisted signal an FB
+// of thread `thr` writes, from its down channel into the writer's cell — before the first dispatch,
+// as the owner's thread restore does (REQ-PLACE-006). Its absence (nothing restored) keeps the
+// cell's default.
+fn nvm_sat_restore_lines(m Model, doc toml.Doc, thr string) []string {
+	mut g := []string{}
+	wthr := nvm_writer_thr(m, doc)
+	for sname in m.xdown_names {
+		if !(m.xdown_persist[sname] or { false }) || (wthr[sname] or { '' }) != thr {
+			continue
+		}
+		si := m.sig_of[sname] or { continue }
+		lanes := m.xdown_lanes[sname] or { 0 }
+		g << '\t{ // ${sname}: the value the owner\'s journal restored, before the first dispatch'
+		g << '\t\tmut xr := [${lanes + 2}]u32{}'
+		g << '\t\tif C.xcore_down_read(u32(${m.xdown_off[sname] or { 0 }}), u32(${lanes}), &xr[0]) != 0 {'
+		g << lane_unpack_lines(si, 'xr', 2, 'st.cell_${snake(sname)}', false, '\t\t\t')
+		g << '\t\t}'
+		g << '\t}'
+	}
+	return g
+}
+
 // nvm_flush_choreo: the flush-first choreography — every persist signal flushed, clean marked
 // ONLY when all values are durable. Emitted at the NM edges, before an ECUReset AND after an
 // in-sleep write (REQ-NVM-014: the marker must cover ALL persist dirt — a "now" write during
@@ -717,9 +808,7 @@ fn nvm_flush_choreo(m Model, ioc_idx map[string]int, ind string, erase bool) []s
 		cell := ioc_idx[sname] or { 0 }
 		id := m.nvm_ids[sname] or { 0 }
 		g << '${ind}{ // flush ${sname}'
-		g << '${ind}\tmut fa := u32(0)'
-		g << '${ind}\tmut fb := u32(0)'
-		g << '${ind}\tC.ioc_get(${cell}, &fa, &fb)'
+		g << nvm_read_lines(m, cell, sname, 'fa', 'fb', ind + '\t')
 		g << '${ind}\tif fa != nvm_${n}_a || fb != nvm_${n}_b {'
 		g << nvm_pack_lines_named(si, ind + '\t\t', 'fa', 'fb')
 		g << '${ind}\t\tif g_nvm.put(${id}, &nvm_pack[0], ${si.packed_size()}) {'
