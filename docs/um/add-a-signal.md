@@ -65,7 +65,7 @@ decode as garbage; it just doesn't build until the on-target DBC codec phase lan
 Practically: a bus-endpoint signal on target today is one u32 value field. Cross-core
 (remote) signals are the exception where multiple fields hit the wire — one u32 lane
 per field (up to 16 of `u32`/`u16`/`u8`/`bool`; 1–2 plain u32s without `valid` keep the
-{a, b} pair cell), `DLC = 4 × lanes` with every lane SG-owned, checked. Past 2 lanes the
+{a, b} pair cell), `DLC ≥ 4 × lanes` with every lane SG-owned, checked. Past 2 lanes the
 frame is FD-sized and waits for the FD comm owner — see
 [move-data.md](move-data.md) for the full lane contract.
 
@@ -132,7 +132,7 @@ a bus) that an FB on a generated satellite (`image =`) lists in its `reads` gets
 satellite channel. Readers come from the FBs' `reads`, not from `to`, so an owner FB and a
 satellite FB may both read it. Constraints: up to 16 u32 lanes — `bool`/`u8`/`u16`/`u32`/
 `i8`/`i16`/`i32`/`f32` one lane each, `u64`/`i64`/`f64` two (1–2 plain u32s without `valid`
-keep the bench-verified pair cell); to a bus, `DLC = 4 × lanes` with the full lane contract
+keep the bench-verified pair cell); to a bus, `DLC ≥ 4 × lanes` with the full lane contract
 of [move-data.md](move-data.md), only the types the comm thread encodes (`bool`…`i32`), and
 3+ lanes waits for the FD comm owner. Not generated on a satellite yet: reading a parameter,
 owning a fault, writing a persisted signal, an io or eth endpoint. See

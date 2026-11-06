@@ -364,6 +364,7 @@ fn comm_thread_entry(_ u32) {
 	mut nm_txf := can.Frame{}
 	// cross-core signals (gen_xcore): last tx time + latest polled value per signal
 	mut xcore_m4_count_last := u64(0)
+	mut xcore_m4_count_have := false // a value has come from the satellite
 	mut xcore_m4_count_a := u32(0)
 	mut xcore_m4_count_b := u32(0)
 	mut xcore_txf := can.Frame{}
@@ -520,8 +521,11 @@ fn comm_thread_entry(_ u32) {
 			g_tm.load_remote(C.xcore_trace_buf(), C.xcore_trace_count())
 			xcore_trc_wait = false
 		}
-		if nm_up && C.xcore_layout_ok() != 0 && t1 - xcore_m4_count_last >= u64(100000) && ch.tx_ready()
-			&& C.xcore_poll(0, &xcore_m4_count_a, &xcore_m4_count_b) != 0 {
+		if nm_up && t1 - xcore_m4_count_last >= u64(100000) && ch.tx_ready() { // REQ-COM-007
+			xcore_m4_count_last = t1
+			if C.xcore_layout_ok() != 0 && C.xcore_poll(0, &xcore_m4_count_a, &xcore_m4_count_b) != 0 {
+				xcore_m4_count_have = true
+			}
 			xcore_txf.id = u32(0x201)
 			xcore_txf.len = 8
 			// initial payload of m4_load_frame: every signal at its initial value (REQ-COM-011)
@@ -534,28 +538,29 @@ fn comm_thread_entry(_ u32) {
 			xcore_txf.data[6] = u8(0x00)
 			xcore_txf.data[7] = u8(0x00)
 			mut xcore_sat := u32(0)
-			xcore_txf_raw0_x := (f64(xcore_m4_count_a) - 0.0) / 1.0
-			xcore_txf_raw0, xcore_txf_raw0_sat := com.encode_raw(xcore_txf_raw0_x, 0.0, 4294967295.0, u64(0), u64(4294967295), u64(0), u64(0xffffffff))
-			xcore_txf.data[0] = u8(xcore_txf_raw0)
-			xcore_txf.data[1] = u8(xcore_txf_raw0 >> 8)
-			xcore_txf.data[2] = u8(xcore_txf_raw0 >> 16)
-			xcore_txf.data[3] = u8(xcore_txf_raw0 >> 24)
-			if xcore_txf_raw0_sat {
-				xcore_sat++
-			}
-			xcore_txf_raw1_x := (f64(xcore_m4_count_b) - 0.0) / 1.0
-			xcore_txf_raw1, xcore_txf_raw1_sat := com.encode_raw(xcore_txf_raw1_x, 0.0, 4294967295.0, u64(0), u64(4294967295), u64(0), u64(0xffffffff))
-			xcore_txf.data[4] = u8(xcore_txf_raw1)
-			xcore_txf.data[5] = u8(xcore_txf_raw1 >> 8)
-			xcore_txf.data[6] = u8(xcore_txf_raw1 >> 16)
-			xcore_txf.data[7] = u8(xcore_txf_raw1 >> 24)
-			if xcore_txf_raw1_sat {
-				xcore_sat++
+			if xcore_m4_count_have {
+				xcore_txf_raw0_x := (f64(xcore_m4_count_a) - 0.0) / 1.0
+				xcore_txf_raw0, xcore_txf_raw0_sat := com.encode_raw(xcore_txf_raw0_x, 0.0, 4294967295.0, u64(0), u64(4294967295), u64(0), u64(0xffffffff))
+				xcore_txf.data[0] = u8(xcore_txf_raw0)
+				xcore_txf.data[1] = u8(xcore_txf_raw0 >> 8)
+				xcore_txf.data[2] = u8(xcore_txf_raw0 >> 16)
+				xcore_txf.data[3] = u8(xcore_txf_raw0 >> 24)
+				if xcore_txf_raw0_sat {
+					xcore_sat++
+				}
+				xcore_txf_raw1_x := (f64(xcore_m4_count_b) - 0.0) / 1.0
+				xcore_txf_raw1, xcore_txf_raw1_sat := com.encode_raw(xcore_txf_raw1_x, 0.0, 4294967295.0, u64(0), u64(4294967295), u64(0), u64(0xffffffff))
+				xcore_txf.data[4] = u8(xcore_txf_raw1)
+				xcore_txf.data[5] = u8(xcore_txf_raw1 >> 8)
+				xcore_txf.data[6] = u8(xcore_txf_raw1 >> 16)
+				xcore_txf.data[7] = u8(xcore_txf_raw1 >> 24)
+				if xcore_txf_raw1_sat {
+					xcore_sat++
+				}
 			}
 			if ch.send(xcore_txf) {
 				tx_sat.add(xcore_sat)
 			}
-			xcore_m4_count_last = t1
 		}
 		C.xcore_bulk_consume() // cross-core bulk consumer (platform-owned pool)
 		{ // persist "now": LoadCmd

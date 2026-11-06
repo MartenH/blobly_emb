@@ -369,7 +369,7 @@ fn test_a_satellites_tx_waits_on_0x28() {
 		dbc_lanes: [candb.Signal{ name: 'PairA', length: 32 }].repeat(3)
 	}
 	out := xcore_produce_drain(m).join('\n')
-	assert out.count('if g_diag.server.tx_enabled() && C.xcore_layout_ok() != 0') == 2, out
+	assert out.count('if g_diag.server.tx_enabled() && t1 - xcore_') == 2, out
 }
 
 // A frame checked only for its layout or its status keeps no deadline: no clock is read for it.

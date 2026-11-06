@@ -2,7 +2,7 @@ module main
 
 import tools.candb
 
-// @verifies REQ-INV-006
+// @verifies REQ-INV-006, REQ-PLACE-005
 // The wide-remote-signal emitters on a hand-built model (the bench demo deliberately
 // carries no wide signal until the H755 tear re-run signs the mechanism off, so this
 // is what executes the wide paths in CI). The MECHANISM (xioc_n) is tear-tested in
@@ -103,10 +103,12 @@ fn test_xcore_gen_h_wide_defines_and_budget_guard() {
 fn test_wide_drain_polls_and_encodes_every_lane_through_its_signal() {
 	g := xcore_produce_drain(wide_model()).join('\n')
 	// wide: stateless C reader, caller-owned seq + lane buffer, one u32 lane per 4 bytes
-	assert g.contains('C.xcore_poll_n(u32(0), 3, &xcore_m4_wide_seq, &xcore_m4_wide_lanes[0])')
-	// freshness is consumed LAST: pacing + readiness precede the poll, else an
-	// off-cycle fresh value is eaten and never transmitted (codex #211 r3)
-	assert g.contains("C.xcore_layout_ok() != 0 && t1 - xcore_m4_wide_last >= u64(100000) && ch.tx_ready()")
+	// sent like an owner FB's signal (REQ-PLACE-005): due on its period from boot, the poll inside
+	// it behind the layout gate, the lanes encoded only once a value has come
+	assert g.contains('if t1 - xcore_m4_wide_last >= u64(100000) && ch.tx_ready() { // REQ-COM-007')
+	assert g.contains('if C.xcore_layout_ok() != 0 && C.xcore_poll_n(u32(0), 3, &xcore_m4_wide_seq, &xcore_m4_wide_lanes[0]) != 0 {')
+	assert g.contains('xcore_m4_wide_have = true')
+	assert g.contains('if xcore_m4_wide_have {')
 	// each lane through com.encode_raw (the one send encode: rounded, saturated to its signal's
 	// range) and written LE at byte 4 * lane; the saturations counted once the frame is sent
 	assert g.contains('xcore_txf.len = 12')
@@ -117,11 +119,11 @@ fn test_wide_drain_polls_and_encodes_every_lane_through_its_signal() {
 	assert g.contains('xcore_txf.data[0] = u8(xcore_txf_raw0)')
 	assert g.contains('xcore_txf.data[7] = u8(xcore_txf_raw1 >> 24)')
 	assert g.contains('xcore_txf.data[11] = u8(xcore_txf_raw2 >> 24)')
-	assert g.contains('if xcore_txf_raw2_sat {\n\t\t\t\txcore_sat++')
+	assert g.contains('if xcore_txf_raw2_sat {\n\t\t\t\t\txcore_sat++')
 	assert g.count('if ch.send(xcore_txf) {\n\t\t\t\ttx_sat.add(xcore_sat)\n\t\t\t}') == 2, g
 	// pair emission rides along unchanged in the same drain
-	assert g.contains('C.xcore_poll(0, &xcore_m4_pair_a, &xcore_m4_pair_b)')
-	assert g.contains("C.xcore_layout_ok() != 0 && t1 - xcore_m4_pair_last >= u64(100000) && ch.tx_ready()")
+	assert g.contains('if C.xcore_layout_ok() != 0 && C.xcore_poll(0, &xcore_m4_pair_a, &xcore_m4_pair_b) != 0 {')
+	assert g.contains('if t1 - xcore_m4_pair_last >= u64(100000) && ch.tx_ready() { // REQ-COM-007')
 }
 
 fn test_wide_comm_locals_declare_seq_and_lane_buffer() {

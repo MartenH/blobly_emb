@@ -3,7 +3,7 @@ module main
 import os
 import tools.sysmodel
 
-// @verifies REQ-INV-006, REQ-PLACE-001, REQ-PLACE-002
+// @verifies REQ-INV-006, REQ-PLACE-001, REQ-PLACE-002, REQ-PLACE-005
 // Owner -> satellite signals end to end: loom2v run on a scratch copy of examples/h755_threadx
 // (an owner with a generated CM4 image) with signals added in each shape — a received signal read
 // on both cores, an owner FB output in the wider lane types, a wide satellite signal an owner FB
@@ -23,6 +23,13 @@ struct GenRun {
 
 // gen_scratch copies the owner example into a fresh directory, edits its ecu.toml, runs loom2v
 fn gen_scratch(name string, edit fn (string) string) GenRun {
+	return gen_scratch_dbc(name, edit, fn (d string) string {
+		return d
+	})
+}
+
+// gen_scratch_dbc: gen_scratch with the DBC edited too
+fn gen_scratch_dbc(name string, edit fn (string) string, edit_dbc fn (string) string) GenRun {
 	tmp := os.join_path(os.vtmp_dir(), 'xdown_gen_${name}_${os.getpid()}')
 	os.rmdir_all(tmp) or {}
 	ex := os.join_path(tmp, 'h755_threadx')
@@ -30,7 +37,8 @@ fn gen_scratch(name string, edit fn (string) string) GenRun {
 	src := os.read_file(os.join_path(owner_ex, 'ecu.toml')) or { panic(err) }
 	ecu := os.join_path(ex, 'ecu.toml')
 	os.write_file(ecu, edit(src)) or { panic(err) }
-	os.cp(os.join_path(owner_ex, 'bus.dbc'), os.join_path(ex, 'bus.dbc')) or { panic(err) }
+	dbc := os.read_file(os.join_path(owner_ex, 'bus.dbc')) or { panic(err) }
+	os.write_file(os.join_path(ex, 'bus.dbc'), edit_dbc(dbc)) or { panic(err) }
 	glue := os.join_path(tmp, 'gen.v')
 	bin := sysmodel.tool_binary('loom2v') or { panic(err) }
 	r := os.exec([bin, ecu, os.join_path(ex, 'bus.dbc'), os.join_path(tmp, 'sig.v'), os.join_path(tmp,
@@ -251,4 +259,46 @@ fn test_a_satellite_output_fans_out_to_both_cores_with_derived_endpoints() {
 	assert r.sat.contains('st.cell_fan = outp.fan')
 	assert r.sat.contains('C.xcore_pub(2, u32(outp.fan.v), u32(0))')
 	assert r.owner.contains('C.xcore_poll(2, &fan_a, &fan_b)')
+}
+
+// a satellite's CAN signal takes the DBC's frame as an owner FB's does: a DLC past its lanes is
+// fine (those bytes keep the initial payload, whatever SG the DBC puts there); one short of them
+// is refused
+fn test_a_satellite_frame_may_be_longer_than_its_lanes_never_shorter() {
+	one_field := fn (src string) string {
+		return must_replace(src, 'fields = { n = "u32", acc = "u32" }', 'fields = { n = "u32" }')
+	}
+	r := gen_scratch_dbc('dlc_long', one_field, fn (d string) string {
+		return must_replace(d, ' SG_ M4Acc : 32|32@1+ (1,0) [0|4294967295] "" Tester',
+			' SG_ M4Flags : 40|8@1+ (1,0) [0|255] "" Tester')
+	})
+	assert r.code == 0, r.output
+	assert r.owner.contains('xcore_txf.len = 8')
+	// M4Count's encode: its one lane only, bytes 4..7 left to the initial payload
+	b := r.owner.index('if xcore_m4_count_have {') or { -1 }
+	assert b >= 0, r.owner
+	enc := r.owner[b..].all_before('if ch.send(xcore_txf)')
+	assert enc.contains('xcore_txf.data[3] = u8(xcore_txf_raw0 >> 24)'), enc
+	assert !enc.contains('xcore_txf_raw1'), enc
+	short := gen_scratch_dbc('dlc_short', fn (src string) string {
+		return src
+	}, fn (d string) string {
+		return must_replace(d, 'BO_ 513 M4LoadFrame: 8 SUT', 'BO_ 513 M4LoadFrame: 4 SUT')
+	})
+	assert short.code != 0
+	assert short.output.contains('M4Count'), short.output
+	// what the lanes leave alone must still be representable: no multiplexing (no switch is set),
+	// and a trailing signal inside the frame (its initial value has nowhere else to be)
+	muxed := gen_scratch_dbc('dlc_mux', one_field, fn (d string) string {
+		return must_replace(d, ' SG_ M4Acc : 32|32@1+ (1,0) [0|4294967295] "" Tester',
+			' SG_ M4Sel M : 32|8@1+ (1,0) [0|255] "" Tester')
+	})
+	assert muxed.code != 0
+	assert muxed.output.contains('"M4Sel" is multiplexed'), muxed.output
+	outside := gen_scratch_dbc('dlc_out', one_field, fn (d string) string {
+		return must_replace(d, ' SG_ M4Acc : 32|32@1+ (1,0) [0|4294967295] "" Tester',
+			' SG_ M4Spare : 60|8@1+ (1,0) [1|10] "" Tester')
+	})
+	assert outside.code != 0
+	assert outside.output.contains('"M4Spare"'), outside.output
 }

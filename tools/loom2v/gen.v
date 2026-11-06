@@ -3271,16 +3271,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\t\t\tid:  u32(0x${si.dbc_id.hex()})'
 					glue << '\t\t\t\tlen: ${si.dbc_dlc}'
 					glue << '\t\t\t}'
-					glue << pdu_init_lines(si, 'tf', '\t\t\t')
-					glue << '\t\t\tmut tf_sat := u32(0)'
 					// until the FB's first publish the cell holds no value, only its zero: the frame
 					// goes out at its initial payload, and nothing is encoded or counted
-					glue << '\t\t\tif C.ioc_get_ever(${idx}, &tv_a, &tv_b) != 0 {'
-					glue << lane_encode_lines(si, 0, si.val_type, 'tv_a', 'tf', 'tf_sat', '\t\t\t\t')
-					glue << '\t\t\t}'
-					glue << '\t\t\tif ch.send(tf) {'
-					glue << '\t\t\t\ttx_sat.add(tf_sat)'
-					glue << '\t\t\t}'
+					glue << tx_send_lines(si, 'tf', 'tf_sat', 'C.ioc_get_ever(${idx}, &tv_a, &tv_b) != 0',
+						lane_encode_lines(si, 0, si.val_type, 'tv_a', 'tf', 'tf_sat', '\t\t\t\t'), '\t\t\t')
 					glue << '\t\t}'
 				}
 				glue << trace_produce_drain(m)
@@ -4627,8 +4621,9 @@ fn main() {
 				if si.remote {
 					// remote TX (satellite -> bus): the satellite image publishes into the signal's
 					// xioc slot; the comm producer polls it (xcore_produce_drain) — no owner IOC cell.
-					// The lean encode packs the {a, b} pair LE at bytes 0/4, so the frame must be
-					// exactly the fields' width (field order = DBC layout order by convention).
+					// Each field is one u32 lane LE at byte 4 * lane, so the frame must hold at
+					// least the lanes; bytes past them keep the initial payload, as on the owner
+					// (field order = DBC layout order by convention).
 					for f in si.fields {
 						if f.typ !in lane_field_types {
 							panic('loom2v: remote TX signal "${sname}" field "${f.name}" is ${f.typ}, but a ' +
@@ -4641,10 +4636,12 @@ fn main() {
 							'carry the lane encode — ${si.dbc_lane_issue}. The lane writer fills whole ' +
 							'4-byte lanes; every SG in the frame must own one (codex #211)')
 					}
-					if si.dbc_dlc != 4 * sig_lanes(si) {
-						panic('loom2v: remote TX signal "${sname}" has ${si.fields.len} u32 field(s) ' +
+					// the lanes fill bytes 0 .. 4 x lanes; any bytes past them keep the frame's
+					// initial payload, as an owner producer's frame does (REQ-PLACE-005)
+					if si.dbc_dlc < 4 * sig_lanes(si) {
+						panic('loom2v: remote TX signal "${sname}" takes ${sig_lanes(si)} lane(s) ' +
 							'but DBC message "${si.dbc_msg}" DLC is ${si.dbc_dlc} — the xioc encode packs ' +
-							'4 bytes per lane (expect DLC ${4 * sig_lanes(si)})')
+							'4 bytes per lane (expect DLC >= ${4 * sig_lanes(si)})')
 					}
 					continue
 				}
@@ -5200,6 +5197,20 @@ fn dbc_msg_lane_issue(db candb.Database, signame string, nlanes int, widths []in
 			}
 			mut lanes_used := map[int]string{}
 			for sg in m.signals {
+				// the lane writer sets no switch: a multiplexed frame would carry the lanes under
+				// whatever selector its initial payload holds
+				if sg.is_multiplexor || sg.is_multiplexed {
+					return 'signal "${sg.name}" is multiplexed — the lane writer fills lanes, it sets no multiplexor'
+				}
+				if sg.start_bit >= 32 * nlanes {
+					// past the lanes: never written, the initial payload, as on the owner — so it
+					// must lie in the frame, or its initial value is nowhere
+					if sg.byte_order != candb.ByteOrder.little_endian
+						|| sg.start_bit + sg.length > 8 * m.dlc {
+						return 'signal "${sg.name}" (bits ${sg.start_bit}..${sg.start_bit + sg.length - 1}) past the lanes is not a little-endian signal inside the ${m.dlc}-byte frame'
+					}
+					continue
+				}
 				if sg.start_bit % 32 != 0 {
 					return 'signal "${sg.name}" starts at bit ${sg.start_bit} (not a 32-bit lane boundary)'
 				}

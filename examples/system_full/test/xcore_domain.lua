@@ -18,7 +18,8 @@
 --
 -- Prerequisites: BOTH banks flashed from ONE build — domain (bank 1) and domain_m4 (bank 2,
 -- 0x08100000). The layout id gates every cross-core channel, so a mismatched pair shows as the
--- first test failing (no DynEchoFrame at all), never as wrong values:
+-- first test failing (DynPt never advances: the CM4's frames go out at their initial payload),
+-- never as wrong values:
 --   make -C examples/system_full/nodes/domain    flash SERIAL=<H755 sn>
 --   make -C examples/system_full/nodes/domain_m4 flash SERIAL=<H755 sn>
 -- After flashing with `st-flash --connect-under-reset`, clear the core-reset vector catch before
@@ -51,10 +52,15 @@ local function commander(x)
   return bus.send_message_cyclic(CH, "DynCmdFrame", { DynCmd = x }, 50)
 end
 
+-- the CM4's frames go out from boot like any other (the initial payload until its first value), so
+-- what shows the CM4 running is DynPt ADVANCING: it carries the CM7's tick through the CM4, and only
+-- a running CM4 of the same build (the layout gate) moves it
 test("xcore: the CM4 is up and both banks are one build", function()
-  -- 0x129 goes out only after a fresh CM4 publish, behind the layout gate
-  local ok = pcall(expect, CH, 0x129, 1000)
-  check.truthy(ok, "no DynEchoFrame: the CM4 is not running, or the banks are from different builds (flash both)")
+  local a = value(0x12A, "DynPt", 1000)
+  sleep_ms(500)
+  drain()
+  local b = value(0x12A, "DynPt", 1000)
+  check.truthy(b > a and b ~= 0xFFFFFFFF, string.format("DynPt %d then %d: the CM4 is not running, or the banks are from different builds (flash both)", a, b))
 end)
 
 test("xcore: a protected bus command crosses to the CM4 and back", function()
@@ -71,8 +77,10 @@ test("xcore: a protected bus command crosses to the CM4 and back", function()
 end)
 
 test("xcore: the CM7's timeout reaches the CM4 when the sender stops", function()
-  local s = commander(fresh())
-  expect(CH, 0x129, 1000)
+  local x = fresh()
+  local s = commander(x)
+  -- the echo of THIS command: DynEchoFrame goes out from boot, so a bare frame proves nothing
+  expect_signal(CH, 0x129, "DynEcho", x, 1000)
   sleep_ms(200)
   s:stop()
   local t0 = now_ms()

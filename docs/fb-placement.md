@@ -31,8 +31,8 @@ the down channel the FB reads, exactly as the comm thread already does for a bus
 satellite FB's output to send it, and writes a received value down to a satellite reader). The
 transport, its gate and its single-writer rule do not change; each service only names the context
 it reads and writes in. Every gap below is a route of that kind not generated yet — not a limit of
-the design — and the order they close in is: the CAN send semantics (REQ-PLACE-005), NvM and
-parameters (006, 007), then faults and DIDs (008, 009).
+the design — and the order they close in is: NvM and parameters (006, 007), then faults and DIDs
+(008, 009).
 
 An FB's source does not move either: a node's FBs are one `app` module, in the platform owner's
 folder, which every image of the node compiles (each declares every FB's ports; the linker drops
@@ -50,7 +50,7 @@ refused naming both partitions, never generated wrong.
 | an FB's output read by an FB on another core, every lane type (bool, u8..u32, i8..i32, f32; u64, i64, f64 in two lanes) | ✅ | ✅ | REQ-PLACE-002 | bench: a two-lane u32 at 20/s, never torn; the other types compiled and round-tripped on the host only |
 | one output read on its own core and another at once (fan-out) | ✅ | ✅ | REQ-PLACE-003 | bench: `HostLedLevel` on both cores; generator test for satellite → both |
 | any number of crossing signals, bounded by the shared window | ✅ | ✅ | REQ-PLACE-004 | past the 4-slot pair pool a signal rides a wide channel, decided at generation |
-| a signal written by an FB and sent on CAN | ✅ | ⚠️ | REQ-PLACE-005 | from a satellite the frame's DLC must be 4 × lanes (an 8-byte frame with one u32 is refused), and it is sent only when the satellite publishes a new value. Route: the comm thread keeps the last value and sends on the period from boot, the initial payload first, at the DBC's DLC |
+| a signal written by an FB and sent on CAN | ✅ | ✅ | REQ-PLACE-005 | sent as an owner FB's is: on its period from boot, the initial payload until the first value, at the DBC's DLC (bytes past its lanes keep the initial payload); a satellite that stops repeats its last value, as a stalled owner FB does, and an absent or mismatched one (the layout gate shut) leaves the initial payload — liveness is an alive counter's or E2E's job on both cores |
 | a persisted signal (persist = now / shutdown) written by an FB | ✅ | ❌ | REQ-PLACE-006 | route: the journal service reads the FB's up channel; the restore writes a down channel before the FB's first dispatch. Reading one written on the owner works. |
 | a calibration parameter (`[[param]]`, 0x2E) read by an FB | ✅ | ❌ | REQ-PLACE-007 | route: `param_pub` — the one publish point, at restore and on 0x2E — also writes a down channel |
 | a fault (`[[fault]]`) owned by an FB — debounce, fault memory, 0x19 / 0x14 / 0x85 | ✅ | ❌ | REQ-PLACE-008 | route: the test result up to the owner's debounce and fault memory (the 0x85 / 0x14 control stays there). Today's workaround: the satellite FB writes its result as a bool signal and an owner FB owns the fault. A signal-status fault on a signal a satellite FB reads works. |
