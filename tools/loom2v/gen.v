@@ -1520,6 +1520,7 @@ mut:
 	xdown_lanes map[string]int
 	xdown_lean  map[string]bool // a lean received signal: one lane, the comm thread's lean decode
 	xdown_param map[string]bool // a [[param]]: its fields, published by param_pub (gen_param.v)
+	xdown_persist map[string]bool // a persisted signal a satellite FB writes: the restore (gen_nvm.v)
 	xdown_total int
 	// [nvm] (gen_nvm.v): persistent-signal names in declaration order + their
 	// schema-identity block ids — all derived, never configured beyond intent.
@@ -1623,8 +1624,10 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		if !from_ext {
 			continue
 		}
-		// local to the satellite (from = to) and read on no other image: no channel
-		if si.local && !fb_rws.any(sname in it.reads && !(part.external[it.part] or { false })) {
+		// local to the satellite (from = to) and read on no other image: no channel — unless it is
+		// persisted, which the owner's journal reads from an up channel (REQ-PLACE-006)
+		if si.local && si.persist == ''
+			&& !fb_rws.any(sname in it.reads && !(part.external[it.part] or { false })) {
 			continue
 		}
 		si.remote = true
@@ -1794,6 +1797,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	m.xdown_lanes = xd.lanes
 	m.xdown_lean = xd.lean
 	m.xdown_param = xd.param
+	m.xdown_persist = xd.persist
 	m.xdown_total = xd.total
 	validate_signal_routes_model(m, doc)
 	validate_uds(m)
@@ -3721,7 +3725,7 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 						// a signal read across cores (a down channel here, an up channel on the
 						// owner) is not a cross-thread local signal on this image
 						if rsi.local && (sig_writer_thr[r.string()] or { '' }) != fb_thr[cname]
-							&& !(image_part != '' && r.string() in m.xdown_off)
+							&& !(image_part != '' && xdown_fb_input(m, r.string()))
 							&& !(image_part == '' && rsi.remote) {
 							panic('loom2v: local signal "${r.string()}" is written on thread ' +
 								'"${sig_writer_thr[r.string()]}" but read by fb "${cname}" on thread ' +
@@ -3806,7 +3810,7 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 				for r in reads {
 					rn := r.string()
 					si := m.sig_of[rn] or { SigInfo{} }
-					if image_part != '' && rn in m.xdown_off {
+					if image_part != '' && xdown_fb_input(m, rn) {
 						// SATELLITE FB reads a signal produced on the owner image (owner -> satellite),
 						// whatever the owner side holds it in (a local cell, an IOC cell, a byte IOC),
 						// or a parameter param_pub hands down
@@ -4295,6 +4299,7 @@ fn main() {
 		m.xdown_lanes.clear()
 		m.xdown_lean.clear()
 		m.xdown_param.clear()
+		m.xdown_persist.clear()
 		m.xdown_total = 0
 	}
 	if m.trace.on && m.target.threadx {
@@ -4739,7 +4744,9 @@ fn main() {
 		// [nvm]: each persistent signal stages through its own intra-core IOC
 		// cell (single-writer wait-free — the proven transport, reused).
 		for sname in m.nvm_names {
-			ioc_idx[sname] = ioc_idx.len
+			if !(m.xdown_persist[sname] or { false }) { // a satellite FB's rides its up channel
+				ioc_idx[sname] = ioc_idx.len
+			}
 		}
 		// [[param]]: each parameter reaches its owner FBs through one cell the comm thread writes
 		// (a satellite reader has its own channel, xdown_derive)

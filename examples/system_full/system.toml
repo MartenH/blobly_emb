@@ -122,6 +122,16 @@ bus      = "compute"
 frame    = "DynLedFrame"
 cycle_ms = 100
 
+# DynKeptOut: the value the CM4's DynamicsModel keeps in DynKept — a persisted signal an FB on the
+# CM4 writes, journalled and restored by the CM7's NvM (nodes/domain/ecu.toml, REQ-PLACE-006).
+[[signal]]
+name     = "DynKeptOut"
+fields   = { v = "u32" }
+producer = "domain"
+bus      = "compute"
+frame    = "DynKeptFrame"
+cycle_ms = 100
+
 [[signal]]
 name     = "SteeringAngle"
 fields   = { deg = "u32" }

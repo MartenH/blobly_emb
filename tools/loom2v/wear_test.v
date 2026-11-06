@@ -199,12 +199,14 @@ fn test_system_full_lasts_and_its_numbers_are_printed() {
 			println('  ${l.all_after('loom2v: ')}')
 		}
 	}
-	// domain: DriveMode floored at 10 s, on an NM node — each put that can land in bus sleep lays a
-	// clean marker beside it; its parameter's codings are such puts too (one choreography run each)
+	// domain: DriveMode (the CM7's) and DynKept (the CM4's, REQ-PLACE-006) floored at 30 s, on an NM
+	// node — each put that can land in bus sleep lays a clean marker beside it and flushes the other;
+	// its parameter's codings are such puts too (one choreography run each)
 	d := reports['domain'] or { []string{} }
-	assert d.len > 0 && d[0].contains('753 records/h') && d[0].contains('12.4 years'), d.join('\n')
-	assert share(d, 'signal "DriveMode" (persist = "now")').starts_with('376 records/h'), d.join('\n')
-	assert share(d, 'clean markers').starts_with('376 records/h'), d.join('\n')
+	assert d.len > 0 && d[0].contains('769 records/h') && d[0].contains('12.1 years'), d.join('\n')
+	assert share(d, 'signal "DriveMode" (persist = "now")').starts_with('256 records/h'), d.join('\n')
+	assert share(d, 'signal "DynKept" (persist = "now")').starts_with('256 records/h'), d.join('\n')
+	assert share(d, 'clean markers').starts_with('256 records/h'), d.join('\n')
 	assert share(d, 'parameters (1)').starts_with('1 records/h'), d.join('\n')
 	// zone_a: a power-cycle node — its persisted fault memory, its parameter, its resets' markers
 	z := reports['zone_a'] or { []string{} }

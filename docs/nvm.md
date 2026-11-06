@@ -206,9 +206,10 @@ outside the model: a fault, not traffic.
 
 system_full at the default assumptions (`tools/loom2v/wear_test.v` prints and pins these):
 
-- **domain** — DriveMode floored at 10 s on an NM node, one parameter: 376 records/h of puts and
-  choreography flushes (a coding in bus sleep is one more run) plus 376 clean markers and the
-  parameter 1 = 753 records/h, 12.4 years.
+- **domain** — DriveMode (written on the CM7) and DynKept (written on the CM4) floored at 30 s on an
+  NM node, one parameter: 256 records/h each of puts and choreography flushes (a coding in bus sleep
+  is one more run) plus 256 clean markers and the parameter 1 = 769 records/h, 12.1 years. At the
+  10 s floor DriveMode alone had, the second signal took it to 4.2 years.
 - **zone_a** — power cycles, 4 DTCs (one with a snapshot), one parameter: the status image (42 B =
   3 records, 89 writes/h) 267 records/h, snapshots 16, the parameter 1, the resets' markers 1 =
   285 records/h, 16.4 years.
@@ -450,6 +451,14 @@ The entire layer develops dry.
    change+floor-gated puts, NM prepare-bus-sleep edge flush + mark_clean +
    deferred erase. P2 cut: local signals, 1..2 unsigned fields. Host sim
    example (file-backed) = the next slice.
+   **On a satellite core** (REQ-PLACE-006): a persisted signal an FB on a generated satellite
+   (`image =`) writes is journalled by the owner's comm thread like any other. The FB's thread
+   keeps the cell; each dispatch also publishes it on an up channel, which the comm thread reads
+   in place of the staging cell (behind the layout gate, the last journalled value until the
+   satellite's first one). The restore goes down an owner → satellite channel in the pre-kernel
+   window, before the satellite is released, and the satellite's thread seeds the cell from it
+   before the first dispatch. The comm thread must be the up channel's one owner reader: an owner
+   FB reading the same signal is refused. system_full's DynKept is one (`test/xcore_domain.lua`).
 3. **P3 — target**: IN USE — the ThreadX target generates it, and
    `examples/h755_threadx` and `system_full/nodes/domain` persist signals on the
    H755. NOT yet recorded: the bench loop that pulls power mid-append and counts
@@ -463,8 +472,6 @@ The entire layer develops dry.
 
 - Large blobs / file semantics (records are signal-sized; chaining exists but is
   not the design center).
-- Cross-core persistent signals (the satellite's persistent state would journal
-  through the owner — needs a crossing design; defer until a real M4 use case).
 - Redundant dual-copy storage per block (the journal's previous-record fallback
   covers the power-cut case; true redundancy arrives with an ASIL owner).
 

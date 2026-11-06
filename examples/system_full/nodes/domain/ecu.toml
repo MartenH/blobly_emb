@@ -197,7 +197,7 @@ write = { session = ["extended"], security = 1 }
 # Persistence storage ([nvm], docs/nvm.md): the journal engine over a sector pair the node's comm
 # glue maps (nvm_map_* -> boards flash driver). DriveMode above is the persisted signal.
 [nvm]
-min_write_ms   = 10000
+min_write_ms   = 30000
 sector_records = 4096
 endurance      = 10000
 min_years      = 10
@@ -231,6 +231,15 @@ image = "nodes/domain_m4"
   name     = "model"
   priority = 11
 
+# DynKept: a persisted signal ("now") written by an FB on the CM4 (REQ-PLACE-006). DynamicsModel
+# latches the low 24 bits of a DynCmd in 0xFE000000..0xFEFFFFFF into it and sends it as DynKeptOut;
+# the CM7's journal keeps it from the CM4's up channel and restores it down its channel before the
+# CM4 is released — the same intent an owner FB's DriveMode declares, nothing more.
+[[signal]]
+name    = "DynKept"
+fields  = { v = "u32" }
+persist = "now"
+
 [[fb]]
 name   = "DynamicsModel"
 thread = "model"
@@ -238,5 +247,5 @@ thread = "model"
   [[fb.handler]]
   name      = "on_5ms"
   period_ms = 5
-  reads     = ["DynCmd", "HostLedLevel", "PtState", "DynLedCap"]
-  writes    = ["TorqueEstimate", "DynEcho", "DynLed", "DynPt"] # trailing comment terminates nested block (vlang/v#27684)
+  reads     = ["DynCmd", "HostLedLevel", "PtState", "DynLedCap", "DynKept"]
+  writes    = ["TorqueEstimate", "DynEcho", "DynLed", "DynPt", "DynKept", "DynKeptOut"] # trailing comment terminates nested block (vlang/v#27684)

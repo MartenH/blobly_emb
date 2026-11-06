@@ -203,8 +203,12 @@ channel.
 - **A parameter read on a satellite** rides a down channel of its own, one lane per field,
   written by `param_pub` at the restore and on every 0x2E; the owner releases the satellite only
   after the restore (REQ-PLACE-007).
+- **A persisted signal written on a satellite** goes up a channel the owner's journal service
+  reads (its one owner reader), and its restored value comes down a channel the owner writes
+  before it releases the satellite; the writer's thread seeds its cell from it before the first
+  dispatch (REQ-PLACE-006, [nvm.md](nvm.md)).
 - **Not generated yet**, each refused at generation ([fb-placement.md](fb-placement.md)): faults
-  owned by a satellite FB, persisted signals written there, io / eth endpoints in a satellite,
+  owned by a satellite FB, io / eth endpoints in a satellite,
   live DIDs on satellite values; a hand-written satellite (`external = true`) reads nothing
   down. A CM4 doorbell (drain-on-publish) and moving the hand-written xcore seams into shared
   code are follow-ups.
