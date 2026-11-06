@@ -31,6 +31,7 @@
 #define BLOBLY_H755_XCORE_H
 
 #include <stdint.h>
+#include <stddef.h> /* offsetof, for the checks against the vendor header */
 
 #define XCORE_HB_MAGIC   0x434D3452u /* "CM4R" */
 #define XCORE_CLK_MAGIC  0x434C4B52u /* "CLKR" */
@@ -61,13 +62,46 @@ static inline void xcore_clk_retract(void) {
 	__asm__ volatile("dsb");
 }
 
-/* satellite: park until released, then consume the release */
+/* satellite: the CM4's ART accelerator, the cache in front of its flash fetches. It is off at
+ * reset, and off every fetch from bank 2 waits on the flash: the same work measured 19.6 % of the
+ * CM4 with it off and 7.5 % on (system_full's domain_m4). Its clock goes on through the CM4's own
+ * RCC view (RCC_C2_AHB1ENR.ARTEN), so no read-modify-write races the CM7's, and it caches the 1 MB
+ * page this code runs from (PCACHEADDR = address bits 31:20). The CM7's NvM journal shares bank 2,
+ * but the CM4 never reads it, so a journal write leaves no stale line the CM4 could fetch. The
+ * numbers are spelled out so the host tests can include this header; where the vendor header is
+ * in, they are checked against it. */
+#define XCORE_RCC_C2_AHB1ENR 0x58024598u
+#define XCORE_RCC_ARTEN      (1u << 14)
+#define XCORE_ART_CTR        0x40024400u
+#define XCORE_ART_EN         1u
+#define XCORE_ART_PAGE_MSK   0x000FFF00u
+#ifdef RCC_C2_BASE
+_Static_assert(XCORE_RCC_C2_AHB1ENR == RCC_C2_BASE + offsetof(RCC_Core_TypeDef, AHB1ENR), "RCC_C2 AHB1ENR");
+_Static_assert(XCORE_RCC_ARTEN == RCC_AHB1ENR_ARTEN, "ARTEN");
+_Static_assert(XCORE_ART_CTR == ART_BASE + offsetof(ART_TypeDef, CTR), "ART CTR");
+_Static_assert(XCORE_ART_EN == ART_CTR_EN && XCORE_ART_PAGE_MSK == ART_CTR_PCACHEADDR_Msk, "ART CTR bits");
+#endif
+
+static inline void xcore_sat_art_on(void) {
+	volatile uint32_t *en = (volatile uint32_t *)(uintptr_t)XCORE_RCC_C2_AHB1ENR;
+	volatile uint32_t *ctr = (volatile uint32_t *)(uintptr_t)XCORE_ART_CTR;
+	*en |= XCORE_RCC_ARTEN;
+	(void)*en; /* read back: the clock is on before the ART is written */
+	uint32_t page = (uint32_t)(uintptr_t)&xcore_sat_art_on;
+	*ctr = (page >> 12) & XCORE_ART_PAGE_MSK; /* the page first, with the cache off */
+	*ctr |= XCORE_ART_EN;
+	__asm__ volatile("dsb; isb");
+}
+
+/* satellite: park until released, then consume the release — the satellite's start, so its ART
+ * cache goes on here, in every satellite image (threadx_makefiles_test.v pins that each calls this) */
 static inline void xcore_clk_take(void) {
 	volatile uint32_t *clk = (volatile uint32_t *)XCORE_CLK_ADDR;
 	while (*clk != XCORE_CLK_MAGIC) {
 	}
 	*clk = 0u;
 	__asm__ volatile("dsb");
+	xcore_sat_art_on();
 }
 
 #define XCORE_LAYOUT_REQ_ADDR 0x38000010u
