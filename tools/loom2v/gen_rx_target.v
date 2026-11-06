@@ -390,7 +390,7 @@ fn validate_rx_target(m Model) {
 // of the bound, asked by the fault and the receive validations alike.
 fn iocb_overflow(m Model) ?string {
 	sigs := rx_iocb_idx(m).len
-	faults := 2 * fault_fbs(m).len
+	faults := 2 * fault_local_fbs(m).len
 	if sigs + faults <= iocb_pool_n {
 		return none
 	}

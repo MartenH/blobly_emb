@@ -47,6 +47,10 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 		g << 'module gen'
 		g << ''
 		mut imports := ['ports', 'app', 'loom']
+		sat_faults := fault_sat_fbs(m, part)
+		if sat_faults.len > 0 {
+			imports << 'comm.fault' // its FBs' debounce (gen_xfault.v)
+		}
 		if sat_glue.join('\n').contains('sig.') || xlane_helpers(xcore_sigs(m)).join('\n').contains('sig.') {
 			imports.prepend('sig')
 		}
@@ -77,12 +81,14 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 				}
 			}
 		}
+		// a fault-owning FB publishes its reports up too (gen_xfault.v)
+		produces = produces || sat_faults.len > 0
 		if produces {
 			g << 'fn C.xcore_layout_retract() // boot FIRST act: close polling before touching channels'
 			g << 'fn C.xcore_layout_publish() // layout-id handshake: owner polls nothing until this'
 		}
 		g << 'fn C.xcore_pub(int, u32, u32) // xioc writer — slots from gen/xcore_gen.h'
-		if wide_writes.len > 0 {
+		if wide_writes.len > 0 || sat_faults.len > 0 {
 			g << 'fn C.xcore_xw_init(u32, u32) // wide xioc_n channel init (writer side, boot)'
 			g << 'fn C.xcore_pub_n(u32, &u32) // wide xioc_n writer — offsets from gen/xcore_gen.h'
 		}
@@ -125,6 +131,11 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 			g << '\tg_st_${thr} = ${sname}{} // the FB field defaults, at entry: bss is all zero'
 			g << '\tmut st := &g_st_${thr}'
 			g << nvm_sat_restore_lines(m, doc, thr)
+			for fb in sat_faults {
+				if (m.part.fb_thread[fb] or { '' }) == thr {
+					g << fault_init_lines(m, fb) // its debouncers, before the first dispatch
+				}
+			}
 			g << '\tmut sched := &g_sched_${thr} // module-sized: lives in bss, not this lifetime frame'
 			// emit_handlers keys registrations by part/thread only for a MULTI-thread partition;
 			// a single-thread one stores them under the bare part (gen.v all_regs[part]). The owner
@@ -207,6 +218,9 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 		for sname in wide_writes {
 			si := m.sig_of[sname] or { continue }
 			g << '\tC.xcore_xw_init(u32(${m.xcore_xw_off[sname] or { 0 }}), u32(${sig_lanes(si)})) // ${sname}'
+		}
+		for fb in sat_faults {
+			g << '\tC.xcore_xw_init(u32(${m.fault_xup_off[fb] or { 0 }}), u32(${fault_rep_lanes(m, fb)})) // ${fb}\'s fault reports'
 		}
 		if produces {
 			g << '\tC.xcore_layout_publish() // AFTER every channel init: the owner may poll now'

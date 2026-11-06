@@ -194,12 +194,20 @@ id    = 0x0130
 param = "DynLedCap"
 write = { session = ["extended"], security = 1 }
 
+# live: a value an FB on the CM4 writes (REQ-PLACE-009) — DynamicsModel's DynKeptOut, which the comm
+# thread reads from its up channel (and sends as DynKeptFrame); frozen by DynCmdRejected's snapshot
+[[did]]
+id     = 0xF1A2
+signal = "DynKeptOut"
+
 # Persistence storage ([nvm], docs/nvm.md): the journal engine over a sector pair the node's comm
 # glue maps (nvm_map_* -> boards flash driver). Two persisted signals: DriveMode (the CM7's) and
-# DynKept (the CM4's). Both are "now", and each put that can land in bus sleep reruns the flush for
-# both, so the floor is 30 s: at 10 s the pair proved 4.2 years of wear, short of min_years.
+# DynKept (the CM4's), and the fault memory (DynCmdRejected's status and snapshot). Both signals are
+# "now", and each put — and each fault-memory write — that can land in bus sleep reruns the flush
+# for all of them, so the floor is 60 s: at 30 s the three proved 7.9 years of wear, short of
+# min_years.
 [nvm]
-min_write_ms   = 30000
+min_write_ms   = 60000
 sector_records = 4096
 endurance      = 10000
 min_years      = 10
@@ -251,3 +259,14 @@ thread = "model"
   period_ms = 5
   reads     = ["DynCmd", "HostLedLevel", "PtState", "DynLedCap", "DynKept"]
   writes    = ["TorqueEstimate", "DynEcho", "DynLed", "DynPt", "DynKept", "DynKeptOut"] # trailing comment terminates nested block (vlang/v#27684)
+
+# DynCmdRejected: a fault DynamicsModel tests on the CM4 (REQ-PLACE-008) — failed while a DynCmd in
+# 0xFD000000..0xFDFFFFFF arrives. Debounced on the CM4, kept in the CM7's fault memory and served by
+# its 0x19 / 0x14 / 0x85; the snapshot freezes 0xF1A2, a live DID on a CM4 value.
+[[fault]]
+name     = "DynCmdRejected"
+dtc      = 0xD10100                    # U1101-00
+from     = "DynamicsModel.on_5ms"
+debounce = { kind = "counter", fail = 3, pass = 3 }
+confirm  = 1
+freeze   = [0xF1A2]

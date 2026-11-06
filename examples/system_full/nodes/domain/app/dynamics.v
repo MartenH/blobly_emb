@@ -51,6 +51,13 @@ pub fn (mut fb DynamicsModel) on_5ms(inp ports.DynamicsModelIn, mut out ports.Dy
 	}
 	out.dyn_kept.v = kept
 	out.dyn_kept_out.v = kept
+	// DynCmdRejected: a DynCmd in 0xFD000000 .. 0xFDFFFFFF fails the test, anything else passes it —
+	// the current result every dispatch; the CM7's fault memory keeps the history
+	out.fault.dyn_cmd_rejected = if inp.dyn_cmd.status == .ok && inp.dyn_cmd.cmd >> 24 == 0xFD {
+		.failed
+	} else {
+		.passed
+	}
 	// DynPt: the CM7 FB's sequence when both PtState lanes came from one publish, 0 before the
 	// first one (the port default), 0xFFFFFFFF for lanes that do not belong together.
 	out.dyn_pt.seq = if inp.pt_state.seq == 0 && inp.pt_state.inv == 0 {

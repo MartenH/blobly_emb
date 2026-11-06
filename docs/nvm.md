@@ -206,10 +206,12 @@ outside the model: a fault, not traffic.
 
 system_full at the default assumptions (`tools/loom2v/wear_test.v` prints and pins these):
 
-- **domain** — DriveMode (written on the CM7) and DynKept (written on the CM4) floored at 30 s on an
-  NM node, one parameter: 256 records/h each of puts and choreography flushes (a coding in bus sleep
-  is one more run) plus 256 clean markers and the parameter 1 = 769 records/h, 12.1 years. At the
-  10 s floor DriveMode alone had, the second signal took it to 4.2 years.
+- **domain** — DriveMode (written on the CM7) and DynKept (written on the CM4) floored at 60 s on an
+  NM node, one parameter, and the fault memory of one DTC with a snapshot (tested on the CM4): 240
+  records/h each of puts and choreography flushes (a coding or a fault-memory write in bus sleep is
+  one more run) plus 240 clean markers, the status image 88, snapshots 16 and the parameter 1 = 825
+  records/h, 11.3 years. At the 10 s floor DriveMode alone had, the second signal took it to 4.2
+  years; at 30 s the fault memory took the pair to 7.9.
 - **zone_a** — power cycles, 4 DTCs (one with a snapshot), one parameter: the status image (42 B =
   3 records, 89 writes/h) 267 records/h, snapshots 16, the parameter 1, the resets' markers 1 =
   285 records/h, 16.4 years.

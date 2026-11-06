@@ -211,7 +211,8 @@ you plan around it:
 
 - **On a ThreadX target, constant DIDs and the node's own outputs.** The comm thread serves
   the connection (on its `[telemetry].bus`); a signal-backed DID may name a signal this node
-  transmits from a local FB (an input is refused at generation), and a security gate is served
+  transmits from a local FB, or one an FB on a generated satellite core writes (an input is refused
+  at generation), and a security gate is served
   through the board's key seam (`boards/common/diag_board.c`; docs/diagnostics.md).
 - **The generated link is a UDS endpoint, not an API.** It lives in private bridge state
   and every completed message is fed straight to the plain **UDS server** — `0x10`/`0x22`/

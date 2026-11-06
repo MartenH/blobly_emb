@@ -19,7 +19,7 @@ module main
 
 // xcore_on: any cross-image signal slots to wire.
 fn xcore_on(m Model) bool {
-	return m.xcore_names.len > 0
+	return m.xcore_names.len > 0 || m.fault_xup_off.len > 0
 }
 
 // has_satellite: any partition whose image lives elsewhere (hand-written or generated) —
@@ -77,6 +77,7 @@ fn xcore_gen_h(m Model) []string {
 			g << '#define XCORE_XW_${u}_OFF ${m.xcore_xw_off[sname] or { 0 }}u'
 			g << '#define XCORE_XW_${u}_WORDS ${sig_lanes(si)}u'
 		}
+		g << fault_xw_gen_h(m)
 		g << '#define XCORE_XW_TOTAL ${m.xcore_xw_total}u'
 		g << '#if defined(XCORE_XW_MAX) && (XCORE_XW_TOTAL > XCORE_XW_MAX)'
 		g << '#error "wide xioc channels overflow the board window — grow XCORE_XW_MAX (xcore.h) or shed signals"'
@@ -113,8 +114,10 @@ fn xcore_layout_id(m Model) u32 {
 			desc += '${sname}:${m.xcore_idx[sname] or { 0 }}[${fs}]|'
 		}
 	}
-	// the owner -> satellite channels follow, marked by direction (gen_xdown.v)
+	// the owner -> satellite channels follow, marked by direction (gen_xdown.v), then the
+	// satellite fault-owning FBs' two (gen_xfault.v)
 	desc += xdown_layout_desc(m)
+	desc += fault_layout_desc(m)
 	mut h := u32(2166136261)
 	for b in desc.bytes() {
 		h = (h ^ u32(b)) * 16777619
