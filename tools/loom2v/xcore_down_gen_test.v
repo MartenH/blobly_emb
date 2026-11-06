@@ -452,6 +452,24 @@ fn test_a_fault_owned_by_a_satellite_fb_reaches_the_owner_fault_memory() {
 	assert !r.owner.contains('fdeb_m4_load')
 }
 
+// the faults' order is part of the cross-core contract: their lanes are positional
+fn test_reordered_satellite_faults_change_the_layout_id() {
+	second := '\n[[fault]]\nname   = "M4Slow"\ndtc    = 0xD00200\nfrom   = "M4Load.on_10ms"\n'
+	a := gen_scratch('fault_ab', fn [second] (src string) string {
+		return fault_on_satellite(src) + second
+	})
+	b := gen_scratch('fault_ba', fn [second] (src string) string {
+		s := fault_on_satellite(src)
+		f := s.index('\n[[fault]]') or { panic('no fault') }
+		return s[..f] + second + s[f..]
+	})
+	assert a.code == 0 && b.code == 0, a.output + b.output
+	id := fn (h string) string {
+		return h.all_after('#define XCORE_LAYOUT_ID ').all_before('\n')
+	}
+	assert id(a.header) != '' && id(a.header) != id(b.header)
+}
+
 fn test_a_live_did_reads_a_value_a_satellite_fb_writes() {
 	r := gen_scratch('did', fault_on_satellite)
 	assert r.code == 0, r.output

@@ -111,12 +111,15 @@ fn fault_ow_gen_h(m Model) []string {
 	return g
 }
 
-// fault_layout_desc: the channels' part of the layout-id string (`f:` up, `fo:` down)
+// fault_layout_desc: the channels' part of the layout-id string (`f:` up, `fo:` down) — with the
+// FB's faults in lane order, so two images that order them differently never pass the handshake
+// and read one fault's lanes as another's
 fn fault_layout_desc(m Model) string {
 	mut desc := ''
 	for fb in fault_fbs(m) {
 		if off := m.fault_xup_off[fb] {
-			desc += 'f:${fb}:xw+${off}:${fault_rep_lanes(m, fb)}|'
+			names := m.faults.filter(it.fb == fb && it.signal == '').map(it.name).join(',')
+			desc += 'f:${fb}:xw+${off}:${fault_rep_lanes(m, fb)}[${names}]|'
 			desc += 'fo:${fb}:ow+${m.fault_xdn_off[fb] or { 0 }}:${fault_ctl_lanes(m, fb)}|'
 		}
 	}
