@@ -470,13 +470,18 @@ date = ""
 # through a 0x11 reset, and DynKept — a persisted signal the CM4 writes — latched from a command,
 # kept once the command stopped, and back from the first CM4 frame after a 0x11 reset. Separately,
 # a DynKept latched and left past the 30 s floor came back after an st-flash hard reset (no flush):
-# the floored put from the CM4's up channel, not the ECUReset flush. The generator tests verify the
-# wiring; this review is pending the bench sign-off.
+# the floored put from the CM4's up channel, not the ECUReset flush. Then (REQ-PLACE-008/009) the
+# same suite, 14/14 on 2026-11-06: live DID 0xF1A2 on the CM4's DynKeptOut read back as latched,
+# twice; DynCmdRejected — a fault the CM4 tests — confirmed in the CM7's fault memory within ~300 ms
+# (status 0x2F) with 0xF1A2 frozen in its snapshot, passing again once the command stopped, cleared
+# by 0x14, returning after a clear made WHILE failing (the new generation reached the CM4), and not
+# recorded with 0x85 off. The generator tests verify the wiring; this review is pending the bench
+# sign-off.
 [[review]]
 id = "placement-silicon"
 method = "review"
 context = "h755/dual-core"
-verifies = ["REQ-PLACE-006", "REQ-PLACE-007"]
+verifies = ["REQ-PLACE-006", "REQ-PLACE-007", "REQ-PLACE-008", "REQ-PLACE-009"]
 approved_by = ""
 date = ""
 

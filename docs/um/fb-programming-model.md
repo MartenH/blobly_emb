@@ -66,7 +66,7 @@ An acronym is a word of its own, so `ABSActive` is `abs_active` and `LED5State` 
 | drive an output pin | `to = "io"` + an `[[io.gpio]]` / `[[io.pwm]]` point of the same name | `out.led_green.on = true` | sim | ✅ |
 | read an input pin / ADC | `from = "io"` + an `[[io.gpio]]` / `[[io.adc]]` point | `inp.pot_volt.count` | sim | ✅ |
 | keep a value across power cycles | `persist = "now"` / `"shutdown"` on the signal, plus `[nvm]` and `[nm]` | read it and write it like any signal | builds, not stored | ✅ |
-| report a fault (DTC) | `[[fault]]` naming my handler | `out.fault.x = .failed` / `.passed` | ✅ | not yet (R6) |
+| report a fault (DTC) | `[[fault]]` naming my handler | `out.fault.x = .failed` / `.passed` | ✅ | ✅ — on a satellite core too ([../fb-placement.md](../fb-placement.md)) |
 
 "sim" = the host's file-mirror stand-in for pins ([../io.md](../io.md)). **The table shows the
 common case, not every combination** — generation refuses one it cannot build and names the rule.

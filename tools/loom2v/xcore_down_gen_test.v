@@ -3,7 +3,7 @@ module main
 import os
 import tools.sysmodel
 
-// @verifies REQ-INV-006, REQ-PLACE-001, REQ-PLACE-002, REQ-PLACE-005, REQ-PLACE-006, REQ-PLACE-007
+// @verifies REQ-INV-006, REQ-PLACE-001, REQ-PLACE-002, REQ-PLACE-005, REQ-PLACE-006, REQ-PLACE-007, REQ-PLACE-008, REQ-PLACE-009
 // Owner -> satellite signals end to end: loom2v run on a scratch copy of examples/h755_threadx
 // (an owner with a generated CM4 image) with signals added in each shape — a received signal read
 // on both cores, an owner FB output in the wider lane types, a wide satellite signal an owner FB
@@ -397,4 +397,81 @@ fn test_a_persisted_signal_on_a_hand_written_satellite_is_refused() {
 	})
 	assert r.code != 0
 	assert r.output.contains('persistent signal "M4Keep" is local to partition "m4", a hand-written satellite'), r.output
+}
+
+// fault_on_satellite: M4Load (on the CM4) owns a fault that freezes a live DID on its own output,
+// and a second live DID reads a CM4 signal nothing else reads — the CM4 partition made one thread
+// (a fault-owning FB is refused in a multi-thread partition on every core)
+fn fault_on_satellite(src string) string {
+	mut s := must_replace(src, '[[partition.thread]]\nname     = "m4_stress"\npriority = 12\n', '')
+	s = must_replace(s, 'name   = "M4Churn"\nthread = "m4_stress"', 'name   = "M4Churn"\nthread = "m4_app"')
+	s = must_replace(s, 'writes    = ["M4Count"]', 'writes    = ["M4Count", "M4Probe"]')
+	s = must_replace(s, 'min_write_ms   = 10000', 'min_write_ms   = 20000')
+	s += '\n[isotp]\nbus   = "can0"\nrx_id = 0x7B0\ntx_id = 0x7B8\n'
+	s += '\n[[signal]]\nname   = "M4Probe"\nfields = { v = "u16" }\n'
+	s += '\n[[did]]\nid     = 0xF1A2\nsignal = "M4Count"\n'
+	s += '\n[[did]]\nid     = 0xF1A3\nsignal = "M4Probe"\n'
+	s += '\n[[fault]]\nname   = "M4Stuck"\ndtc    = 0xD00100\nfrom   = "M4Load.on_10ms"\nfreeze = [0xF1A2]\n'
+	return s
+}
+
+fn test_a_fault_owned_by_a_satellite_fb_reaches_the_owner_fault_memory() {
+	r := gen_scratch('fault', fault_on_satellite)
+	assert r.code == 0, r.output
+	// the two exchanges as channels: reports up (two lanes a fault), control down (one)
+	assert r.header.contains('#define XCORE_XW_M4_LOAD__FAULTS_WORDS 2u'), r.header
+	assert r.header.contains('#define XCORE_OW_M4_LOAD__FAULTS_WORDS 1u'), r.header
+	// owner: the control channel up before the satellite is released, no byte-IOC cell for it
+	init := r.owner.index('u32(1)) // M4Load\'s fault control') or { -1 }
+	c := r.owner.index('\tC.xcore_owner_commit()') or { -1 }
+	assert init >= 0 && init < c, r.owner
+	assert !r.owner.contains('// M4Load: reports')
+	// the comm thread reads the reports behind the gate, consumes them, publishes the control
+	take := r.owner.index(', 2, &g_frx_m4_load[0], &g_frx_m4_load[1]) != 0 {') or { -1 }
+	cons := r.owner.index('g_fmem.consume(0, g_frep_m4_load.r[0])') or { -1 }
+	give := r.owner.index('&g_fxl_m4_load[0]) // M4Load\'s control -> the satellite') or { -1 }
+	assert take >= 0 && take < cons && cons < give, r.owner
+	assert r.owner.contains('C.xcore_layout_ok() != 0 && C.xcore_poll_n(')
+	assert r.owner.contains('\t\t\t\tfailed: g_frx_m4_load[1] & 0x1_0000 != 0')
+	assert r.owner.contains('g_fxl_m4_load[0] = u32(g_fctl_m4_load.gen[0]) | if g_fctl_m4_load.held[0] {')
+	// satellite: its debounce, the control from the owner, the reports AFTER its outputs
+	assert r.sat.contains('import comm.fault'), r.sat
+	assert r.sat.contains('\tfxr_m4_load [3]u32')
+	assert !r.sat.contains('iocb')
+	ctl := r.sat.index('u32(1), &st.fxr_m4_load[0]) != 0 {') or { -1 }
+	step := r.sat.index('\tst.fdeb_m4_load[0].step(outp.fault.m4_stuck') or { -1 }
+	outs := r.sat.index('&xw_m4_count[0])') or { -1 }
+	rep := r.sat.index('&fxw_m4_load[0]) // debounced state + counters') or { -1 }
+	assert ctl >= 0 && ctl < step && step < rep && outs < rep, r.sat
+	assert r.sat.contains('\tfxw_m4_load[1] = u32(st.frep_m4_load.r[0].fails) | (u32(st.frep_m4_load.r[0].tests) << 16)')
+	assert r.sat.contains('u32(2)) // M4Load\'s fault reports') // its channel initialised at boot
+	// its debouncers configured on its own thread before the first dispatch, never on the owner
+	deb := r.sat.index('\tst.fdeb_m4_load[0] = fault.Debounce{') or { -1 }
+	sched := r.sat.index('\tmut sched := &g_sched_m4_app') or { -1 }
+	assert deb >= 0 && deb < sched, r.sat
+	assert !r.owner.contains('fdeb_m4_load')
+}
+
+fn test_a_live_did_reads_a_value_a_satellite_fb_writes() {
+	r := gen_scratch('did', fault_on_satellite)
+	assert r.code == 0, r.output
+	// a DID-read signal rides a wide channel, so the refresh holds reader state of its own beside
+	// the comm thread's send of it; one nothing else reads is promoted to an up channel
+	assert !r.header.contains('XCORE_SLOT_M4_COUNT'), r.header
+	assert r.header.contains('#define XCORE_XW_M4_COUNT_WORDS 2u')
+	assert r.header.contains('#define XCORE_XW_M4_PROBE_WORDS 1u')
+	assert r.owner.contains('\tg_didx_m4_count [3]u32')
+	assert r.owner.contains(', 2, &g_didx_m4_count[0], &g_didx_m4_count[1])')
+	assert r.owner.contains('u8(g_didx_m4_count[1] >> 24)') // n, the value field, big-endian
+	assert r.owner.contains(', 1, &g_didx_m4_probe[0], &g_didx_m4_probe[1])')
+	assert r.owner.contains('&xcore_m4_count_seq, &xcore_m4_count_lanes[0])') // the send's own state
+	assert r.sat.contains('&xw_m4_probe[0])') // the satellite publishes it
+}
+
+fn test_a_fault_on_a_hand_written_satellite_is_refused() {
+	r := gen_scratch('fault_external', fn (src string) string {
+		return must_replace(fault_on_satellite(src), 'image = "../h755_m4_app"', 'external = true')
+	})
+	assert r.code != 0
+	assert r.output.contains('M4Load lives in a hand-written satellite (external = true)'), r.output
 }

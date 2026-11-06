@@ -1522,6 +1522,10 @@ mut:
 	xdown_param map[string]bool // a [[param]]: its fields, published by param_pub (gen_param.v)
 	xdown_persist map[string]bool // a persisted signal a satellite FB writes: the restore (gen_nvm.v)
 	xdown_total int
+	// a fault-owning FB on a generated satellite (gen_xfault.v, REQ-PLACE-008): its reports' wide
+	// up channel and its control's down channel, in place of the two byte-IOC cells
+	fault_xup_off map[string]int
+	fault_xdn_off map[string]int
 	// [nvm] (gen_nvm.v): persistent-signal names in declaration order + their
 	// schema-identity block ids — all derived, never configured beyond intent.
 	nvm       NvmCfg
@@ -1615,6 +1619,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 			sig_of[sname] = si
 		}
 	}
+	did_sigs := parse_dids(doc).filter(it.signal != '').map(it.signal)
 	for sname in sig_names {
 		mut si := sig_of[sname] or { continue }
 		// produced on a satellite (its `from` names a satellite partition or one of its threads):
@@ -1627,8 +1632,11 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		// local to the satellite (from = to) and read on no other image: no channel — unless it is
 		// persisted on a generated satellite, which the owner's journal reads from an up channel
 		// (REQ-PLACE-006; on a hand-written one derive_nvm refuses it)
-		persisted := si.persist != '' && (part.image[ep_part(part, si.from)] or { '' }) != ''
-		if si.local && !persisted
+		generated := (part.image[ep_part(part, si.from)] or { '' }) != ''
+		persisted := si.persist != '' && generated
+		// a live DID on it: the diagnostic refresh reads the up channel (REQ-PLACE-009)
+		did_read := sname in did_sigs
+		if si.local && !persisted && !(did_read && generated)
 			&& !fb_rws.any(sname in it.reads && !(part.external[it.part] or { false })) {
 			continue
 		}
@@ -1652,7 +1660,11 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		}
 		// a 1-2 x u32 signal takes a pair slot while the board's pool has one; past it, a wide
 		// channel (same semantics, the larger window) — never an overflow the C build finds
+		// — and a wide one when a live DID reads it, whose refresh then holds its own reader state
+		// beside the comm thread's other reader of it (a pair slot has one, and its freshness is
+		// taken by whoever polls first)
 		si.wide = si.fields.len > 2 || si.fields.any(it.typ != 'u32') || xcore_pair_n >= xcore_pair_slots
+			|| did_read
 		if si.wide {
 			// xioc_n geometry (xioc_n_bytes): neighbouring channels never share a 32 B line
 			xcore_xw_off[sname] = xcore_xw_total
@@ -1801,6 +1813,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	m.xdown_param = xd.param
 	m.xdown_persist = xd.persist
 	m.xdown_total = xd.total
+	fault_xcore_derive(mut m)
 	validate_signal_routes_model(m, doc)
 	validate_uds(m)
 	validate_live_dids(m)
@@ -2808,7 +2821,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 		glue << '\tmut st := &g_st_${part}'
 		if m.target.threadx {
 			glue << nvm_restore_lines(m, nvm_writer_thr(m, doc), '', false)
-			for fb in fault_fbs(m) {
+			for fb in fault_local_fbs(m) {
 				glue << fault_init_lines(m, fb)
 			}
 		}
@@ -3759,6 +3772,9 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 					glue << '\tfdeb_${snake(cname)} [${nf}]fault.Debounce // its faults, debounced on this thread'
 					glue << '\tfctl_${snake(cname)} fault.Control // generations to apply (and held flags), from the diagnostic bridge'
 					glue << '\tfrep_${snake(cname)} fault.Reports // debounced state + counters, to the bridge'
+					if image_part != '' && fault_on_sat(m, cname) {
+						glue << '\tfxr_${snake(cname)} [${fault_ctl_lanes(m, cname) + 2}]u32 // its control down channel: owner nonce, seq, lanes (xcore_down_read)'
+					}
 				}
 			}
 			for sname in m.sig_names {
@@ -5696,8 +5712,9 @@ fn validate_faults(m Model, doc toml.Doc) {
 			panic('loom2v: [[fault]] ${e}')
 		}
 		thr := m.part.fb_thread[f.fb] or { '' }
-		if m.part.external[m.part.thread_part[thr] or { '' }] or { false } {
-			panic('loom2v: [[fault]] "${f.name}": ${f.fb} lives in a partition this image does not generate — its debounce and report cell would never be emitted')
+		fp := m.part.thread_part[thr] or { '' }
+		if (m.part.external[fp] or { false }) && (m.part.image[fp] or { '' }) == '' {
+			panic('loom2v: [[fault]] "${f.name}": ${f.fb} lives in a hand-written satellite (external = true) — its debounce and report would never be emitted; a generated satellite (image =) routes them to the owner\'s fault memory')
 		}
 		if prev := dtcs[f.dtc] {
 			panic('loom2v: [[fault]] "${f.name}": dtc 0x${f.dtc.hex()} is already "${prev}" — a DTC is unique per diagnostic server')
@@ -5860,7 +5877,7 @@ fn validate_fault_target(m Model) {
 // comm thread writes) on a ThreadX image — after the eth signals' channels, two per fault-owning FB
 // in first-declaration order. The one numbering the FB glue, the comm thread and boot share.
 fn fault_cell(m Model, fb string, control bool) int {
-	k := fault_fbs(m).index(fb)
+	k := fault_local_fbs(m).index(fb)
 	if k < 0 {
 		panic('loom2v: no fault cell for ${fb}')
 	}
@@ -5891,6 +5908,10 @@ fn fault_target_globals(m Model) []string {
 		f := snake(fb)
 		g << '\tg_frep_${f} fault.Reports // from ${fb}\'s thread'
 		g << '\tg_fctl_${f} fault.Control // to ${fb}\'s thread'
+		if fault_on_sat(m, fb) {
+			g << '\tg_frx_${f} [${fault_rep_lanes(m, fb) + 1}]u32 // ${fb}\'s reports up channel: seq, lanes (xcore_poll_n)'
+			g << '\tg_fxl_${f} [${fault_ctl_lanes(m, fb)}]u32 // ${fb}\'s control, packed for its down channel'
+		}
 	}
 	return g
 }
@@ -5949,6 +5970,12 @@ fn fault_target_consume(m Model, ind string) []string {
 	mut g := []string{}
 	for fb in fault_fbs(m) {
 		f := snake(fb)
+		if fault_on_sat(m, fb) {
+			g << fault_sat_take_lines(m, fb, ind)
+			g << fault_consume_lines(m, fb, 'g_fmem', 'g_frep_${f}', 'g_fctl_${f}', ind)
+			g << fault_sat_give_lines(m, fb, ind)
+			continue
+		}
 		g << '${ind}C.iocb_get(${fault_cell(m, fb, false)}, &g_frep_${f}) // ${fb}\'s debounced reports'
 		g << fault_consume_lines(m, fb, 'g_fmem', 'g_frep_${f}', 'g_fctl_${f}', ind)
 		g << '${ind}C.iocb_pub(${fault_cell(m, fb, true)}, &g_fctl_${f})'
@@ -6042,7 +6069,7 @@ fn fault_target_boot(m Model) []string {
 		return []string{}
 	}
 	mut g := []string{}
-	for fb in fault_fbs(m) {
+	for fb in fault_local_fbs(m) {
 		g << '\tC.iocb_cfg(${fault_cell(m, fb, false)}, u16(sizeof(fault.Reports))) // ${fb}: reports'
 		g << '\tC.iocb_cfg(${fault_cell(m, fb, true)}, u16(sizeof(fault.Control))) // ${fb}: control'
 	}
@@ -6222,8 +6249,12 @@ fn fault_step_lines(m Model, fb string, handler string) []string {
 		return []string{}
 	}
 	f := snake(fb)
+	sat := fault_on_sat(m, fb)
 	mut out := []string{}
-	if m.target.threadx {
+	if sat {
+		out << '\tfault_now := C.board_now_us()'
+		out << fault_sat_control_lines(m, fb)
+	} else if m.target.threadx {
 		out << '\tfault_now := C.board_now_us()'
 		out << '\tC.iocb_get(${fault_cell(m, fb, true)}, &st.fctl_${f}) // the generations to apply (and held flags), from the comm thread'
 	} else {
@@ -6243,7 +6274,9 @@ fn fault_step_lines(m Model, fb string, handler string) []string {
 		out << '\tst.fdeb_${f}[${k}].step(outp.fault.${snake(fc.name)}, fault_now, ${en})'
 		out << '\tst.frep_${f}.r[${k}] = st.fdeb_${f}[${k}].rep'
 	}
-	if m.target.threadx {
+	if sat {
+		out << fault_sat_report_lines(m, fb)
+	} else if m.target.threadx {
 		out << '\tC.iocb_pub(${fault_cell(m, fb, false)}, &st.frep_${f}) // debounced state + counters, to the comm thread'
 	} else {
 		out << '\tosal.${publish_fn('triple')}(fault_rep_${f}_ch, &st.frep_${f}, u8(sizeof(st.frep_${f})))'

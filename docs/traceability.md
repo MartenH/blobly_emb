@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 290 | 197 | 28 | 65 | 0 |
+| 290 | 197 | 30 | 63 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -223,8 +223,8 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-PLACE-005 | QM | test | verified | xcore_down_gen_test.v (pass), xcore_wide_test.v (pass) |
 | REQ-PLACE-006 | QM | test | covered | placement-silicon (pending), xcore_down_gen_test.v (pass) |
 | REQ-PLACE-007 | QM | test | covered | placement-silicon (pending), xcore_down_gen_test.v (pass), xcore_down_test.v (pass) |
-| REQ-PLACE-008 | QM | test | uncovered | — |
-| REQ-PLACE-009 | QM | test | uncovered | — |
+| REQ-PLACE-008 | QM | test | covered | placement-silicon (pending), xcore_down_gen_test.v (pass) |
+| REQ-PLACE-009 | QM | test | covered | placement-silicon (pending), xcore_down_gen_test.v (pass) |
 | REQ-PLACE-010 | QM | test | uncovered | — |
 | REQ-PLACE-011 | QM | test | uncovered | — |
 | REQ-PLACE-012 | QM | test | uncovered | — |
@@ -518,8 +518,8 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-PLACE-005 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-PLACE-006 | | | | | | | | | | | | | | | · | | | | ✓ | | | |
 | REQ-PLACE-007 | | | | | | | | | | | | | | | · | | | | ✓ | | | |
-| REQ-PLACE-008 | | | | | | | | | | | | | | | | | | | | | | |
-| REQ-PLACE-009 | | | | | | | | | | | | | | | | | | | | | | |
+| REQ-PLACE-008 | | | | | | | | | | | | | | | · | | | | ✓ | | | |
+| REQ-PLACE-009 | | | | | | | | | | | | | | | · | | | | ✓ | | | |
 | REQ-PLACE-010 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-PLACE-011 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-PLACE-012 | | | | | | | | | | | | | | | | | | | | | | |

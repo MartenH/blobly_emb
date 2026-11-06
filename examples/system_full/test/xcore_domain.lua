@@ -12,7 +12,11 @@
 --     0 before the first publish (0x12A).
 --   DynKept is a persisted signal the CM4 WRITES: a DynCmd of 0xFE000000 | v sets it to v, the CM7's
 --     journal keeps it (from the CM4's up channel) and restores it down a channel before the CM4
---     starts; the CM4 reports it as DynKeptOut (0x12C).
+--     starts; the CM4 reports it as DynKeptOut (0x12C), and the CM7 serves it as live DID 0xF1A2
+--     (read from the CM4's up channel).
+--   DynCmdRejected (U1101-00) is a fault the CM4 TESTS: a DynCmd of 0xFD...... fails it. The CM4
+--     debounces it; the CM7's fault memory keeps it, serves 0x19 / 0x14 / 0x85, and freezes 0xF1A2
+--     in its snapshot. A clear goes back DOWN to the CM4 as a new generation.
 --   DynLedCap is a PARAMETER (DID 0x0130, 0x2E in extended + level 1): the CM7's journal keeps it
 --     and its publish point hands it down, at the restore and on every 0x2E; the CM4 caps DynLed
 --     at it. The suite leaves it uncoded-equivalent (1000).
@@ -48,10 +52,10 @@ local function value(id, signal, ms)
   local f = expect(CH, id, ms or 500)
   return decode(CH, f.id, f.data, f.ext)[signal], f
 end
--- nonzero, below the latch commands (0xFE......) and the status codes, and different every run, so
--- nothing left from an earlier run can pass
+-- nonzero, below the fault and latch commands (0xFD......, 0xFE......) and the status codes, and
+-- different every run, so nothing left from an earlier run can pass
 local function fresh()
-  return (math.floor(now_ms()) * 2654435761) % 0xFDFFFFFF + 1
+  return (math.floor(now_ms()) * 2654435761) % 0xFCFFFFFF + 1
 end
 -- the protected command, sent every 50 ms (inside the 300 ms timeout), E2E stamped per frame
 local function commander(x)
@@ -76,7 +80,7 @@ test("xcore: a protected bus command crosses to the CM4 and back", function()
   local s = commander(x)
   expect_signal(CH, 0x129, "DynEcho", x, 1000)
   log(string.format("DynCmd 0x%08X echoed within %.1f ms", x, now_ms() - t0))
-  local y = (x ~ 0x5A5A5A5A) % 0xFDFFFFFF + 1
+  local y = (x ~ 0x5A5A5A5A) % 0xFCFFFFFF + 1
   s:update({ DynCmd = y })
   expect_signal(CH, 0x129, "DynEcho", y, 1000)
   s:stop()
@@ -238,4 +242,89 @@ test("xcore: a reset does not bring back the retained values", function()
   s = commander(z)
   expect_signal(CH, 0x129, "DynEcho", z, 1000)
   s:stop()
+end)
+
+-- DynCmdRejected, a fault DynamicsModel tests on the CM4 (REQ-PLACE-008), and live DID 0xF1A2 on a
+-- value the CM4 writes (REQ-PLACE-009). The CM4 debounces (3 failing 5 ms dispatches); the CM7's
+-- fault memory turns its reports into the DTC's status and freezes 0xF1A2 at the first failure.
+local DTC, DTC_CODE, KEPT_DID = "U1101-00", 0xD10100, 0xF1A2
+local REJECT = 0xFD000001
+local function diag() return uds.open(CH, { tx = 0x7B0, rx = 0x7B8 }) end
+local function u32be(v) return frombytes({ (v >> 24) & 0xFF, (v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF }) end
+-- a clean slate: cleared, then long enough for the CM4 to apply the clear and pass its test
+local function clean(d)
+  d:clear_dtcs()
+  sleep_ms(400)
+  check.dtc(d, DTC, { testFailed = false, confirmedDTC = false, pendingDTC = false,
+    testFailedSinceLastClear = false })
+end
+-- DynKept latched to `k` (and so DynKeptOut and 0xF1A2), the command then stopped
+local function keep(k)
+  local s = commander(0xFE000000 | k)
+  expect_signal(CH, 0x12C, "DynKeptOut", k, 1000)
+  s:stop()
+end
+
+test("xcore: a live DID reads a value the CM4 writes", function()
+  local k = (math.floor(now_ms()) * 2654435761) % 0xFFFFFF + 1
+  keep(k)
+  local d = diag()
+  check.equal(tohex(d:read_did(KEPT_DID)), tohex(u32be(k)), "0xF1A2 against the DynKeptOut on the bus")
+  local k2 = (k ~ 0x00A5A5A5) % 0xFFFFFF + 1
+  keep(k2)
+  check.equal(tohex(d:read_did(KEPT_DID)), tohex(u32be(k2)), "0xF1A2 after DynKept changed")
+end)
+
+test("xcore: a fault the CM4 tests confirms in the CM7's fault memory, frozen with a CM4 value", function()
+  local d = diag()
+  clean(d)
+  local k = (math.floor(now_ms()) * 2654435761) % 0xFFFFFF + 1
+  keep(k)
+  local s = commander(REJECT)
+  local t0 = now_ms()
+  sleep_ms(300)
+  local r = check.dtc(d, DTC, { testFailed = true, confirmedDTC = true, pendingDTC = true,
+    testFailedThisOperationCycle = true, testFailedSinceLastClear = true })
+  log(string.format("%s status 0x%02X within %.0f ms of the first rejected command", DTC, r.status, now_ms() - t0))
+  check.snapshot(d, DTC, { [KEPT_DID] = u32be(k) })
+  -- the command stops, times out, and the CM4's test passes again: the history stays
+  s:stop()
+  sleep_ms(800)
+  check.dtc(d, DTC, { testFailed = false, confirmedDTC = true, testFailedSinceLastClear = true })
+  d:clear_dtcs(DTC_CODE)
+  sleep_ms(400)
+  check.dtc(d, DTC, { testFailed = false, confirmedDTC = false, testFailedSinceLastClear = false })
+end)
+
+-- the clear reaches the CM4 as a new generation, which its debounce starts over from: reports of
+-- the old one cannot bring the DTC back, so the DTC returns only if the generation came down
+test("xcore: a fault cleared while the CM4 fails it returns by failing again", function()
+  local d = diag()
+  clean(d)
+  local s = commander(REJECT)
+  sleep_ms(300)
+  check.dtc(d, DTC, { testFailed = true, confirmedDTC = true })
+  d:clear_dtcs()
+  check.dtc(d, DTC, { confirmedDTC = false, testFailedSinceLastClear = false })
+  sleep_ms(300) -- still failing: the restarted debounce qualifies again
+  check.dtc(d, DTC, { testFailed = true, confirmedDTC = true, testFailedSinceLastClear = true })
+  s:stop()
+  sleep_ms(800)
+  clean(d)
+end)
+
+test("xcore: with DTC setting off (0x85) the CM4's failures are not recorded", function()
+  local d = diag()
+  clean(d)
+  d:session(0x03)
+  d:dtc_setting(false)
+  local s = commander(REJECT)
+  sleep_ms(1000)
+  check.dtc(d, DTC, { testFailed = false, confirmedDTC = false, testFailedSinceLastClear = false })
+  s:stop()
+  sleep_ms(800) -- timed out and passing again before setting resumes: nothing is replayed
+  d:dtc_setting(true)
+  sleep_ms(300)
+  check.dtc(d, DTC, { confirmedDTC = false, testFailedSinceLastClear = false })
+  d:session(0x01)
 end)

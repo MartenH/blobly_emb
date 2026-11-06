@@ -377,7 +377,7 @@ fn xdown_fb_input(m Model, name string) bool {
 
 // xdown_on: any owner -> satellite channel in the model.
 fn xdown_on(m Model) bool {
-	return m.xdown_names.len > 0
+	return m.xdown_names.len > 0 || m.fault_xdn_off.len > 0
 }
 
 // xdown_gen_h: the down channels' part of gen/xcore_gen.h — offsets in the owner window, lane
@@ -393,6 +393,7 @@ fn xdown_gen_h(m Model) []string {
 		g << '#define XCORE_OW_${u}_OFF ${m.xdown_off[sname] or { 0 }}u'
 		g << '#define XCORE_OW_${u}_WORDS ${m.xdown_lanes[sname] or { 0 }}u'
 	}
+	g << fault_ow_gen_h(m)
 	g << '#define XCORE_OW_TOTAL ${m.xdown_total}u'
 	g << '#if defined(XCORE_OW_MAX) && (XCORE_OW_TOTAL > XCORE_OW_MAX)'
 	g << '#error "owner->satellite channels overflow the owner window — grow XCORE_OW_MAX (xcore.h) or shed signals"'
@@ -457,6 +458,11 @@ fn xdown_boot_lines(m Model) []string {
 	for sname in m.xdown_names {
 		g << '\tC.xcore_ow_init(u32(${m.xdown_off[sname] or { 0 }}), u32(${m.xdown_lanes[sname] or { 0 }})) // ${sname}'
 	}
+	for fb in fault_fbs(m) {
+		if off := m.fault_xdn_off[fb] {
+			g << '\tC.xcore_ow_init(u32(${off}), u32(${fault_ctl_lanes(m, fb)})) // ${fb}\'s fault control'
+		}
+	}
 	g << '\tC.xcore_owner_commit()'
 	return g
 }
@@ -505,6 +511,9 @@ fn xdown_reader_decls(m Model, part string) []string {
 
 // xdown_reads: whether an FB of `part` reads a down channel.
 fn xdown_reads(m Model, part string) bool {
+	if fault_sat_fbs(m, part).len > 0 {
+		return true // a fault-owning FB reads its control
+	}
 	for c in m.part.by_part[part] or { []toml.Any{} } {
 		name := (c.as_map()['name'] or { toml.Any('') }).string()
 		if (m.fb_reads_by[name] or { []string{} }).any(it in m.xdown_off) {

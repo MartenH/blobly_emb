@@ -594,18 +594,20 @@ fn validate_diag_threadx(m Model) {
 
 // validate_diag_live_dids: on the target a live DID reads what the node TRANSMITS from a local
 // FB — the cells the comm thread already reads (`tx_cells`, recorded where they are allocated, so
-// this is that rule and not a second copy of it). A cell has ONE reader (its slot is reader-private,
-// boards/common/ioc.h): an input's cell is read by the FB it feeds, and an eth or satellite signal
-// has no cell on this thread.
+// this is that rule and not a second copy of it) — or what an FB on a satellite writes, from its
+// up channel (did_xup_sigs). A cell has ONE reader (its slot is reader-private,
+// boards/common/ioc.h): an input's cell is read by the FB it feeds, and an eth signal has no cell
+// on this thread.
 fn validate_diag_live_dids(m Model, tx_cells map[string]bool) {
 	for d in m.dids {
 		if d.signal == '' {
 			continue
 		}
-		if d.signal !in tx_cells {
+		if d.signal !in tx_cells && d.signal !in m.xcore_xw_off {
 			panic('loom2v: [target] kind="threadx": [[did]] 0x${d.id.hex()} reads signal "${d.signal}", ' +
-				'but on the target a live DID reads only what this node TRANSMITS on CAN from a local FB ' +
-				'(its IOC cell is the comm thread\'s to read; an input\'s cell is its FB\'s, and a cell has one reader)')
+				'but on the target a live DID reads only what this node TRANSMITS on CAN from an owner FB, ' +
+				'or what an FB on a generated satellite writes (its IOC cell is the comm thread\'s to read; ' +
+				'an input\'s cell is its FB\'s, and a cell has one reader)')
 		}
 		// the cell carries one 32-bit word (the lean encode's), so a wider value has no home in it
 		vt := (m.sig_of[d.signal] or { SigInfo{} }).val_type
@@ -629,6 +631,10 @@ fn diag_target_fns(m Model, ioc_idx map[string]int) []string {
 			continue
 		}
 		si := m.sig_of[did.signal] or { panic('loom2v: [[did]] 0x${did.id.hex()}: no signal "${did.signal}"') }
+		if off := m.xcore_xw_off[did.signal] {
+			g << did_xup_read_lines(idx, si, did.signal, off)
+			continue
+		}
 		cell := ioc_idx[did.signal] or {
 			panic('loom2v: [[did]] 0x${did.id.hex()}: signal "${did.signal}" has no IOC cell on the comm thread')
 		}
@@ -639,6 +645,26 @@ fn diag_target_fns(m Model, ioc_idx map[string]int) []string {
 		g << did_encode_lines(idx, if si.val_type == 'bool' { '${v} != 0' } else { v }, si.val_type, '\t')
 	}
 	g << '}'
+	return g
+}
+
+// did_xup_read_lines: DID `idx` from satellite signal `sname`'s up channel — the newest value
+// behind the layout gate, the last one while nothing newer came, zero until the first (as an owner
+// FB's cell reads before its first publish)
+fn did_xup_read_lines(idx int, si SigInfo, sname string, off int) []string {
+	r := 'g_didx_${snake(sname)}'
+	mut lane := 1
+	for f in si.fields {
+		if f.name == si.val_field {
+			break
+		}
+		lane += field_lanes(f.typ)
+	}
+	v := '${r}[${lane}]'
+	mut g := ['\tif C.xcore_layout_ok() != 0 { // ${sname}: an FB on the satellite writes it']
+	g << '\t\tC.xcore_poll_n(u32(${off}), ${sig_lanes(si)}, &${r}[0], &${r}[1])'
+	g << '\t}'
+	g << did_encode_lines(idx, if si.val_type == 'bool' { '${v} != 0' } else { v }, si.val_type, '\t')
 	return g
 }
 
@@ -772,7 +798,24 @@ fn diag_target_globals(m Model) []string {
 	if m.isotp_conns.len == 0 {
 		return []string{}
 	}
-	return ['\tg_diag diag.Connection // the diagnostic server on its ISO-TP connection (bss)']
+	mut g := ['\tg_diag diag.Connection // the diagnostic server on its ISO-TP connection (bss)']
+	for sname in did_xup_sigs(m) {
+		si := m.sig_of[sname] or { continue }
+		g << '\tg_didx_${snake(sname)} [${sig_lanes(si) + 1}]u32 // ${sname}\'s up channel, the live DIDs\' reader: seq, lanes (xcore_poll_n)'
+	}
+	return g
+}
+
+// did_xup_sigs: the satellite signals live DIDs read — each from its wide up channel, with reader
+// state of the refresh's own (REQ-PLACE-009)
+fn did_xup_sigs(m Model) []string {
+	mut out := []string{}
+	for d in m.dids {
+		if d.signal != '' && d.signal in m.xcore_xw_off && d.signal !in out {
+			out << d.signal
+		}
+	}
+	return out
 }
 
 // diag_target_init: configured before the loop. ECUReset is served and performed by the comm
