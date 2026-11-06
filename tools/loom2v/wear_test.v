@@ -200,11 +200,12 @@ fn test_system_full_lasts_and_its_numbers_are_printed() {
 		}
 	}
 	// domain: DriveMode floored at 10 s, on an NM node — each put that can land in bus sleep lays a
-	// clean marker beside it
+	// clean marker beside it; its parameter's codings are such puts too (one choreography run each)
 	d := reports['domain'] or { []string{} }
-	assert d.len > 0 && d[0].contains('750 records/h') && d[0].contains('12.5 years'), d.join('\n')
-	assert share(d, 'signal "DriveMode" (persist = "now")').starts_with('375 records/h'), d.join('\n')
-	assert share(d, 'clean markers').starts_with('375 records/h'), d.join('\n')
+	assert d.len > 0 && d[0].contains('753 records/h') && d[0].contains('12.4 years'), d.join('\n')
+	assert share(d, 'signal "DriveMode" (persist = "now")').starts_with('376 records/h'), d.join('\n')
+	assert share(d, 'clean markers').starts_with('376 records/h'), d.join('\n')
+	assert share(d, 'parameters (1)').starts_with('1 records/h'), d.join('\n')
 	// zone_a: a power-cycle node — its persisted fault memory, its parameter, its resets' markers
 	z := reports['zone_a'] or { []string{} }
 	assert z.len > 0 && z[0].contains('285 records/h') && z[0].contains('16.4 years'), z.join('\n')

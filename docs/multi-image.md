@@ -200,7 +200,10 @@ channel.
 - **Reader.** `xcore_down_read` (`boards/h755zi/xcore_sat.c`) checks the ack on every read and
   resets to the port default when the owner nonce changes, so a new owner boot never shows the
   previous boot's value. Its state is in the reading thread's state struct.
-- **Not generated yet**, each refused at generation: parameters read on a satellite, faults
+- **A parameter read on a satellite** rides a down channel of its own, one lane per field,
+  written by `param_pub` at the restore and on every 0x2E; the owner releases the satellite only
+  after the restore (REQ-PLACE-007).
+- **Not generated yet**, each refused at generation ([fb-placement.md](fb-placement.md)): faults
   owned by a satellite FB, persisted signals written there, io / eth endpoints in a satellite,
   live DIDs on satellite values; a hand-written satellite (`external = true`) reads nothing
   down. A CM4 doorbell (drain-on-publish) and moving the hand-written xcore seams into shared

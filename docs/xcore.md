@@ -66,8 +66,8 @@ stops while it re-inits.
 **#3 Owner ACK — the down direction.** The same gate, mirrored, for what the owner writes. The
 owner's generated `boot()` retracts its ACK, bumps its own **retained odd nonce**, initialises every
 owner → satellite channel with a sequence seed derived from that nonce, and only then commits
-`ACK = ack(nonce ^ XCORE_LAYOUT_ID)` — all before it releases the satellite's clocks
-(`boards/h755zi/xcore_owner.c`). The satellite's reader checks the ACK on **every read**: a
+`ACK = ack(nonce ^ XCORE_LAYOUT_ID)` — all before it releases the satellite's clocks, which it does
+last, once every restore (a parameter's among them) has published (`boards/h755zi/xcore_owner.c`). The satellite's reader checks the ACK on **every read**: a
 retracted or mismatched ACK reads as the port default, and a changed owner nonce resets the
 reader to the default, so a new owner boot never shows the previous boot's value. A boot manager
 that stays for programming retracts this ACK too (`boot_park_satellite`).

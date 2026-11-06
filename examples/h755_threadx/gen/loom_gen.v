@@ -696,7 +696,6 @@ fn nvm_fl_read(_ voidptr, addr u32, out &u8, len u32) bool {
 pub fn boot() {
 	C.xcore_owner_begin() // owner->satellite window: retract, then init, then publish
 	C.xcore_owner_commit()
-	C.xcore_clocks_ready()
 	C.ioc_pool_init() // init the cross-thread signal IOC cells before any thread runs
 	// [nvm]: mount + restore BEFORE the kernel — the single-threaded window.
 	// Restored values seed both the thread-init staging AND the persist ioc
@@ -728,6 +727,7 @@ pub fn boot() {
 			C.ioc_pub(2, u32(g_nvmres_load_cmd[0]) | (u32(g_nvmres_load_cmd[1]) << 8) | (u32(g_nvmres_load_cmd[2]) << 16) | (u32(g_nvmres_load_cmd[3]) << 24), u32(0))
 		}
 	}
+	C.xcore_clocks_ready()
 	C._tx_initialize_kernel_enter()
 }
 

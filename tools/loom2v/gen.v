@@ -1519,6 +1519,7 @@ mut:
 	xdown_off   map[string]int
 	xdown_lanes map[string]int
 	xdown_lean  map[string]bool // a lean received signal: one lane, the comm thread's lean decode
+	xdown_param map[string]bool // a [[param]]: its fields, published by param_pub (gen_param.v)
 	xdown_total int
 	// [nvm] (gen_nvm.v): persistent-signal names in declaration order + their
 	// schema-identity block ids — all derived, never configured beyond intent.
@@ -1785,13 +1786,14 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		fb_reads_owner: fb_reads_owner(fb_rws, part)
 	}
 	// owner -> satellite channels: needs the built model (which received frames are checked)
-	xd := xdown_derive(m.sig_names, m.sig_of, m.part, fb_rws, rx_checked_msgs(m), m.eth) or {
+	xd := xdown_derive(m.sig_names, m.sig_of, m.params, m.part, fb_rws, rx_checked_msgs(m), m.eth) or {
 		panic('loom2v: ${err}')
 	}
 	m.xdown_names = xd.names
 	m.xdown_off = xd.off
 	m.xdown_lanes = xd.lanes
 	m.xdown_lean = xd.lean
+	m.xdown_param = xd.param
 	m.xdown_total = xd.total
 	validate_signal_routes_model(m, doc)
 	validate_uds(m)
@@ -3422,9 +3424,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// SysTick is set against the final HCLK. Generator-owned so any owner — a shared
 				// main.v (system_full) or a hand-written one — releases its satellite (codex #235).
 				// The owner->satellite channels are initialised first: the satellite must never see
-				// a channel of this boot before it is ready (gen_xdown.v).
+				// a channel of this boot before it is ready (gen_xdown.v). The release itself is
+				// the last thing before the kernel, after every restore has published.
 				glue << xdown_boot_lines(m)
-				glue << '\tC.xcore_clocks_ready()'
 			}
 			if ioc_idx.len > 0 {
 				glue << '\tC.ioc_pool_init() // init the cross-thread signal IOC cells before any thread runs'
@@ -3443,6 +3445,12 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			}
 			glue << rx_target_boot(m)
 			glue << fault_target_boot(m)
+			if has_satellite(m) {
+				// release the satellite once every restored value is published — a parameter
+				// down its channel among them — so its FBs' first dispatch reads it, as the
+				// owner's do (REQ-PLACE-007)
+				glue << '\tC.xcore_clocks_ready()'
+			}
 			glue << '\tC._tx_initialize_kernel_enter()'
 			glue << '}'
 		}
@@ -3798,17 +3806,20 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 				for r in reads {
 					rn := r.string()
 					si := m.sig_of[rn] or { SigInfo{} }
+					if image_part != '' && rn in m.xdown_off {
+						// SATELLITE FB reads a signal produced on the owner image (owner -> satellite),
+						// whatever the owner side holds it in (a local cell, an IOC cell, a byte IOC),
+						// or a parameter param_pub hands down
+						glue << xdown_read_lines(m, rn)
+						continue
+					}
 					if p := param_of(m, rn) {
 						glue << param_read_lines(p, ioc_idx[rn] or {
 							panic('loom2v: parameter "${rn}" has no IOC cell on this image')
 						})
 						continue
 					}
-					if image_part != '' && rn in m.xdown_off {
-						// SATELLITE FB reads a signal produced on the owner image (owner -> satellite),
-						// whatever the owner side holds it in (a local cell, an IOC cell, a byte IOC)
-						glue << xdown_read_lines(m, rn)
-					} else if si.local && !(image_part == '' && si.remote) {
+					if si.local && !(image_part == '' && si.remote) {
 						glue << '\tinp.${snake(rn)} = st.cell_${snake(rn)} // local'
 					} else if idx := ioc_idx[rn] {
 						// bus -> comm(decode) -> target IOC cell ${idx} -> this FB input (6b-2b). One
@@ -4283,6 +4294,7 @@ fn main() {
 		m.xdown_off.clear()
 		m.xdown_lanes.clear()
 		m.xdown_lean.clear()
+		m.xdown_param.clear()
 		m.xdown_total = 0
 	}
 	if m.trace.on && m.target.threadx {
@@ -4729,9 +4741,12 @@ fn main() {
 		for sname in m.nvm_names {
 			ioc_idx[sname] = ioc_idx.len
 		}
-		// [[param]]: each parameter reaches its FBs through one cell the comm thread writes
+		// [[param]]: each parameter reaches its owner FBs through one cell the comm thread writes
+		// (a satellite reader has its own channel, xdown_derive)
 		for p in m.params {
-			ioc_idx[p.name] = ioc_idx.len
+			if (m.fb_reads_owner[p.name] or { 0 }) > 0 {
+				ioc_idx[p.name] = ioc_idx.len
+			}
 		}
 	}
 	// io points on the ThreadX target: the io thread and the FB thread(s) are different

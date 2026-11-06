@@ -134,9 +134,10 @@ satellite FB may both read it. Constraints: up to 16 u32 lanes — `bool`/`u8`/`
 `i8`/`i16`/`i32`/`f32` one lane each, `u64`/`i64`/`f64` two (1–2 plain u32s without `valid`
 keep the bench-verified pair cell); to a bus, `DLC ≥ 4 × lanes` with the full lane contract
 of [move-data.md](move-data.md), only the types the comm thread encodes (`bool`…`i32`), and
-3+ lanes waits for the FD comm owner. Not generated on a satellite yet: reading a parameter,
-owning a fault, writing a persisted signal, an io or eth endpoint. See
-[add-a-core.md](add-a-core.md) and [../multi-image.md](../multi-image.md).
+3+ lanes waits for the FD comm owner. A satellite FB reads a parameter like any input (its own
+channel, restored before the satellite starts). Not generated on a satellite yet: owning a fault,
+writing a persisted signal, an io or eth endpoint — [../fb-placement.md](../fb-placement.md) has
+the matrix. See [add-a-core.md](add-a-core.md) and [../multi-image.md](../multi-image.md).
 
 ```toml
 [[signal]]

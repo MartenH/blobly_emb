@@ -271,9 +271,10 @@ fn validate_params(mut m Model, doc toml.Doc) {
 			panic('loom2v: [[did]] 0x${d.id.hex()} names parameter "${d.param}", which is not a [[param]]')
 		}
 	}
-	// who reads it: FB handlers on this image, all on one thread (the cell has one reader context),
-	// and nobody writes it
+	// who reads it: on the owner image FB handlers of one thread (the cell has one reader context),
+	// on a satellite any (each reader holds its own channel state); nobody writes it
 	mut reader_thr := map[string]string{}
+	mut sat_read := map[string]bool{}
 	for fb in ecumodel.toml_arr(doc, 'fb') {
 		fm := fb.as_map()
 		fbname := (fm['name'] or { toml.Any('') }).string()
@@ -291,7 +292,11 @@ fn validate_params(mut m Model, doc toml.Doc) {
 					continue
 				}
 				if m.part.external[part] or { false } {
-					panic('loom2v: fb "${fbname}" reads parameter "${r.string()}" from partition "${part}", whose image is built elsewhere — a parameter reaches FBs on the image that owns the journal')
+					if (m.part.image[part] or { '' }) == '' {
+						panic('loom2v: fb "${fbname}" reads parameter "${r.string()}" in partition "${part}", a hand-written satellite (external = true) — a parameter reaches a satellite through a generated image only (docs/multi-image.md)')
+					}
+					sat_read[r.string()] = true // its own owner->satellite channel (xdown_derive)
+					continue
 				}
 				if prev := reader_thr[r.string()] {
 					if prev != thr {
@@ -303,7 +308,7 @@ fn validate_params(mut m Model, doc toml.Doc) {
 		}
 	}
 	for p in m.params {
-		if p.name !in reader_thr {
+		if p.name !in reader_thr && p.name !in sat_read {
 			panic('loom2v: [[param]] "${p.name}" is read by no FB handler — a parameter nothing reads codes nothing; add it to a handler\'s `reads`')
 		}
 	}
@@ -362,20 +367,28 @@ fn param_sig_structs(m Model) []string {
 	return g
 }
 
+// param_field_lines: `inp`'s fields of parameter `p` from the u32s `srcs` (one per field, as
+// param_pub publishes them: two's complement) — the one decode both cores read a parameter by.
+fn param_field_lines(p ParamCfg, srcs []string, ind string) []string {
+	v := snake(p.name)
+	mut g := []string{}
+	for i, f in p.fields {
+		g << if f.typ == 'bool' {
+			'${ind}inp.${v}.${snake(f.name)} = ${srcs[i]} != 0'
+		} else {
+			'${ind}inp.${v}.${snake(f.name)} = ${f.typ}(${srcs[i]})'
+		}
+	}
+	return g
+}
+
 // param_read_lines: a handler's read of parameter `p` from its cell `idx` — every field, as the
-// comm thread published it (field 0 in a, field 1 in b, two's complement).
+// comm thread published it (field 0 in a, field 1 in b).
 fn param_read_lines(p ParamCfg, idx int) []string {
 	v := snake(p.name)
 	mut g := ['\tmut ${v}_a := u32(0)', '\tmut ${v}_b := u32(0)',
 		'\tC.ioc_get(${idx}, &${v}_a, &${v}_b) // parameter: the comm thread publishes it']
-	for i, f in p.fields {
-		src := if i == 0 { '${v}_a' } else { '${v}_b' }
-		g << if f.typ == 'bool' {
-			'\tinp.${v}.${snake(f.name)} = ${src} != 0'
-		} else {
-			'\tinp.${v}.${snake(f.name)} = ${f.typ}(${src})'
-		}
-	}
+	g << param_field_lines(p, ['${v}_a', '${v}_b'], '\t')
 	return g
 }
 
@@ -405,7 +418,20 @@ fn param_fns(m Model, ioc_idx map[string]int) []string {
 		'\tmatch i {',
 	]
 	for i, p in m.params {
-		g << '\t\t${i} { C.ioc_pub(${ioc_idx[p.name] or { panic('loom2v: parameter "${p.name}" has no IOC cell') }}, a, b) } // ${p.name}'
+		// the owner FBs' cell, and a satellite's channel: one value, every reader
+		off := m.xdown_off[p.name] or {
+			cell := ioc_idx[p.name] or { panic('loom2v: parameter "${p.name}" has no reader') }
+			g << '\t\t${i} { C.ioc_pub(${cell}, a, b) } // ${p.name}'
+			continue
+		}
+		g << '\t\t${i} { // ${p.name}'
+		if cell := ioc_idx[p.name] {
+			g << '\t\t\tC.ioc_pub(${cell}, a, b)'
+		}
+		lanes := if p.fields.len > 1 { '[a, b]!' } else { '[a]!' }
+		g << '\t\t\tl := ${lanes}'
+		g << '\t\t\tC.xcore_opub_n(u32(${off}), &l[0])'
+		g << '\t\t}'
 	}
 	g << '\t\telse {}'
 	g << '\t}'

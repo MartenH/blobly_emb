@@ -118,7 +118,7 @@ fn test_lane_counts_and_channel_footprint() {
 
 fn test_an_owner_fb_output_read_on_the_satellite_gets_a_channel() {
 	fbs := [rw('Pt', 'ctl', 'fast', [], ['PtState']), rw('Dyn', 'sat', 'model', ['PtState'], [])]
-	d := xdown_derive(['PtState'], down_sigs(), two_core_parts(), fbs, [], '') or { panic(err) }
+	d := xdown_derive(['PtState'], down_sigs(), [], two_core_parts(), fbs, [], '') or { panic(err) }
 	assert d.names == ['PtState']
 	assert d.off['PtState'] == 0
 	assert d.lanes['PtState'] == 2
@@ -128,7 +128,7 @@ fn test_an_owner_fb_output_read_on_the_satellite_gets_a_channel() {
 
 fn test_a_lean_received_signal_rides_one_lane() {
 	fbs := [rw('Dyn', 'sat', 'model', ['Cmd'], [])]
-	d := xdown_derive(['Cmd'], down_sigs(), two_core_parts(), fbs, [], '') or { panic(err) }
+	d := xdown_derive(['Cmd'], down_sigs(), [], two_core_parts(), fbs, [], '') or { panic(err) }
 	assert d.names == ['Cmd']
 	assert d.lean['Cmd']
 	assert d.lanes['Cmd'] == 1
@@ -136,7 +136,7 @@ fn test_a_lean_received_signal_rides_one_lane() {
 
 fn test_a_checked_received_signal_carries_every_field_and_its_status() {
 	fbs := [rw('Dyn', 'sat', 'model', ['Speed'], [])]
-	d := xdown_derive(['Speed'], down_sigs(), two_core_parts(), fbs, ['SpeedFrame'], '') or {
+	d := xdown_derive(['Speed'], down_sigs(), [], two_core_parts(), fbs, ['SpeedFrame'], '') or {
 		panic(err)
 	}
 	assert !d.lean['Speed']
@@ -146,14 +146,14 @@ fn test_a_checked_received_signal_carries_every_field_and_its_status() {
 fn test_readers_decide_not_the_signal_to() {
 	// `to` names the owner partition, but a satellite fb reads it too: fan-out, one channel
 	fbs := [rw('Pt', 'ctl', 'fast', ['Speed'], []), rw('Dyn', 'sat', 'model', ['Speed'], [])]
-	d := xdown_derive(['Speed'], down_sigs(), two_core_parts(), fbs, ['SpeedFrame'], '') or {
+	d := xdown_derive(['Speed'], down_sigs(), [], two_core_parts(), fbs, ['SpeedFrame'], '') or {
 		panic(err)
 	}
 	assert d.names == ['Speed']
 	owner := fb_reads_owner(fbs, two_core_parts())
 	assert owner['Speed'] == 1 // the owner's cell is for the owner reader alone
 	// `to` names the satellite but nobody there reads it: no channel
-	nobody := xdown_derive(['PtState'], down_sigs(), two_core_parts(), [
+	nobody := xdown_derive(['PtState'], down_sigs(), [], two_core_parts(), [
 		rw('Pt', 'ctl', 'fast', [], ['PtState']),
 	], [], '') or { panic(err) }
 	assert nobody.names.len == 0
@@ -161,7 +161,7 @@ fn test_readers_decide_not_the_signal_to() {
 
 fn test_a_satellite_produced_signal_is_the_up_direction() {
 	fbs := [rw('Dyn', 'sat', 'model', [], ['Torque']), rw('Pt', 'ctl', 'fast', ['Torque'], [])]
-	d := xdown_derive(['Torque'], down_sigs(), two_core_parts(), fbs, [], '') or { panic(err) }
+	d := xdown_derive(['Torque'], down_sigs(), [], two_core_parts(), fbs, [], '') or { panic(err) }
 	assert d.names.len == 0
 	// a satellite THREAD named as the endpoint is the same partition
 	mut s := down_sigs()
@@ -169,7 +169,7 @@ fn test_a_satellite_produced_signal_is_the_up_direction() {
 		...s['Torque']
 		from: 'model'
 	}
-	d2 := xdown_derive(['Torque'], s, two_core_parts(), [
+	d2 := xdown_derive(['Torque'], s, [], two_core_parts(), [
 		rw('Dyn2', 'sat', 'slow', ['Torque'], []),
 	], [], '') or { panic(err) }
 	assert d2.names.len == 0
@@ -178,7 +178,7 @@ fn test_a_satellite_produced_signal_is_the_up_direction() {
 fn test_channels_are_laid_out_in_declaration_order_on_the_line() {
 	fbs := [rw('Pt', 'ctl', 'fast', [], ['PtState', 'Wide']),
 		rw('Dyn', 'sat', 'model', ['PtState', 'Cmd', 'Wide'], [])]
-	d := xdown_derive(all_sigs, down_sigs(), two_core_parts(), fbs, [], '') or { panic(err) }
+	d := xdown_derive(all_sigs, down_sigs(), [], two_core_parts(), fbs, [], '') or { panic(err) }
 	assert d.names == ['PtState', 'Cmd', 'Wide']
 	assert d.off['PtState'] == 0
 	assert d.off['Cmd'] == 96
@@ -191,7 +191,7 @@ fn test_channels_are_laid_out_in_declaration_order_on_the_line() {
 }
 
 fn refused(names []string, s map[string]SigInfo, fbs []FbRW, checked []string, eth string) string {
-	xdown_derive(names, s, two_core_parts(), fbs, checked, eth) or { return err.msg() }
+	xdown_derive(names, s, [], two_core_parts(), fbs, checked, eth) or { return err.msg() }
 	return ''
 }
 
@@ -229,7 +229,7 @@ fn test_two_owner_writer_threads_are_refused() {
 	p.thread_part['other'] = 'ctl'
 	fbs := [rw('A', 'ctl', 'fast', [], ['PtState']), rw('B', 'ctl', 'other', [], ['PtState']),
 		rw('Dyn', 'sat', 'model', ['PtState'], [])]
-	xdown_derive(['PtState'], down_sigs(), p, fbs, [], '') or {
+	xdown_derive(['PtState'], down_sigs(), [], p, fbs, [], '') or {
 		assert err.msg().contains('ONE producer context')
 		return
 	}
@@ -310,7 +310,7 @@ fn test_bit_cast_helpers_are_emitted_only_when_used() {
 
 fn down_model() Model {
 	fbs := [rw('Pt', 'ctl', 'fast', [], ['PtState']), rw('Dyn', 'sat', 'model', ['PtState', 'Cmd'], [])]
-	d := xdown_derive(all_sigs, down_sigs(), two_core_parts(), fbs, [], '') or { panic(err) }
+	d := xdown_derive(all_sigs, down_sigs(), [], two_core_parts(), fbs, [], '') or { panic(err) }
 	return Model{
 		sig_of:      down_sigs()
 		sig_names:   all_sigs.clone()
@@ -442,4 +442,38 @@ fn test_the_pair_pool_size_matches_the_board() {
 	line := h.split_into_lines().filter(it.starts_with('#define XCORE_IOC_N '))
 	assert line.len == 1
 	assert line[0].all_after('XCORE_IOC_N').trim_space().int() == xcore_pair_slots
+}
+
+fn gain_param() ParamCfg {
+	return ParamCfg{
+		name:   'Gain'
+		fields: [ParamField{
+			name: 'k'
+			typ:  'u16'
+		}, ParamField{
+			name: 'on'
+			typ:  'bool'
+		}]
+	}
+}
+
+// @verifies REQ-PLACE-007
+fn test_a_parameter_a_satellite_fb_reads_gets_a_channel_per_field() {
+	d := xdown_derive([], down_sigs(), [gain_param()], two_core_parts(), [rw('S', 'sat', 'model',
+		['Gain'], [])], [], '') or { panic(err) }
+	assert d.names == ['Gain']
+	assert d.lanes['Gain'] == 2
+	assert d.param['Gain']
+	// read on the owner only: its cell, no channel
+	own := xdown_derive([], down_sigs(), [gain_param()], two_core_parts(), [rw('O', 'ctl', 'fast',
+		['Gain'], [])], [], '') or { panic(err) }
+	assert own.names == []
+	// a hand-written satellite has no generated reader
+	xdown_derive([], down_sigs(), [gain_param()], two_core_parts(), [rw('H', 'hand', 'hw', ['Gain'],
+		[])], [], '') or {
+		assert err.msg().contains('parameter "Gain" is read by fb "H"')
+		assert err.msg().contains('hand-written satellite')
+		return
+	}
+	assert false, 'a hand-written satellite reader was accepted'
 }

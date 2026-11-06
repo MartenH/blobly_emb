@@ -4,8 +4,8 @@ module app
 // window (so the CM4 shows a REAL load in the cross-core CpuLoad frame) and publishes the result
 // as TorqueEstimate — a CROSS-CORE signal the CM7 control loop reads. It also reads three signals
 // the CM7 hands DOWN to it — DynCmd (a protected bus frame, with its receive status), HostLedLevel
-// (a bus signal the CM7 reads too) and PtState (a CM7 FB output) — and reports them on the bus as
-// DynEcho, DynLed and DynPt. The point is the cross-core paths (load telemetry, the bulk
+// (a bus signal the CM7 reads too, held to the DynLedCap parameter) and PtState (a CM7 FB output) —
+// and reports them on the bus as DynEcho, DynLed and DynPt. The point is the cross-core paths (load telemetry, the bulk
 // model-stream, the signals both ways), not real dynamics.
 
 import ports
@@ -35,8 +35,14 @@ pub fn (mut fb DynamicsModel) on_5ms(inp ports.DynamicsModelIn, mut out ports.Dy
 	} else {
 		u32(0xFFFFFF00) | u32(u8(inp.dyn_cmd.status))
 	}
-	// DynLed: the LED level as the CM4 sees it (the CM7 drives LD3 from the same decode)
-	out.dyn_led.permille = inp.host_led_level.permille
+	// DynLed: the LED level as the CM4 sees it (the CM7 drives LD3 from the same decode), held to
+	// the coded cap — a parameter the CM7's journal keeps and hands down
+	cap := u32(inp.dyn_led_cap.permille)
+	out.dyn_led.permille = if inp.host_led_level.permille > cap {
+		cap
+	} else {
+		inp.host_led_level.permille
+	}
 	// DynPt: the CM7 FB's sequence when both PtState lanes came from one publish, 0 before the
 	// first one (the port default), 0xFFFFFFFF for lanes that do not belong together.
 	out.dyn_pt.seq = if inp.pt_state.seq == 0 && inp.pt_state.inv == 0 {
