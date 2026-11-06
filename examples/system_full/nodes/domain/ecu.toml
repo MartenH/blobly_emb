@@ -195,7 +195,9 @@ param = "DynLedCap"
 write = { session = ["extended"], security = 1 }
 
 # Persistence storage ([nvm], docs/nvm.md): the journal engine over a sector pair the node's comm
-# glue maps (nvm_map_* -> boards flash driver). DriveMode above is the persisted signal.
+# glue maps (nvm_map_* -> boards flash driver). Two persisted signals: DriveMode (the CM7's) and
+# DynKept (the CM4's). Both are "now", and each put that can land in bus sleep reruns the flush for
+# both, so the floor is 30 s: at 10 s the pair proved 4.2 years of wear, short of min_years.
 [nvm]
 min_write_ms   = 30000
 sector_records = 4096

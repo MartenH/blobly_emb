@@ -157,8 +157,8 @@ fn derive_nvm(mut m Model, doc toml.Doc) ([]string, map[string]u16) {
 		}
 		if (m.xdown_persist[sname] or { false }) && (m.fb_reads_owner[sname] or { 0 }) > 0 {
 			panic('loom2v: persistent signal "${sname}" is written on satellite partition "${wp}" ' +
-				'and read by an owner FB — the journal service is the one owner reader of its up ' +
-				'channel; write a second signal for the owner reader')
+				'and read by an owner FB — the journal service reads its up channel, and an owner FB ' +
+				'reading it as well is not generated; write a second signal for the owner reader')
 		}
 		if !m.nm.on {
 			panic('loom2v: persistent signals need [nm] — the NM prepare-bus-sleep edge IS the ' +

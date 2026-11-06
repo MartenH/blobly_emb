@@ -390,3 +390,11 @@ fn test_a_satellite_persisted_signal_has_the_journal_as_its_one_owner_reader() {
 	assert r.code != 0
 	assert r.output.contains('persistent signal "M4Keep" is written on satellite partition "m4" and read by an owner FB'), r.output
 }
+
+fn test_a_persisted_signal_on_a_hand_written_satellite_is_refused() {
+	r := gen_scratch('persist_external', fn (src string) string {
+		return must_replace(persist_on_satellite(src), 'image = "../h755_m4_app"', 'external = true')
+	})
+	assert r.code != 0
+	assert r.output.contains('persistent signal "M4Keep" is local to partition "m4", a hand-written satellite'), r.output
+}

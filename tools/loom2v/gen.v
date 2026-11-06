@@ -1625,8 +1625,10 @@ fn build_model(doc toml.Doc, dbc string) Model {
 			continue
 		}
 		// local to the satellite (from = to) and read on no other image: no channel — unless it is
-		// persisted, which the owner's journal reads from an up channel (REQ-PLACE-006)
-		if si.local && si.persist == ''
+		// persisted on a generated satellite, which the owner's journal reads from an up channel
+		// (REQ-PLACE-006; on a hand-written one derive_nvm refuses it)
+		persisted := si.persist != '' && (part.image[ep_part(part, si.from)] or { '' }) != ''
+		if si.local && !persisted
 			&& !fb_rws.any(sname in it.reads && !(part.external[it.part] or { false })) {
 			continue
 		}
