@@ -468,6 +468,17 @@ fn test_a_live_did_reads_a_value_a_satellite_fb_writes() {
 	assert r.sat.contains('&xw_m4_probe[0])') // the satellite publishes it
 }
 
+fn test_a_live_did_on_a_hand_written_satellite_signal_is_refused() {
+	r := gen_scratch('did_external', fn (src string) string {
+		mut s := must_replace(src, 'image = "../h755_m4_app"', 'external = true')
+		s += '\n[isotp]\nbus   = "can0"\nrx_id = 0x7B0\ntx_id = 0x7B8\n'
+		return s + '\n[[did]]\nid     = 0xF1A2\nsignal = "M4Count"\n'
+	})
+	// refused, never a pair slot moved to a wide channel the hand-written image does not publish
+	assert r.code != 0
+	assert r.output.contains('[[did]] 0xf1a2 reads signal "M4Count"'), r.output
+}
+
 fn test_a_fault_on_a_hand_written_satellite_is_refused() {
 	r := gen_scratch('fault_external', fn (src string) string {
 		return must_replace(fault_on_satellite(src), 'image = "../h755_m4_app"', 'external = true')

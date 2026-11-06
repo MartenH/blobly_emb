@@ -45,6 +45,19 @@ fn sig_lanes(si SigInfo) int {
 	return n
 }
 
+// field_lane: the first lane of field `name` in the signal's lanes — fields in order, as
+// lane_pack_lines lays them
+fn field_lane(si SigInfo, name string) int {
+	mut k := 0
+	for f in si.fields {
+		if f.name == name {
+			break
+		}
+		k += field_lanes(f.typ)
+	}
+	return k
+}
+
 // xioc_n_bytes: one xioc_n channel's footprint (xioc.h XIOC_N_BYTES): a 32 B header plus four
 // slots of one seq word and the lanes, rounded up to the 32 B line.
 fn xioc_n_bytes(lanes int) int {

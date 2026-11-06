@@ -297,7 +297,9 @@ test("xcore: a fault the CM4 tests confirms in the CM7's fault memory, frozen wi
 end)
 
 -- the clear reaches the CM4 as a new generation, which its debounce starts over from: reports of
--- the old one cannot bring the DTC back, so the DTC returns only if the generation came down
+-- the old one cannot bring the DTC back, so the DTC returns only if the generation came down. (That
+-- the 0x14 cleared it is the test above's; read here at once, the restarted debounce — three 5 ms
+-- dispatches — may already have qualified again.)
 test("xcore: a fault cleared while the CM4 fails it returns by failing again", function()
   local d = diag()
   clean(d)
@@ -305,7 +307,6 @@ test("xcore: a fault cleared while the CM4 fails it returns by failing again", f
   sleep_ms(300)
   check.dtc(d, DTC, { testFailed = true, confirmedDTC = true })
   d:clear_dtcs()
-  check.dtc(d, DTC, { confirmedDTC = false, testFailedSinceLastClear = false })
   sleep_ms(300) -- still failing: the restarted debounce qualifies again
   check.dtc(d, DTC, { testFailed = true, confirmedDTC = true, testFailedSinceLastClear = true })
   s:stop()
@@ -319,12 +320,17 @@ test("xcore: with DTC setting off (0x85) the CM4's failures are not recorded", f
   d:session(0x03)
   d:dtc_setting(false)
   local s = commander(REJECT)
-  sleep_ms(1000)
-  check.dtc(d, DTC, { testFailed = false, confirmedDTC = false, testFailedSinceLastClear = false })
+  -- whatever a check says, setting back on and the default session: a board left with setting off
+  -- records nothing for every later run
+  local ok, e = pcall(function()
+    sleep_ms(1000)
+    check.dtc(d, DTC, { testFailed = false, confirmedDTC = false, testFailedSinceLastClear = false })
+  end)
   s:stop()
   sleep_ms(800) -- timed out and passing again before setting resumes: nothing is replayed
   d:dtc_setting(true)
+  d:session(0x01)
+  if not ok then error(e, 0) end
   sleep_ms(300)
   check.dtc(d, DTC, { confirmedDTC = false, testFailedSinceLastClear = false })
-  d:session(0x01)
 end)

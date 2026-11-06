@@ -653,18 +653,12 @@ fn diag_target_fns(m Model, ioc_idx map[string]int) []string {
 // FB's cell reads before its first publish)
 fn did_xup_read_lines(idx int, si SigInfo, sname string, off int) []string {
 	r := 'g_didx_${snake(sname)}'
-	mut lane := 1
-	for f in si.fields {
-		if f.name == si.val_field {
-			break
-		}
-		lane += field_lanes(f.typ)
-	}
-	v := '${r}[${lane}]'
 	mut g := ['\tif C.xcore_layout_ok() != 0 { // ${sname}: an FB on the satellite writes it']
 	g << '\t\tC.xcore_poll_n(u32(${off}), ${sig_lanes(si)}, &${r}[0], &${r}[1])'
 	g << '\t}'
-	g << did_encode_lines(idx, if si.val_type == 'bool' { '${v} != 0' } else { v }, si.val_type, '\t')
+	// lanes from [1]: [0] is the reader's seq
+	g << did_encode_lines(idx, lane_value(si.val_type, r, 1 + field_lane(si, si.val_field)), si.val_type,
+		'\t')
 	return g
 }
 

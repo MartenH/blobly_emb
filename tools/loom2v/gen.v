@@ -1664,7 +1664,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		// beside the comm thread's other reader of it (a pair slot has one, and its freshness is
 		// taken by whoever polls first)
 		si.wide = si.fields.len > 2 || si.fields.any(it.typ != 'u32') || xcore_pair_n >= xcore_pair_slots
-			|| did_read
+			|| (did_read && generated)
 		if si.wide {
 			// xioc_n geometry (xioc_n_bytes): neighbouring channels never share a 32 B line
 			xcore_xw_off[sname] = xcore_xw_total
@@ -5661,8 +5661,10 @@ fn parse_fault_entries(doc toml.Doc) int {
 	return int((fm.as_map()['entries'] or { toml.Any(-1) }).i64())
 }
 
-// fault_fbs: the FBs that own faults, in first-declaration order — each gets one report cell (its
-// thread writes) and one control cell (the diagnostic bridge writes); cfg2v allocates both.
+// fault_fbs: the FBs that own faults, in first-declaration order — each exchanges a report cell (its
+// thread writes) and a control cell (the diagnostic bridge writes): byte-IOC cells on this image
+// (fault_local_fbs, the ones fault_cell numbers; cfg2v allocates the host's), cross-core channels for
+// an FB on a satellite (gen_xfault.v).
 fn fault_fbs(m Model) []string {
 	return ecumodel.fault_fbs(m.faults.filter(it.signal == '').map('${it.fb}.${it.handler}'))
 }
@@ -5875,7 +5877,7 @@ fn validate_fault_target(m Model) {
 
 // fault_cell: the byte-IOC channel of `fb`'s report cell (its thread writes) or control cell (the
 // comm thread writes) on a ThreadX image — after the eth signals' channels, two per fault-owning FB
-// in first-declaration order. The one numbering the FB glue, the comm thread and boot share.
+// of this image (fault_local_fbs) in first-declaration order. The one numbering the FB glue, the comm thread and boot share.
 fn fault_cell(m Model, fb string, control bool) int {
 	k := fault_local_fbs(m).index(fb)
 	if k < 0 {

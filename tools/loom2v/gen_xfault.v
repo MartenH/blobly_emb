@@ -45,8 +45,28 @@ fn fault_ctl_lanes(m Model, fb string) int {
 	return fault_count(m, fb)
 }
 
-// fault_xcore_derive lays out each satellite fault-owning FB's two channels after the signals'
+// fault_xcore_derive lays out each satellite fault-owning FB's two channels after the signals'. Its
+// partition publishes the layout acknowledgement too, so it counts toward the one satellite producer
+// the handshake carries (build_model's guard counts the signals' producers).
 fn fault_xcore_derive(mut m Model) {
+	mut producers := []string{}
+	for sname in m.xcore_names {
+		p := ep_part(m.part, (m.sig_of[sname] or { SigInfo{} }).from)
+		if p !in producers {
+			producers << p
+		}
+	}
+	for fb in fault_fbs(m) {
+		p := m.part.thread_part[m.part.fb_thread[fb] or { '' }] or { '' }
+		if fault_on_sat(m, fb) && p !in producers {
+			producers << p
+		}
+	}
+	if producers.len > 1 {
+		producers.sort()
+		panic('loom2v: ${producers.len} satellite partitions publish to the owner (${producers.join(', ')}) ' +
+			'— remote signals or a fault\'s reports; the cross-core layout handshake carries ONE satellite today')
+	}
 	for fb in fault_fbs(m) {
 		if !fault_on_sat(m, fb) {
 			continue
@@ -136,7 +156,9 @@ fn fault_sat_give_lines(m Model, fb string, ind string) []string {
 }
 
 // fault_sat_control_lines: the satellite FB thread's read of its control — the generations to
-// apply and the held flags; zero until the owner publishes in this boot, as a cell reads
+// apply and the held flags: zero until the owner's first publish, as a cell reads, then the last
+// one while none newer is readable (a closed gate re-applies nothing: a changed generation restarts
+// the debounce, so a default would clear it twice)
 fn fault_sat_control_lines(m Model, fb string) []string {
 	f := snake(fb)
 	x := 'st.fxr_${f}'
