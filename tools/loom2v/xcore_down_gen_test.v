@@ -128,7 +128,22 @@ fn test_the_unchanged_example_generates_no_owner_window() {
 	c := r.owner.index('\tC.xcore_owner_commit()') or { -1 }
 	rel := r.owner.index('\tC.xcore_clocks_ready()') or { -1 }
 	assert b >= 0 && b < c && c < rel
-	assert r.build.contains('LOOM_GLUE_SRCS :=')
+}
+
+// each core's total load (trace_hooks.c): the owner's comm thread closes its window every pass, and
+// the satellite's first thread closes its own and publishes it for the owner's `ps`, linking the
+// glue that publishes it
+fn test_both_cores_close_their_load_window_and_the_satellite_publishes_it() {
+	r := gen_scratch('load', fn (src string) string {
+		return src
+	})
+	assert r.code == 0, r.output
+	w := r.owner.index('\t\tC.comm_rx_wait(') or { -1 }
+	t := r.owner.index('\t\tC.core_load_tick()') or { -1 }
+	assert w >= 0 && w < t, 'the comm thread closes the window after its wait:\n${r.owner}'
+	assert r.sat.contains('\t\tC.core_load_tick()\n\t\tC.xcore_busy_pub(1, C.core_busy_permille())'), r.sat
+	// with no down channel, the busy publish is what links the satellite glue
+	assert r.build.contains('LOOM_GLUE_SRCS = \$(BOARD_XCORE_SAT)\n'), r.build
 }
 
 // an owner FB output read on the owner (its writer's thread) AND by a satellite with two threads:

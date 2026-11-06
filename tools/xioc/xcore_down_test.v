@@ -21,6 +21,10 @@ fn C.xcore_opub_n(off u32, src &u32)
 fn C.xcore_down_read(off u32, words u32, st &u32) int
 fn C.xcore_test_sram() &u32
 fn C.xcore_ow_ack(v u32) u32
+fn C.xcore_busy_pub(core int, pm int)
+fn C.xcore_busy_get(core int) int
+fn C.xcore_test_busy_slots() &u32
+fn C.xcore_busy_watch()
 
 const layout_id = u32(0x1234ABCD)
 const sram_words = 1024
@@ -209,4 +213,38 @@ fn test_retract_closes_the_gate() {
 	src[0] = 6
 	C.xcore_opub_n(off1, &src[0])
 	assert C.xcore_down_read(off1, 1, &st[0]) == 0
+}
+
+// the busy slots (each satellite's total load for the owner's ps): an owner boot clears what a
+// previous boot left, and a core counts as reporting only while it published since the last load
+// window, so one that never reports or stops reads as not measured, never as idle or as its last
+// value
+fn test_busy_slots_read_as_not_measured_unless_a_satellite_keeps_reporting() {
+	unsafe {
+		mut b := C.xcore_test_busy_slots()
+		for c in 0 .. 8 {
+			b[c] = u32(123) | (u32(7) << 16) // retained from a previous boot
+		}
+	}
+	C.xcore_owner_begin()
+	C.xcore_busy_watch()
+	for c in 0 .. 8 {
+		assert C.xcore_busy_get(c) == -1, 'core ${c} before any report'
+	}
+	C.xcore_busy_pub(1, 185)
+	assert C.xcore_busy_get(1) == -1, 'not reporting until a window has seen it publish'
+	C.xcore_busy_watch()
+	assert C.xcore_busy_get(1) == 185
+	assert C.xcore_busy_get(2) == -1, 'one core reporting sets its own slot only'
+	C.xcore_busy_watch() // a window with no publish: the core stopped
+	assert C.xcore_busy_get(1) == -1, 'a core that stopped publishing keeps no stale value'
+	C.xcore_busy_pub(1, 190)
+	C.xcore_busy_watch()
+	assert C.xcore_busy_get(1) == 190, 'reporting again'
+	C.xcore_busy_pub(1, -1) // an image without the hooks
+	C.xcore_busy_watch()
+	assert C.xcore_busy_get(1) == -1
+	C.xcore_busy_pub(8, 500) // no such slot: nothing written
+	C.xcore_busy_watch()
+	assert C.xcore_busy_get(8) == -1 && C.xcore_busy_get(-1) == -1
 }

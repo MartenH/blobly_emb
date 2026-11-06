@@ -98,11 +98,63 @@ int shell_bmc(unsigned char *out, int cap) {
     return (int)(p - (char *)out);
 }
 
+/* total core load (trace_hooks.c; weak -1 where the hooks are absent) and each satellite's */
+int core_busy_permille(void);
+int core_isr_permille(void);
+int core_load_window_ms(void);
+int core_thread_permille(void *tcb);
+int xcore_busy_get(int core);
+
+/* ps's longest row: name 20 + pri 4 + state 6 + stack 12 (two 5-digit sizes) + "100.0%" + newline,
+ * and its "+N more" line */
+#define PS_ROW  49
+#define PS_MORE 12
+
+/* a per-mille share as "12.3%", or "n/a" when it cannot be measured on this image */
+static char *ps_pm(char *p, char *end, int pm) {
+    if (pm < 0)
+        return ps_str(p, end, "n/a");
+    p = ps_u32(p, end, (unsigned)pm / 10u);
+    p = ps_str(p, end, ".");
+    p = ps_u32(p, end, (unsigned)pm % 10u);
+    return ps_str(p, end, "%");
+}
+
 int shell_ps(unsigned char *out, int cap) {
     char *p = (char *)out, *end = (char *)out + cap;
-    p = ps_str(p, end, "name                pri state stack\n");
+    /* the core's TOTAL load over the last window — every thread and ISR, not the Loom FBs alone */
+    p = ps_str(p, end, "this core busy ");
+    p = ps_pm(p, end, core_busy_permille());
+    p = ps_str(p, end, " isr ");
+    p = ps_pm(p, end, core_isr_permille());
+    int win = core_load_window_ms();
+    if (win >= 0) {
+        p = ps_str(p, end, " (");
+        p = ps_u32(p, end, (unsigned)win);
+        p = ps_str(p, end, " ms)");
+    }
+    p = ps_str(p, end, "\n");
+    for (int c = 1; c < 8; c++) {
+        int pm = xcore_busy_get(c);
+        if (pm < 0)
+            continue;
+        p = ps_str(p, end, "core ");
+        p = ps_u32(p, end, (unsigned)c);
+        p = ps_str(p, end, " busy ");
+        p = ps_pm(p, end, pm);
+        p = ps_str(p, end, "\n");
+    }
+    p = ps_str(p, end, "name                pri state stack       cpu\n");
     TX_THREAD *t = _tx_thread_created_ptr;
     for (ULONG i = 0; i < _tx_thread_created_count && t && i < 16u; i++, t = t->tx_thread_created_next) {
+        /* a row is at most PS_ROW bytes: one that would not fit, or would leave no room to say how
+         * many are left out, is not started — the answer ends on a whole row and the count */
+        if (end - p < PS_ROW + PS_MORE) {
+            p = ps_str(p, end, "+");
+            p = ps_u32(p, end, (unsigned)(_tx_thread_created_count - i));
+            p = ps_str(p, end, " more\n");
+            break;
+        }
         const char *nm = t->tx_thread_name ? t->tx_thread_name : "?";
         char *col = p + 20;
         for (int c = 0; nm[c] && c < 19 && p < end; c++) *p++ = nm[c];
@@ -124,9 +176,12 @@ int shell_ps(unsigned char *out, int cap) {
          * overwrote, scanning up from the stack's low end. */
         unsigned untouched = 0;
         while (lo + untouched <= hi && lo[untouched] == 0xEFu) untouched++;
+        col = p + 12;
         p = ps_u32(p, end, size - untouched);
         p = ps_str(p, end, "/");
         p = ps_u32(p, end, size);
+        while (p < col && p < end) *p++ = ' ';
+        p = ps_pm(p, end, core_thread_permille(t));
         p = ps_str(p, end, "\n");
     }
     return (int)(p - (char *)out);

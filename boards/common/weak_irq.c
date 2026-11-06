@@ -38,6 +38,17 @@ __attribute__((weak)) void TIM7_IRQHandler(void) { }
 __attribute__((weak)) void xcore_load_pub(int core, uint16_t pm) { (void)core; (void)pm; }
 __attribute__((weak)) uint16_t xcore_load_get(int core) { (void)core; return 0u; }
 
+/* Total core load (trace_hooks.c, xcore.h XCORE_BUSY_ADDR): an image without the execution-change
+ * hooks, or without a satellite, reports -1 — "not measurable here", never a misleading 0. */
+__attribute__((weak)) void core_load_tick(void) { }
+__attribute__((weak)) int core_busy_permille(void) { return -1; }
+__attribute__((weak)) int core_isr_permille(void) { return -1; }
+__attribute__((weak)) int core_load_window_ms(void) { return -1; }
+__attribute__((weak)) int core_thread_permille(void *tcb) { (void)tcb; return -1; }
+__attribute__((weak)) void xcore_busy_pub(int core, int pm) { (void)core; (void)pm; }
+__attribute__((weak)) int xcore_busy_get(int core) { (void)core; return -1; }
+__attribute__((weak)) void xcore_busy_watch(void) { }
+
 /* A node's extra comm-thread wake sources (the H755 cross-core bulk doorbell): comm_glue.c calls
  * this once, after the wake semaphore exists, so the source's ISR can post it (comm_wake). The
  * node's own glue file provides the strong one; every other image arms nothing. Same

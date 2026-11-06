@@ -2525,6 +2525,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << 'fn C.load_sum_overruns() u32'
 			}
 			glue << 'fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32'
+			glue << 'fn C.core_load_tick() // total core load window (trace_hooks.c; weak no-op without the hooks)'
 			glue << trace_c_decls(m)
 			glue << shell_c_decls(m)
 			glue << xcore_c_decls(m)
@@ -3144,6 +3145,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				} else {
 					glue << '\t\tC.comm_rx_wait(10) // block up to 10 ticks; the FDCAN Rx ISR wakes us on a new frame'
 				}
+				glue << '\t\tC.core_load_tick() // the core\'s total load, every thread and ISR (trace_hooks.c)'
 				// the pass, in the ONE order comm_pass_order states (gen_rx_target.v)
 				for step in comm_pass_order {
 					// a step this node has nothing for leaves no marker
@@ -6102,7 +6104,7 @@ const nvm_glue_syms = ['nvm_map_a', 'nvm_map_b', 'nvm_map_size']
 // the owner->satellite seams (gen_xdown.v): the board's owner writer and satellite reader, linked
 // through its board.mk variables
 const xcore_owner_syms = ['xcore_owner_begin', 'xcore_ow_init', 'xcore_owner_commit', 'xcore_opub_n']
-const xcore_sat_syms = ['xcore_down_read']
+const xcore_sat_syms = ['xcore_down_read', 'xcore_busy_pub']
 const flash_driver_syms = ['bflash_erase', 'bflash_program', 'bflash_read', 'bflash_blank']
 
 // xcore_pair_slots: the board's satellite pair pool, xcore.h XCORE_IOC_N (pinned equal by
