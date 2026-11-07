@@ -4787,7 +4787,8 @@ fn main() {
 	}
 	if ioc_idx.len > ioc_pool_n {
 		panic('loom2v: [target] kind="threadx": ${ioc_idx.len} signals need target IOC ' +
-			'cells (rx-to-FB + persist staging + io points), but the pool (comm_glue.c IOC_POOL_N) ' +
+			'cells (rx-to-FB, FB-to-tx, persist staging, parameters, io points), but the pool ' +
+			'(comm_glue.c IOC_POOL_N) ' +
 			'has ${ioc_pool_n} — raise both together or reduce signals')
 	}
 	// Which m.buses run a COM bridge (an external signal, an ISO-TP conn, or a route touches them).
@@ -6113,7 +6114,7 @@ const xcore_pair_slots = 4
 
 // ioc_pool_n: comm_glue.c's IOC_POOL_N — the target IOC cells an image may use (pinned equal by
 // threadx_makefiles_test.v; a smaller pool silently dropped every index past it, #247).
-const ioc_pool_n = 16
+const ioc_pool_n = 32
 
 // glue_build_lines: what a ThreadX image links for its generic glue, for gen/loom_build.mk — each
 // shared glue file whose symbols the generated code declares, read off the emitted declarations

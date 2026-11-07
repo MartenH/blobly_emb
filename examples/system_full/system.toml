@@ -164,6 +164,48 @@ bus      = "edge"
 frame    = "SafetyViewFrame"
 cycle_ms = 100
 
+# LoadOutA..E: five points of the domain's load-FB chain on the compute bus, sent by FBs on the
+# CM7 — A, C and D the values they read up from the CM4 (nodes/domain/ecu.toml, "Load FBs").
+[[signal]]
+name     = "LoadOutA"
+fields   = { v = "u32" }
+producer = "domain"
+bus      = "compute"
+frame    = "LoadOutAFrame"
+cycle_ms = 100
+
+[[signal]]
+name     = "LoadOutB"
+fields   = { v = "u32" }
+producer = "domain"
+bus      = "compute"
+frame    = "LoadOutBFrame"
+cycle_ms = 100
+
+[[signal]]
+name     = "LoadOutC"
+fields   = { v = "u32" }
+producer = "domain"
+bus      = "compute"
+frame    = "LoadOutCFrame"
+cycle_ms = 100
+
+[[signal]]
+name     = "LoadOutD"
+fields   = { v = "u32" }
+producer = "domain"
+bus      = "compute"
+frame    = "LoadOutDFrame"
+cycle_ms = 100
+
+[[signal]]
+name     = "LoadOutE"
+fields   = { v = "u32" }
+producer = "domain"
+bus      = "compute"
+frame    = "LoadOutEFrame"
+cycle_ms = 100
+
 # --- Gateway routes on sysnode (H735-DK): compute <-> edge ---
 [[route]]
 gateway = "sysnode"

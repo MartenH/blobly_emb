@@ -38,6 +38,21 @@ BO_ 299 DynLedFrame: 8 domain
 BO_ 300 DynKeptFrame: 4 domain
  SG_ DynKeptOut : 0|32@1+ (1,0) [0|16777215] "" tester
 
+BO_ 320 LoadOutAFrame: 4 domain
+ SG_ LoadOutA : 0|32@1+ (1,0) [0|4294967295] "" tester
+
+BO_ 321 LoadOutBFrame: 4 domain
+ SG_ LoadOutB : 0|32@1+ (1,0) [0|4294967295] "" tester
+
+BO_ 322 LoadOutCFrame: 4 domain
+ SG_ LoadOutC : 0|32@1+ (1,0) [0|4294967295] "" tester
+
+BO_ 323 LoadOutDFrame: 4 domain
+ SG_ LoadOutD : 0|32@1+ (1,0) [0|4294967295] "" tester
+
+BO_ 324 LoadOutEFrame: 4 domain
+ SG_ LoadOutE : 0|32@1+ (1,0) [0|4294967295] "" tester
+
 BA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;
 BA_DEF_ BO_ "E2ECounterSignal" STRING;
 BA_DEF_ BO_ "E2ECrcSignal" STRING;
@@ -54,6 +69,11 @@ BA_ "GenMsgCycleTime" BO_ 297 100;
 BA_ "GenMsgCycleTime" BO_ 298 100;
 BA_ "GenMsgCycleTime" BO_ 299 100;
 BA_ "GenMsgCycleTime" BO_ 300 100;
+BA_ "GenMsgCycleTime" BO_ 320 100;
+BA_ "GenMsgCycleTime" BO_ 321 100;
+BA_ "GenMsgCycleTime" BO_ 322 100;
+BA_ "GenMsgCycleTime" BO_ 323 100;
+BA_ "GenMsgCycleTime" BO_ 324 100;
 BA_ "E2ECounterSignal" BO_ 292 "DynCmdCounter";
 BA_ "E2ECrcSignal" BO_ 292 "DynCmdCrc";
 BA_ "E2EProfile" BO_ 292 "P01";

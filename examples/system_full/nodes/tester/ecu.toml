@@ -49,6 +49,16 @@ thread = "gen"
   reads     = ["DynEcho", "DynPt", "DynLed", "DynKeptOut"]
   writes    = ["DynCmd"] # trailing comment terminates the nested block (vlang/v#27684)
 
+# reads the domain's load FBs' chained values off the bus (nodes/domain/ecu.toml, "Load FBs")
+[[fb]]
+name   = "LoadWatch"
+thread = "gen"
+
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  reads     = ["LoadOutA", "LoadOutB", "LoadOutC", "LoadOutD", "LoadOutE"] # trailing comment terminates the nested block (vlang/v#27684)
+
 [[fb]]
 name   = "BenchPeer"
 thread = "gen"

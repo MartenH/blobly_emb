@@ -24,14 +24,15 @@
 
 /* ---- cross-thread signal IOC pool (wait-free triple buffer, ioc.h) ---------------------
  * A small indexed pool loom2v assigns cells out of, so a signal crosses threads without a
- * lock (the blobly IOC invariant): a bus->app rx signal decoded by the comm thread, persist
- * staging, and the io thread's points. V can't express the atomics/volatile, so it calls these
- * scalar wrappers by cell index; loom2v wires which index carries which signal.
+ * lock (the blobly IOC invariant): a bus->app rx signal decoded by the comm thread, an app->bus
+ * signal it encodes, persist staging, a parameter, and the io thread's points. V can't express
+ * the atomics/volatile, so it calls these scalar wrappers by cell index; loom2v wires which index
+ * carries which signal. A cell is ~65 B of RAM.
  *
  * MUST equal loom2v's cell ceiling (tools/loom2v ioc_pool_n, which refuses an image needing
  * more): a smaller pool silently drops any generated index >= IOC_POOL_N in ioc_pub/get —
  * system_full zone_a's slot 4 (HeadlightLed) sat at its init level that way (codex, #247). */
-#define IOC_POOL_N 16
+#define IOC_POOL_N 32
 static ioc_t g_ioc_pool[IOC_POOL_N];
 /* size-proportional arenas: 3 x the scalar sig_t per channel, line-rounded + line-aligned
  * so channels never share a cache line (ioc.h invariant). */

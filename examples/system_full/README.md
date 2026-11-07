@@ -22,6 +22,7 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 | Cross-core **signals both ways**: the CM4's `TorqueEstimate` up into the CM7 loop; down to the CM4 a protected `DynCmd` (checked by the CM7 comm thread, with its receive status), `HostLedLevel` (read on both cores) and `PtState` (a CM7 FB output), reported back as `DynEcho` / `DynLed` / `DynPt` | `domain` + `domain_m4` | ✅ bench 2026-11-06: `test/xcore_domain.lua` 14/14 on the H755 (both banks flashed from one build), the parameter, the CM4's persisted `DynKept`, its fault and its live DID among them |
 | Two-core **trace** (thread/ISR/FB, one timeline) | `domain` | ✅ |
 | CAN **shell** (`bulkperf`, `ps`, `bmc`) | `domain` | ✅ |
+| **Load FBs**: 20 FBs on the CM7 and 10 on the CM4 pass a hop count from `HostLedLevel` along a chain that stays on one core, goes down to the CM4 twice and comes back up three times, and leaves on five frames (`LoadOutA..E`, 0x140–0x144) — signals flowing for the per-core load `ps` prints | `domain` + `domain_m4` | ✅ (`test/load_fbs.lua`; busy CM7 10.3 %, CM4 15.2 % with its ART cache on, 46.3 % off) |
 | Network Management (coordinated sleep/wake + NvM flush) | `compute` bus | ✅ |
 | Node-local FB→FB signalling (intra-thread cell) | `zone_a` | ✅ |
 | Physical **IO** (GPIO: button → signal, signal → LED) | `zone_a` | ⚙️ config-proven on silicon (re-flash after the #247 pool fix to see the LED) |
