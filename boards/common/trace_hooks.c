@@ -137,6 +137,15 @@ static unsigned char state_reason(unsigned st)
     }
 }
 
+/* ---- core load: busy time per thread and in ISRs, always on (the trace ring is optional) ----
+ * Every slice a thread runs, less the ISR time inside it, and every bracketed ISR, are added up
+ * here, so a 1 s window (core_load_tick) gives the core's TOTAL busy time — the comm thread and
+ * the CAN interrupts included, which the Loom FB-load slots do not count — with a per-thread
+ * breakdown. ThreadX has no idle thread: time no thread or ISR ran is idle. */
+static unsigned long g_busy_us[MAX_THREADS + 1]; /* by thread id; [0] = threads past MAX_THREADS */
+static unsigned long g_isr_us;
+static volatile int g_hooks_seen; /* the execution-change hooks fire: the load is measurable */
+
 static unsigned long g_slice_start;  /* when the currently-running thread started */
 static unsigned long g_slice_isr_us; /* ISR time that interrupted the current slice */
 static unsigned long g_isr_start;
@@ -158,16 +167,17 @@ void _tx_execution_thread_exit(void)
 {
     unsigned long t = now_us();
     unsigned id = thread_id(_tx_thread_current_ptr);
+    /* the thread's CPU is its wall slice minus the ISR time that preempted it */
+    unsigned long wall = t - g_slice_start;
+    unsigned long dur = wall > g_slice_isr_us ? wall - g_slice_isr_us : 0u;
     if (id != 0) {
-        /* the thread's CPU is its wall slice minus the ISR time that preempted it */
-        unsigned long wall = t - g_slice_start;
-        unsigned long dur = wall > g_slice_isr_us ? wall - g_slice_isr_us : 0u;
-        unsigned char reason = _tx_thread_current_ptr
-                                   ? state_reason((unsigned)_tx_thread_current_ptr->tx_thread_state)
-                                   : REASON_BLOCK;
+        unsigned char reason = state_reason((unsigned)_tx_thread_current_ptr->tx_thread_state);
         push_rec(KIND_THREAD, id, reason, g_slice_start,
                  (unsigned)(dur > 0xFFFFu ? 0xFFFFu : dur));
     }
+    if (_tx_thread_current_ptr)
+        g_busy_us[id] += dur; /* a thread with no id still counts toward the core's total */
+    g_hooks_seen = 1;
 }
 
 /* thread_enter runs after the switch — the incoming thread's slice starts now. */
@@ -192,8 +202,82 @@ void _tx_execution_isr_exit(void)
 {
     unsigned long dur = now_us() - g_isr_start;
     g_slice_isr_us += dur; /* charge this ISR against the interrupted thread's slice */
+    g_isr_us += dur;
+    g_hooks_seen = 1;
     push_rec(KIND_ISR, g_isr_vec, 0u, g_isr_start,
              (unsigned)(dur > 0xFFFFu ? 0xFFFFu : dur));
+}
+
+/* core_load_tick(): called once per pass by one thread (the owner's comm thread, a satellite's
+ * first thread). When a window of at least LOAD_WIN_US has passed it publishes the window's busy,
+ * ISR and per-thread shares (per mille) and its length, and starts the next; until then it only
+ * reads the clock. The calling thread's own running slice is counted up to now, so its time is
+ * never a window late. On a satellite owner it then asks which satellites published in the
+ * window (xcore_busy_watch), so a core that stopped reads as not measured. */
+#define LOAD_WIN_US 1000000u
+static unsigned long w_t0, w_isr0, w_th0[MAX_THREADS + 1];
+static int w_started;
+static volatile int g_load_pm = -1, g_isr_pm = -1, g_win_ms = -1;
+static volatile short g_th_pm[MAX_THREADS + 1];
+
+void xcore_busy_watch(void); /* xcore_owner.c, weak no-op elsewhere (weak_irq.c) */
+
+void core_load_tick(void)
+{
+    if (w_started && now_us() - w_t0 < LOAD_WIN_US)
+        return;
+    unsigned long th[MAX_THREADS + 1];
+    unsigned prim;
+    __asm__ volatile("mrs %0, primask; cpsid i" : "=r"(prim) : : "memory");
+    unsigned long now = now_us();
+    unsigned long isr = g_isr_us;
+    for (unsigned i = 0; i <= MAX_THREADS; i++)
+        th[i] = g_busy_us[i];
+    if (_tx_thread_current_ptr) {
+        unsigned long wall = now - g_slice_start;
+        th[thread_id(_tx_thread_current_ptr)] += wall > g_slice_isr_us ? wall - g_slice_isr_us : 0u;
+    }
+    __asm__ volatile("msr primask, %0" : : "r"(prim) : "memory");
+    if (!w_started) {
+        w_started = 1;
+    } else {
+        unsigned long dt = now - w_t0;
+        unsigned long busy = isr - w_isr0;
+        for (unsigned i = 0; i <= MAX_THREADS; i++) {
+            unsigned long d = th[i] - w_th0[i];
+            busy += d;
+            g_th_pm[i] = (short)((unsigned long long)d * 1000u / dt);
+        }
+        if (g_hooks_seen) {
+            g_isr_pm = (int)((unsigned long long)(isr - w_isr0) * 1000u / dt);
+            g_load_pm = (int)((unsigned long long)busy * 1000u / dt);
+            g_win_ms = (int)(dt / 1000u);
+        }
+        xcore_busy_watch();
+    }
+    w_t0 = now;
+    w_isr0 = isr;
+    for (unsigned i = 0; i <= MAX_THREADS; i++)
+        w_th0[i] = th[i];
+}
+
+/* the last window's total busy share of this core, per mille; -1 = not measurable here */
+int core_busy_permille(void) { return g_load_pm; }
+/* ...of which ISRs */
+int core_isr_permille(void) { return g_isr_pm; }
+/* ...and how long that window was, in ms (at least LOAD_WIN_US; longer when the caller ran late) */
+int core_load_window_ms(void) { return g_win_ms; }
+/* one thread's share, by its TCB; 0 for a thread that has not run (the recorder has not given it
+ * an id while it has ids left), -1 when there is no window yet or the thread is past the
+ * recorder's ids — its time is in the core's total, not broken out */
+int core_thread_permille(void *tcb)
+{
+    if (g_load_pm < 0)
+        return -1;
+    for (unsigned i = 0; i < g_tid_n; i++)
+        if (g_tid_ptr[i] == tcb)
+            return g_th_pm[i + 1u];
+    return g_tid_n < MAX_THREADS ? 0 : -1;
 }
 
 /* ---- Trace ring read-out: PURE RECORDER, no CAN driver dependency ----

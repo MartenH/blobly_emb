@@ -31,6 +31,7 @@ is claimed by either core's linker.
 | `+0x020` | IOC pool `xioc_t[N]` | sat → owner | cross-core **signals** (the {a,b} pair cell) |
 | `+0x200` | trace handoff cell + records | both | two-core **trace** dump |
 | `+0xC00` | bench burst flag + **load** slots (`u16[8]`) | mixed | bulkperf trigger; per-core **CpuLoad** |
+| `+0xC20` | **busy** slots (`u32[8]`: share, publish count) | sat → owner | each core's total load, for `ps` |
 | `+0x1000` | wide-signal window (`XW`, 4 KB) | sat → owner | **wide** signals (>2 fields, or a field not `u32`) |
 | `+0x2000` | **bulk** window (52 KB, to the owner window) | producer → consumer | zero-copy **blocks** |
 | `+0xF000` | owner **ACK** (`ack(nonce ^ LAYOUT_ID)`, 0 = retracted) | owner → sat | matched-images handshake #3 |
@@ -113,6 +114,18 @@ that stays for programming retracts this ACK too (`boot_park_satellite`).
   the owner reads the satellite slots into the CpuLoad frame, so telemetry reports **every core**,
   not just the owner's. The owner zeroes the slots before releasing the satellite, so an absent
   core reads 0 rather than retained garbage.
+- **Busy share.** CpuLoad counts the scheduler's handlers; the busy share is the whole core —
+  every thread and every ISR that calls the hooks (SysTick, the FDCAN receive interrupts, the H755
+  examples' bulk doorbell), added up by ThreadX's execution-change hooks
+  (`boards/common/trace_hooks.c`) over a 1 s window.
+  The owner's comm thread closes its window each pass, a satellite's first thread each tick and
+  publishes its share into its busy slot with a publish count (`xcore_busy_pub`). The owner sets
+  every slot to not measured before releasing the satellite and, each time its own window closes,
+  takes a core whose count did not move as not reporting, so a core that never reports or stops
+  prints as not measured rather than as its last share. The shell's `ps` prints this core's busy
+  and ISR shares over the window it measured, each reporting satellite's busy share, and per thread
+  its share (a thread past the recorder's 8 ids is in the total, not broken out). An ISR that does
+  not call the hooks is charged to the thread it interrupted.
 
 ## How the generator wires it
 

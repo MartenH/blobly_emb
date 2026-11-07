@@ -74,6 +74,7 @@ fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)
 fn C._tx_thread_sleep(u32) u32
 fn C._tx_initialize_kernel_enter()
 fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32
+fn C.core_load_tick() // total core load window (trace_hooks.c; weak no-op without the hooks)
 fn C.trace_snapshot(voidptr, u32) u32
 fn C.trace_arm()
 fn C.trace_freeze()
@@ -387,6 +388,7 @@ fn comm_thread_entry(_ u32) {
 	for {
 		wait_ticks := if g_tm.is_dumping() { u32(1) } else { u32(10) }
 		C.comm_rx_wait(wait_ticks) // the FDCAN Rx ISR wakes us early on a new frame
+		C.core_load_tick() // the core's total load, every thread and ISR (trace_hooks.c)
 		// pass: drain
 		// CONSUMER: drain the Rx FIFO (non-blocking); account each external rx frame
 		for ch.recv(mut rx) {

@@ -35,6 +35,7 @@ fn C.io_exec_us() u32 // FB thread reads to subtract io preemption
 fn C._tx_thread_sleep(u32) u32
 fn C._tx_initialize_kernel_enter()
 fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32
+fn C.core_load_tick() // total core load window (trace_hooks.c; weak no-op without the hooks)
 fn C.comm_rx_irq_enable()
 fn C.comm_rx_wait(u32) u32 // block up to N ticks; returns 0 if woken by rx
 fn C.load_pub(u32, u32, u32, u32, u32)
@@ -180,6 +181,7 @@ fn comm_thread_entry(_ u32) {
 	mut rx := &g_comm_rx // bss: see the __global block
 	for {
 		C.comm_rx_wait(10) // block up to 10 ticks; the FDCAN Rx ISR wakes us on a new frame
+		C.core_load_tick() // the core's total load, every thread and ISR (trace_hooks.c)
 		// pass: drain
 		// CONSUMER: drain the Rx FIFO (non-blocking); account each external rx frame
 		for ch.recv(mut rx) {

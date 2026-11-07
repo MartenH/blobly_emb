@@ -43,3 +43,16 @@ int xcore_down_read(uint32_t off, uint32_t words, uint32_t *st) {
 	}
 	return st[1] != 0u;
 }
+
+/* this core's total busy share (per mille; -1 = not measurable) into its XCORE_BUSY_ADDR slot with
+ * the next publish count, which the owner reads (xcore_owner.c) — one writer per slot, this core */
+void xcore_busy_pub(int core, int pm) {
+	static uint32_t n;
+	if (core < 0 || core >= 8)
+		return;
+	n++;
+	if ((n & 0xFFFFu) == 0u)
+		n++; /* 0 is the owner's 'never published' */
+	uint32_t v = (pm < 0 ? 0xFFFFu : (uint32_t)pm & 0xFFFFu) | (n << 16);
+	XIOC_ST((volatile uint32_t *)(uintptr_t)XCORE_BUSY_ADDR + core, v);
+}

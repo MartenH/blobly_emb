@@ -191,6 +191,17 @@ int xcore_down_read(uint32_t off, uint32_t words, uint32_t *st);
  * indexed by core (owner writes nothing — it has its own sched). In the SRAM4 gap. */
 #define XCORE_LOAD_ADDR 0x38000C10u
 
+/* Cross-core TOTAL core load: each satellite publishes its core's busy share (per mille, every
+ * thread and ISR — trace_hooks.c core_load_tick) into its slot here every tick, beside the FB-only
+ * load above: u32[8], indexed by core, the share in the low half (0xFFFF = not measurable on that
+ * image) and a publish count in the high half. The owner sets every slot to 0xFFFF before
+ * releasing a satellite, and once per load window marks a core whose count did not move as not
+ * reporting, so an absent or stopped core never reads as idle or as its last value. Overridable so
+ * the host test can place it in an ordinary array. */
+#ifndef XCORE_BUSY_ADDR
+#define XCORE_BUSY_ADDR 0x38000C20u
+#endif
+
 /* Platform seam for the cross-core bulk base: generated code externs `xcore_bulk_base()` and adds
  * the per-pool offset, and NEVER includes this board header — so an image that declares a
  * cross-core [[bulk]] pool must DEFINE the seam in its glue C, exactly like xcore_pub/xcore_ioc_init:
