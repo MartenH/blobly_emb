@@ -74,7 +74,7 @@ fn table_key(m map[string]toml.Any) string {
 
 // name_refs: where each string value is named in a node's configuration outside its signal
 // declarations and FBs — a DID, a fault, persistence, telemetry — by key path (`did.signal`), so a
-// signal something else on the node consumes is a kind of its own
+// signal, FB or handler something else on the node names is a kind of its own
 fn name_refs(doc toml.Doc) map[string][]string {
 	mut out := map[string][]string{}
 	top := doc.to_any().as_map()
@@ -112,8 +112,9 @@ fn collect_refs(v toml.Any, path string, mut out map[string][]string) {
 // its thread, each handler's period, and each signal it reads and writes by kind: a node signal by
 // its declaration, a system signal by its fields and direction, and either by the cores of the
 // node's other FBs that read or write it (the same core as this FB, or the other) and by what
-// else on the node names it (name_refs). Anything else it names (a parameter, an io
-// point) keeps its name, so such an FB is a shape of its own.
+// else on the node names it (name_refs). Anything else it names (a parameter, an io point) keeps
+// its name, so such an FB is a shape of its own; and what names the FB or one of its handlers (a
+// fault it raises) is part of its shape too.
 fn fb_shape(fm map[string]toml.Any, node string, local map[string]map[string]toml.Any, system map[string]map[string]toml.Any, ends map[string][]string, core_of_fb map[string]i64, refs map[string][]string) string {
 	name := (fm['name'] or { toml.Any('') }).string()
 	mut out := ['thread=${(fm['thread'] or { toml.Any('') }).string()}']
@@ -145,6 +146,15 @@ fn fb_shape(fm map[string]toml.Any, node string, local map[string]map[string]tom
 			out << '${dir}=${kinds.join('|')}'
 		}
 	}
+	// what names the FB itself or one of its handlers (a fault's `from = "Fb.on_10ms"`), by key path
+	mut owned := []string{}
+	for k, paths in refs {
+		if k == name || k.starts_with('${name}.') {
+			owned << 'self(${k[name.len..]}:${paths.join(',')})'
+		}
+	}
+	owned.sort()
+	out << owned
 	return out.join(' ')
 }
 
