@@ -5,8 +5,8 @@ Moving an FB to another core of a node is its `thread` line in `ecu.toml`, nothi
 capability, each a requirement in [`requirements/placement.toml`](../requirements/placement.toml)
 (REQ-PLACE-*), so a gap is a requirement nothing verifies yet and shows in
 [`traceability.md`](traceability.md). A move into a gap is **refused at generation, naming the
-reason** until its route is generated — `tools/sysgen/fb_move_test.v` moves every FB of `system_full`'s two-core node and holds
-each refusal to the list below. The open gaps are #424.
+reason** until its route is generated — `tools/sysgen/fb_move_test.v` moves an FB of every shape on `system_full`'s two-core node
+(every FB with `FB_MOVE_ALL=1`) and holds each refusal to the list below. The open gaps are #424.
 
 ## Terms
 
