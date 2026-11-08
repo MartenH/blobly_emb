@@ -117,7 +117,7 @@ that stays for programming retracts this ACK too (`boot_park_satellite`).
 - **Busy share.** CpuLoad counts the scheduler's handlers; the busy share is the whole core —
   every thread and every ISR that calls the hooks (SysTick, the FDCAN receive interrupts, the H755
   examples' bulk doorbell), added up by ThreadX's execution-change hooks
-  (`boards/common/trace_hooks.c`) over a 1 s window.
+  (`boards/common/trace_hooks.c`) in cycles over a 1 s window, as basis points (0.01 %).
   The owner's comm thread closes its window each pass, a satellite's first thread each tick and
   publishes its share into its busy slot with a publish count (`xcore_busy_pub`). The owner sets
   every slot to not measured before releasing the satellite and, each time its own window closes,

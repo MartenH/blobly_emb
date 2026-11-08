@@ -99,24 +99,24 @@ int shell_bmc(unsigned char *out, int cap) {
 }
 
 /* total core load (trace_hooks.c; weak -1 where the hooks are absent) and each satellite's */
-int core_busy_permille(void);
-int core_isr_permille(void);
+int core_busy_bp(void);
+int core_isr_bp(void);
 int core_load_window_ms(void);
-int core_thread_permille(void *tcb);
+int core_thread_bp(void *tcb);
 int xcore_busy_get(int core);
 
-/* ps's longest row: name 20 + pri 4 + state 6 + stack 12 (two 5-digit sizes) + "100.0%" + newline,
+/* ps's longest row: name 20 + pri 4 + state 6 + stack 12 (two 5-digit sizes) + "100.00%" + newline,
  * and its "+N more" line */
-#define PS_ROW  49
+#define PS_ROW  50
 #define PS_MORE 12
 
-/* a per-mille share as "12.3%", or "n/a" when it cannot be measured on this image */
-static char *ps_pm(char *p, char *end, int pm) {
-    if (pm < 0)
+/* a share in basis points (0.01 %) as "12.34%", or "n/a" when it cannot be measured on this image */
+static char *ps_bp(char *p, char *end, int bp) {
+    if (bp < 0)
         return ps_str(p, end, "n/a");
-    p = ps_u32(p, end, (unsigned)pm / 10u);
-    p = ps_str(p, end, ".");
-    p = ps_u32(p, end, (unsigned)pm % 10u);
+    p = ps_u32(p, end, (unsigned)bp / 100u);
+    p = ps_str(p, end, (unsigned)bp % 100u < 10u ? ".0" : ".");
+    p = ps_u32(p, end, (unsigned)bp % 100u);
     return ps_str(p, end, "%");
 }
 
@@ -124,9 +124,9 @@ int shell_ps(unsigned char *out, int cap) {
     char *p = (char *)out, *end = (char *)out + cap;
     /* the core's TOTAL load over the last window — every thread and ISR, not the Loom FBs alone */
     p = ps_str(p, end, "this core busy ");
-    p = ps_pm(p, end, core_busy_permille());
+    p = ps_bp(p, end, core_busy_bp());
     p = ps_str(p, end, " isr ");
-    p = ps_pm(p, end, core_isr_permille());
+    p = ps_bp(p, end, core_isr_bp());
     int win = core_load_window_ms();
     if (win >= 0) {
         p = ps_str(p, end, " (");
@@ -135,13 +135,13 @@ int shell_ps(unsigned char *out, int cap) {
     }
     p = ps_str(p, end, "\n");
     for (int c = 1; c < 8; c++) {
-        int pm = xcore_busy_get(c);
-        if (pm < 0)
+        int bp = xcore_busy_get(c);
+        if (bp < 0)
             continue;
         p = ps_str(p, end, "core ");
         p = ps_u32(p, end, (unsigned)c);
         p = ps_str(p, end, " busy ");
-        p = ps_pm(p, end, pm);
+        p = ps_bp(p, end, bp);
         p = ps_str(p, end, "\n");
     }
     p = ps_str(p, end, "name                pri state stack       cpu\n");
@@ -181,7 +181,7 @@ int shell_ps(unsigned char *out, int cap) {
         p = ps_str(p, end, "/");
         p = ps_u32(p, end, size);
         while (p < col && p < end) *p++ = ' ';
-        p = ps_pm(p, end, core_thread_permille(t));
+        p = ps_bp(p, end, core_thread_bp(t));
         p = ps_str(p, end, "\n");
     }
     return (int)(p - (char *)out);
