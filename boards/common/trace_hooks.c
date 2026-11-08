@@ -70,8 +70,8 @@ static uint64_t clock_now(uint32_t *us)
     uint64_t c;
     uint32_t u;
     if (cyc == 0u && g_clk.cyc == 0u) {
+        c = (uint64_t)g_ticks * 10000u * TRACE_CPU_MHZ;
         u = (uint32_t)(g_ticks * 10000u);
-        c = (uint64_t)u * TRACE_CPU_MHZ;
     } else {
         cyc_clock_advance(&g_clk, cyc, TRACE_CPU_MHZ);
         c = g_clk.cyc;
@@ -182,12 +182,18 @@ static unsigned active_vector(void)
  * NOW (at the real stop time), not at the next enter, which idle time could delay. */
 void _tx_execution_thread_exit(void)
 {
+    /* the switch path runs with interrupts enabled: read the slice's ISR time with the clock, in
+     * one critical section, so an ISR ending in between is in both or in neither */
+    unsigned prim;
+    __asm__ volatile("mrs %0, primask; cpsid i" : "=r"(prim) : : "memory");
     uint64_t t = clock_now(NULL);
+    uint64_t slice_isr = g_slice_isr;
+    __asm__ volatile("msr primask, %0" : : "r"(prim) : "memory");
     unsigned id = thread_id(_tx_thread_current_ptr);
     /* the thread's CPU is its wall slice minus the ISR time that preempted it */
     uint64_t wall = t - g_slice_start;
-    uint64_t dur = wall > g_slice_isr ? wall - g_slice_isr : 0u;
-    if (id != 0 && g_capturing) {
+    uint64_t dur = wall > slice_isr ? wall - slice_isr : 0u;
+    if (id != 0) {
         unsigned char reason = state_reason((unsigned)_tx_thread_current_ptr->tx_thread_state);
         push_rec(KIND_THREAD, id, reason, g_slice_start_us, us16(dur));
     }
@@ -199,8 +205,11 @@ void _tx_execution_thread_exit(void)
 /* thread_enter runs after the switch — the incoming thread's slice starts now. */
 void _tx_execution_thread_enter(void)
 {
+    unsigned prim;
+    __asm__ volatile("mrs %0, primask; cpsid i" : "=r"(prim) : : "memory");
     g_slice_start = clock_now(&g_slice_start_us);
     g_slice_isr = 0u; /* fresh slice: no ISR time charged yet */
+    __asm__ volatile("msr primask, %0" : : "r"(prim) : "memory");
 }
 
 /* ISR enter/exit bracket the active interrupt. Single-level: nested ISRs (a higher
@@ -220,8 +229,7 @@ void _tx_execution_isr_exit(void)
     g_slice_isr += dur; /* charge this ISR against the interrupted thread's slice */
     g_isr += dur;
     g_hooks_seen = 1;
-    if (g_capturing)
-        push_rec(KIND_ISR, g_isr_vec, 0u, g_isr_start_us, us16(dur));
+    push_rec(KIND_ISR, g_isr_vec, 0u, g_isr_start_us, us16(dur));
 }
 
 /* core_load_tick(): called once per pass by one thread (the owner's comm thread, a satellite's
