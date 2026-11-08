@@ -10,6 +10,7 @@
  * kinds: ISR=0, THREAD=1. reasons: preempt=0, block=1, yield=2, exit=3.
  */
 #include "tx_api.h"
+#include "cyc_clock.h"
 
 #define KIND_ISR       0u
 #define KIND_THREAD    1u
@@ -48,36 +49,46 @@ static void push_rec(unsigned kind, unsigned id, unsigned char info,
     __asm__ volatile("msr primask, %0" : : "r"(prim) : "memory");
 }
 
-/* Microsecond clock: the DWT cycle counter (enabled in tx_initialize_low_level.S) on
- * real M7 (the H735, verified in P3c-0). QEMU doesn't model DWT->CYCCNT (reads 0), so
- * fall back to the 100 Hz SysTick count (10 ms granularity) — enough to show the
- * schedule advancing under sim; the H735 gives true microsecond timing. */
+/* The clock: the DWT cycle counter (enabled in tx_initialize_low_level.S), extended to 64 bits
+ * with a microsecond clock beside it (cyc_clock.h). Every hook reads it, so it does no 64-bit
+ * division: the load accounting adds cycles and the records take the carried microseconds. QEMU
+ * doesn't model DWT->CYCCNT (reads 0), so there the SysTick count stands in, at the sim's 10 ms
+ * granularity, in both units — enough to show the schedule advancing under sim. */
 #ifndef TRACE_CPU_MHZ
 #define TRACE_CPU_MHZ 25u /* QEMU mps2-an500 core clock */
 #endif
 static volatile unsigned long g_ticks; /* SysTicks seen (isr_enter), the QEMU timebase */
-static unsigned long now_us(void)
+static cyc_clock_t g_clk;
+
+/* clock_now(): the time now in cycles, and in microseconds through *us when it is not NULL. A
+ * PRIMASK critical section serialises the clock (an ISR can preempt a thread hook mid-advance). */
+static uint64_t clock_now(uint32_t *us)
 {
-    /* Accumulate 32-bit CYCCNT deltas into a 64-bit tally so the µs value doesn't wrap
-     * every ~7.8 s (32 bits at 550 MHz) — the hooks fire far more often than that. A
-     * PRIMASK critical section serialises the statics (an ISR can preempt a thread hook
-     * mid-read). If DWT reads 0 (QEMU doesn't model CYCCNT) fall back to the SysTick
-     * count (10 ms granularity); the H735 gives true µs. */
-    static unsigned long last_cyc;
-    static unsigned long long acc;
     unsigned prim;
     __asm__ volatile("mrs %0, primask; cpsid i" : "=r"(prim) : : "memory");
-    unsigned long cyc = *(volatile unsigned long *)0xE0001004u; /* DWT->CYCCNT */
-    unsigned long r;
-    if (cyc == 0u && acc == 0ull) {
-        r = g_ticks * 10000u;
+    uint32_t cyc = *(volatile uint32_t *)0xE0001004u; /* DWT->CYCCNT */
+    uint64_t c;
+    uint32_t u;
+    if (cyc == 0u && g_clk.cyc == 0u) {
+        u = (uint32_t)(g_ticks * 10000u);
+        c = (uint64_t)u * TRACE_CPU_MHZ;
     } else {
-        acc += (unsigned long long)(unsigned long)(cyc - last_cyc); /* modular 32-bit delta */
-        last_cyc = cyc;
-        r = (unsigned long)(acc / TRACE_CPU_MHZ);
+        cyc_clock_advance(&g_clk, cyc, TRACE_CPU_MHZ);
+        c = g_clk.cyc;
+        u = g_clk.us;
     }
     __asm__ volatile("msr primask, %0" : : "r"(prim) : "memory");
-    return r;
+    if (us)
+        *us = u;
+    return c;
+}
+
+/* us16(): a duration in cycles as a record's microseconds, which hold 16 bits */
+static unsigned us16(uint64_t cyc)
+{
+    if (cyc >= 0xFFFFull * TRACE_CPU_MHZ)
+        return 0xFFFFu;
+    return (unsigned)((uint32_t)cyc / TRACE_CPU_MHZ);
 }
 
 /* trace_now_us(): the recorder's own clock, exported. This is the ONE timebase every record in
@@ -86,11 +97,13 @@ static unsigned long now_us(void)
  * records don't actually have. The cross-core handoff (xcore.h) stamps this on both sides of its
  * request/ack exchange to place the two cores on one timeline (REQ-TRACE-011).
  *
- * Note the origin: now_us() counts from this core's FIRST call, and trace_arm() deliberately
+ * Note the origin: the clock counts from when the cycle counter started, and trace_arm() deliberately
  * does not reset it — so the offset stays valid across re-arms within a boot. */
 unsigned long trace_now_us(void)
 {
-    return now_us();
+    uint32_t us;
+    (void)clock_now(&us);
+    return us;
 }
 
 /* Map each tx_thread pointer to a small 1-based id (0 = none/idle), assigned on first
@@ -141,14 +154,18 @@ static unsigned char state_reason(unsigned st)
  * Every slice a thread runs, less the ISR time inside it, and every bracketed ISR, are added up
  * here, so a 1 s window (core_load_tick) gives the core's TOTAL busy time — the comm thread and
  * the CAN interrupts included, which the Loom FB-load slots do not count — with a per-thread
- * breakdown. ThreadX has no idle thread: time no thread or ISR ran is idle. */
-static unsigned long g_busy_us[MAX_THREADS + 1]; /* by thread id; [0] = threads past MAX_THREADS */
-static unsigned long g_isr_us;
+ * breakdown. ThreadX has no idle thread: time no thread or ISR ran is idle. All of it is counted in
+ * cycles: an ISR lasts about a microsecond, and summed in whole microseconds every one of them is
+ * rounded the same way, since SysTick starts each at the same point of a microsecond. */
+static uint64_t g_busy[MAX_THREADS + 1]; /* cycles, by thread id; [0] = threads past MAX_THREADS */
+static uint64_t g_isr;                   /* cycles in bracketed ISRs */
 static volatile int g_hooks_seen; /* the execution-change hooks fire: the load is measurable */
 
-static unsigned long g_slice_start;  /* when the currently-running thread started */
-static unsigned long g_slice_isr_us; /* ISR time that interrupted the current slice */
-static unsigned long g_isr_start;
+static uint64_t g_slice_start;    /* when the currently-running thread started, in cycles */
+static uint32_t g_slice_start_us; /* ...and in microseconds, for its record */
+static uint64_t g_slice_isr;      /* ISR cycles that interrupted the current slice */
+static uint64_t g_isr_start;
+static uint32_t g_isr_start_us;
 static unsigned g_isr_vec; /* active exception number of the ISR in progress */
 
 void _tx_execution_initialize(void) {}
@@ -165,26 +182,25 @@ static unsigned active_vector(void)
  * NOW (at the real stop time), not at the next enter, which idle time could delay. */
 void _tx_execution_thread_exit(void)
 {
-    unsigned long t = now_us();
+    uint64_t t = clock_now(NULL);
     unsigned id = thread_id(_tx_thread_current_ptr);
     /* the thread's CPU is its wall slice minus the ISR time that preempted it */
-    unsigned long wall = t - g_slice_start;
-    unsigned long dur = wall > g_slice_isr_us ? wall - g_slice_isr_us : 0u;
-    if (id != 0) {
+    uint64_t wall = t - g_slice_start;
+    uint64_t dur = wall > g_slice_isr ? wall - g_slice_isr : 0u;
+    if (id != 0 && g_capturing) {
         unsigned char reason = state_reason((unsigned)_tx_thread_current_ptr->tx_thread_state);
-        push_rec(KIND_THREAD, id, reason, g_slice_start,
-                 (unsigned)(dur > 0xFFFFu ? 0xFFFFu : dur));
+        push_rec(KIND_THREAD, id, reason, g_slice_start_us, us16(dur));
     }
     if (_tx_thread_current_ptr)
-        g_busy_us[id] += dur; /* a thread with no id still counts toward the core's total */
+        g_busy[id] += dur; /* a thread with no id still counts toward the core's total */
     g_hooks_seen = 1;
 }
 
 /* thread_enter runs after the switch — the incoming thread's slice starts now. */
 void _tx_execution_thread_enter(void)
 {
-    g_slice_start = now_us();
-    g_slice_isr_us = 0u; /* fresh slice: no ISR time charged yet */
+    g_slice_start = clock_now(&g_slice_start_us);
+    g_slice_isr = 0u; /* fresh slice: no ISR time charged yet */
 }
 
 /* ISR enter/exit bracket the active interrupt. Single-level: nested ISRs (a higher
@@ -195,63 +211,64 @@ void _tx_execution_isr_enter(void)
     g_isr_vec = active_vector();
     if (g_isr_vec == 15u)
         g_ticks++; /* SysTick -> the QEMU fallback timebase */
-    g_isr_start = now_us();
+    g_isr_start = clock_now(&g_isr_start_us);
 }
 
 void _tx_execution_isr_exit(void)
 {
-    unsigned long dur = now_us() - g_isr_start;
-    g_slice_isr_us += dur; /* charge this ISR against the interrupted thread's slice */
-    g_isr_us += dur;
+    uint64_t dur = clock_now(NULL) - g_isr_start;
+    g_slice_isr += dur; /* charge this ISR against the interrupted thread's slice */
+    g_isr += dur;
     g_hooks_seen = 1;
-    push_rec(KIND_ISR, g_isr_vec, 0u, g_isr_start,
-             (unsigned)(dur > 0xFFFFu ? 0xFFFFu : dur));
+    if (g_capturing)
+        push_rec(KIND_ISR, g_isr_vec, 0u, g_isr_start_us, us16(dur));
 }
 
 /* core_load_tick(): called once per pass by one thread (the owner's comm thread, a satellite's
  * first thread). When a window of at least LOAD_WIN_US has passed it publishes the window's busy,
- * ISR and per-thread shares (per mille) and its length, and starts the next; until then it only
- * reads the clock. The calling thread's own running slice is counted up to now, so its time is
- * never a window late. On a satellite owner it then asks which satellites published in the
- * window (xcore_busy_watch), so a core that stopped reads as not measured. */
+ * ISR and per-thread shares (in basis points, 0.01 %) and its length, and starts the next; until
+ * then it only reads the clock. The calling thread's own running slice is counted up to now, so
+ * its time is never a window late. On a satellite owner it then asks which satellites published
+ * in the window (xcore_busy_watch), so a core that stopped reads as not measured. */
 #define LOAD_WIN_US 1000000u
-static unsigned long w_t0, w_isr0, w_th0[MAX_THREADS + 1];
+#define LOAD_WIN_CYC ((uint64_t)LOAD_WIN_US * TRACE_CPU_MHZ)
+static uint64_t w_t0, w_isr0, w_th0[MAX_THREADS + 1];
 static int w_started;
-static volatile int g_load_pm = -1, g_isr_pm = -1, g_win_ms = -1;
-static volatile short g_th_pm[MAX_THREADS + 1];
+static volatile int g_load_bp = -1, g_isr_bp = -1, g_win_ms = -1;
+static volatile short g_th_bp[MAX_THREADS + 1];
 
 void xcore_busy_watch(void); /* xcore_owner.c, weak no-op elsewhere (weak_irq.c) */
 
 void core_load_tick(void)
 {
-    if (w_started && now_us() - w_t0 < LOAD_WIN_US)
+    if (w_started && clock_now(NULL) - w_t0 < LOAD_WIN_CYC)
         return;
-    unsigned long th[MAX_THREADS + 1];
+    uint64_t th[MAX_THREADS + 1];
     unsigned prim;
     __asm__ volatile("mrs %0, primask; cpsid i" : "=r"(prim) : : "memory");
-    unsigned long now = now_us();
-    unsigned long isr = g_isr_us;
+    uint64_t now = clock_now(NULL);
+    uint64_t isr = g_isr;
     for (unsigned i = 0; i <= MAX_THREADS; i++)
-        th[i] = g_busy_us[i];
+        th[i] = g_busy[i];
     if (_tx_thread_current_ptr) {
-        unsigned long wall = now - g_slice_start;
-        th[thread_id(_tx_thread_current_ptr)] += wall > g_slice_isr_us ? wall - g_slice_isr_us : 0u;
+        uint64_t wall = now - g_slice_start;
+        th[thread_id(_tx_thread_current_ptr)] += wall > g_slice_isr ? wall - g_slice_isr : 0u;
     }
     __asm__ volatile("msr primask, %0" : : "r"(prim) : "memory");
     if (!w_started) {
         w_started = 1;
     } else {
-        unsigned long dt = now - w_t0;
-        unsigned long busy = isr - w_isr0;
+        uint64_t dt = now - w_t0;
+        uint64_t busy = isr - w_isr0;
         for (unsigned i = 0; i <= MAX_THREADS; i++) {
-            unsigned long d = th[i] - w_th0[i];
+            uint64_t d = th[i] - w_th0[i];
             busy += d;
-            g_th_pm[i] = (short)((unsigned long long)d * 1000u / dt);
+            g_th_bp[i] = (short)(d * 10000u / dt);
         }
         if (g_hooks_seen) {
-            g_isr_pm = (int)((unsigned long long)(isr - w_isr0) * 1000u / dt);
-            g_load_pm = (int)((unsigned long long)busy * 1000u / dt);
-            g_win_ms = (int)(dt / 1000u);
+            g_isr_bp = (int)((isr - w_isr0) * 10000u / dt);
+            g_load_bp = (int)(busy * 10000u / dt);
+            g_win_ms = (int)(dt / (TRACE_CPU_MHZ * 1000u));
         }
         xcore_busy_watch();
     }
@@ -261,22 +278,23 @@ void core_load_tick(void)
         w_th0[i] = th[i];
 }
 
-/* the last window's total busy share of this core, per mille; -1 = not measurable here */
-int core_busy_permille(void) { return g_load_pm; }
+/* the last window's total busy share of this core, in basis points (0.01 %); -1 = not measurable
+ * here */
+int core_busy_bp(void) { return g_load_bp; }
 /* ...of which ISRs */
-int core_isr_permille(void) { return g_isr_pm; }
+int core_isr_bp(void) { return g_isr_bp; }
 /* ...and how long that window was, in ms (at least LOAD_WIN_US; longer when the caller ran late) */
 int core_load_window_ms(void) { return g_win_ms; }
 /* one thread's share, by its TCB; 0 for a thread that has not run (the recorder has not given it
  * an id while it has ids left), -1 when there is no window yet or the thread is past the
  * recorder's ids — its time is in the core's total, not broken out */
-int core_thread_permille(void *tcb)
+int core_thread_bp(void *tcb)
 {
-    if (g_load_pm < 0)
+    if (g_load_bp < 0)
         return -1;
     for (unsigned i = 0; i < g_tid_n; i++)
         if (g_tid_ptr[i] == tcb)
-            return g_th_pm[i + 1u];
+            return g_th_bp[i + 1u];
     return g_tid_n < MAX_THREADS ? 0 : -1;
 }
 

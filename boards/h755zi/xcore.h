@@ -191,7 +191,7 @@ int xcore_down_read(uint32_t off, uint32_t words, uint32_t *st);
  * indexed by core (owner writes nothing — it has its own sched). In the SRAM4 gap. */
 #define XCORE_LOAD_ADDR 0x38000C10u
 
-/* Cross-core TOTAL core load: each satellite publishes its core's busy share (per mille, every
+/* Cross-core TOTAL core load: each satellite publishes its core's busy share (basis points, every
  * thread and ISR — trace_hooks.c core_load_tick) into its slot here every tick, beside the FB-only
  * load above: u32[8], indexed by core, the share in the low half (0xFFFF = not measurable on that
  * image) and a publish count in the high half. The owner sets every slot to 0xFFFF before

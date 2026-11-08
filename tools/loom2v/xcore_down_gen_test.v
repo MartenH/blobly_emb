@@ -141,7 +141,7 @@ fn test_both_cores_close_their_load_window_and_the_satellite_publishes_it() {
 	w := r.owner.index('\t\tC.comm_rx_wait(') or { -1 }
 	t := r.owner.index('\t\tC.core_load_tick()') or { -1 }
 	assert w >= 0 && w < t, 'the comm thread closes the window after its wait:\n${r.owner}'
-	assert r.sat.contains('\t\tC.core_load_tick()\n\t\tC.xcore_busy_pub(1, C.core_busy_permille())'), r.sat
+	assert r.sat.contains('\t\tC.core_load_tick()\n\t\tC.xcore_busy_pub(1, C.core_busy_bp())'), r.sat
 	// with no down channel, the busy publish is what links the satellite glue
 	assert r.build.contains('LOOM_GLUE_SRCS = \$(BOARD_XCORE_SAT)\n'), r.build
 }

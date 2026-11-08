@@ -21,7 +21,7 @@ fn C.xcore_opub_n(off u32, src &u32)
 fn C.xcore_down_read(off u32, words u32, st &u32) int
 fn C.xcore_test_sram() &u32
 fn C.xcore_ow_ack(v u32) u32
-fn C.xcore_busy_pub(core int, pm int)
+fn C.xcore_busy_pub(core int, bp int)
 fn C.xcore_busy_get(core int) int
 fn C.xcore_test_busy_slots() &u32
 fn C.xcore_busy_watch()
