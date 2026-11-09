@@ -139,6 +139,12 @@ verification fulfils a requirement. Requirements still being worked sit at `draf
 and are **not gated at all** (their failing/pending evidence won't block CI) until
 they go green, at which point you promote them to `agreed`.
 
+The same gate is also a **ratchet on the gaps** of every requirement, `draft` included:
+[`gaps.toml`](gaps.toml) lists the `uncovered` requirements and the ones above QM that are not
+`verified`, and must list exactly what the tool computes. A new gap fails until it is added
+there; a closed one fails until it is struck. So a gap appears or disappears only as an edit the
+review sees, and neither list can grow back unnoticed.
+
 ## Status lifecycle
 
 ```

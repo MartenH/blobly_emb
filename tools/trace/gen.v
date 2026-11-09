@@ -7,7 +7,8 @@
 //
 //   make tool-trace   # built once by tools/tools.mk, rebuilt when its sources change
 //   bin/.tool-trace           # write docs/traceability.md
-//   bin/.tool-trace --check   # also exit nonzero on a FAILED requirement
+//   bin/.tool-trace --check   # also exit nonzero on a FAILED requirement, an agreed one not
+//                             # verified, or a gap requirements/gaps.toml does not record
 module main
 
 import os
@@ -73,7 +74,7 @@ fn main() {
 	mut rfiles := os.walk_ext('requirements', '.toml')
 	rfiles.sort()
 	for f in rfiles {
-		if os.file_name(f) == 'verifications.toml' {
+		if os.file_name(f) in ['verifications.toml', os.file_name(gaps_file)] {
 			continue
 		}
 		doc := toml.parse_file(f) or { panic('parse ${f}: ${err}') }
@@ -419,7 +420,53 @@ fn main() {
 		}
 		if n_gap > 0 {
 			eprintln('trace-check: ${n_gap} agreed requirement(s) not verified')
+		}
+		ratchet := gap_ratchet(reqs, st)
+		for l in ratchet {
+			eprintln('trace-check: ${l}')
+		}
+		if n_gap > 0 || ratchet.len > 0 {
 			exit(1)
 		}
 	}
+}
+
+const gaps_file = 'requirements/gaps.toml'
+
+// gap_ratchet compares the requirements' gaps with the ones requirements/gaps.toml records —
+// `uncovered` (no verification linked) and `asil_unverified` (above QM and not verified) — and
+// names every difference: a new gap must be recorded there, so it is seen in review, and a
+// closed one must be struck, so it cannot reopen unseen. Neither list is held to shrink; each
+// change to it is an edit in the diff. A missing key is an empty list.
+fn gap_ratchet(reqs []Req, st map[string]string) []string {
+	doc := toml.parse_file(gaps_file) or { return ['cannot read ${gaps_file}: ${err}'] }
+	mut out := []string{}
+	mut uncovered := []string{}
+	mut asil := []string{}
+	for r in reqs {
+		if st[r.id] == 'uncovered' {
+			uncovered << r.id
+		}
+		if r.asil.trim_space().to_upper() in ['A', 'B', 'C', 'D'] && st[r.id] != 'verified' {
+			asil << r.id
+		}
+	}
+	for key, now in {
+		'uncovered':       uncovered
+		'asil_unverified': asil
+	} {
+		val := doc.value(key)
+		listed := if val is toml.Null { []string{} } else { arr(val).map(it.string()) }
+		for id in now {
+			if id !in listed {
+				out << '${id}: a new gap (${key}) — link a verification, or add it to ${key} in ${gaps_file}'
+			}
+		}
+		for id in listed {
+			if id !in now {
+				out << '${id}: no longer a gap (${key}) — remove it from ${key} in ${gaps_file}'
+			}
+		}
+	}
+	return out
 }
