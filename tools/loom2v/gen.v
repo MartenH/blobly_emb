@@ -1056,7 +1056,7 @@ fn parse_isotp(doc toml.Doc) []IsotpConn {
 		tx_id:         toml_int(m, 'tx_id', 0, 0, 0x1FFFFFFF, '[isotp]')
 		// both go out as one Flow Control byte (and the bootloader's as a uint8_t): a block size
 		// of 256 would wrap to 0, the whole message, and an STmin past 127 is a reserved or a
-		// microsecond code — refused here rather than narrowed (REQ-TP-020)
+		// microsecond code — refused here rather than narrowed (REQ-CAN-TP-020)
 		bs:            schema_int(m, 'isotp', 'bs', 0, '[isotp]')
 		stmin:         schema_int(m, 'isotp', 'stmin_ms', 0, '[isotp]')
 		functional_id: toml_int(m, 'functional_id', 0, 0, 0x1FFFFFFF, '[isotp]')

@@ -19,7 +19,7 @@ from each ID prefix (`REQ-<AREA>-NNN` / `SYS-REQ-<AREA>-NNN`).
 | **app** | Function Block model + the application contract | APP | planned |
 | **com** | signal ⇄ PDU, TX modes, RX deadline monitoring | COM | planned |
 | **route** | raw-PDU routing / gateway | ROUTE | planned |
-| **tp** | ISO-TP segmented transport (15765-2) | TP | planned |
+| **isotp** | ISO-TP segmented transport on CAN (15765-2) | CAN-TP | ✅ |
 | **diag** | UDS diagnostic services (14229) | DIAG | planned |
 | **e2e** | end-to-end protection (safety: CRC + alive counter) | E2E | planned |
 | **secoc** | authenticated messaging (security: CMAC + freshness) | SEC | planned |
@@ -45,7 +45,7 @@ Cross-cutting (not a module — properties of the whole):
                   │                 │              │
    ioc ◄──────────┘                 │            wdg (Sentinel)
                                     │
-   com ─ route ─ tp ─ diag ─ e2e ─ secoc ─ nm     (communication)
+   com ─ route ─ isotp ─ diag ─ e2e ─ secoc ─ nm  (communication)
                   │
         can (driver port + backends)
                   │
@@ -59,6 +59,6 @@ on the `osal`/`ioc` platform line.
 
 ## Authored so far
 
-`system`, `ecu` (ECU/INIT/MODE), `nm`, `wdg`, `can-drv`, `inv`. The remaining
-existing modules (`com`, `ioc`, `tp`, `diag`, `e2e`, `secoc`, `loom`, `app`,
+`system`, `ecu` (ECU/INIT/MODE), `nm`, `wdg`, `can-drv`, `can-tp`, `inv`. The remaining
+existing modules (`com`, `ioc`, `diag`, `e2e`, `secoc`, `loom`, `app`,
 `osal`) get baselined from what's already built + tested; `nvm` is future.

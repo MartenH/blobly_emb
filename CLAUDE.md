@@ -13,7 +13,7 @@ handlers, wired by the **Loom**, over a comms stack we own. **Start with
 `docs/architecture.md`** for how the pieces fit. See `docs/` for the deeper
 rationale (`no-alloc.md`, `memory-protection.md`, `multicore-perf.md`,
 `threadx-amp.md`, `fb-placement.md` — what an FB can do on each core, as REQ-PLACE-* —
-`communication.md`, `diagnostics.md` — the fault-memory / diagnostic-server
+`communication.md`, `can-tp.md` — ISO-TP on CAN: what of ISO 15765-2 is implemented and the choices the standard leaves open — `diagnostics.md` — the fault-memory / diagnostic-server
 plan (#286–#288) — `autosar-comparison.md` — which RTE/COM
 patterns we keep, plan, or skip — `ways-of-working.md` — how many teams + a
 weekly DBC stay in sync via the signal-name contract — and `porting.md` — the
