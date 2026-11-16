@@ -54,7 +54,7 @@ services of its **service table** (`[uds] services`, §3.1), each in the session
 | Feature | Host bridge | ThreadX target |
 |---|---|---|
 | The server: sessions, gating, constant DIDs, functional requests | yes | yes |
-| Live DIDs | any signal | only a signal this node transmits on CAN from an owner FB, or a value an FB on a generated satellite core writes; at most 32 bits |
+| Live DIDs (an integer or bool value, never a float) | any such signal | only a signal this node transmits on CAN from an owner FB, or a value an FB on a generated satellite core writes; at most 32 bits |
 | 0x27 key | blobly_net's reference key | the board's `diag_sa_key_ok` (no default is linked), or the reference key by name for a bench (`security_key = "reference"`); seed from the board's TRNG |
 | 0x11 | returns the diagnostic state to power-on | resets the MCU once the answer is on the wire |
 | 0x10 02 handoff to the bootloader | — | with `[boot]` |
@@ -230,8 +230,10 @@ unanswered**.
   to their DBC range). Up to 16 DIDs of up to 32 bytes.
 - **0x22 reads several DIDs per request**; an answer too long for the buffer is 0x14
   responseTooLong.
-- **Per-DID gates**: `read` and `write`, each a session list and a 0x27 level. A DID with no
-  `write` gate is not writable (absent is never "no requirements").
+- **Per-DID gates**: `read` and `write`, each a session list and a 0x27 level. A DID is writable
+  when it has a `write` gate, or `writable = true` (a constant's RAM copy); with `writable = true`
+  and no `write` gate, 0x2E accepts it in every session with no level, so protect such a DID with a
+  `write` gate. Without either it is read-only.
 - **0x2E accepts exactly the DID's declared size** and never changes it. The checks run in this
   order: the service row (0x7F, 0x33), the DID's session (0x31), its level (0x33), the length
   (0x13), then for a parameter its conditions (0x22), range (0x31) and the journal (0x72).
@@ -403,7 +405,9 @@ period never taken as less than 50 ms (an interrupt-driven handler has none), so
 
 - **What a snapshot is**: the declared DIDs' values **at storage**, taken in the first owner pass
   after the qualifying report, as AUTOSAR's Dem captures a freeze frame when it processes the event.
-  That is at most one pass after the report: 10 ms on a target at `tick_ms = 1`, 10 ms on the host.
+  That is at most one owner-pass interval after the report, plus the passes' own execution time: the
+  comm loop waits at most 10 ticks between passes on a target (10 ms at `tick_ms = 1`), one bridge
+  pass (10 ms) on the host.
 - **One snapshot per DTC**, record 0x01, taken at the occurrence that finds the DTC without one, and
   kept until the DTC is cleared, ages out, heals before confirming, or is displaced.
 - **Fixed shape**: each DID at its declared size, zero-filled while nothing has published it.
@@ -468,13 +472,18 @@ feed the journal's wear check ([nvm.md](nvm.md), "Wear, proven per configuration
 (the NM sleep edges, before an ECUReset). A write made in bus sleep, such as a DoIP tester's 0x14,
 re-runs the flush **without its erase** (REQ-NVM-015).
 - On an NM node, erases happen only at the sleep edges (and in the flush after an ECUReset's answer).
-- On a node without NM, erases happen only **at boot**, since a run-time erase on a single-bank chip
-  stalls every instruction fetch for 1–2 s. Boot leaves at least half a sector free; past a second
-  fill in one run, writes are refused until the next boot (a 0x14 then answers 0x72).
+- On a node without NM, erases happen at boot, and in the flush after an ECUReset's answer when a
+  sector rollover left one pending (a stall of 1–2 s just before the reset), never otherwise at run
+  time: an erase on a single-bank chip stalls every instruction fetch. Boot leaves at least half a
+  sector free; past a second fill in one run, writes are refused until the next boot (a 0x14 then
+  answers 0x72).
 
 **Worst-case comm-thread stall** per pass: one flash program per 32-byte record, at most the
-unwritten snapshots, one image (up to 17 records for 32 faults) and the tombstones. On zone_a that is
-a handful of programs, well under a millisecond. Never an erase at run time.
+unwritten snapshots, one image (up to 17 records for 32 faults) and the tombstones. A write that
+fills the sector first copies the whole live set into the erased partner (an inline compaction:
+every persisted value, signals and parameters included), which is the worst case. On zone_a, with
+a live set of a few records, that is a handful of programs, well under a millisecond. No erase in a pass (the ECUReset flush above is
+after the answer).
 
 ### 3.4 Parameters (variant coding)
 
