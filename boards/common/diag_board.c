@@ -148,7 +148,7 @@ void diag_sys_reset(void) {
  * system reset does not clear: just below the boot cells (bootmap.h, 0x38000FE0+) and clear of
  * xcore's map (which ends well below 0x38000F00). Garbage after power-on, so a magic and a check
  * word guard it, and it is consumed when read. Not across a power cycle: that is the journal's
- * (docs/diagnostics.md R6). */
+ * (not built yet, docs/diagnostics.md §5). */
 #ifndef DIAG_KEEP_ADDR
 #define DIAG_KEEP_ADDR 0x38000FC0u
 #endif

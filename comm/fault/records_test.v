@@ -157,7 +157,7 @@ fn test_extended_data_records() {
 }
 
 // The persisted counters saturate at their serialized width: an increment at the maximum stays
-// there (docs/diagnostics.md §7, R6).
+// there (docs/diagnostics.md §6).
 fn test_counters_saturate_at_their_width() {
 	mut m := snap_memory(1, 1)
 	m.slots[0].confirm = 255

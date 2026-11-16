@@ -374,7 +374,7 @@ pub fn (mut m Memory) cycle_start() {
 }
 
 // end_cycle_after requests the operation cycle's end `grace_us` from `now`, the cycle-end barrier
-// (docs/diagnostics.md §7): a producer's dispatch that began before the end was decided — NM going
+// (docs/diagnostics.md §6): a producer's dispatch that began before the end was decided — NM going
 // to sleep — publishes its report within one of its periods, and a report the owner reads only
 // after cycle_end would count for nothing, the qualification in it lost from the cycle it belongs
 // to and from the store. So the cycle stays open for the grace (at least the longest period of a

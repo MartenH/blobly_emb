@@ -141,7 +141,7 @@ frame    = "SteeringFrame"
 cycle_ms = 50
 
 # SafetyCmd: a protected command the chassis node sends zone_a on edge — the received-signal checks
-# on a ThreadX target (docs/diagnostics.md R5). SafetyCmdFrame carries AUTOSAR E2E Profile 1 (Data
+# on a ThreadX target (docs/diagnostics.md §3.2). SafetyCmdFrame carries AUTOSAR E2E Profile 1 (Data
 # ID 0x55, CRC byte 2, counter byte 3) and its receiver's 300 ms sender-loss timeout, all in edge.dbc
 # (blobly_net's docs/dbc_attributes.md). zone_a's comm thread checks every frame of it, and its FB
 # sees the value with its RxStatus and lost count (sysgen adds both to a receiver of an E2E frame);

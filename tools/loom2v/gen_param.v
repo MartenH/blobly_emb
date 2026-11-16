@@ -1,4 +1,4 @@
-// loom2v's parameter codegen (docs/diagnostics.md §3.4, R7, #288): a [[param]] is a value an FB
+// loom2v's parameter codegen (docs/diagnostics.md §3.4, #288): a [[param]] is a value an FB
 // reads and never writes, fixed per vehicle — coded with 0x2E on the [[did]] that names it, kept in
 // the NvM journal, read back with 0x22. comm/param is the runtime; this file is its wiring.
 //

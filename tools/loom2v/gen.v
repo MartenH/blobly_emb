@@ -5692,7 +5692,7 @@ fn validate_faults(m Model, doc toml.Doc) {
 		return
 	}
 	if m.target.on && !m.target.threadx {
-		panic('loom2v: [[fault]] on a bare-metal [target] — the fault memory runs on a ThreadX comm thread (docs/diagnostics.md R6); use kind = "threadx"')
+		panic('loom2v: [[fault]] on a bare-metal [target] — the fault memory runs on a ThreadX comm thread (docs/diagnostics.md §3.3); use kind = "threadx"')
 	}
 	if m.isotp_conns.len != 1 {
 		panic('loom2v: [[fault]] needs the node\'s diagnostic server — an [isotp] connection — to serve 0x19 / 0x14 / 0x85')
@@ -5796,7 +5796,7 @@ fn fault_entries(m Model) int {
 
 // validate_fault_snapshots: every owner's snapshot rules. A snapshot names declared [[did]]s,
 // each at most once, at most fault.max_freeze of them, none empty. And it is no side door around
-// DID access (docs/diagnostics.md §7): 0x19 04 hands out what the DIDs hold under 0x19's own
+// DID access (docs/diagnostics.md §6): 0x19 04 hands out what the DIDs hold under 0x19's own
 // gate, so each DID must be readable in every session 0x19 is served in, behind no 0x27 level but
 // the one 0x19's row itself demands.
 fn validate_fault_snapshots(m Model) {
@@ -5850,7 +5850,7 @@ fn validate_fault_snapshots(m Model) {
 // fault_cycle_power: `[fault_memory] cycle = "power"` — the operation cycle is the power cycle: it
 // begins when the owner starts and ends with it (AUTOSAR's POWER cycle), for a node with neither NM
 // nor a cycle signal. With the memory in RAM its end is never observed: pending never clears and
-// nothing ages until the persistent memory records the shutdown (R6, docs/diagnostics.md §3.3).
+// nothing ages until the persistent memory records the shutdown (docs/diagnostics.md §3.3).
 const fault_cycle_power = 'power'
 
 // iocb_pool_n: the byte-IOC channels a ThreadX image has (boards/common/iocb.c IOCB_POOL_N),

@@ -3,7 +3,7 @@ module main
 import toml
 import tools.ecumodel
 
-// The ThreadX comm thread's receive path (R5, docs/diagnostics.md §3.2): the host bridge's
+// The ThreadX comm thread's receive path (docs/diagnostics.md §3.2): the host bridge's
 // templates (gen_rx.v) over the target's seams. A received frame that needs the COM receive rule —
 // a deadline, E2E or SecOC, a signal with a status or lost count, or a layout the lean whole-frame
 // copy cannot hand over — is decoded by the DBC codec, judged by com.RxMonitor, and its signals

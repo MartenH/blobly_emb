@@ -105,7 +105,7 @@ fn signal_fault_init(m Model, ind string) []string {
 }
 
 // rx_state_init: the monitors' deadlines, armed from the owner's start (a sender absent since
-// boot still reaches `timeout`, docs/diagnostics.md §7), and SecOC's keys.
+// boot still reaches `timeout`, docs/diagnostics.md §6), and SecOC's keys.
 fn rx_state_init(m Model, msgs []string, bname string, now string, ind string) []string {
 	mut out := []string{}
 	for msg in msgs {

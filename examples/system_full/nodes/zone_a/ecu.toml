@@ -96,7 +96,7 @@ thread = "front_thread"
 # SafetyMonitor receives the chassis node's protected SafetyCmd (system.toml; on the bench blobly_net
 # simulates the chassis). The comm thread checks every frame of it — the E2E CRC and counter, and E2E's own 300 ms
 # sender-loss timeout (edge.dbc) — and the FB reads the value WITH its receive status and the count of
-# frames the sequence showed missing (docs/diagnostics.md §3.2, R5). It acts on the level only while
+# frames the sequence showed missing (docs/diagnostics.md §3.2). It acts on the level only while
 # the status is ok and holds the safe level 0 otherwise, and reports what it saw on SafetyView.
 [[fb]]
 name   = "SafetyMonitor"
@@ -108,7 +108,7 @@ thread = "front_thread"
   reads     = ["SafetyCmd"]
   writes    = ["SafetyView"] # trailing comment terminates nested block (vlang/v#27684)
 
-# --- A parameter (docs/diagnostics.md §3.4, R7): variant coding ------------------------------------
+# --- A parameter (docs/diagnostics.md §3.4): variant coding ------------------------------------
 # The most SteerLimiter ever puts on the wire, coded per vehicle: an In field the limiter reads like
 # any input (it cannot write it), kept in the NvM journal below, coded with 0x2E on DID 0x0110 (the
 # extended session and 0x27 level 1, as the DID says) and read back with 0x22. "reset": a coded
@@ -123,7 +123,7 @@ default = { deg = 360 }
 range   = { deg = { min = 0, max = 360 } }   # refused at 0x2E (0x31) and at restore
 apply   = "reset"
 
-# --- Faults (docs/diagnostics.md §3.3, R6): a fault memory on the TARGET ----------------------
+# --- Faults (docs/diagnostics.md §3.3): a fault memory on the TARGET ----------------------
 # SteerLimiter tests the VehicleSpeed it receives (domain -> gateway -> here) for plausibility each
 # dispatch; the Loom debounces the result on front_thread, and the fault memory on the comm thread
 # keeps the DTC status the tester reads (0x19), clears (0x14) and freezes (0x85). The domain's speed
@@ -140,7 +140,7 @@ confirm  = 1
 aging    = 3                           # three passing power cycles after the last failure age it out
 freeze   = [0xF1A0]
 
-# Signal-status faults (docs/diagnostics.md §3.3, R5): no FB tests these — the comm thread is the
+# Signal-status faults (docs/diagnostics.md §3.3): no FB tests these — the comm thread is the
 # detector, from SafetyCmd's receive status, on every publication. Debounced there (counter defaults).
 [[fault]]
 name   = "SafetyCmdTimeout"

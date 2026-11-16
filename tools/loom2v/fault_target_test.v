@@ -4,7 +4,7 @@ module main
 import os
 import tools.sysmodel
 
-// Faults on a ThreadX target (docs/diagnostics.md R6): the fault memory on the comm thread, each
+// Faults on a ThreadX target (docs/diagnostics.md §3.3): the fault memory on the comm thread, each
 // fault-owning FB's report and control cells on the byte IOC, the operation cycle from NM (D3) or
 // the power cycle — and what stays refused. Runs the real generator on testdata/threadx_node with
 // its FBs on one thread and a connection and faults appended (a refusal is a panic, which cannot be
@@ -257,7 +257,7 @@ fn test_the_fault_memory_is_persisted_in_the_journal() {
 }
 
 // A snapshot names this node's DIDs, at most max_freeze of them, each readable wherever 0x19 is —
-// never a side door around a DID's gate (docs/diagnostics.md §7) — and the entries are bounded.
+// never a side door around a DID's gate (docs/diagnostics.md §6) — and the entries are bounded.
 fn test_snapshot_declarations_are_checked() {
 	did := '[[did]]\nid    = 0xF190\nascii = "BLOBLY"\n[[did]]\nid    = 0xF191\nascii = "X"\nread  = { session = ["extended"] }\n[[did]]\nid    = 0xF193\nascii = "Y"\nread  = { security = 1 }\n'
 	cases := {

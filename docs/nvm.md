@@ -6,9 +6,9 @@
 >
 > Earlier (2026-10-04, R7): **P4 is built** as the parameters' write path — a `[[param]]` is one
 > record in this journal, coded with 0x2E on the `[[did]]` that names it, durable before the answer
-> ([diagnostics.md](diagnostics.md) §3.4 "As built"). The persisted signals still have no DID binding.
+> ([diagnostics.md](diagnostics.md) §3.4). The persisted signals still have no DID binding.
 >
-> Earlier (2026-10-04): the fault memory (diagnostics.md R6b) persists in this journal — a
+> Earlier (2026-10-04): the fault memory (diagnostics.md §3.3) persists in this journal — a
 > status image and per-fault snapshot blocks, the journal's sectors now the board's (`bootmap.h`
 > NVM_*, linked by the generator through `boards/common/nvm_map.c`).
 >
@@ -17,7 +17,7 @@
 > ThreadX target (`examples/h755_threadx`, `system_full/nodes/domain`), its power-pull bench
 > loop not yet recorded. **P4
 > (writable DIDs backed by blocks) is not built** — it is the first step of parameters in
-> [diagnostics.md](diagnostics.md) (R7). Requirements: `requirements/nvm.toml` (draft,
+> [diagnostics.md](diagnostics.md) §3.4. Requirements: `requirements/nvm.toml` (draft,
 > deriving from SYS-REQ-NVM-001). This page began as the design (2026-07-14); the phasing
 > below records what landed. Fault-memory storage (freeze frames) is now designed in
 > [diagnostics.md](diagnostics.md) §3.3 — chained values in this journal — which supersedes
