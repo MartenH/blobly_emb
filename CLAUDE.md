@@ -183,7 +183,7 @@ each example's `test/` (blobly_net project + Lua), run by `make test`.
 feature branch runs only `guard`, so a green tick there is the identity check, NOT the test
 gate. Open the PR to get one.
 
-Both jobs run on **`ubuntu-24.04`**, pinned rather than `ubuntu-latest`: 24.04 is the supported
+ci.yml's two jobs (`test`, `cross`) run on **`ubuntu-24.04`**, pinned rather than `ubuntu-latest`: 24.04 is the supported
 floor, and when `ubuntu-latest` became 26.04 (2026-11) its gcc 14 and arm-none-eabi 14.2 broke the
 build under every open PR at once. Moving to a newer image is its own PR.
 
