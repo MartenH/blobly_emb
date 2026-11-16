@@ -48,7 +48,7 @@ test("UDS: write + read DID 0xF1AD (RAM, multi-frame both ways)", function()
   check.equal(d:read_did(0xF1AD), payload)
 end)
 
--- R1 (docs/diagnostics.md): the server's session model, gating, multi-DID reads, functional
+-- docs/diagnostics.md §3.1: the server's session model, gating, multi-DID reads, functional
 -- requests, ECUReset and CommunicationControl, over the real bus. Built on the client's raw()
 -- plus raw frames, so it needs nothing beyond what blobly_net already offers.
 

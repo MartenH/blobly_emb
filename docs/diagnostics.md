@@ -44,7 +44,7 @@ services of its **service table** (`[uds] services`, §3.1), each in the session
 | Topic | What we do |
 |---|---|
 | Negative responses | 0x11 0x12 0x13 0x14 0x22 0x24 0x31 0x33 0x35 0x36 0x37 0x72 0x7E 0x7F, in ISO 14229-1's evaluation order (§3.1) |
-| Functional requests | single frames only; the ISO-suppressed negative responses (0x11, 0x12, 0x31, 0x7E, 0x7F) are withheld |
+| Functional requests | single frames only; the ISO-suppressed negative responses (0x11, 0x12, 0x31, 0x7E, 0x7F) are withheld; a functional 0x27 is ignored outright (no seed, no answer) |
 | responsePending (0x78) | **not sent** by an application. Every write that must be stored is one synchronous journal append that never erases, well inside P2 (§3.1) |
 | busyRepeatRequest (0x21) | **not sent**. A request that arrives while an answer is in flight is dropped; the tester retries |
 | P2 on silicon | P2server_max is announced as 50 ms; measuring it on the bench (REQ-DIAG-064) is still to do |
@@ -145,7 +145,8 @@ Dispatch checks it after "is the service built in", in ISO 14229-1's order:
 then the length check and any per-DID gate.
 
 **Absent, the default table**: every service the build performs; 0x27, 0x28 and 0x85 in the
-non-default sessions only, everything else in every session; no service-level security.
+extended session only (and programming, in the bootloader), so not in safety; everything else in
+every session; no service-level security.
 
 **What a build performs**: 0x10, 0x22, 0x2E and 0x3E always; 0x11 and 0x28 on both owners;
 0x14, 0x19 and 0x85 with a `[[fault]]` memory; 0x27 when a `[[did]]` gate or a row names a level.
@@ -182,8 +183,9 @@ refused with the move they need.
   the exchange is over).
 - **Every session entry relocks security**: an explicit 0x10, re-entering the same session, S3 or
   a reset. An expired unlocked session cannot be re-entered without a new seed and key.
-- **Leaving a non-default session** (explicitly, by S3 or by a reset) re-enables communication
-  0x28 disabled and turns DTC setting back on (0x85).
+- **Returning to the default session** (explicitly, by S3 or by a reset) re-enables communication
+  0x28 disabled and turns DTC setting back on (0x85). A switch between two non-default sessions
+  keeps both as they are.
 - **An application never enters programming.** Without `[boot]` 0x10 02 is refused (0x12). With
   it, 0x10 02 is the handoff (below).
 - **A non-default session, or an exchange in flight on CAN, holds NM awake** on a ThreadX node
@@ -199,7 +201,7 @@ refused with the move they need.
 | Seed | 4 bytes, from the board's TRNG on a target. All zeros when the level is already unlocked |
 | Key | one key per seed, checked through an injected seam (`SecurityOps`), so `comm/uds` holds no algorithm. A target links the OEM's `diag_sa_key_ok`; the bench and the host use blobly_net's public reference key (seed XOR 0xFF), so both sides unlock with one algorithm |
 | A key before its seed | 0x24 requestSequenceError |
-| Wrong keys | 0x35 invalidKey; past `security_attempts` (3) 0x36, then 0x37 for `security_delay_ms` (10 s) |
+| Wrong keys | 0x35 invalidKey; the `security_attempts`-th wrong key (the 3rd by default) is answered 0x36 and starts the lockout, during which a seed request is answered 0x37 for `security_delay_ms` (10 s) |
 | Across a reset | the failed-key count and a running lockout are kept (a reset-surviving RAM cell on a target), so a reset between guesses buys nothing. A clean reset never waits |
 | Across a power cycle | the count is **not** kept yet |
 | Two transports | an unlock belongs to the transport that earned it: a DoIP tester never inherits a CAN tester's unlock, nor the reverse; a seed asked over one never replaces the other's challenge |
@@ -231,15 +233,16 @@ unanswered**.
 - **Per-DID gates**: `read` and `write`, each a session list and a 0x27 level. A DID with no
   `write` gate is not writable (absent is never "no requirements").
 - **0x2E accepts exactly the DID's declared size** and never changes it. The checks run in this
-  order: the DID's session (0x31), its level (0x33), the length (0x13), then for a parameter its
-  conditions (0x22), range (0x31) and the journal (0x72).
+  order: the service row (0x7F, 0x33), the DID's session (0x31), its level (0x33), the length
+  (0x13), then for a parameter its conditions (0x22), range (0x31) and the journal (0x72).
 - **0xF186** (active session) and, with `[boot]`, **0xF195** (the running image's version, which
   the bootloader verified) are the server's own; declaring them is refused.
 
 #### Negative responses and functional requests
 
-NRCs come in ISO 14229-1's evaluation order: 0x11 / 0x7F, 0x12 / 0x7E, 0x13, 0x22, 0x24, 0x31,
-0x33. A functional request (`[isotp] functional_id`, single frames only) is served the moment it is
+NRCs come in ISO 14229-1's evaluation order: first for the service, 0x11, 0x7F and the service
+row's 0x33; then within the service, 0x12 / 0x7E, 0x13, 0x22, 0x24, 0x31, and a DID's own 0x33 where
+it is checked. A functional request (`[isotp] functional_id`, single frames only) is served the moment it is
 read, so a functional 0x28 gates the very next frame. Its negative responses 0x11, 0x12, 0x31, 0x7E
 and 0x7F are withheld, so a broadcast into a gated service stays silent on every ECU. It is dropped,
 not queued, while the physical connection is busy ([can-tp.md](can-tp.md) §3.6).
@@ -326,7 +329,7 @@ signal = "VehicleSpeed"      # detector: the receiver, from the rx status (§3.2
 on     = "timeout"           # or "integrity", "lost"
 ```
 
-Up to 32 faults per node, and 8 per producing thread.
+Up to 32 faults per node, and 8 per fault-owning FB (its report cell is bounded); signal-status faults count only toward the 32.
 
 #### Reporting is one-way
 
@@ -392,9 +395,9 @@ warningIndicatorRequested, is never set).
 | `cycle = "power"` | both | the owner starts | power-off: on the target, ended at the next start; with the RAM-only memory of the host, never observed |
 
 A node declaring any fault with none of these fails generation. The cycle-end **grace**: when NM
-decides to sleep, the cycle stays open for twice the longest period of a fault-testing handler (an
-interrupt-driven one counts as 50 ms), so a report published just after the decision still counts in
-the ending cycle.
+decides to sleep, the cycle stays open for twice the longest period of a fault-testing handler, that
+period never taken as less than 50 ms (an interrupt-driven handler has none), so the grace is at least
+100 ms and a report published just after the decision still counts in the ending cycle.
 
 #### Snapshots (0x19 03 / 04)
 
@@ -406,8 +409,9 @@ the ending cycle.
 - **Fixed shape**: each DID at its declared size, zero-filled while nothing has published it.
 - **No side door**: a `freeze` DID must be readable in every session 0x19 is served in, behind no
   0x27 level but 0x19's own. Also refused: a DID that is not the node's, one named twice, more than 4.
-- **Fits the transport**: generation refuses a fault table whose 0x19 02 / 03 / 04 / 0A answer could
-  exceed the 520-byte message limit.
+- **Fits the transport**, by the limits rather than a check: a 0x19 02 / 0A answer is at most
+  3 + 32 × 4 bytes and a snapshot at most 144 bytes, both well inside the 520-byte message. Raising
+  `max_faults`, `max_freeze` or `max_did_data` needs a check that does not exist yet.
 
 #### Extended data (0x19 06)
 
@@ -503,7 +507,7 @@ param_status = true                         # one byte per parameter: 0 default,
 | Identity in the journal | the block id is the parameter's DID (or a pinned `nvm_id`), never a hash. The record states its structure exactly: format, `version`, field count, each field's type, then the values |
 | A firmware update | restored only when the whole header matches. Renaming a field keeps the coding; a changed type, count or `version` reverts to the default. Same-type fields reordered are taken by position, so bump `version` when meaning changes |
 | Range | checked again at restore: a value outside a narrowed range runs the default and reads `reverted`; a widened range keeps the coding |
-| 0x2E order | the DID's session (0x31) and level (0x33) and the service row, then the length (0x13), the range (0x31), then the journal; a refusal there is 0x72 and changes nothing |
+| 0x2E order | the service row, the DID's session (0x31) and level (0x33), then the length (0x13), the range (0x31), then the journal. A refusal there is 0x72 and changes nothing in this run; the stored value is unchanged too unless the flash took the record and only its read-back failed, so after a 0x72 the next write is stored whatever it holds |
 | An unchanged value | writes nothing, so a tester polling 0x2E costs no wear. The first write of a never-coded parameter is stored even when it equals the default |
 | When it takes effect | `next_dispatch`: in the pass that wrote it. `reset`: from the next power-up or ECUReset. 0x22 reads the coded value either way |
 | Status DID | 0 default (nothing stored), 1 coded, 2 reverted (another layout, out of range, or the journal unreadable) |
@@ -532,6 +536,8 @@ param_status = true                         # one byte per parameter: 0 default,
 - responsePending (0x78) and busyRepeatRequest (0x21) in an application.
 
 **Not built yet**:
+- live DIDs on a target's inputs (a live DID there reads only what the node transmits, or a
+  satellite's value);
 - the 0x27 failed-key count across a power cycle;
 - an operation-cycle signal on a target;
 - faults in a multi-thread partition or a hand-written satellite;
@@ -543,7 +549,7 @@ param_status = true                         # one byte per parameter: 0 default,
 
 | Guarantee | Proved by |
 |---|---|
-| Leaving a non-default session (explicitly, by S3, by a reset) re-enables 0x28 communication and turns 0x85 back on | `comm/uds` unit tests; vcan e2e |
+| Returning to the default session (explicitly, by S3, by a reset) re-enables 0x28 communication and turns 0x85 back on | `comm/uds` unit tests; vcan e2e |
 | One diagnostic server per node: `[isotp]` is a table, so a second connection cannot be written | generation |
 | The programming handoff is offered only on the bus and ids its bootloader serves: the bootloader is built from the node's own `[isotp]` | `tools/loom2v/diag_target_test.v`; bench `test/boot_handoff.lua` |
 | The handoff is gated on the application's conditions (`boot_handoff_ok`) | `comm/uds` `test_the_conditions_seam_refuses_a_handoff` |
@@ -556,9 +562,8 @@ param_status = true                         # one byte per parameter: 0 default,
 | A test result is never lost to the not-completed bits or aging: the tested count is monotonic | `comm/fault/fault_test.v` |
 | The cycle end waits for reports in flight (the grace) | `comm/fault/fault_test.v` |
 | A snapshot is never a side door around a DID's gate | `tools/loom2v/fault_target_test.v` `test_snapshot_declarations_are_checked` |
-| Every 0x19 list answer fits the transport | generation |
 | A power cut anywhere leaves one coherent memory; a lowered `entries` keeps the most important snapshots | `comm/fault/persist_test.v` power-cut fuzz |
-| A refused 0x14 or parameter 0x2E answers 0x72 and changes nothing, live or stored | `persist_test.v` `test_a_refused_clear_answers_0x72_and_changes_nothing`; `comm/param/param_test.v` `test_a_refused_write_answers_0x72_and_changes_nothing` |
+| A refused 0x14 or parameter 0x2E answers 0x72 and changes nothing live; nothing stored either, unless the flash took the record and only its read-back failed | `persist_test.v` `test_a_refused_clear_answers_0x72_and_changes_nothing`; `comm/param/param_test.v` `test_a_refused_write_answers_0x72_and_changes_nothing` |
 | An automatic write the journal refuses is retried, paced | `persist_test.v` `test_a_refused_write_is_retried_after_the_pause` |
 | Counters have fixed widths and saturate | `comm/fault/records_test.v` `test_counters_saturate_at_their_width` |
 | A parameter's record is restored only under its exact header, and revalidated against the current range | `comm/param/param_test.v`; `tools/loom2v/param_target_test.v` |
