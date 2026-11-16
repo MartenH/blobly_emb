@@ -35,4 +35,12 @@ int  blob_ioc_acq(int idx, unsigned char *dst, unsigned char max_len); /* 1=valu
 void blob_ioc_pub2(int idx, const unsigned char *src, unsigned char len);
 int  blob_ioc_acq2(int idx, unsigned char *dst, unsigned char max_len);
 
+/* Like blob_ioc_acq on the double buffer, but 1 only when it consumed a buffer the writer
+ * published since this reader's previous acquire (osal_native.c). */
+int  blob_ioc_acq_fresh(int idx, unsigned char *dst, unsigned char max_len);
+
+/* The ThreadX backend (osal_threadx.c): start a core's entry, and sleep through the scheduler. */
+int  blob_tx_start_core(int core_id, void (*entry)(int, void *), void *arg);
+void blob_tx_sleep_us(unsigned long long us);
+
 #endif

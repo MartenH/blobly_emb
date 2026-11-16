@@ -45,7 +45,9 @@ env:
 jobs:
   test:
     name: linux • host unit tests + check + trace
-    runs-on: ubuntu-latest
+    # pinned, not ubuntu-latest: Ubuntu 24.04 is the supported floor, and ubuntu-latest moving to
+    # 26.04 (gcc 14, arm-none-eabi 14.2) changed the build under every open PR at once
+    runs-on: ubuntu-24.04
     timeout-minutes: 40 # ~20 min on V3; a hung job otherwise holds an account-wide slot for 6 h
     steps:
       - uses: actions/checkout@v7
@@ -215,7 +217,7 @@ jobs:
 
   cross:
     name: cross • bare-metal STM32H7 images (+ the _vinit gate)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # pinned like the host job above
     timeout-minutes: 75 # ~40 min on V3 (the cross builds and the dependency checks most of it), more when apt is slow; a hung job otherwise holds an account-wide slot for 6 h
     steps:
       - uses: actions/checkout@v7
