@@ -3,7 +3,7 @@
 # instance-agnostic. The fault memory and the parameters it serves are here too, for now.
 #
 # Scope — what the server deliberately does NOT do (non-goals until a requirement here says
-# otherwise; silence is not compliance). docs/diagnostics.md §1 "Supported, and not" is the
+# otherwise; silence is not compliance). docs/diagnostics.md §1 "What is supported" is the
 # per-service statement of the same:
 #   * services not served by an application: 0x23/0x3D memory access, 0x24, 0x2A, 0x2C dynamic
 #     DIDs, 0x2F InputOutputControl, generic 0x31 RoutineControl, 0x34..0x38 transfers (the

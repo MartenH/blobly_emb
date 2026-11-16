@@ -1,6 +1,6 @@
 -- @project rx_faults.blobnet
 -- @verifies REQ-COM-008 REQ-DIAG-011 REQ-DIAG-046
--- The receive checks on a TARGET (docs/diagnostics.md R5): zone_a (H723, the edge bus) checks the
+-- The receive checks on a TARGET (docs/diagnostics.md §3.2): zone_a (H723, the edge bus) checks the
 -- chassis node's SafetyCmdFrame on its ThreadX comm thread — AUTOSAR E2E Profile 1 and E2E's own
 -- 300 ms sender-loss timeout, from edge.dbc — and its FB SafetyMonitor reads the value WITH its
 -- receive status and lost count, holding the safe level 0 unless the status is ok. What the FB saw

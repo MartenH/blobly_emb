@@ -5,7 +5,7 @@ import os
 import tools.sysmodel
 import tools.candb
 
-// The ThreadX comm thread's receive path (docs/diagnostics.md R5): a frame with a deadline, E2E or a
+// The ThreadX comm thread's receive path (docs/diagnostics.md §3.2): a frame with a deadline, E2E or a
 // signal status is checked on the comm thread by the host bridge's own templates (gen_rx.v) and
 // com.RxMonitor, its signals cross to the FBs whole through the byte IOC, a signal-status fault is
 // debounced there, and 0x28 and NM's sleep gate it. Runs the real generator on

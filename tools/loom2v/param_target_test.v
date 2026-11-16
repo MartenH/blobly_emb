@@ -4,7 +4,7 @@ module main
 import os
 import tools.sysmodel
 
-// Parameters on a ThreadX target (docs/diagnostics.md §3.4, R7): the table restored before the
+// Parameters on a ThreadX target (docs/diagnostics.md §3.4): the table restored before the
 // kernel and published into each reading FB's IOC cell, bound to the server on the comm thread, its
 // journal blocks in the prune keep-set — and what generation refuses. Runs the real generator on
 // testdata/threadx_node with its FBs on one thread and a connection, [nvm] and parameters appended

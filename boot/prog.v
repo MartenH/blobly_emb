@@ -319,7 +319,7 @@ pub fn (mut p Prog) init() {
 
 // open_handed_off starts the server in the programming session — for a boot the application
 // entered by the 0x10 02 handoff, whose positive answer the tester already holds, so it goes on to
-// 0x29 without asking twice (docs/diagnostics.md §7). Locked, like any session entry, and timed
+// 0x29 without asking twice (docs/diagnostics.md §6). Locked, like any session entry, and timed
 // from `now`: a tester that never speaks loses it to S3 like any other, and then the stay-window
 // (REQ-BOOT-014) gives the ECU back to the application.
 // `via` is the transport the handoff was asked over, which holds the session; over the network the

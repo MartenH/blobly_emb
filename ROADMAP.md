@@ -154,8 +154,8 @@ no H735 image carries them until sysnode gains a `[shell]` / `[trace]`.
 
 ## Diagnostics & variant coding
 
-The plan is [docs/diagnostics.md](docs/diagnostics.md) (#286–#288): rungs R0–R7 plus blobly_net
-tester rungs N1–N4, decisions D1–D6 made. The FB sees a port, and the platform does the work;
+[docs/diagnostics.md](docs/diagnostics.md) (#286–#288) says what is supported; its §4 records the decisions D1–D6.
+The rungs below (R0–R7, and blobly_net's tester rungs N1–N4) are how it was built. The FB sees a port, and the platform does the work;
 the FB never calls a service API.
 
 - ✅ **R1 diagnostic server** (#291) — sessions + S3, ISO NRC order, per-DID session /

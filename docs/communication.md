@@ -344,8 +344,8 @@ owns the fault memory (`comm/fault`), keeps each DTC's ISO 14229-1 status throug
 FB's thread as a new generation in a control cell, so its debounce restarts. On a ThreadX target
 (R6's first step) the ThreadX comm thread owns the memory and the two cells ride the byte IOC; there
 the operation cycle is NM's wake -> bus sleep, or `[fault_memory] cycle = "power"`; the memory is
-persisted in the node's NvM journal with snapshots and extended data (R6b), and signal-status faults
-(below) run there too (R5) — docs/diagnostics.md.
+persisted in the node's NvM journal with snapshots and extended data, and signal-status faults
+(below) run there too — docs/diagnostics.md §3.3.
 
 A fault can also be raised by a received signal's **status** — no FB code, the diagnostic bridge
 (on a ThreadX target, the comm thread) is the detector:

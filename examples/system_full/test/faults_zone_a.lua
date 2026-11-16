@@ -1,5 +1,5 @@
 -- @project diag_bench.blobnet
--- Faults on the TARGET (docs/diagnostics.md R6): zone_a (H723, the edge bus) keeps a fault memory on
+-- Faults on the TARGET (docs/diagnostics.md §3.3): zone_a (H723, the edge bus) keeps a fault memory on
 -- its ThreadX comm thread. SteerLimiter tests the VehicleSpeed it receives for plausibility each 50 ms
 -- dispatch (above 250 km/h fails it); the Loom debounces the result on front_thread (an accumulating
 -- counter, +3 to fail, -3 to pass: 150 ms from a clean start, 300 ms back) and the comm thread turns it into DTC U0401-00's ISO 14229-1 status, read with 0x19,

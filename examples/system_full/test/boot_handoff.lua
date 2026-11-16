@@ -1,6 +1,6 @@
 -- @project diag_bench.blobnet
 -- The programming handoff and the field update on the target (docs/bootloader.md P3 and "The DoIP
--- binding", docs/diagnostics.md R2): each system_full node runs behind its bootloader ([boot]), and
+-- binding", docs/diagnostics.md §3.1): each system_full node runs behind its bootloader ([boot]), and
 -- its application's 0x10 02 hands the ECU over — answered 50 02, then the boot request cell and the
 -- reset — to a boot manager that answers on the SAME ids and bus, already in the programming session
 -- it was promised. A [doip] node's bootloader is its DoIP entity too: asked over DoIP, the tester's

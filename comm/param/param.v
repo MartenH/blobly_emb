@@ -1,6 +1,6 @@
 module param
 
-// Parameters / variant coding (docs/diagnostics.md §3.4, R7, #288), no-alloc.
+// Parameters / variant coding (docs/diagnostics.md §3.4, #288), no-alloc.
 //
 // A parameter is a value an FB READS and never writes, fixed per vehicle rather than per build:
 // coded at end of line or in the workshop with 0x2E WriteDataByIdentifier, kept in the NvM journal,

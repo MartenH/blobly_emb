@@ -1,6 +1,6 @@
 module fault
 
-// Snapshots (freeze frames), extended data and displacement (docs/diagnostics.md §3.3, R6b).
+// Snapshots (freeze frames), extended data and displacement (docs/diagnostics.md §3.3).
 //
 // A DTC that declares `freeze` DIDs gets a SNAPSHOT at the occurrence that finds it without one.
 // What it holds is DEFINED as the declared DIDs' values AT STORAGE — read from the diagnostic

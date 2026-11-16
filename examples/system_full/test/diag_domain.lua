@@ -1,5 +1,5 @@
 -- @project ../system_full.blobnet
--- UDS on the target (docs/diagnostics.md R2): the domain node (H755 CM7) serves ISO 14229 over
+-- UDS on the target (docs/diagnostics.md §3.1): the domain node (H755 CM7) serves ISO 14229 over
 -- ISO-TP on the compute bus — requests on 0x7B0, answers on 0x7B8 — from its ThreadX comm thread,
 -- while that thread keeps routing, telemetry and the tester's rest-bus traffic going. Bench only:
 -- it needs the flashed board on the CANsub (system_full.blobnet), so it is not in CI.

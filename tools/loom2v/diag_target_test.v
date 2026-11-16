@@ -4,7 +4,7 @@ import os
 import tools.sysmodel
 import comm.doip as doippolicy
 
-// The diagnostic server on a ThreadX comm thread (docs/diagnostics.md R2): what the generator
+// The diagnostic server on a ThreadX comm thread (docs/diagnostics.md §3.1): what the generator
 // wires, in what order, and what it refuses until the next R2 steps. Runs the real generator on
 // testdata/threadx_node (ThreadX, NM, trace and shell on can0, no [nvm]) with a connection added —
 // a refusal is a panic, which cannot be caught in-process.

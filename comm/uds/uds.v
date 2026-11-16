@@ -304,7 +304,7 @@ pub fn (mut s Server) restore_security(k [kept_len]u8) {
 // communication enabled, no pending reset. DIDs are untouched. The 0x27 failed-key count and a
 // running lockout SURVIVE it: a reset between guesses must not buy fresh attempts, so a reset
 // with wrong keys already counted costs the lockout delay — and a clean reset costs nothing.
-// (Across a power cycle the count is lost until the target persists it — R2, docs/diagnostics.md §7.)
+// (Across a power cycle the count is lost until the target persists it — not built yet, docs/diagnostics.md §5.)
 pub fn (mut s Server) reset_state() {
 	s.session = session_default
 	s.unlocked = 0

@@ -129,7 +129,7 @@ The boot manager keeps the promise: the request cell carries WHY it was written
 (`BOOTCELL_REQ_HANDOFF`, or `BOOTCELL_REQ_SHELL` for the bench `boot` command), and on a handoff
 `boot.Prog.open_handed_off` starts the server in the programming session — locked, and timed by
 S3 like any session, so a tester that never speaks loses it and the stay-window (REQ-BOOT-014)
-gives the ECU back to the application (docs/diagnostics.md §7, "the session survives the
+gives the ECU back to the application (docs/diagnostics.md §6, "the session survives the
 handoff"). Serving on the ids and bus of the node's own `[isotp]` is the per-node bootloader's,
 built per node ("One boot manager, every node", below).
 

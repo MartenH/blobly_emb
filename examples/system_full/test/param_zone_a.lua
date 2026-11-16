@@ -1,6 +1,6 @@
 -- @project diag_bench.blobnet
 -- @verifies REQ-DIAG-017
--- A PARAMETER on the target (docs/diagnostics.md §3.4, R7): zone_a (H723, the edge bus) codes the
+-- A PARAMETER on the target (docs/diagnostics.md §3.4): zone_a (H723, the edge bus) codes the
 -- SteerLimit parameter — the most its SteerLimiter puts on the wire as SteeringAngle — with 0x2E on
 -- DID 0x0110 (extended session, 0x27 level 1), keeps it in the NvM journal (boards/h723/bootmap.h,
 -- flash sectors 6 + 7) and reads it back with 0x22. It is declared apply = "reset": a coded limit
