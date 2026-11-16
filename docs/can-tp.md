@@ -25,7 +25,7 @@ over a completed one.
 | Frame size (TX_DL) | **8**. On a CAN-FD bus the same 8-byte PDUs go out as CAN-FD frames (FDF set; BRS set unless the image is built with `BLOB_FDCAN_NOBRS`) | TX_DL above 8: the FD single-frame escape (`SF_DL` in byte 1) and 64-byte consecutive frames |
 | Message length | 1 to **520 bytes** (`isotp.max_payload`) | 521 to 4095 bytes, and the escape first frame (`FF_DL` above 4095). Both are refused with OVFLW (§3.4) |
 | Padding | every frame we send has DLC 8, unused bytes `0x00` | a configurable fill byte. We accept received frames shorter than 8 (§3.5) |
-| Timers | N_Bs and N_Cr, both 1000 ms; WFTmax 16 (§3.1) | N_As, N_Ar and N_Cs as separate timers (N_Bs also bounds a stalled send, §3.1); N_Br and N_Cs performance targets |
+| Timers | N_Bs and N_Cr, both 1000 ms; WFTmax 16 (§3.1). N_Bs also bounds a send whose frames stop leaving, which is N_As's job | N_As as a timer of its own; **N_Ar**: nothing bounds our own flow control waiting for room in the transmit FIFO (§3.1); the N_Br and N_Cs performance targets |
 | Connections | one per node: the diagnostic server's (`[isotp]`). Its bootloader serves the same one | a second diagnostic connection (refused at generation, [diagnostics.md](diagnostics.md) §7) |
 
 The same `Link` also carries a few non-diagnostic streams (§4); those use other ids but the same
@@ -45,7 +45,8 @@ stmin_ms      = 0        # STmin we ask the sender to keep, in milliseconds
 
 | Key | Range | Default | Notes |
 |---|---|---|---|
-| `rx_id`, `tx_id`, `functional_id` | `0x000`–`0x7FF` | — (`functional_id` absent = none) | 11-bit only |
+| `rx_id`, `tx_id` | `0x000`–`0x7FF` | — | 11-bit only |
+| `functional_id` | `0x001`–`0x7FF` | absent = none | 11-bit only; 0 also means none |
 | `bs` | 0–255 | 0 | one byte on the wire |
 | `stmin_ms` | 0–127 | 0 | milliseconds only: the microsecond codes `0xF1`–`0xF9` cannot be asked for |
 
@@ -64,7 +65,7 @@ A value outside its range is refused when the node is generated, never narrowed
 | Timer | Value | Started | On expiry |
 |---|---|---|---|
 | **N_Bs** (sender waits for FC) | 1000 ms | when our first frame, or the last consecutive frame of a block, is handed to the CAN controller; restarted by each FC.WAIT | the transmission is abandoned and counted in `tx_aborts` |
-| N_Bs as a **stall bound while sending CFs** | 1000 ms | on each CTS, refreshed by each CF handed over | the transmission is abandoned and counted. This covers a transmit FIFO that stays full (bus-off, nobody acknowledging), which ISO would catch with N_As/N_Cs |
+| N_Bs as a **stall bound while sending CFs** | 1000 ms | on each CTS, refreshed by each CF handed over | the transmission is abandoned and counted. This covers a transmit FIFO that stays full (bus-off, nobody acknowledging), which ISO catches with N_As |
 | **N_Cr** (receiver waits for CF) | 1000 ms | when our CTS is handed to the controller, at the first frame and at each block boundary; restarted by each CF in sequence | the partial message is discarded and no flow control is owed. Nothing is reported: the sender finds out from its own N_Bs or N_As |
 | **WFTmax** | 16 | counts FC.WAIT frames in a row within one block | the next WAIT after 16 abandons the transmission (counted) |
 
@@ -73,7 +74,10 @@ is handed to the controller, not on its transmit confirmation: the `Link` never 
 confirmation. An FC arriving after N_Bs has expired does not revive the transmission
 (REQ-CAN-TP-007), and neither does a CF arriving after N_Cr (REQ-CAN-TP-008). N_Cr is not armed
 while our CTS is still waiting for room in the transmit FIFO, because the sender is then correctly
-waiting for it.
+waiting for it. **Nothing bounds that wait** (ISO's N_Ar): with a transmit FIFO that never drains
+(bus-off, nobody acknowledging) the reception stays in progress, the link never goes idle, S3 is
+held and functional requests are dropped until the FIFO moves. The DoIP gateway bounds it with its
+own stall timer (§4); the diagnostic server and the bootloader do not yet.
 
 ### 3.2 The flow control we send
 
@@ -114,7 +118,7 @@ waiting for it.
 | CF with the expected sequence number | appended. Numbers run 1…15, 0, 1… (REQ-CAN-TP-001) |
 | CF with the wrong sequence number | the reception is abandoned and nothing of it is delivered. The next FF starts a new one (REQ-CAN-TP-011) |
 | CF with no reception in progress | ignored |
-| SF or FF **while a reception is in progress** | the partial message is discarded and the new frame handled as a new reception (REQ-CAN-TP-012). A pending OVFLW is dropped too |
+| A valid SF (`SF_DL` 1–7) or FF (`FF_DL` 8 or more) **while a reception is in progress** | the partial message is discarded and the new frame handled as a new reception (REQ-CAN-TP-012). A pending OVFLW is dropped too. An SF or FF that is ignored (rows above) leaves the reception running |
 | A reserved PCI type (`0x4_`–`0xF_`) | ignored |
 | A frame with a 29-bit id, or an id other than `rx_id` / `functional_id` | not this connection's |
 
@@ -138,8 +142,9 @@ REQ-CAN-TP-013):
 
 A frame **longer** than 8 bytes (a CAN-FD frame) is read as its first 8 bytes. That is right for a
 tester using TX_DL = 8 on CAN FD, which is what blobly_net does. A tester using TX_DL = 64 is not
-supported: its single frames are ignored (`SF_DL` reads as 0) and its multi-frame messages are not
-reassembled correctly.
+supported: a single frame it sends in a frame longer than 8 bytes (the escape format) is ignored, as
+`SF_DL` reads as 0, and its multi-frame messages time out (N_Cr), since we read 7 bytes of each
+63-byte consecutive frame. A short single frame it sends in an 8-byte frame is accepted.
 
 ### 3.6 Functional requests
 
@@ -177,7 +182,7 @@ serves no functional requests.
 | Diagnostic server ([`comm/diag`](../comm/diag/diag.v)): the host bridge, and the ThreadX comm thread on a target | `[isotp]` `rx_id` / `tx_id` / `functional_id` | `bs`, `stmin_ms` | the connection this page describes |
 | Bootloader ([`boot/target`](../boot/target/main.v), `diag.serve_step`) | the node's `[isotp]`, from `gen/boot_gen.h` | the node's `bs`, `stmin_ms` | same bus, ids, frame format; no functional requests ([bootloader.md](bootloader.md)) |
 | DoIP gateway router ([`comm/diagroute`](../comm/diagroute/diagroute.v)) | each routed node's request / response ids | BS 8, STmin 0 | the gateway acting as a **tester** on CAN. Besides the ISO timers: an exchange whose frames stop moving for 5 s is ended (`stall_us`), and an answer is awaited 6 s after the request left (`answer_wait_us`: P2*max plus 1 s) ([net.md](net.md)) |
-| Shell response ([`comm/shell`](../comm/shell/shell.v)) and trace dump ([`comm/trace`](../comm/trace/module.v)) | a stream id plus a separate flow-control id (`out` / `fc`, `record` / `dump_fc`) | — (transmit only) | one ISO-TP message per response or dump block; the request is a plain frame, not ISO-TP ([onboard_trace.md](onboard_trace.md)) |
+| Shell response ([`comm/shell`](../comm/shell/shell.v)) and trace dump ([`comm/trace`](../comm/trace/module.v)) | a stream id plus a separate flow-control id (`out` / `fc`, `record` / `dump_fc`) | — (they send messages, never receive one) | one ISO-TP message per response or dump block; the request is a plain frame, not ISO-TP ([onboard_trace.md](onboard_trace.md)). Every frame on the flow-control id reaches the link today, so a first frame there would start a reception and put a CTS into the stream |
 
 ## 5. Verification
 

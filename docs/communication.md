@@ -204,7 +204,7 @@ bus    = "can0"
 rx_id  = 0x101      # Request   (DBC)
 tx_id  = 0x102      # Response  (DBC)
 functional_id = 0x7DF   # optional: functional requests (single frame)
-bs      = 8         # flow-control block size
+bs      = 0         # flow-control block size (0 = the whole message)
 stmin_ms = 0        # min separation time we request
 ```
 

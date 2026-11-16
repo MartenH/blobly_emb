@@ -19,7 +19,7 @@ from each ID prefix (`REQ-<AREA>-NNN` / `SYS-REQ-<AREA>-NNN`).
 | **app** | Function Block model + the application contract | APP | planned |
 | **com** | signal ⇄ PDU, TX modes, RX deadline monitoring | COM | planned |
 | **route** | raw-PDU routing / gateway | ROUTE | planned |
-| **can-tp** | ISO-TP segmented transport on CAN (15765-2) | CAN-TP | ✅ |
+| **isotp** | ISO-TP segmented transport on CAN (15765-2) | CAN-TP | ✅ |
 | **diag** | UDS diagnostic services (14229) | DIAG | planned |
 | **e2e** | end-to-end protection (safety: CRC + alive counter) | E2E | planned |
 | **secoc** | authenticated messaging (security: CMAC + freshness) | SEC | planned |
@@ -45,7 +45,7 @@ Cross-cutting (not a module — properties of the whole):
                   │                 │              │
    ioc ◄──────────┘                 │            wdg (Sentinel)
                                     │
-   com ─ route ─ can-tp ─ diag ─ e2e ─ secoc ─ nm (communication)
+   com ─ route ─ isotp ─ diag ─ e2e ─ secoc ─ nm  (communication)
                   │
         can (driver port + backends)
                   │

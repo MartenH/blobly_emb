@@ -6,8 +6,9 @@
 #
 # Scope — what this transport deliberately does NOT do (non-goals until a requirement here
 # says otherwise; silence is not compliance):
-#   * classic CAN only: no CAN FD frame formats (SF_DL escape, CAN_DL > 8), and an escape first
-#     frame (FF_DL > 4095) is only refused (REQ-CAN-TP-015) — every example runs `[bus] fd = false`;
+#   * 8-byte frames only (TX_DL 8, sent as CAN-FD frames on an FD bus): no CAN FD frame formats
+#     (the SF_DL escape, CAN_DL > 8), and an escape first frame (FF_DL > 4095) is only refused
+#     (REQ-CAN-TP-015);
 #   * normal addressing on 11-bit identifiers only: no extended, mixed or 29-bit normal-fixed
 #     addressing (`[isotp] rx_id` / `tx_id` are 0x000..0x7FF);
 #   * a fixed padding byte (0x00) on every frame sent; no configurable fill value;
