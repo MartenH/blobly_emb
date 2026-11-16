@@ -268,7 +268,7 @@ block transfer instead — it acks per block and lets ISO-TP flow control pace i
 - **Being *asked* to receive too much** — a FirstFrame declaring more than `max_payload`
   (or an escape FirstFrame, any length above 4095) starts no reassembly and is answered at
   once with an OVFLW flow control, so the peer fails immediately instead of timing out
-  (REQ-TP-015). An OVFLW we *receive* aborts our transmission the same way.
+  (REQ-CAN-TP-015). An OVFLW we *receive* aborts our transmission the same way.
 
 ### On Ethernet — SOME/IP over UDP
 

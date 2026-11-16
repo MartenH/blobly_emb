@@ -1,8 +1,8 @@
 module isotp
 
-// @verifies REQ-TP-001 REQ-TP-002 REQ-TP-003 REQ-TP-004 REQ-TP-005 REQ-TP-007 REQ-TP-008 REQ-TP-009
-// @verifies REQ-TP-006 REQ-TP-010 REQ-TP-011 REQ-TP-012 REQ-TP-013 REQ-TP-014 REQ-TP-015
-// @verifies REQ-TP-016 REQ-TP-017 REQ-TP-018
+// @verifies REQ-CAN-TP-001 REQ-CAN-TP-002 REQ-CAN-TP-003 REQ-CAN-TP-004 REQ-CAN-TP-005 REQ-CAN-TP-007 REQ-CAN-TP-008 REQ-CAN-TP-009
+// @verifies REQ-CAN-TP-006 REQ-CAN-TP-010 REQ-CAN-TP-011 REQ-CAN-TP-012 REQ-CAN-TP-013 REQ-CAN-TP-014 REQ-CAN-TP-015
+// @verifies REQ-CAN-TP-016 REQ-CAN-TP-017 REQ-CAN-TP-018
 // (segmentation/reassembly: single/first/consecutive frames, sequence wrap, blocksize, STmin, both
 //  directions; flow control incl. WAIT bounds, N_Bs/N_Cr timeouts, sequence errors, unexpected and
 //  truncated frames, reserved STmin, undefined flow status, overflow, the length bound, busy

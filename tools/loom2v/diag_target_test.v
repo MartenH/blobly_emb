@@ -192,7 +192,7 @@ fn test_a_diagnostic_id_in_the_nm_range_or_wider_than_11_bits_is_refused() {
 	assert out2.contains('tx_id 0x8100 must be a standard 11-bit id'), out2
 }
 
-// @verifies REQ-TP-020
+// @verifies REQ-CAN-TP-020
 // bs and stmin_ms each go out as one Flow Control byte, and the bootloader's as a uint8_t: a
 // block size of 256 would wrap to 0 (the whole message) and an STmin past 127 ms is a reserved or a
 // microsecond code, so both are refused rather than narrowed; the largest of each still generates

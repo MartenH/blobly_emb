@@ -70,7 +70,7 @@ pub mut:
 	progress u32
 	// N_Cr: max gap between consecutive frames of an in-flight RECEIVE before the
 	// partial reassembly is abandoned (ISO 15765-2 N_Cr) — without it a sender that
-	// dies after its FF leaves the link .receiving forever (REQ-TP-007/008 bound BOTH
+	// dies after its FF leaves the link .receiving forever (REQ-CAN-TP-007/008 bound BOTH
 	// directions; the gap was documented in move-data.md and is now closed).
 	// 0 disables. No field default — the _vinit rule again: init_defaults() sets it.
 	n_cr_us u64
@@ -205,7 +205,7 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 				}
 				l.ready = true
 				l.ready_len = n
-				l.rx = .idle // a reception it interrupts is over (REQ-TP-012), and so is its CTS
+				l.rx = .idle // a reception it interrupts is over (REQ-CAN-TP-012), and so is its CTS
 				l.fc_send = false
 				l.fc_ovflw = false // and a refusal still owed for an earlier first frame
 				l.progress++
@@ -237,8 +237,8 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 				}
 			} else if total == 0 || total > max_payload {
 				// more than we can hold: refuse it at once with FC.OVFLW, so the sender fails now
-				// rather than waiting out its N_Bs (REQ-TP-015); like any first frame it ends a
-				// reception in progress (REQ-TP-012)
+				// rather than waiting out its N_Bs (REQ-CAN-TP-015); like any first frame it ends a
+				// reception in progress (REQ-CAN-TP-012)
 				l.rx = .idle
 				l.fc_send = false
 				l.fc_ovflw = true
@@ -310,7 +310,7 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 						l.fc_deadline = now + l.n_bs_us
 						l.progress++
 					}
-				} else { // OVFLW, or a flow status the standard does not define -> abort (REQ-TP-010)
+				} else { // OVFLW, or a flow status the standard does not define -> abort (REQ-CAN-TP-010)
 					l.give_up_tx()
 				}
 			}
@@ -342,7 +342,7 @@ pub fn (mut l Link) tick(now u64) {
 		l.give_up_tx()
 	}
 	// N_Cr: a receive whose sender went quiet mid-transfer is abandoned, so the link
-	// (and its reassembly buffer) cannot stay .receiving forever (REQ-TP-008). Only
+	// (and its reassembly buffer) cannot stay .receiving forever (REQ-CAN-TP-008). Only
 	// armed deadlines count — rx_deadline == 0 means the CTS hasn't been emitted yet,
 	// so the sender is correctly waiting for flow control, not stalling (codex #218).
 	if l.n_cr_us != 0 && l.rx == .receiving && l.rx_deadline != 0 && now >= l.rx_deadline {
@@ -442,7 +442,7 @@ fn zero(mut p Pdu) {
 }
 
 // decode_stmin maps the FC STmin byte to microseconds: 0x00-0x7F ms, 0xF1-0xF9
-// = 100-900 us; a reserved value (0x80-0xF0, 0xFA-0xFF) as 0x7F, the longest (REQ-TP-006).
+// = 100-900 us; a reserved value (0x80-0xF0, 0xFA-0xFF) as 0x7F, the longest (REQ-CAN-TP-006).
 fn decode_stmin(b u8) u64 {
 	if b <= 0x7F {
 		return u64(b) * 1000

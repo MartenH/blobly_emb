@@ -1,4 +1,4 @@
-# DIAG — UDS (ISO 14229) diagnostic services. Runs over the ISO-TP transport (area TP)
+# DIAG — UDS (ISO 14229) diagnostic services. Runs over the ISO-TP transport (area CAN-TP)
 # and reads live values from the same COM/IOC source the FBs use. Implementation- and
 # instance-agnostic. The fault memory and the parameters it serves are here too, for now.
 #

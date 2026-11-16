@@ -194,9 +194,9 @@ extension; today a route is one source → one destination.)*
 
 ## 3. ISO-TP — segmented transport (ISO 15765-2)
 
-For PDUs larger than one frame (UDS payloads up to 4095 B classic, more on FD).
-`[isotp]` is the node's ONE connection — the transport of its diagnostic server, `[uds]`
-(§4); it carries only ISO 15765-2's settings:
+For PDUs larger than one frame: UDS requests and answers of up to 520 bytes. `[isotp]` is the
+node's ONE connection — the transport of its diagnostic server, `[uds]` (§4); it carries only
+ISO 15765-2's settings:
 
 ```toml
 [isotp]
@@ -208,21 +208,12 @@ bs      = 8         # flow-control block size
 stmin_ms = 0        # min separation time we request
 ```
 
-State machine per connection:
+What is implemented — normal addressing on 11-bit ids, 8-byte frames (sent as CAN-FD frames on an
+FD bus), single, first, consecutive and flow-control frames, N_Bs / N_Cr / WFTmax — and how it
+behaves where the standard leaves the choice, is [can-tp.md](can-tp.md); the requirements are
+[requirements/can-tp.toml](../requirements/can-tp.toml).
 
-- **SF** (Single Frame): payload ≤ 7 B (classic) / ≤ 62 B (FD).
-- **FF + CF**: First Frame starts a multi-frame transfer; Consecutive Frames carry
-  the rest with a 4-bit sequence number.
-- **FC** (Flow Control): receiver sends CTS / WAIT / OVFLW with its block size and
-  STmin; sender paces CFs accordingly.
-- **Timers**: N_As/N_Ar (frame tx/rx), N_Bs/N_Cr (FC/CF wait), N_Cs — timeouts abort
-  the transfer.
-
-That is the protocol; what `comm/isotp` implements of it, one behaviour per requirement, and
-what it deliberately does not (CAN FD frame formats, addressing other than normal 11-bit, a
-configurable padding byte), is [requirements/tp.toml](../requirements/tp.toml).
-
-No-alloc: exactly one fixed `[max_len]u8` reassembly buffer and one TX buffer per
+No-alloc: exactly one fixed `[max_payload]u8` reassembly buffer and one TX buffer per
 connection, sized at build time. ISO-TP delivers a reassembled PDU up to **UDS**
 (below), and blobly_net’s `uds` module drives it in the integration tests (the DBC
 already carries `Request`/`Response`).
