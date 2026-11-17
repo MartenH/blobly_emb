@@ -92,7 +92,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-009 | QM | test | verified | pass_model_test.v (pass), rxmon_test.v (pass) |
 | REQ-COM-010 | QM | test | verified | encode_test.v (pass), gen_test.v (pass), raw_range_test.v (pass), rx_target_test.v (pass), tx_saturation_test.v (pass) |
 | REQ-COM-011 | QM | test | verified | init_value_test.v (pass), pdu_init_test.v (pass) |
-| REQ-COM-012 | QM | test | verified | rx_target_test.v (pass), tx_saturation_test.v (pass) |
+| REQ-COM-012 | QM | test | verified | rx_target_test.v (pass), rx_target_test.v (pass), tx_saturation_test.v (pass), tx_saturation_test.v (pass) |
 | REQ-DIAG-001 | QM | test | verified | diag_test.v (pass), uds-on-target-domain (approved), uds-on-target-sysnode (approved), uds-on-target-zone-a (approved), uds_test.v (pass) |
 | REQ-DIAG-018 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-004 | QM | test | verified | io_control_test.v (pass), uds_test.v (pass) |

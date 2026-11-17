@@ -577,3 +577,22 @@ fn test_a_standard_id_past_11_bits_is_refused() {
 	assert code != 0
 	assert out.contains('has the standard id 0x1000, which does not fit 11 bits'), out
 }
+
+// @verifies REQ-COM-012
+// A standard and an extended message with the same number are two frames: each gets its own
+// receive arm and its own cell, where a receive keyed by number alone folded them into one and
+// received only the first.
+fn test_a_standard_and_an_extended_frame_of_one_number_are_two_frames() {
+	code, out, glue := rt_generate_dbc('samenum', fn (src string) string {
+		return src.replace('reads     = ["Command", "LoadCmd"]', 'reads     = ["Command", "LoadCmd", "CommandX"]') +
+			'\n[[signal]]\nname = "CommandX"\nfields = { code = "u32" }\nfrom = "can0"\nto   = "app"\ntransport = "double"\n'
+	}, rt_conn, fn (dbc string) string {
+		return dbc + '\nBO_ 2147483939 CmdFrameX: 4 Tester\n SG_ CommandX : 0|32@1+ (1,0) [0|4294967295] "" SUT\n'
+	})
+	assert code == 0, out
+	std_arm := glue.all_after('if rx.id == u32(0x123) && rx.len == 4 && rx.ext == false {').all_before('\n\t\t\t}')
+	ext_arm := glue.all_after('if rx.id == u32(0x123) && rx.len == 4 && rx.ext == true {').all_before('\n\t\t\t}')
+	assert std_arm.contains('C.ioc_pub('), glue
+	assert ext_arm.contains('C.ioc_pub('), glue
+	assert std_arm.all_after('C.ioc_pub(').all_before(',') != ext_arm.all_after('C.ioc_pub(').all_before(','), 'one cell for two frames'
+}

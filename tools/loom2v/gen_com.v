@@ -932,7 +932,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			glue << '\tmut tx_${msg} := can.Frame{'
 			glue << '\t\tid:  ${msg}_id'
 			glue << '\t\tlen: ${msg}_dlc'
-			if (m.sig_of[list[0]] or { SigInfo{} }).dbc_ext {
+			if msg_ext[msg] {
 				glue << '\t\text: true // an extended (29-bit) DBC message'
 			}
 			glue << '\t}'
