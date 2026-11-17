@@ -761,3 +761,18 @@ context = "h735/ThreadX"
 verifies = []
 approved_by = "Claude (coding agent) on Marten Hildell's bench — STM32H735G-DK (system_full sysnode), SWD timing"
 date = "2026-10-06"
+
+# [isotp] max_message on silicon: system_full flashed from one build, zone_a (H723) at 4095, domain
+# (H755) and sysnode (H735) at the default 520. boot_bench.sh: zone_a's field update over CAN in 15
+# blocks of 4064 data bytes (58,328 bytes), domain's in 156 blocks of 512 (79,588) — each
+# bootloader's 0x34 block length following its node's maximum. isotp_len.lua 3/4: zone_a answers
+# and takes messages over 520 whole, domain answers 0x14 and FC.OVFLW; the routed case (through
+# sysnode over DoIP) was not run, the bench Ethernet segment not being connected. diag_domain.lua
+# 14/14 and diag_nodes.lua 11/11 on the same images.
+[[review]]
+id = "isotp-max-message-silicon"
+method = "review"
+context = "h723/ThreadX"
+verifies = ["REQ-BOOT-020"]
+approved_by = "Claude (coding agent) on Marten Hildell's bench — system_full zone_a, domain, sysnode vs CANsub.4"
+date = "2026-11-17"

@@ -34,7 +34,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BOOT-017 | QM | test | verified | ed25519_interop_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), sha512_test.v (pass) |
 | REQ-BOOT-018 | QM | analysis | uncovered | — |
 | REQ-BOOT-019 | QM | test | verified | doip_mb_test.v (pass), prog_test.v (pass) |
-| REQ-BOOT-020 | QM | test | verified | bufs_test.v (pass), diag_target_test.v (pass), prog_test.v (pass), step_test.v (pass) |
+| REQ-BOOT-020 | QM | test | verified | bufs_test.v (pass), diag_target_test.v (pass), isotp-max-message-silicon (approved), prog_test.v (pass), step_test.v (pass) |
 | REQ-BULK-001 | QM | test | verified | bulk_test.v (pass) |
 | REQ-BULK-002 | QM | test | verified | bulk_test.v (pass) |
 | REQ-BULK-003 | QM | test | verified | bulk-ring-silicon (approved), bulk_test.v (pass) |
@@ -335,7 +335,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BOOT-017 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BOOT-018 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-BOOT-019 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-BOOT-020 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-BOOT-020 | ✓ | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BULK-001 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BULK-002 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BULK-003 | | | | | | | | | | | | | | | ✓ | | | | ✓ | | | |
