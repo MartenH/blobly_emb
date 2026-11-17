@@ -205,6 +205,34 @@ test("domain: a lockout runs on through a reset", function()
   d:session(0x01)
 end)
 
+-- nor a reset after a lockout has ENDED: the count since the last correct key is still at the
+-- limit in the journal, so the restart runs the full delay again, and after it the level has its
+-- attempts again (two wrong keys answered 0x35, not 0x36) until the right key clears the count
+test("domain: a reset after an ended lockout costs the delay", function()
+  local d = diag()
+  d:session(0x03)
+  local wrong = function(seed) return seed end
+  check.nrc(0x35, function() d:security_access(0x01, wrong) end)
+  check.nrc(0x35, function() d:security_access(0x01, wrong) end)
+  check.nrc(0x36, function() d:security_access(0x01, wrong) end)
+  sleep_ms(3200) -- the lockout ends
+  d:tester_present()
+  d:raw("\x11\x01")
+  sleep_ms(2000)
+  d:session(0x03)
+  check.nrc(0x37, function() d:raw("\x27\x01") end) -- the saturated count armed the delay from boot
+  sleep_ms(3200)
+  d:tester_present()
+  check.nrc(0x35, function() d:security_access(0x01, wrong) end) -- the attempts again
+  check.nrc(0x35, function() d:security_access(0x01, wrong) end)
+  d:security_access(0x01) -- the right key clears the count
+  d:raw("\x11\x01")
+  sleep_ms(2000)
+  d:session(0x03)
+  d:security_access(0x01) -- and the next restart does not wait
+  d:session(0x01)
+end)
+
 -- The server shares the comm thread with the node's application traffic: a burst of multi-frame
 -- answers must not starve VehSpeedFrame (0x120, every 100 ms).
 test("domain: requests back to back while the node keeps its cadence", function()
