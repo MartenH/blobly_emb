@@ -173,3 +173,12 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-020"
+title = "Block length follows the connection"
+text = "The bootloader shall advertise in its RequestDownload answer the longest TransferData block that its connection's maximum message length holds in whole flash program units (maxNumberOfBlockLength: that data length plus the two service bytes — 514 at the default 520, 4066 at 4095), shall refuse a longer TransferData block with incorrectMessageLengthOrInvalidFormat, and shall refuse RequestDownload with conditionsNotCorrect when not one program unit fits. Its message buffers are sized by the same maximum."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"

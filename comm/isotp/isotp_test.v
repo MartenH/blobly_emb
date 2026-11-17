@@ -8,6 +8,16 @@ module isotp
 //  truncated frames, reserved STmin, undefined flow status, overflow, the length bound, busy
 //  refusal, abort counting and abort_tx.)
 
+// bound gives a link `cap`-byte receive and transmit buffers of its own (the owner's job)
+fn bound(l Link, cap int) Link {
+	mut b := l
+	rx := []u8{len: cap}
+	tx := []u8{len: cap}
+	b.bind_rx(&rx[0], cap)
+	assert b.bind_tx(&tx[0], cap)
+	return b
+}
+
 // pump runs PDUs between two links until quiescent — each link's output is the
 // other's input (the bridge does this id-routing on a real bus).
 fn pump(mut a Link, mut b Link, now u64) {
@@ -26,13 +36,13 @@ fn pump(mut a Link, mut b Link, now u64) {
 }
 
 fn test_single_frame() {
-	mut server := Link{}
-	mut tester := Link{}
+	mut server := bound(Link{}, default_message)
+	mut tester := bound(Link{}, default_message)
 	req := [u8(0x22), 0xF1, 0x90]
 	assert tester.send(&req[0], req.len)
 	pump(mut tester, mut server, 1000)
 
-	mut buf := [max_payload]u8{}
+	mut buf := [default_message]u8{}
 	n := server.take(&buf[0])
 	assert n == 3
 	assert buf[0] == 0x22 && buf[1] == 0xF1 && buf[2] == 0x90
@@ -44,8 +54,8 @@ fn test_single_frame() {
 // same link resyncs cleanly. (The host-side receiver in blobly_net enforces the same invariant;
 // this is the target end of that contract.)
 fn test_cf_sequence_mismatch_aborts_then_resyncs() {
-	mut l := Link{}
-	mut buf := [max_payload]u8{}
+	mut l := bound(Link{}, default_message)
+	mut buf := [default_message]u8{}
 
 	// First Frame (total 14, first 6 bytes) -> receiving, expecting CF SN 1.
 	l.on_frame(0, Pdu{
@@ -70,11 +80,11 @@ fn test_cf_sequence_mismatch_aborts_then_resyncs() {
 }
 
 fn test_multi_frame_with_blocksize() {
-	mut server := Link{
+	mut server := bound(Link{
 		bs: 4 // force multiple flow-control rounds
-	}
-	mut tester := Link{}
-	mut req := [max_payload]u8{}
+	}, default_message)
+	mut tester := bound(Link{}, default_message)
+	mut req := [default_message]u8{}
 	n := 64
 	for i in 0 .. n {
 		req[i] = u8(i + 1)
@@ -82,7 +92,7 @@ fn test_multi_frame_with_blocksize() {
 	assert tester.send(&req[0], n)
 	pump(mut tester, mut server, 1000)
 
-	mut buf := [max_payload]u8{}
+	mut buf := [default_message]u8{}
 	got := server.take(&buf[0])
 	assert got == n
 	for i in 0 .. n {
@@ -91,20 +101,20 @@ fn test_multi_frame_with_blocksize() {
 }
 
 fn test_response_direction() {
-	mut server := Link{}
-	mut tester := Link{
+	mut server := bound(Link{}, default_message)
+	mut tester := bound(Link{
 		bs: 2
-	}
-	mut req := [max_payload]u8{}
+	}, default_message)
+	mut req := [default_message]u8{}
 	for i in 0 .. 20 {
 		req[i] = u8(i)
 	}
 	assert tester.send(&req[0], 20)
 	pump(mut tester, mut server, 1000)
-	mut rbuf := [max_payload]u8{}
+	mut rbuf := [default_message]u8{}
 	assert server.take(&rbuf[0]) == 20
 
-	mut resp := [max_payload]u8{}
+	mut resp := [default_message]u8{}
 	m := 100
 	for i in 0 .. m {
 		resp[i] = u8(0x80 + (i % 16))
@@ -112,7 +122,7 @@ fn test_response_direction() {
 	assert server.send(&resp[0], m)
 	pump(mut server, mut tester, 1000)
 
-	mut got := [max_payload]u8{}
+	mut got := [default_message]u8{}
 	rn := tester.take(&got[0])
 	assert rn == m
 	for i in 0 .. m {
@@ -123,10 +133,10 @@ fn test_response_direction() {
 fn test_wait_fc_times_out() {
 	// A multi-frame tx that never gets a FC (no receiver bound) must abort after N_Bs
 	// so the link frees up instead of wedging busy forever.
-	mut l := Link{
+	mut l := bound(Link{
 		n_bs_us: 1000
-	}
-	mut buf := [max_payload]u8{}
+	}, default_message)
+	mut buf := [default_message]u8{}
 	assert l.send(&buf[0], 20) // > 7 bytes -> FF then wait_fc
 
 	mut p := Pdu{}
@@ -140,10 +150,10 @@ fn test_wait_fc_times_out() {
 fn test_tick_times_out_stalled_send_cf() {
 	// In send_cf (CTS received) a full Tx FIFO gates poll() out mid-burst; tick() must still
 	// abort if no CF goes out within N_Bs, so a bus drop mid-transfer can't wedge the link.
-	mut l := Link{
+	mut l := bound(Link{
 		n_bs_us: 1000
-	}
-	mut buf := [max_payload]u8{}
+	}, default_message)
+	mut buf := [default_message]u8{}
 	for i in 0 .. 20 {
 		buf[i] = u8(i + 1)
 	}
@@ -164,10 +174,10 @@ fn test_tick_times_out_stalled_send_cf() {
 fn test_tick_times_out_wait_fc_without_poll() {
 	// Under Tx back-pressure the sender gates poll() on FIFO space, so the N_Bs timeout must
 	// also advance via tick() alone — otherwise a full FIFO (down bus) wedges the link forever.
-	mut l := Link{
+	mut l := bound(Link{
 		n_bs_us: 1000
-	}
-	mut buf := [max_payload]u8{}
+	}, default_message)
+	mut buf := [default_message]u8{}
 	assert l.send(&buf[0], 20)
 	mut p := Pdu{}
 	assert l.poll(0, mut p) // FF out, enter wait_fc (deadline 1000)
@@ -180,10 +190,10 @@ fn test_tick_times_out_wait_fc_without_poll() {
 fn test_fc_wait_refreshes_n_bs() {
 	// FC.WAIT means "not ready yet" — it must restart N_Bs so a peer that WAITs within
 	// the window and later sends CTS still completes, instead of aborting at the old deadline.
-	mut l := Link{
+	mut l := bound(Link{
 		n_bs_us: 1000
-	}
-	mut buf := [max_payload]u8{}
+	}, default_message)
+	mut buf := [default_message]u8{}
 	for i in 0 .. 20 {
 		buf[i] = u8(i + 1)
 	}
@@ -206,11 +216,11 @@ fn test_fc_wait_refreshes_n_bs() {
 fn test_wftmax_255_does_not_wrap() {
 	// Regression: wft_max at the u8 max must still abort — the counter must not wrap past
 	// 255 back to 0 and tolerate WAITs forever.
-	mut l := Link{
+	mut l := bound(Link{
 		n_bs_us: 1000
 		wft_max: 255
-	}
-	mut buf := [max_payload]u8{}
+	}, default_message)
+	mut buf := [default_message]u8{}
 	assert l.send(&buf[0], 20)
 	mut p := Pdu{}
 	assert l.poll(0, mut p) // FF -> wait_fc
@@ -228,10 +238,10 @@ fn test_wftmax_255_does_not_wrap() {
 fn test_late_fc_after_deadline_aborts() {
 	// A FC arriving after N_Bs has elapsed (but before poll runs the timeout) must not
 	// revive the transfer — it aborts, matching the deadline poll() would enforce.
-	mut l := Link{
+	mut l := bound(Link{
 		n_bs_us: 1000
-	}
-	mut buf := [max_payload]u8{}
+	}, default_message)
+	mut buf := [default_message]u8{}
 	assert l.send(&buf[0], 20)
 	mut p := Pdu{}
 	assert l.poll(0, mut p) // FF -> wait_fc (deadline 1000)
@@ -244,11 +254,11 @@ fn test_late_fc_after_deadline_aborts() {
 
 fn test_fc_wait_bounded_by_wftmax() {
 	// An endless-WAIT peer must not re-wedge the link: after wft_max WAITs the tx aborts.
-	mut l := Link{
+	mut l := bound(Link{
 		n_bs_us: 1000
 		wft_max: 3
-	}
-	mut buf := [max_payload]u8{}
+	}, default_message)
+	mut buf := [default_message]u8{}
 	assert l.send(&buf[0], 20)
 	mut p := Pdu{}
 	assert l.poll(0, mut p) // FF -> wait_fc
@@ -264,17 +274,17 @@ fn test_fc_wait_bounded_by_wftmax() {
 }
 
 fn test_send_rejects_when_busy_or_too_long() {
-	mut l := Link{}
-	mut buf := [max_payload]u8{}
+	mut l := bound(Link{}, default_message)
+	mut buf := [default_message]u8{}
 	assert l.send(&buf[0], 10) // starts a tx (FF pending)
 	assert !l.send(&buf[0], 5) // busy
-	mut l2 := Link{}
-	assert !l2.send(&buf[0], max_payload + 1) // too long
+	mut l2 := bound(Link{}, default_message)
+	assert !l2.send(&buf[0], default_message + 1) // too long
 }
 
 
 fn test_n_cr_times_out_stalled_receive() {
-	mut l := Link{}
+	mut l := bound(Link{}, default_message)
 	l.init_defaults()
 	mut ff := Pdu{}
 	ff.data[0] = 0x10
@@ -294,12 +304,12 @@ fn test_n_cr_times_out_stalled_receive() {
 	cf.data[0] = 0x21
 	l.on_frame(1_000_002, cf)
 	assert l.rx == .idle
-	mut dst := [max_payload]u8{}
+	mut dst := [default_message]u8{}
 	assert l.take(&dst[0]) == 0
 }
 
 fn test_n_cr_refreshes_per_cf() {
-	mut l := Link{}
+	mut l := bound(Link{}, default_message)
 	l.init_defaults()
 	mut ff := Pdu{}
 	ff.data[0] = 0x10
@@ -325,14 +335,14 @@ fn test_n_cr_refreshes_per_cf() {
 		cf2.data[1 + i] = u8(13 + i)
 	}
 	l.on_frame(1_800_000, cf2)
-	mut dst := [max_payload]u8{}
+	mut dst := [default_message]u8{}
 	assert l.take(&dst[0]) == 20
 	assert dst[6] == 6 && dst[19] == 19
 }
 
 
 fn test_n_cr_abort_clears_pending_fc() {
-	mut l := Link{}
+	mut l := bound(Link{}, default_message)
 	l.init_defaults()
 	mut ff := Pdu{}
 	ff.data[0] = 0x10
@@ -354,7 +364,7 @@ fn test_n_cr_abort_clears_pending_fc() {
 
 
 fn test_new_ff_after_prior_ncr_expiry() {
-	mut l := Link{}
+	mut l := bound(Link{}, default_message)
 	l.init_defaults()
 	// complete one small multi-frame transfer, leaving rx_deadline armed from its last CF
 	mut ff := Pdu{}
@@ -371,7 +381,7 @@ fn test_new_ff_after_prior_ncr_expiry() {
 	cf.data[1] = 6
 	cf.data[2] = 7
 	l.on_frame(100_000, cf)
-	mut dst := [max_payload]u8{}
+	mut dst := [default_message]u8{}
 	assert l.take(&dst[0]) == 8
 	// a NEW FF arrives long after that stale deadline; the generated bridge calls
 	// tick() before its readiness-gated poll — the fresh receive must survive it and
@@ -388,7 +398,7 @@ fn test_new_ff_after_prior_ncr_expiry() {
 }
 
 fn test_block_boundary_backpressured_cts_not_aborted() {
-	mut l := Link{}
+	mut l := bound(Link{}, default_message)
 	l.init_defaults()
 	l.bs = 1 // one CF per block -> a CTS is due after every CF
 	mut ff := Pdu{}
@@ -419,7 +429,7 @@ fn test_block_boundary_backpressured_cts_not_aborted() {
 // abort_tx abandons a multi-frame send mid-flight: nothing more is polled out, and the link
 // accepts a new message (an owner whose channel refused a frame must not keep sending the rest).
 fn test_abort_tx_stops_a_transfer_in_flight() {
-	mut l := Link{}
+	mut l := bound(Link{}, default_message)
 	l.init_defaults()
 	mut msg := [20]u8{}
 	assert l.send(&msg[0], 20)
@@ -434,10 +444,10 @@ fn test_abort_tx_stops_a_transfer_in_flight() {
 
 // a send the link gave up on is counted; one that completed is not — both leave it not busy
 fn test_a_send_given_up_is_counted_apart_from_a_completed_one() {
-	mut l := Link{
+	mut l := bound(Link{
 		n_bs_us: 1000
-	}
-	mut buf := [max_payload]u8{}
+	}, default_message)
+	mut buf := [default_message]u8{}
 	mut p := Pdu{}
 	assert l.send(&buf[0], 5) // a single frame
 	assert l.poll(0, mut p)
@@ -450,7 +460,7 @@ fn test_a_send_given_up_is_counted_apart_from_a_completed_one() {
 
 // progress is what advanced a reception, never what the link ignored or rejected
 fn test_only_frames_that_advance_a_reception_count_as_progress() {
-	mut l := Link{}
+	mut l := bound(Link{}, default_message)
 	l.init_defaults()
 	mut p := Pdu{}
 	p.data[0] = 0x40 // a reserved PCI
@@ -481,7 +491,7 @@ fn test_only_frames_that_advance_a_reception_count_as_progress() {
 // CTS (N_Bs bounds each wait, WFTmax their number); the WAIT past WFTmax and an overflow give up,
 // no progress
 fn test_flow_control_a_transmission_waits_for_counts_as_progress() {
-	mut l := Link{}
+	mut l := bound(Link{}, default_message)
 	l.init_defaults()
 	l.wft_max = 2
 	buf := []u8{len: 20, init: u8(index)}
@@ -509,27 +519,27 @@ fn test_flow_control_a_transmission_waits_for_counts_as_progress() {
 
 // a message of the maximum length crosses the sequence number's 15 -> 0 wrap intact (74 CFs)
 fn test_a_max_length_message_wraps_the_sequence_number() {
-	mut server := Link{}
-	mut tester := Link{}
-	mut req := [max_payload]u8{}
-	for i in 0 .. max_payload {
+	mut server := bound(Link{}, default_message)
+	mut tester := bound(Link{}, default_message)
+	mut req := [default_message]u8{}
+	for i in 0 .. default_message {
 		req[i] = u8(i * 7)
 	}
-	assert tester.send(&req[0], max_payload)
+	assert tester.send(&req[0], default_message)
 	pump(mut tester, mut server, 1000)
-	mut buf := [max_payload]u8{}
-	assert server.take(&buf[0]) == max_payload
-	for i in 0 .. max_payload {
+	mut buf := [default_message]u8{}
+	assert server.take(&buf[0]) == default_message
+	for i in 0 .. default_message {
 		assert buf[i] == u8(i * 7)
 	}
 }
 
 // our flow control carries the block size and STmin we grant, and comes again after each block
 fn test_flow_control_carries_our_block_size_and_stmin() {
-	mut l := Link{
+	mut l := bound(Link{
 		bs:    2
 		stmin: 5
-	}
+	}, default_message)
 	l.init_defaults()
 	mut p := Pdu{}
 	l.on_frame(0, Pdu{
@@ -550,8 +560,8 @@ fn test_flow_control_carries_our_block_size_and_stmin() {
 
 // a single frame claiming length 0 or above 7 is no message
 fn test_a_single_frame_of_length_0_or_above_7_is_ignored() {
-	mut l := Link{}
-	mut buf := [max_payload]u8{}
+	mut l := bound(Link{}, default_message)
+	mut buf := [default_message]u8{}
 	l.on_frame(0, Pdu{
 		data: [u8(0x00), 1, 2, 3, 4, 5, 6, 7]!
 	})
@@ -564,7 +574,7 @@ fn test_a_single_frame_of_length_0_or_above_7_is_ignored() {
 
 // starts a 30-byte transmission and grants it `bs` / `stmin` with a clear-to-send at `now`
 fn granted(bs u8, stmin u8, now u64) Link {
-	mut l := Link{}
+	mut l := bound(Link{}, default_message)
 	l.init_defaults()
 	buf := [30]u8{}
 	assert l.send(&buf[0], 30)
@@ -606,9 +616,9 @@ fn test_transmission_honours_the_receivers_stmin() {
 
 // a single frame arriving mid-reception ends it: the single frame is delivered, the partial not
 fn test_a_single_frame_mid_reception_replaces_it() {
-	mut l := Link{}
+	mut l := bound(Link{}, default_message)
 	l.init_defaults()
-	mut buf := [max_payload]u8{}
+	mut buf := [default_message]u8{}
 	l.on_frame(0, Pdu{
 		data: [u8(0x10), 20, 1, 2, 3, 4, 5, 6]!
 	})
@@ -624,17 +634,17 @@ fn test_a_single_frame_mid_reception_replaces_it() {
 	assert l.take(&buf[0]) == 0 // the old reception does not resume
 }
 
-// a first frame announcing more than max_payload starts nothing: it is refused with FC.OVFLW,
+// a first frame announcing more than default_message starts nothing: it is refused with FC.OVFLW,
 // and ends a reception in progress
 fn test_an_oversize_first_frame_is_refused_with_overflow() {
-	mut l := Link{}
+	mut l := bound(Link{}, default_message)
 	l.init_defaults()
-	mut buf := [max_payload]u8{}
+	mut buf := [default_message]u8{}
 	mut p := Pdu{}
 	l.on_frame(0, Pdu{
 		data: [u8(0x10), 20, 1, 2, 3, 4, 5, 6]!
 	})
-	total := max_payload + 1
+	total := default_message + 1
 	l.on_frame(0, Pdu{
 		data: [u8(0x10 | (total >> 8)), u8(total & 0xFF), 0, 0, 0, 0, 0, 0]!
 	})
@@ -652,10 +662,10 @@ fn test_an_oversize_first_frame_is_refused_with_overflow() {
 // a refusal still owed when the sender restarts — with a valid first frame or a single frame — is
 // never sent: it would fail the transfer that replaced the oversize one
 fn test_an_owed_overflow_is_dropped_by_the_next_first_or_single_frame() {
-	mut l := Link{}
+	mut l := bound(Link{}, default_message)
 	l.init_defaults()
 	mut p := Pdu{}
-	mut buf := [max_payload]u8{}
+	mut buf := [default_message]u8{}
 	oversize := Pdu{
 		data: [u8(0x10 | (600 >> 8)), u8(600 & 0xFF), 0, 0, 0, 0, 0, 0]!
 	}
@@ -675,7 +685,7 @@ fn test_an_owed_overflow_is_dropped_by_the_next_first_or_single_frame() {
 
 // an escape first frame (FF_DL 0: a 32-bit length follows, above 4095) is refused with FC.OVFLW
 fn test_an_escape_first_frame_is_refused_with_overflow() {
-	mut l := Link{}
+	mut l := bound(Link{}, default_message)
 	l.init_defaults()
 	mut p := Pdu{}
 	l.on_frame(0, Pdu{
@@ -698,7 +708,7 @@ fn test_a_reserved_stmin_is_read_as_127_ms() {
 // a flow status the standard does not define (3..15) ends the transmission at once, counted
 fn test_an_undefined_flow_status_aborts_the_transmission() {
 	for fs in 3 .. 16 {
-		mut l := Link{}
+		mut l := bound(Link{}, default_message)
 		l.init_defaults()
 		buf := [20]u8{}
 		mut p := Pdu{}
@@ -713,7 +723,7 @@ fn test_an_undefined_flow_status_aborts_the_transmission() {
 
 // the length each frame type needs before its bytes may be read
 fn test_truncated_frames_by_type() {
-	mut l := Link{}
+	mut l := bound(Link{}, default_message)
 	assert l.truncated(0x03, 3) && !l.truncated(0x03, 4) // SF of 3 needs 4 bytes
 	assert l.truncated(0x10, 7) && !l.truncated(0x10, 8) // FF is always full
 	assert l.truncated(0x30, 2) && !l.truncated(0x30, 3) // FC needs FS, BS, STmin
@@ -722,4 +732,144 @@ fn test_truncated_frames_by_type() {
 	assert l.truncated(0x21, 7) // 14 bytes left: a CF must be full
 	l.rx_pos = 18
 	assert !l.truncated(0x23, 3) && l.truncated(0x23, 2) // the last 2 bytes need 3
+}
+
+// a first frame announcing `total` bytes
+fn first_frame(total int) Pdu {
+	return Pdu{
+		data: [u8(0x10 | (total >> 8)), u8(total & 0xFF), 1, 2, 3, 4, 5, 6]!
+	}
+}
+
+// @verifies REQ-CAN-TP-014
+// the maximum is the one the owner gives the link, at the floor, the default and the limit: a
+// message of that length goes both ways intact (the sequence number wrapping on the long ones),
+// one byte more is refused to send, and a first frame announcing one byte more starts nothing
+fn test_the_maximum_is_the_capacity_the_owner_binds() {
+	for cap in [min_message, default_message, message_limit] {
+		mut a := bound(Link{}, cap)
+		mut b := bound(Link{}, cap)
+		a.init_defaults()
+		b.init_defaults()
+		msg := []u8{len: cap, init: u8(index * 13 + 1)}
+		assert a.send(&msg[0], cap), 'cap ${cap}'
+		pump(mut a, mut b, 1000)
+		got := []u8{len: cap}
+		assert b.take(&got[0]) == cap, 'cap ${cap}'
+		assert got == msg, 'cap ${cap}'
+		big := []u8{len: cap + 1}
+		assert !a.send(&big[0], cap + 1), 'cap ${cap}'
+		mut p := Pdu{}
+		if cap < message_limit {
+			b.on_frame(0, first_frame(cap + 1))
+			assert b.poll(0, mut p) && p.data[0] == 0x32, 'cap ${cap}'
+			assert b.rx == .idle && b.take(&got[0]) == 0
+		}
+		b.on_frame(0, first_frame(cap))
+		assert b.poll(0, mut p) && p.data[0] == 0x30, 'cap ${cap}' // the maximum itself is taken
+	}
+}
+
+// @verifies REQ-CAN-TP-014 REQ-CAN-TP-015
+// at the limit only the escape first frame is above the capacity: FF_DL 4095 starts a reception,
+// FF_DL 0 draws FC.OVFLW
+fn test_at_the_limit_only_the_escape_first_frame_overflows() {
+	mut l := bound(Link{}, message_limit)
+	l.init_defaults()
+	mut p := Pdu{}
+	l.on_frame(0, first_frame(4095))
+	assert l.rx == .receiving
+	assert l.poll(0, mut p) && p.data[0] == 0x30
+	l.on_frame(0, first_frame(0))
+	assert l.poll(0, mut p) && p.data[0] == 0x32
+	assert l.rx == .idle
+}
+
+// a single frame longer than a capacity below 7 is not taken
+fn test_a_single_frame_longer_than_the_capacity_is_ignored() {
+	mut l := bound(Link{}, 3)
+	mut buf := [8]u8{}
+	l.on_frame(0, Pdu{
+		data: [u8(0x04), 1, 2, 3, 4, 0, 0, 0]!
+	})
+	assert l.take(&buf[0]) == 0
+	l.on_frame(0, Pdu{
+		data: [u8(0x03), 1, 2, 3, 0, 0, 0, 0]!
+	})
+	assert l.take(&buf[0]) == 3
+}
+
+// a link nobody bound fails closed: nothing is sent, every first frame is refused, nothing written
+fn test_an_unbound_link_fails_closed() {
+	mut l := Link{}
+	l.init_defaults()
+	buf := [20]u8{}
+	assert !l.send(&buf[0], 1)
+	l.on_frame(0, Pdu{
+		data: [u8(0x02), 0x3E, 0, 0, 0, 0, 0, 0]!
+	})
+	assert !l.has_request()
+	l.on_frame(0, first_frame(20))
+	mut p := Pdu{}
+	assert l.poll(0, mut p) && p.data[0] == 0x32
+	assert l.rx == .idle
+}
+
+// a capacity above the limit is clamped to it, a nil buffer is capacity 0, and the transmit
+// buffer is not exchanged under a transmission in flight
+fn test_bind_clamps_and_is_refused_while_sending() {
+	mut l := Link{}
+	big := []u8{len: message_limit + 100}
+	l.bind_rx(&big[0], message_limit + 100)
+	assert l.bind_tx(&big[0], message_limit + 100)
+	assert l.rx_cap == message_limit && l.tx_cap == message_limit
+	assert l.bind_tx(unsafe { nil }, 100) && l.tx_cap == 0
+	l.bind_rx(unsafe { nil }, 100)
+	assert l.rx_cap == 0
+	assert l.bind_tx(&big[0], 30)
+	assert l.send(&big[0], 20)
+	other := []u8{len: 30}
+	assert !l.bind_tx(&other[0], 30) && l.tx_buf == &big[0]
+}
+
+// the owner may send from the link's own transmit buffer and take into its own receive buffer:
+// the message is where it already is
+fn test_send_and_take_on_the_links_own_buffers() {
+	mut a := bound(Link{}, 64)
+	mut b := bound(Link{}, 64)
+	a.init_defaults()
+	b.init_defaults()
+	for i in 0 .. 40 {
+		unsafe {
+			a.tx_buf[i] = u8(i + 3)
+		}
+	}
+	assert a.send(a.tx_buf, 40)
+	pump(mut a, mut b, 1000)
+	assert b.take(b.rx_buf) == 40
+	for i in 0 .. 40 {
+		assert unsafe { b.rx_buf[i] } == u8(i + 3)
+	}
+}
+
+// @verifies REQ-CAN-TP-024
+// a transmit-only link's flow-control id takes flow control and nothing else: a first frame, a
+// single frame, a consecutive frame and a truncated flow control are dropped — no reception starts
+// and no flow control is owed — while the clear-to-send the transmission waits for goes in
+fn test_a_transmit_only_link_takes_only_flow_control() {
+	mut l := bound(Link{}, default_message)
+	l.init_defaults()
+	msg := []u8{len: 40, init: u8(index)}
+	assert l.send(&msg[0], msg.len)
+	mut p := Pdu{}
+	assert l.poll(0, mut p) && p.data[0] >> 4 == 1 // the first frame; flow control awaited
+	for f in [[u8(0x10), 20, 1, 2, 3, 4, 5, 6], [u8(0x03), 0x22, 0xF1, 0x90],
+		[u8(0x21), 1, 2, 3, 4, 5, 6, 7], [u8(0x30), 0]] {
+		assert !l.on_flow_control(1, &f[0], f.len), f.str()
+	}
+	assert l.rx == .idle && !l.fc_send && !l.fc_ovflw && !l.has_request()
+	assert !l.poll(1, mut p), 'nothing goes out on a frame that is not flow control'
+	cts := [u8(0x30), 0, 0, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA] // CAN-FD padded
+	assert l.on_flow_control(2, &cts[0], cts.len)
+	assert l.poll(2, mut p) && p.data[0] == 0x21
 }

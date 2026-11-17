@@ -63,3 +63,4 @@ fn test_the_uds_import_follows_the_dids() {
 	_, with_dids := emit_module_headers(m, 'ecu', false, false)
 	assert 'import comm.uds' in with_dids
 }
+

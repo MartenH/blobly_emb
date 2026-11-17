@@ -9,6 +9,7 @@ module sysmodel
 
 import os
 import comm.doip
+import comm.isotp
 import tools.candb
 import tools.doipcfg
 import tools.netcfg
@@ -3153,6 +3154,31 @@ fn check_doip_routes(s System) []Issue {
 						severity: .error
 						req:      'REQ-NET-019'
 						msg:      '${where}: its [isotp] listens on 0x${c.rx_id.hex()} and answers on 0x${c.tx_id.hex()}, but its diag allocation is 0x${t.diag.req.hex()} / 0x${t.diag.rsp.hex()} — the gateway forwards to the allocation'
+					}
+				}
+				// the gateway carries routed messages up to its own maximum: a target that exchanges
+				// longer ones is reached through it only up to the gateway's — a longer request is
+				// refused by the gateway's entity (REQ-CAN-TP-023), a longer answer is answered
+				// responseTooLong by the gateway, and the bootloader's TransferData blocks are lowered
+				// to the gateway's maximum (REQ-CAN-TP-025). The other way round nothing is lost: the
+				// route carries the target's maximum ([[doip.route]] max_message, sysgen), and the
+				// gateway refuses a longer request at once (diagnostic NACK 0x04) — the target would
+				// refuse it on its own bus too
+				gm := if gw.view.isotp_conns.len > 0 {
+					gw.view.isotp_conns[0].max_len()
+				} else {
+					isotp.default_message
+				}
+				if c.max_len() > gm {
+					blocks := if t.view.boot {
+						'; its bootloader\'s TransferData blocks are lowered to ${gm} bytes'
+					} else {
+						''
+					}
+					issues << Issue{
+						severity: .warning
+						req:      'REQ-CAN-TP-023'
+						msg:      '${where}: its [isotp] max_message is ${c.max_len()} and the gateway\'s ${gm} — through the gateway a request longer than ${gm} bytes is refused by the gateway\'s entity (generic NACK 0x02, the message discarded) and an answer longer than ${gm} bytes is answered responseTooLong (0x14) by the gateway${blocks}; reach it directly on its bus for longer messages'
 					}
 				}
 			}

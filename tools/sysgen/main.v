@@ -19,6 +19,7 @@ import toml
 import sysmodel
 import tools.ecumodel
 import tools.candb
+import comm.isotp
 
 fn main() {
 	if os.args.len < 2 {
@@ -949,6 +950,11 @@ fn doip_route_section(sys sysmodel.System, node sysmodel.Node) []string {
 		b << 'bus     = "${sysmodel.local_can_iface(node, bus)}"'
 		b << 'tx_id   = 0x${t.diag.req.hex().to_upper()}'
 		b << 'rx_id   = 0x${t.diag.rsp.hex().to_upper()}'
+		// the longest request the gateway forwards: the node's own maximum (written only when it is
+		// not the default the key takes absent)
+		if t.view.isotp_conns.len == 1 && t.view.isotp_conns[0].max_len() != isotp.default_message {
+			b << 'max_message = ${t.view.isotp_conns[0].max_len()}'
+		}
 		b << ''
 	}
 	return b

@@ -68,24 +68,31 @@ void doip_net_seed(unsigned int seed) {
 
 static TX_MUTEX mb_mutex;
 static TX_SEMAPHORE mb_done;   /* put by each answer; a stale put is told apart by sequence */
-static unsigned char *mb_req;  /* the generated globals, sized by the V constants */
+static unsigned char *mb_req;  /* the generated globals, sized by the node's maximum message */
 static unsigned char *mb_resp;
+static int mb_req_cap;         /* ... and their sizes: a copy never runs past them */
+static int mb_resp_cap;
 static int mb_req_len;
 static int mb_functional;
 static int mb_resp_len;
 /* the sequence rules: doip_mb.h, host-tested against a reference model (doip_mb_test.v) */
 static doip_mb_t mb;
 
-void doip_mb_init(unsigned char *req_buf, unsigned char *resp_buf) {
+void doip_mb_init(unsigned char *req_buf, int req_cap, unsigned char *resp_buf, int resp_cap) {
 	mb_req = req_buf;
+	mb_req_cap = req_cap;
 	mb_resp = resp_buf;
+	mb_resp_cap = resp_cap;
 	tx_mutex_create(&mb_mutex, "doip-mb", TX_INHERIT);
 	tx_semaphore_create(&mb_done, "doip-mb-done", 0);
 }
 
 /* doip thread: post one request and wait for its answer; the answer's length, or -1 when the comm
- * thread did not answer in time (comm/doip NACKs it). */
+ * thread did not answer in time, or the request does not fit the mailbox (comm/doip NACKs it). */
 int doip_mb_call(const unsigned char *req, int len, int functional, unsigned char *resp, int cap) {
+	if (mb_req == NX_NULL || len < 0 || len > mb_req_cap) {
+		return -1;
+	}
 	tx_mutex_get(&mb_mutex, TX_WAIT_FOREVER);
 	for (int i = 0; i < len; i++) {
 		mb_req[i] = req[i];
@@ -139,9 +146,9 @@ int doip_mb_take(int *functional) {
 }
 
 /* comm thread: the answer to the request doip_mb_take returned (written to the response buffer).
- * Releases the mailbox. */
+ * Releases the mailbox. An answer longer than the buffer is no answer (-1). */
 void doip_mb_answer(int n) {
-	mb_resp_len = n;
+	mb_resp_len = n > mb_resp_cap ? -1 : n;
 	doip_mb_serve(&mb);
 	tx_mutex_put(&mb_mutex);
 	tx_semaphore_put(&mb_done);
@@ -246,7 +253,8 @@ int doip_mb_push_get(unsigned char *resp, int cap) {
 static TX_MUTEX rt_mutex;
 static TX_SEMAPHORE rt_done;
 static doip_mb_t rt;
-static unsigned char *rt_req; /* the generated global, sized by the V constants; NULL = no routes */
+static unsigned char *rt_req; /* the generated global, sized by the gateway's maximum message; NULL = no routes */
+static int rt_req_cap;
 static int rt_req_len;
 static int rt_idx;
 static uint32_t rt_conn;
@@ -254,6 +262,7 @@ static uint32_t rt_ticket;
 static int rt_code;
 /* the answer slot: one answer of a routed node on its way to the doip thread (len -1 = empty) */
 static unsigned char *rt_ans;
+static int rt_ans_cap;
 static int rt_ans_len = -1;
 static uint16_t rt_ans_from;
 static uint32_t rt_ans_ticket;
@@ -285,17 +294,20 @@ int doip_rt_is_live(uint32_t ticket) {
 		&& tx_time_get() - rt_live_at <= MS_TICKS(RT_LIVE_FRESH_MS);
 }
 
-void doip_rt_init(unsigned char *req_buf, unsigned char *ans_buf) {
+void doip_rt_init(unsigned char *req_buf, int req_cap, unsigned char *ans_buf, int ans_cap) {
 	rt_req = req_buf;
+	rt_req_cap = req_cap;
 	rt_ans = ans_buf;
+	rt_ans_cap = ans_cap;
 	tx_mutex_create(&rt_mutex, "doip-rt", TX_INHERIT);
 	tx_semaphore_create(&rt_done, "doip-rt-done", 0);
 }
 
 /* doip thread: hand a routed request to the router and wait for its verdict (0 = forwarded, else
- * the NACK code); -1 when the comm thread did not take it in time (withdrawn, never forwarded). */
+ * the NACK code); -1 when the comm thread did not take it in time (withdrawn, never forwarded), or
+ * the request does not fit the channel. */
 int doip_rt_call(int idx, const unsigned char *req, int len, uint32_t conn, uint32_t ticket) {
-	if (rt_req == NX_NULL) {
+	if (rt_req == NX_NULL || len < 0 || len > rt_req_cap) {
 		return -1;
 	}
 	tx_mutex_get(&rt_mutex, TX_WAIT_FOREVER);
@@ -355,10 +367,14 @@ void doip_rt_answer(int code) {
 }
 
 /* comm thread: an answer of routed node `from` to request `ticket` into the slot; 0 = the slot is
- * still full (try again next pass) */
+ * still full (try again next pass). An answer longer than the slot is dropped (1: taken, never
+ * framed) — the router's answers are bounded by the same maximum, so none should be. */
 int doip_rt_put(uint16_t from, uint32_t ticket, const unsigned char *data, int n) {
 	if (rt_ans == NX_NULL || n < 0) {
 		return 0;
+	}
+	if (n > rt_ans_cap) {
+		return 1;
 	}
 	tx_mutex_get(&rt_mutex, TX_WAIT_FOREVER);
 	if (rt_ans_len >= 0) {

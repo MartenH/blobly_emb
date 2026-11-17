@@ -33,6 +33,10 @@ fn send_block(mut b TraceBuffer, core u8, out &u8) int {
 	n := b.pack_block(&blk[0], 128, core)
 	mut tx := isotp.Link{}
 	mut rx := isotp.Link{}
+	tbuf := []u8{len: dump_block}
+	rbuf := []u8{len: dump_block}
+	tx.bind_tx(&tbuf[0], dump_block)
+	rx.bind_rx(&rbuf[0], dump_block)
 	assert tx.send(&blk[0], n)
 	pump_dump(mut tx, mut rx, 1000)
 	return rx.take(out)

@@ -156,6 +156,8 @@ mut:
 	rxm_brake_status com.RxMonitor // its deadlines, E2E receive state and silences (comm/com)
 	rxg com.RxGate // reception: UDS 0x28 on, the network awake
 	conn_diag diag.Connection // the node's diagnostic server on its ISO-TP connection
+	conn_diag_req [520]u8 // its request buffer: [isotp] max_message
+	conn_diag_resp [520]u8 // its response buffer
 	fmem fault.Memory // the node's fault memory: this bridge is its one writer (D2)
 	fcycle_on bool // the operation-cycle signal as last seen
 	fsrc_brake_pressure sig.RxStatus // BrakePressure's latest published status (signal-status faults)
@@ -485,7 +487,7 @@ pub fn partition_can0(ch can.Channel) {
 	st.rxm_ignition.start(osal.now_us())
 	st.rxm_brake_status.e2e.timeout_us = 300000
 	st.rxm_brake_status.start(osal.now_us())
-	st.conn_diag.init(u32(0x101), u32(0x102), u32(0x7df), 8, 0)
+	st.conn_diag.init(u32(0x101), u32(0x102), u32(0x7df), 8, 0, &st.conn_diag_req[0], &st.conn_diag_resp[0], 520)
 	st.conn_diag.server.no_programming = true // programming is the bootloader's
 	st.conn_diag.server.s3_us = u64(2000) * 1000
 	st.conn_diag.server.serves_reset = true // the owner performs reset_req once answered

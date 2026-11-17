@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 290 | 197 | 30 | 63 | 0 |
+| 296 | 203 | 30 | 63 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -34,6 +34,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BOOT-017 | QM | test | verified | ed25519_interop_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), sha512_test.v (pass) |
 | REQ-BOOT-018 | QM | analysis | uncovered | — |
 | REQ-BOOT-019 | QM | test | verified | doip_mb_test.v (pass), prog_test.v (pass) |
+| REQ-BOOT-020 | QM | test | verified | bufs_test.v (pass), diag_target_test.v (pass), prog_test.v (pass), step_test.v (pass) |
 | REQ-BULK-001 | QM | test | verified | bulk_test.v (pass) |
 | REQ-BULK-002 | QM | test | verified | bulk_test.v (pass) |
 | REQ-BULK-003 | QM | test | verified | bulk-ring-silicon (approved), bulk_test.v (pass) |
@@ -59,13 +60,18 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-CAN-TP-011 | QM | test | verified | isotp_test.v (pass) |
 | REQ-CAN-TP-012 | QM | test | verified | isotp_test.v (pass) |
 | REQ-CAN-TP-013 | QM | test | verified | diag_test.v (pass), isotp_test.v (pass), step_test.v (pass) |
-| REQ-CAN-TP-014 | QM | test | verified | isotp_test.v (pass) |
-| REQ-CAN-TP-015 | QM | test | verified | isotp_test.v (pass) |
+| REQ-CAN-TP-014 | QM | test | verified | diag_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), step_test.v (pass) |
+| REQ-CAN-TP-015 | QM | test | verified | isotp_test.v (pass), isotp_test.v (pass) |
 | REQ-CAN-TP-016 | QM | test | verified | isotp_test.v (pass) |
 | REQ-CAN-TP-017 | QM | test | verified | isotp_test.v (pass) |
 | REQ-CAN-TP-018 | QM | test | verified | isotp_test.v (pass), step_test.v (pass) |
 | REQ-CAN-TP-019 | QM | test | verified | diag_test.v (pass) |
 | REQ-CAN-TP-020 | QM | test | verified | diag_target_test.v (pass) |
+| REQ-CAN-TP-021 | QM | test | verified | diag_target_test.v (pass) |
+| REQ-CAN-TP-022 | QM | test | verified | diag_target_test.v (pass), diag_target_test.v (pass), fault_target_test.v (pass), fault_target_test.v (pass), records_test.v (pass), uds_test.v (pass) |
+| REQ-CAN-TP-023 | QM | test | verified | diag_target_test.v (pass), diag_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), doip_target_test.v (pass), doip_target_test.v (pass), doip_test.v (pass), doip_test.v (pass), doipnet_test.v (pass), doipnet_test.v (pass), doipnet_test.v (pass), route_size_test.v (pass), route_test.v (pass), someip_test.v (pass) |
+| REQ-CAN-TP-024 | QM | test | verified | isotp_test.v (pass), module_test.v (pass), shell_test.v (pass) |
+| REQ-CAN-TP-025 | QM | test | verified | diagroute_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass) |
 | REQ-COM-001 | QM | test | uncovered | — |
 | REQ-COM-002 | QM | test | uncovered | — |
 | REQ-COM-003 | QM | test | verified | com_test.v (pass) |
@@ -329,6 +335,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BOOT-017 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BOOT-018 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-BOOT-019 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-BOOT-020 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BULK-001 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BULK-002 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BULK-003 | | | | | | | | | | | | | | | ✓ | | | | ✓ | | | |
@@ -361,6 +368,11 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-CAN-TP-018 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-CAN-TP-019 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-CAN-TP-020 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-021 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-022 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-023 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-024 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-025 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-COM-001 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-COM-002 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-COM-003 | | | | | | | | | | | | | | | | | | | ✓ | | | |

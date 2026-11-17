@@ -222,6 +222,8 @@ fn test_trace_module_isotp_block_dump() {
 
 	// host side: an isotp.Link reassembles what the module streams on record_id
 	mut host := isotp.Link{}
+	hbuf := []u8{len: dump_block}
+	host.bind_rx(&hbuf[0], dump_block)
 	mut now := u64(1000)
 	for _ in 0 .. 64 {
 		if m.produce(now, mut f) {
@@ -318,6 +320,8 @@ fn test_remote_block_streams_after_local() {
 
 	// host reassembles BOTH transfers back to back
 	mut host := isotp.Link{}
+	hbuf := []u8{len: dump_block}
+	host.bind_rx(&hbuf[0], dump_block)
 	mut now := u64(1000)
 	mut blocks := 0
 	mut cores := []u8{}
@@ -389,6 +393,8 @@ fn test_multiblock_local_and_remote() {
 	m.load_remote(&wire[0], 70)
 
 	mut host := isotp.Link{}
+	hbuf := []u8{len: dump_block}
+	host.bind_rx(&hbuf[0], dump_block)
 	mut now := u64(1000)
 	mut cores := []u8{}
 	mut mores := []bool{}
@@ -449,4 +455,48 @@ fn test_correlated_window_refuses_small_cap_up_front() {
 	assert n0 == 0 && next0 == 0 && !more0 // refused before ANY block shipped
 	n1, _, _ := t.pack_chunk(&out[0], 32, 1, 0)
 	assert n1 == 32 // at the true minimum it progresses
+}
+
+// a frame on the dump_fc id
+fn dump_fc_frame(data []u8) can.Frame {
+	mut f := can.Frame{
+		id:  0x7e6
+		len: 8
+	}
+	for i, b in data {
+		f.data[i] = b
+	}
+	return f
+}
+
+// @verifies REQ-CAN-TP-024
+// a first frame on the dump_fc id starts nothing — idle, or while the dump waits for flow control:
+// no frame goes out (no clear-to-send, no overflow), the dump is where it was, and it still
+// completes on the host's real flow control
+fn test_a_first_frame_on_the_dump_fc_id_is_dropped() {
+	mut backing := [8]Record{}
+	buf := new_buffer(&backing[0], 8, .ring, 0)
+	mut m := new_module(0x713, 0x7e5, 0, true, buf)
+	mut f := can.Frame{}
+	ff := dump_fc_frame([u8(0x10), 20, 1, 2, 3, 4, 5, 6])
+	m.on_dump_fc(0, ff) // idle
+	assert !m.produce(0, mut f)
+	assert m.link.idle()
+	m.on_cmd(cmd_frame(op_arm))
+	assert m.produce(0, mut f)
+	m.push(new_fb(1, 0, 100, 10))
+	m.push(new_fb(2, 0, 200, 20))
+	m.on_cmd(cmd_frame(op_stop))
+	assert m.produce(0, mut f)
+	m.on_cmd(cmd_frame(op_dump))
+	assert m.produce(0, mut f) // dump rsp
+	assert !m.produce(0, mut f) // the block is packed and queued
+	assert m.produce(0, mut f) && f.data[0] >> 4 == 1 // its first frame
+	m.on_dump_fc(1, ff) // mid-dump, waiting for flow control
+	assert !m.produce(1, mut f)
+	assert m.link.busy() && m.link.rx == .idle
+	m.on_dump_fc(2, dump_fc_frame([u8(0x30), 0, 0])) // the host's clear-to-send
+	assert m.produce(2, mut f) && f.data[0] == 0x21
+	for m.produce(2, mut f) {}
+	assert !m.link.busy()
 }

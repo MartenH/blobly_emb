@@ -59,14 +59,16 @@ fn (mut c FakeChan) tx_idle() bool {
 struct FakeServer {
 mut:
 	handled  int
+	last_len int // the length of the last request handled
 	reset    bool
 	session  u8 = 3
 	last     u64
 	silent_s u64 = 5_000_000
 }
 
-fn (mut s FakeServer) handle(req &u8, _ int, resp &u8) int {
+fn (mut s FakeServer) handle(req &u8, n int, resp &u8) int {
 	s.handled++
+	s.last_len = n
 	sid := unsafe { req[0] }
 	if sid == 0x11 {
 		s.reset = true
@@ -123,8 +125,17 @@ fn zero_clock() u64 {
 }
 
 fn new_link() isotp.Link {
+	return link_at(isotp.default_message)
+}
+
+// link_at: a link with `m`-byte buffers of its own
+fn link_at(m int) isotp.Link {
 	mut l := isotp.Link{}
 	l.init_defaults()
+	rxb := []u8{len: m}
+	txb := []u8{len: m}
+	l.bind_rx(&rxb[0], m)
+	l.bind_tx(&txb[0], m)
 	return l
 }
 
@@ -150,8 +161,8 @@ fn tester_frames(mut t isotp.Link, now u64, req []u8) []can.Frame {
 
 struct Bufs {
 mut:
-	req  [isotp.max_payload]u8
-	resp [isotp.max_payload]u8
+	req  [isotp.message_limit]u8
+	resp [isotp.message_limit]u8
 }
 
 fn step(mut s FakeServer, mut l isotp.Link, now u64, mut ch FakeChan, mut b Bufs) bool {
@@ -258,7 +269,7 @@ fn fake_clock() u64 {
 // the bootloader's server through the same step: 0x11 answered, due once the answer has left
 fn test_the_bootloader_runs_the_same_step() {
 	mut p := boot.Prog{}
-	p.init()
+	p.init(isotp.default_message)
 	mut l := new_link()
 	mut ch := FakeChan{}
 	mut b := Bufs{}
@@ -269,7 +280,7 @@ fn test_the_bootloader_runs_the_same_step() {
 	assert ch.tx.len == 1 && ch.tx[0].id == stx && ch.tx[0].data[..3] == [u8(0x02), 0x51, 0x01]
 	// refused: the bootloader does not reset unanswered either
 	mut q := boot.Prog{}
-	q.init()
+	q.init(isotp.default_message)
 	mut l2 := new_link()
 	mut ch2 := FakeChan{
 		refuse: true
@@ -322,7 +333,7 @@ fn ram_read(_ voidptr, _ u32, out &u8, len u32) bool {
 
 fn test_routine_work_steps_once_the_wire_is_drained() {
 	mut p := boot.Prog{}
-	p.init()
+	p.init(isotp.default_message)
 	p.app_base = 0x0802_0000
 	p.app_size = 0x0004_0000
 	p.erase_unit = 0x0001_0000 // four units
@@ -360,7 +371,7 @@ fn test_routine_work_steps_once_the_wire_is_drained() {
 // a response still on its way out of the link holds the next step back
 fn test_routine_work_waits_for_the_link() {
 	mut p := boot.Prog{}
-	p.init()
+	p.init(isotp.default_message)
 	p.app_base = 0x0802_0000
 	p.app_size = 0x0004_0000
 	p.flash = boot.FlashOps{
@@ -391,7 +402,7 @@ fn test_routine_work_waits_for_the_link() {
 // until one has left; refused every time, the routine ends refused — never the erase unannounced
 fn test_a_refused_pending_answer_is_said_again_before_any_erase() {
 	mut p := boot.Prog{}
-	p.init()
+	p.init(isotp.default_message)
 	p.app_base = 0x0802_0000
 	p.app_size = 0x0004_0000
 	p.erase_unit = 0x0002_0000 // two units
@@ -431,7 +442,7 @@ fn test_a_refused_pending_answer_is_said_again_before_any_erase() {
 	assert said == [u8(0x7F), 0x7F, 0x71], 'the 0x78 again, a unit, 0x78, a unit, the answer: ${said}'
 	// refused every time: the routine ends refused, nothing erased
 	mut q := boot.Prog{}
-	q.init()
+	q.init(isotp.default_message)
 	q.app_base = 0x0802_0000
 	q.app_size = 0x0004_0000
 	q.erase_unit = 0x0002_0000
@@ -455,7 +466,7 @@ fn test_a_refused_pending_answer_is_said_again_before_any_erase() {
 // pass says it again and runs nothing (here: the image check, not done unannounced)
 fn test_a_refused_first_pending_answer_holds_the_routine() {
 	mut p := boot.Prog{}
-	p.init()
+	p.init(isotp.default_message)
 	p.app_base = 0x0802_0000
 	p.app_size = 0x0004_0000
 	p.flash = boot.FlashOps{
@@ -493,7 +504,7 @@ fn start_erase(mut p boot.Prog) {
 
 fn two_unit_prog() boot.Prog {
 	mut p := boot.Prog{}
-	p.init()
+	p.init(isotp.default_message)
 	p.app_base = 0x0802_0000
 	p.app_size = 0x0004_0000
 	p.erase_unit = 0x0002_0000 // two units
@@ -580,4 +591,46 @@ fn test_an_undrained_answer_is_sent_again() {
 		said << f.data[1]
 	}
 	assert said == [u8(0x71), 0x71], 'the answer again: ${said}'
+}
+
+// @verifies REQ-CAN-TP-014 REQ-BOOT-020
+// at the limit the step reassembles a TransferData as long as a 4095-byte connection's bootloader
+// advertises (4066 bytes), segmented and paced by its flow control, into the owner's buffers
+fn test_the_step_takes_a_block_as_long_as_the_maximum_holds() {
+	mut s := FakeServer{}
+	mut l := link_at(isotp.message_limit)
+	mut ch := FakeChan{}
+	mut b := Bufs{}
+	mut t := link_at(isotp.message_limit)
+	n := boot.block_data_for(isotp.message_limit) + 2
+	assert n == 4066
+	mut req := []u8{len: n, init: u8(index)}
+	req[0] = 0x36
+	assert t.send(unsafe { &req[0] }, n)
+	for now := u64(0); now < 2_000_000 && s.handled == 0; now += 1000 {
+		mut p := isotp.Pdu{}
+		for t.poll(now, mut p) {
+			mut f := can.Frame{
+				id:  srx
+				len: 8
+			}
+			for i in 0 .. 8 {
+				f.data[i] = p.data[i]
+			}
+			ch.rx << f
+		}
+		step(mut s, mut l, now, mut ch, mut b)
+		for f in ch.tx {
+			mut q := isotp.Pdu{}
+			for i in 0 .. 8 {
+				q.data[i] = f.data[i]
+			}
+			t.on_frame(now, q)
+		}
+		ch.tx.clear()
+	}
+	assert s.handled == 1 && s.last_len == n
+	for i in 1 .. n {
+		assert b.req[i] == u8(i)
+	}
 }

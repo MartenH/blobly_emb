@@ -864,6 +864,32 @@ fn (s &Server) find_did(id u16) int {
 	return -1
 }
 
+// The lengths of the answers below, for whoever must size a buffer to hold them (generation refuses
+// a node's maximum message length that cannot, REQ-CAN-TP-022). Stated beside the writers they
+// describe and pinned against their bytes in uds_test.v.
+
+// did_answer_len: a 0x22 answer carrying one DID of `len` data bytes — and the 0x2E request writing
+// it, which has the same shape (the service, the identifier, the data).
+pub fn did_answer_len(len int) int {
+	return 3 + len
+}
+
+// dtc_list_len: a 0x19 02 / 0A answer listing `n` DTCs (the subfunction, the availability mask,
+// then each DTC and its status).
+pub fn dtc_list_len(n int) int {
+	return 3 + 4 * n
+}
+
+// dtc_records_head: what a 0x19 04 / 06 answer carries before its records (the subfunction, the
+// DTC and its status).
+pub const dtc_records_head = 6
+
+// snapshot_answer_len: a 0x19 04 answer carrying one snapshot record whose body is `body` bytes
+// (the record number, then the body: comm/fault's snapshot_body_len).
+pub fn snapshot_answer_len(body int) int {
+	return dtc_records_head + 1 + body
+}
+
 // read_did serves one or MORE DIDs per request (ISO 14229-1 0x22): each supported DID's record —
 // the table's, or one the server serves itself (served_did_len) — is appended in request order. A
 // DID that does not exist, or is not readable in the active session, is simply not answered; only
@@ -1033,7 +1059,7 @@ fn (mut s Server) read_dtcs(req &u8, req_len int, resp &u8) int {
 		}
 		return 6
 	}
-	total := 3 + 4 * hits
+	total := dtc_list_len(hits)
 	if total > s.cap() {
 		return negative(resp, 0x19, nrc_response_too_long)
 	}
@@ -1130,7 +1156,7 @@ fn (mut s Server) dtc_records(sub u8, req &u8, resp &u8) int {
 		resp[4] = u8(dtc)
 		resp[5] = u8(e) & s.faults.avail
 	}
-	mut o := 6
+	mut o := dtc_records_head
 	if sub == 0x04 {
 		len := s.faults.snapshot(s.faults.ctx, i, unsafe { nil }, 0)
 		if len > 0 {

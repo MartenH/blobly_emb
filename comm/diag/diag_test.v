@@ -12,8 +12,15 @@ const fid = u32(0x7df)
 const name = 'BLOBLY-DOMAIN-0001'
 
 fn new_conn() Connection {
+	return conn_at(isotp.default_message)
+}
+
+// conn_at: a connection whose request and response buffers hold `m` bytes each, the owner's
+fn conn_at(m int) Connection {
 	mut c := Connection{}
-	c.init(rx, tx, fid, 0, 0)
+	req := []u8{len: m}
+	resp := []u8{len: m}
+	c.init(rx, tx, fid, 0, 0, &req[0], &resp[0], m)
 	c.server.dids[0] = uds.Did{
 		id: 0xF190
 	}
@@ -31,6 +38,10 @@ fn new_conn() Connection {
 fn new_tester() isotp.Link {
 	mut t := isotp.Link{}
 	t.init_defaults()
+	rxb := []u8{len: isotp.message_limit}
+	txb := []u8{len: isotp.message_limit}
+	t.bind_rx(&rxb[0], isotp.message_limit)
+	t.bind_tx(&txb[0], isotp.message_limit)
 	return t
 }
 
@@ -92,7 +103,7 @@ fn exchange(mut c Connection, mut t isotp.Link, mut now &u64, req []u8) []u8 {
 		}
 		pass(mut c, *now, mut t)
 		if t.has_request() {
-			mut buf := []u8{len: isotp.max_payload}
+			mut buf := []u8{len: isotp.message_limit}
 			n := t.take(unsafe { &buf[0] })
 			return buf[..n]
 		}
@@ -148,8 +159,15 @@ fn test_a_functional_request_is_served_on_arrival_and_dropped_while_busy() {
 	assert c.on_frame(0, sf(fid, [u8(0x3E), 0x00])) == .taken
 }
 
+// the answer in flight is sent from the connection's response buffer, which the link shares (no
+// copy): a request completing meanwhile is dropped unserved, so its answer — longer than the first
+// frame, other bytes — never lands in the consecutive frames still to go
 fn test_a_request_completing_while_an_answer_is_in_flight_is_dropped() {
 	mut c := new_conn()
+	for i in 0 .. 16 {
+		c.server.dids[1].data[i] = 0xEE
+	}
+	c.server.dids[1].len = 16
 	mut t := new_tester()
 	// the multi-frame answer starts: its first frame is out, the rest waits for flow control
 	c.on_frame(0, sf(rx, [u8(0x22), 0xF1, 0x90]))
@@ -158,7 +176,7 @@ fn test_a_request_completing_while_an_answer_is_in_flight_is_dropped() {
 	assert c.produce(0, mut ff)
 	assert ff.data[0] >> 4 == 1
 	// a second request completes meanwhile: taken out of the link and discarded
-	assert c.on_frame(0, sf(rx, [u8(0x3E), 0x00])) == .request
+	assert c.on_frame(0, sf(rx, [u8(0x22), 0xF1, 0xA0])) == .request
 	c.serve()
 	t.on_frame(0, pdu_of(ff))
 	mut now := u64(0)
@@ -166,9 +184,10 @@ fn test_a_request_completing_while_an_answer_is_in_flight_is_dropped() {
 		now += 1000
 		pass(mut c, now, mut t)
 	}
-	mut buf := []u8{len: isotp.max_payload}
+	mut buf := []u8{len: isotp.message_limit}
 	n := t.take(unsafe { &buf[0] })
 	assert buf[..3] == [u8(0x62), 0xF1, 0x90] && n == 3 + name.len
+	assert buf[3..n].bytestr() == name, 'the dropped request\'s answer wrote over the one in flight'
 	// and it is never answered later
 	for _ in 0 .. 10 {
 		now += 1000
@@ -439,7 +458,7 @@ fn test_a_handoff_over_the_network_waits_for_its_transport() {
 }
 
 fn remote(mut c Connection, req []u8, functional bool) []u8 {
-	mut resp := [isotp.max_payload]u8{}
+	mut resp := [isotp.message_limit]u8{}
 	n := c.serve_remote(&req[0], req.len, functional, &resp[0])
 	return resp[..n].clone()
 }
@@ -1039,4 +1058,54 @@ fn test_the_network_testers_unlock_is_what_a_router_reads() {
 	// gone with its connection
 	c.remote_dropped()
 	assert c.remote_unlocked() == 0
+}
+
+// @verifies REQ-CAN-TP-023
+// the server's response capacity is the connection's maximum message: sixteen full DIDs in one
+// read (545 bytes) go out whole at 4095, and draw responseTooLong at the default 520
+fn test_the_response_capacity_follows_the_maximum_message() {
+	mut req := [u8(0x22)]
+	for k in 0 .. uds.max_dids {
+		req << [u8(0x01), u8(k)]
+	}
+	for m in [isotp.default_message, isotp.message_limit] {
+		mut c := conn_at(m)
+		for k in 0 .. uds.max_dids {
+			c.server.dids[k] = uds.Did{
+				id:  u16(0x0100 + k)
+				len: u8(uds.max_did_data)
+			}
+		}
+		c.server.ndid = uds.max_dids
+		mut t := new_tester()
+		mut now := u64(0)
+		got := exchange(mut c, mut t, mut &now, req)
+		if m == isotp.default_message {
+			assert got == [u8(0x7F), 0x22, uds.nrc_response_too_long]
+		} else {
+			assert got.len == 1 + uds.max_dids * (2 + uds.max_did_data)
+			assert got[0] == 0x62 && got[got.len - 2 - uds.max_did_data] == 0x01
+		}
+	}
+}
+
+// @verifies REQ-CAN-TP-014
+// a request longer than the connection's maximum starts no reception: the tester's first frame is
+// refused with FC.OVFLW, its transmission ends, and nothing is served
+fn test_a_request_over_the_maximum_is_refused_with_overflow() {
+	mut c := conn_at(64)
+	mut t := new_tester()
+	req := []u8{len: 65, init: 0x2E}
+	assert t.send(&req[0], req.len)
+	for now in [u64(1000), 2000, 3000] {
+		pass(mut c, now, mut t)
+	}
+	assert t.tx_aborts == 1 && !t.busy()
+	assert !c.link.has_request() && c.link.idle()
+	ok := []u8{len: 64, init: 0x3E}
+	assert t.send(&ok[0], ok.len) // the maximum itself is taken
+	for now in [u64(4000), 5000, 6000] {
+		pass(mut c, now, mut t)
+	}
+	assert t.has_request() // answered (refused by the server, but carried whole)
 }

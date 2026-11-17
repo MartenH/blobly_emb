@@ -1,6 +1,9 @@
 module main
 
 import toml
+import boot
+import boot.bufs
+import comm.fault
 import comm.uds
 
 // The diagnostic server's wiring (comm/diag.Connection). What the server does in a pass is the
@@ -107,6 +110,10 @@ fn boot_gen_h(m Model, can_idx string, fd bool) []string {
 		'#define BOOT_TX_ID 0x${c.tx_id.hex()}u',
 		'#define BOOT_BS ${c.bs}u',
 		'#define BOOT_STMIN ${c.stmin}u',
+		// the node's maximum message length and the one block every message buffer is carved from
+		// (boot.bufs: the image lays it out by the same function) — REQ-BOOT-020
+		'#define BOOT_MAX_MESSAGE ${c.max_message}u /* [isotp] max_message: the TransferData block follows it */',
+		'#define BOOT_BUF_LEN ${bufs.layout(c.max_message, m.doip.on).total}u /* boot.bufs layout */',
 		'#define BOOT_IMAGE_KEY ${hexes(m.boot.image_key)}',
 		'#define BOOT_SESSION_KEY ${hexes(m.boot.session_key)}',
 	]
@@ -366,6 +373,9 @@ fn validate_boot(m Model) {
 	if fdcan_index(m.isotp_conns[0].bus) == '' {
 		panic('loom2v: [boot]: the [isotp] bus "${m.isotp_conns[0].bus}" names no single FDCAN index 0..2 — the bootloader opens it by that index, as the comm thread does')
 	}
+	if m.isotp_conns[0].max_message < boot.min_message {
+		panic('loom2v: [isotp] max_message = ${m.isotp_conns[0].max_message} is too short for the [boot] node\'s bootloader: its 0x29 proof request is ${boot.min_message} bytes (REQ-CAN-TP-022)')
+	}
 	mask := handoff_sessions(m)
 	if mask & uds.in_programming != 0 {
 		panic('loom2v: [uds] services "0x10 02" names the programming session — the application never runs it; the bootloader does')
@@ -506,7 +516,9 @@ fn svc_row(m Model, sid u8) (SvcCfg, bool) {
 fn conn_init_lines(m Model, c IsotpConn, conn string) []string {
 	srv := '${conn}.server'
 	mut g := []string{}
-	g << '\t${conn}.init(u32(0x${c.rx_id.hex()}), u32(0x${c.tx_id.hex()}), u32(0x${c.functional_id.hex()}), ${c.bs}, ${c.stmin})'
+	// the request and response buffers are the owner's, max_message bytes each: `<conn>_req` /
+	// `<conn>_resp` beside the connection (diag_target_globals, the host bridge state)
+	g << '\t${conn}.init(u32(0x${c.rx_id.hex()}), u32(0x${c.tx_id.hex()}), u32(0x${c.functional_id.hex()}), ${c.bs}, ${c.stmin}, &${conn}_req[0], &${conn}_resp[0], ${c.max_message})'
 	g << '\t${srv}.no_programming = true // programming is the bootloader\'s'
 	if m.boot.on {
 		// [boot]: 0x10 02 is answered and handed to the owner (reset_into_boot) — behind its own
@@ -786,13 +798,17 @@ fn diag_target_c_decls(m Model) []string {
 	return g
 }
 
-// diag_target_globals: the connection lives in __global (its link and buffers are ~2 KB — too
-// much for the comm thread's stack), bss-zero until diag_target_init.
+// diag_target_globals: the connection and its request and response buffers (the node's
+// max_message each) live in __global — too much for the comm thread's stack — bss-zero until
+// diag_target_init.
 fn diag_target_globals(m Model) []string {
 	if m.isotp_conns.len == 0 {
 		return []string{}
 	}
-	mut g := ['\tg_diag diag.Connection // the diagnostic server on its ISO-TP connection (bss)']
+	mm := m.isotp_conns[0].max_message
+	mut g := ['\tg_diag diag.Connection // the diagnostic server on its ISO-TP connection (bss)',
+		'\tg_diag_req [${mm}]u8 // its request buffer: [isotp] max_message',
+		'\tg_diag_resp [${mm}]u8 // its response buffer']
 	for sname in did_xup_sigs(m) {
 		si := m.sig_of[sname] or { continue }
 		g << '\tg_didx_${snake(sname)} [${sig_lanes(si) + 1}]u32 // ${sname}\'s up channel, the live DIDs\' reader: seq, lanes (xcore_poll_n)'
@@ -938,4 +954,70 @@ fn diag_target_produce(m Model) []string {
 		return ['\t\tif nm_up {', '\t\t\tg_diag.pump(t1, mut ch)', '\t\t}']
 	}
 	return ['\t\tg_diag.pump(t1, mut ch)']
+}
+
+// diag_did_answer_len: the bytes DID d's record is answered at — its did_len, or the saturation
+// count's u32
+fn diag_did_answer_len(m Model, d DidCfg) int {
+	return if d.tx_saturations { 4 } else { did_len(m, d) }
+}
+
+// diag_message_need: the longest message the node's diagnostic server must send or receive whole
+// that its configuration determines, and which message that is — a DID's 0x22 answer (and the
+// 0x2E request writing it, the same length), the DTC list (0x19 02 / 0A), a DTC's snapshot (0x19
+// 04) and extended data (0x19 06). The lengths come from the helpers beside the writers (comm/uds,
+// comm/fault), pinned against their bytes there. A multi-DID 0x22 is not here: it is bounded at run
+// time, answered responseTooLong past the maximum. (The bootloader's 0x29 proof is validate_boot's.)
+fn diag_message_need(m Model) (int, string) {
+	mut need := 0
+	mut what := ''
+	for d in m.dids {
+		n := uds.did_answer_len(diag_did_answer_len(m, d))
+		if n > need {
+			need = n
+			what = '[[did]] 0x${d.id.hex()}\'s 0x22 answer' + if d.writable { ' and 0x2E request' } else { '' }
+		}
+	}
+	if m.faults.len > 0 {
+		n := uds.dtc_list_len(m.faults.len)
+		if n > need {
+			need = n
+			what = 'the DTC list (0x19 02 / 0A) of ${m.faults.len} [[fault]]s'
+		}
+		for f in m.faults {
+			if f.freeze.len == 0 {
+				continue
+			}
+			lens := fault_freeze_lens(m, f)
+			mut data := 0
+			for l in lens {
+				data += l
+			}
+			sn := uds.snapshot_answer_len(fault.snapshot_body_len(lens.len, data))
+			if sn > need {
+				need = sn
+				what = '[[fault]] "${f.name}"\'s snapshot (0x19 04)'
+			}
+		}
+		en := fault.extended_answer_len()
+		if en > need {
+			need = en
+			what = 'a DTC\'s extended data (0x19 06)'
+		}
+	}
+	return need, what
+}
+
+// validate_max_message: the node's maximum message length holds every message its server must
+// exchange whole (REQ-CAN-TP-022) — refused, naming the message, rather than answered
+// responseTooLong or refused with FC.OVFLW at run time.
+fn validate_max_message(m Model) {
+	if m.isotp_conns.len == 0 {
+		return
+	}
+	mm := m.isotp_conns[0].max_message
+	need, what := diag_message_need(m)
+	if need > mm {
+		panic('loom2v: [isotp] max_message = ${mm} cannot hold ${what}: ${need} bytes (REQ-CAN-TP-022)')
+	}
 }

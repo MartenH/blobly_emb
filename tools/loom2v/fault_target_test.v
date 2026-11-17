@@ -2,6 +2,8 @@ module main
 
 // @verifies REQ-DIAG-012 REQ-DIAG-047 REQ-NVM-015
 import os
+import comm.fault
+import comm.uds
 import tools.sysmodel
 
 // Faults on a ThreadX target (docs/diagnostics.md §3.3): the fault memory on the comm thread, each
@@ -505,4 +507,63 @@ fn test_the_journal_budget_holds_every_snapshot_whole() {
 	c2, o2, _, _ := ft_generate('budget_ok', same, cfg.replace('sector_records = 40', 'sector_records = 42') +
 		'endurance = 10000000\n\n[nvm.assume]\ncycles_per_day = 1\nresets_per_day = 0\nclears_per_day = 0\nsetting_changes_per_day = 0\n')
 	assert c2 == 0, o2
+}
+
+// @verifies REQ-CAN-TP-022
+// the maximum message must hold what the configuration determines the server exchanges whole: here
+// the fault's snapshot answer (0x19 04: the DTC header, the record number, the DID count, F190's
+// identifier and its 6 bytes = 16) — one byte short is refused naming it, the exact length generates
+fn test_a_maximum_message_short_of_a_snapshot_answer_is_refused() {
+	no_nm := fn (src string) string {
+		at := src.index('[nm]') or { panic('no [nm]') }
+		end := src.index_after('\n\n', at) or { panic('no end of [nm]') }
+		return src[..at] + src[end + 2..]
+	}
+	snap := '[[did]]\nid    = 0xF190\nascii = "BLOBLY"\n' + ft_fault.replace('fail = 3, pass = 3 }',
+		'fail = 3, pass = 3 }\nfreeze   = [0xF190]') + '\n[fault_memory]\ncycle = "power"\n'
+	tx := 'functional_id = 0x7DF'
+	c1, o1, _, _ := ft_generate('mm_short', no_nm, ft_conn.replace(tx, tx + '\nmax_message = 15') + snap)
+	assert c1 != 0, 'loom2v accepted a max_message short of the snapshot answer'
+	assert o1.contains('[isotp] max_message = 15 cannot hold [[fault]] "LoadImplausible"\'s snapshot (0x19 04): 16 bytes'), o1
+	c2, o2, glue, _ := ft_generate('mm_exact', no_nm, ft_conn.replace(tx, tx + '\nmax_message = 16') + snap)
+	assert c2 == 0, o2
+	assert glue.contains('g_diag_req [16]u8') && glue.contains('&g_diag_req[0], &g_diag_resp[0], 16)')
+}
+
+// @verifies REQ-CAN-TP-022
+// the DTC answers the configuration determines bound the maximum too: with one [[fault]] and no
+// snapshot the longest is a DTC's extended data (0x19 06, fault.extended_answer_len), and with three
+// the DTC list (0x19 02 / 0A, uds.dtc_list_len) — one byte short of either is refused naming it, the
+// exact length generates
+fn test_a_maximum_message_short_of_a_dtc_list_or_extended_data_is_refused() {
+	no_nm := fn (src string) string {
+		at := src.index('[nm]') or { panic('no [nm]') }
+		end := src.index_after('\n\n', at) or { panic('no end of [nm]') }
+		return src[..at] + src[end + 2..]
+	}
+	tx := 'functional_id = 0x7DF'
+	cycle := '\n[fault_memory]\ncycle = "power"\n'
+	ext := fault.extended_answer_len()
+	assert ext > uds.dtc_list_len(1), 'one fault: the extended data is the longer'
+	c1, o1, _, _ := ft_generate('mm_ext', no_nm, ft_conn.replace(tx, tx + '\nmax_message = ${ext - 1}') +
+		ft_fault + cycle)
+	assert c1 != 0, 'loom2v accepted a max_message short of the extended data'
+	assert o1.contains("[isotp] max_message = ${ext - 1} cannot hold a DTC's extended data (0x19 06): ${ext} bytes"), o1
+	c2, o2, _, _ := ft_generate('mm_ext_ok', no_nm, ft_conn.replace(tx, tx + '\nmax_message = ${ext}') +
+		ft_fault + cycle)
+	assert c2 == 0, o2
+	// three faults: the list (3 + 4 x 3 = 15) passes the extended data
+	mut three := ft_fault
+	for i, name in ['LoadHigh', 'LoadLow'] {
+		three += '\n[[fault]]\nname     = "${name}"\ndtc      = 0xC4010${i + 1}\nfrom     = "LoadSlow.on_100ms"\ndebounce = { kind = "counter", fail = 3, pass = 3 }\n'
+	}
+	list := uds.dtc_list_len(3)
+	assert list > ext
+	c3, o3, _, _ := ft_generate('mm_list', no_nm, ft_conn.replace(tx, tx + '\nmax_message = ${list - 1}') +
+		three + cycle)
+	assert c3 != 0, 'loom2v accepted a max_message short of the DTC list'
+	assert o3.contains('[isotp] max_message = ${list - 1} cannot hold the DTC list (0x19 02 / 0A) of 3 [[fault]]s: ${list} bytes'), o3
+	c4, o4, _, _ := ft_generate('mm_list_ok', no_nm, ft_conn.replace(tx, tx + '\nmax_message = ${list}') +
+		three + cycle)
+	assert c4 == 0, o4
 }

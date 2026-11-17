@@ -19,6 +19,7 @@ import sync
 import time
 import rand
 import toml
+import comm.isotp
 import tools.candb
 import tools.ecumodel
 import tools.doipcfg
@@ -166,6 +167,13 @@ pub mut:
 	rx_id         u32
 	tx_id         u32
 	functional_id u32 // 0 = none; a SHARED receive id (every server on the bus may listen)
+	max_message   int // the longest diagnostic message either way ([isotp] max_message, 520 absent)
+}
+
+// max_len: the connection's maximum message length — its [isotp] max_message, the default where
+// none was read (a connection built in code)
+pub fn (c IsotpConn) max_len() int {
+	return if c.max_message > 0 { c.max_message } else { isotp.default_message }
 }
 
 // SysSignal — a cross-node signal declared ONCE at system scope (the full
@@ -266,6 +274,13 @@ pub:
 	rx_id       u32
 	logical     u32
 	has_logical bool // an integer `logical` was given (loom2v refuses the rest)
+	max_message int  // the longest request the gateway forwards to it (520 absent)
+}
+
+// max_len: the longest request the route forwards — its max_message, the default where none was
+// read (a route built in code)
+pub fn (r AuthoredRoute) max_len() int {
+	return if r.max_message > 0 { r.max_message } else { isotp.default_message }
 }
 
 // NodeView — the system-relevant slice of a node's ecu.toml: what it produces
@@ -1240,6 +1255,7 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 						rx_id:       m_u32(rm, 'rx_id')
 						logical:     m_u32(rm, 'logical')
 						has_logical: 'logical' in rm && m_is_int(rm, 'logical')
+						max_message: int((rm['max_message'] or { toml.Any(isotp.default_message) }).int())
 					}
 				}
 			}
@@ -1324,6 +1340,7 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 				rx_id:         m_u32(cm, 'rx_id')
 				tx_id:         m_u32(cm, 'tx_id')
 				functional_id: m_u32(cm, 'functional_id')
+				max_message:   int((cm['max_message'] or { toml.Any(isotp.default_message) }).int())
 			}
 		}
 	}

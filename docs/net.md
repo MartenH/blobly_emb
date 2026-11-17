@@ -355,15 +355,21 @@ checker and writer (`tools/doipcfg`) serves loom2v (`[doip]`), syscheck (a node'
 | 0x0005 routing activation | checked in the spec's order: source address (**0x00** unknown source — outside the list, or outside 0x0E00..0x0FFF with no list), activation type (**0x06** unsupported), the socket (**0x02** a different source address on this already-registered socket); else **0x10**, and the registered address may activate again. Every refusal closes the socket after the response, and nothing queued behind it is served | silence |
 | 0x0007 alive check request | answered 0x0008 with the entity's address (the spec sends this request the other way; answered as a liveness probe) | silence |
 | 0x0008 alive check response | accepted, no reply (2-byte payload) | silence |
-| 0x4001 entity status | 0x4002: node type 0x01 (node), or 0x00 (gateway) on a node that routes (`[[doip.route]]`), max sockets 1, open sockets 1, max data size 524 | 0x4002, open sockets 0 or 1 |
+| 0x4001 entity status | 0x4002: node type 0x01 (node), or 0x00 (gateway) on a node that routes (`[[doip.route]]`), max sockets 1, open sockets 1, max data size 4 + the node's `[isotp] max_message` (524 at the default 520) | 0x4002, open sockets 0 or 1 |
 | 0x4003 diagnostic power mode | 0x4004: 0x01 ready | 0x4004 |
 | 0x0001..0x0003 identification | NACK 0x01 | the announcement (0xFF/0x00 version pattern accepted for these only) |
 | 0x8001 diagnostic message | as before (acks 0x8002/0x8003) | silence |
 | anything else | generic NACK 0x01 | silence |
 | a payload length its type does not allow | generic NACK 0x04, and the socket closes | silence |
+| a payload longer than the entity assembles (`doip.msg_len(max_message)` − 8) | generic NACK 0x02 once its header is in; its bytes discarded as they arrive, the socket kept open | silence |
 
-Max data size is the assembly buffer's payload room (532 − 8: one ISO-TP message of 520 bytes and its addresses): a message sized to it fits whether a
-tester reads the field as the payload or the whole message. A malformed UDP request gets silence,
+Max data size is the assembly buffer's payload room (`doip.msg_len(max_message)` − 8: one ISO-TP
+message of the node's maximum length and its addresses, 524 at the default 520): a message sized to
+it fits whether a tester reads the field as the payload or the whole message. The entity's limit,
+its buffers and the mailbox's are all sized by the node's `[isotp] max_message` (REQ-CAN-TP-023); a
+diagnostic message longer than the limit is answered with the generic NACK 0x02 (message too large)
+and discarded as its bytes arrive; the socket stays open, as ISO 13400-2's generic header handler
+has it, so the tester keeps its activation, session and unlocks. A malformed UDP request gets silence,
 never a NACK, as identification always has.
 
 **One TCP_DATA socket** (`max_sockets`, NetX listen backlog 1). So the socket handler's other
@@ -436,7 +442,8 @@ node's Makefile lists those sources by hand.
 zone_a (H723) is on the edge bus only, with no network of its own. A tester reaches it over IP
 through sysnode: a diagnostic message to zone_a's logical address (0x07C0) is forwarded on the
 edge bus to zone_a's diag ids, and each answer comes back as a diagnostic message from 0x07C0 —
-the same UDS as on the bus, so zone_a's bootloader is reprogrammed this way too.
+the same UDS as on the bus, so zone_a's bootloader is reprogrammed this way too (in TransferData
+blocks the gateway carries: below, "How long a routed message may be").
 
 **Declared by the system.** zone_a's `diag` takes a `logical` (its DoIP address behind a gateway)
 and sysnode's `doip` names it in `routes = ["zone_a"]`. syscheck (`check_doip_routes`) requires a
@@ -495,6 +502,36 @@ the exchange (`doip_rt_live`: a slow transfer that keeps moving may outlast any 
 the router's own timers bound it), then for at most 7 s of ticks from the router letting it go,
 the request or its last answer — an answer later than that is dropped.
 
+**How long a routed message may be.** The gateway carries routed requests and answers up to its
+OWN maximum message length (its `[isotp] max_message`, which sizes its router's storage,
+`diagroute.storage_len`, and the route channel). Past that, each direction has its own answer:
+
+- **A longer request** never reaches the router: the gateway's DoIP entity refuses it as too large
+  for its assembly buffer, with the generic NACK 0x02, and discards it — the connection stays open,
+  with its routing, session and unlocks (REQ-CAN-TP-023).
+- **A request longer than the routed node takes**, where the gateway's maximum is the larger, is
+  refused by the router at once with the diagnostic NACK 0x04 (diagnostic message too large): each
+  route carries its node's `max_message` (`[[doip.route]] max_message`, which sysgen writes from the
+  node's `[isotp]`), so the gateway does not forward a request the node would refuse on its bus with
+  FC.OVFLW and leave the tester to wait out its P2 (REQ-CAN-TP-023).
+- **A longer answer** is refused on the bus: the router's link answers the node's first frame with
+  FC.OVFLW, so the node gives it up at once, and the router answers the tester in the node's name
+  with `7F <service> 14` (responseTooLong) — what the node itself would answer at the gateway's size
+  — at once, not after the tester's P2* (REQ-CAN-TP-025). Only when that first frame answers the
+  request in flight, judged as any answer is (its service, and the identifier or sub-function it
+  echoes, all in a first frame's six bytes): a late too-long answer to a request the tester gave up
+  on is refused on the bus and dropped, and the request in flight still gets its own answer.
+- **TransferData blocks** follow the path: a routed RequestDownload answer that offers blocks longer
+  than the gateway carries has its maxNumberOfBlockLength lowered to the gateway's maximum (in place,
+  in the width the node gave it), so the tester sizes its blocks for the gateway and the node's
+  bootloader, which takes any block up to what it offered, is reprogrammed through it in smaller
+  blocks (REQ-CAN-TP-025).
+
+syscheck refuses a gateway's own `[[doip.route]]` whose `max_message` is not its node's, and warns of
+a routed node whose `max_message` is larger than its gateway's (REQ-CAN-TP-023) — the other way
+round nothing is lost, the route carrying the node's maximum. system_full's sysnode is at 4095, like
+zone_a, the node it routes to, so zone_a's 4066-byte blocks reach it through the gateway too.
+
 **Access (REQ-NET-020).** Routing changes state on nodes that otherwise no network tester could
 reach, so a tester is routed only while it holds the gateway's own security level
 `route_level` (default 1) — an unlock earned over the network (`comm/diag remote_unlocked`; a bus
@@ -513,7 +550,8 @@ reads at 1.7 ms each, `3E 80` acknowledged without an answer, entity status "gat
 connection locked again; zone_a's programming handoff and its bootloader's F181 through the route,
 and back. Then the OTA gateway (stm32_linux `otad`, blobly_net's DoIP client retargeted after the
 gateway unlock) reprogrammed zone_a through sysnode: handoff, 0x29, erase with responsePending, 124
-TransferData blocks of 514 bytes, check, reset — 3.0 s, v404 → 1 → 2 → 1.
+TransferData blocks of 514 bytes (zone_a's maximum message was the default 520 then), check, reset —
+3.0 s, v404 → 1 → 2 → 1.
 
 **Not routed:** a node on the bus the gateway runs NM on (a routed exchange would neither hold nor
 wake the network — refused at generation); functional requests (0xE400 reaches the gateway's own

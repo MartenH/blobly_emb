@@ -194,7 +194,8 @@ extension; today a route is one source → one destination.)*
 
 ## 3. ISO-TP — segmented transport (ISO 15765-2)
 
-For PDUs larger than one frame: UDS requests and answers of up to 520 bytes. `[isotp]` is the
+For PDUs larger than one frame: UDS requests and answers up to the connection's maximum message
+length, `max_message` (8–4095 bytes, 520 when not configured). `[isotp]` is the
 node's ONE connection — the transport of its diagnostic server, `[uds]` (§4); it carries only
 ISO 15765-2's settings:
 
@@ -206,6 +207,7 @@ tx_id  = 0x102      # Response  (DBC)
 functional_id = 0x7DF   # optional: functional requests (single frame)
 bs      = 0         # flow-control block size (0 = the whole message)
 stmin_ms = 0        # min separation time we request
+max_message = 520   # optional: the longest message either way (8..4095)
 ```
 
 What is implemented — normal addressing on 11-bit ids, 8-byte frames (sent as CAN-FD frames on an
@@ -213,8 +215,9 @@ FD bus), single, first, consecutive and flow-control frames, N_Bs / N_Cr / WFTma
 behaves where the standard leaves the choice, is [can-tp.md](can-tp.md); the requirements are
 [requirements/can-tp.toml](../requirements/can-tp.toml).
 
-No-alloc: exactly one fixed `[max_payload]u8` reassembly buffer and one TX buffer per
-connection, sized at build time. ISO-TP delivers a reassembled PDU up to **UDS**
+No-alloc: the link holds no buffer of its own — its owner gives it one reassembly and one
+transmit buffer of `max_message` bytes, generated storage sized at build time, so a node pays only
+for the maximum it configures. ISO-TP delivers a reassembled PDU up to **UDS**
 (below), and blobly_net’s `uds` module drives it in the integration tests (the DBC
 already carries `Request`/`Response`).
 

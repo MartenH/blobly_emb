@@ -1,6 +1,7 @@
 module main
 
 import os
+import boot.bufs
 import tools.sysmodel
 import comm.doip as doippolicy
 
@@ -707,7 +708,9 @@ gateway          = "192.168.0.254"
 		'#define BOOT_DOIP_N_ACT_TYPES 0', '#define BOOT_DOIP_INITIAL_MS 2000u',
 		'#define BOOT_DOIP_ANNOUNCE_COUNT 2', '#define BOOT_DOIP_ANNOUNCE_MS 500',
 		'#define BOOT_DOIP_NET_WAIT_MS 6000u',
-		'#define BOOT_RX_ID 0x7b0u'] {
+		'#define BOOT_RX_ID 0x7b0u', '#define BOOT_MAX_MESSAGE 520u',
+		// the block holds the DoIP buffers too: the image carves it by the same layout
+		'#define BOOT_BUF_LEN ${bufs.layout(520, true).total}u'] {
 		assert h.contains(want), '${want} missing:\n${h}'
 	}
 	mk := os.read_file(os.join_path(tmp, 'loom_build.mk')) or { panic(err) }
@@ -810,6 +813,99 @@ fn test_the_network_wait_covers_every_valid_announcement_policy() {
 				assert doip_net_wait_ms(count, interval) >= doip_link_allowance_ms + count * interval
 				assert doip_net_wait_ms(count, interval) <= doip_link_allowance_ms + doippolicy.announce_total_max_ms
 			}
+		}
+	}
+}
+
+// @verifies REQ-CAN-TP-021
+// [isotp] max_message is 8..4095: outside it is refused, never narrowed; the bounds generate; absent
+// it is 520 — and it sizes the connection's request and response buffers and the server's capacity
+fn test_the_maximum_message_is_configured_within_its_range() {
+	tx := 'tx_id         = 0x7B8'
+	assert diag_conn.contains(tx), 'the fixture [isotp] changed shape — update this test'
+	for i, c in [['max_message = 7', '[isotp] max_message = 0x7 is out of range (0x8..0xfff)'],
+		['max_message = 4096', '[isotp] max_message = 0x1000 is out of range (0x8..0xfff)']] {
+		code, out, _ := generate('mm_${i}', diag_conn.replace(tx, tx + '\n' + c[0]))
+		assert code != 0, 'loom2v accepted [isotp] ${c[0]}'
+		assert out.contains(c[1]), out
+	}
+	// the floor holds no 14-byte DID answer, so the floor case has a 5-byte DID
+	short := diag_conn.replace(tx, tx + '\nmax_message = 8').replace('"BLOBLY-TEST"', '"BLOB"')
+	c8, o8, g8 := generate('mm_8', short)
+	assert c8 == 0, o8
+	assert g8.contains('g_diag_req [8]u8') && g8.contains('&g_diag_req[0], &g_diag_resp[0], 8)')
+	c4, o4, g4 := generate('mm_4095', diag_conn.replace(tx, tx + '\nmax_message = 4095'))
+	assert c4 == 0, o4
+	for want in ['g_diag_req [4095]u8', 'g_diag_resp [4095]u8',
+		'g_diag.init(u32(0x7b0), u32(0x7b8), u32(0x7df), 0, 0, &g_diag_req[0], &g_diag_resp[0], 4095)'] {
+		assert g4.contains(want), want
+	}
+	c0, o0, g0 := generate('mm_default', diag_conn)
+	assert c0 == 0, o0
+	assert g0.contains('g_diag_req [520]u8') && g0.contains('&g_diag_req[0], &g_diag_resp[0], 520)')
+}
+
+// @verifies REQ-CAN-TP-022
+// a DID's answer must fit: the 14-byte BLOBLY-TEST DID needs 3 + 11 bytes, more than the floor
+fn test_a_maximum_message_short_of_a_did_answer_is_refused() {
+	tx := 'tx_id         = 0x7B8'
+	code, out, _ := generate('mm_did', diag_conn.replace(tx, tx + '\nmax_message = 13'))
+	assert code != 0
+	assert out.contains("[isotp] max_message = 13 cannot hold [[did]] 0xf190's 0x22 answer: 14 bytes"), out
+	c2, o2, _ := generate('mm_did_ok', diag_conn.replace(tx, tx + '\nmax_message = 14'))
+	assert c2 == 0, o2
+}
+
+// @verifies REQ-CAN-TP-022 REQ-BOOT-020
+// a [boot] node's maximum message must hold its bootloader's 0x29 proof request (66 bytes); the
+// bootloader is generated with the node's maximum message and the one buffer block the boot.bufs
+// layout needs for it — bus-only and with DoIP
+fn test_a_boot_nodes_bootloader_follows_the_maximum_message() {
+	tx := 'tx_id         = 0x7B8'
+	c1, o1, _ := generate('boot_mm_65', boot_conn.replace(tx, tx + '\nmax_message = 65'))
+	assert c1 != 0
+	assert o1.contains('[isotp] max_message = 65 is too short for the [boot] node\'s bootloader: its 0x29 proof request is 66 bytes'), o1
+	for mm, want in {
+		0:    ['#define BOOT_MAX_MESSAGE 520u', '#define BOOT_BUF_LEN ${bufs.layout(520, false).total}u']
+		66:   ['#define BOOT_MAX_MESSAGE 66u', '#define BOOT_BUF_LEN ${bufs.layout(66, false).total}u']
+		4095: ['#define BOOT_MAX_MESSAGE 4095u', '#define BOOT_BUF_LEN ${bufs.layout(4095, false).total}u']
+	} {
+		tmp := os.join_path(os.temp_dir(), 'diag_target_boot_mm_${mm}_${os.getpid()}')
+		defer {
+			os.rmdir_all(tmp) or {}
+		}
+		extra := if mm == 0 { boot_conn } else { boot_conn.replace(tx, tx + '\nmax_message = ${mm}') }
+		code, out, _ := run_in_scratch(tmp, fixture_dir, fn (src string) string {
+			return src
+		}, extra)
+		assert code == 0, out
+		h := os.read_file(os.join_path(tmp, 'boot_gen.h')) or { panic(err) }
+		for w in want {
+			assert h.contains(w), '${w} missing:\n${h}'
+		}
+	}
+}
+
+// @verifies REQ-CAN-TP-023
+// the host bridge holds the connection's request and response buffers beside it in its state, sized
+// by the node's [isotp] max_message, and hands them to the connection with that capacity — run on
+// overspeed as it is (the default 520) and opted in at 4095, so the declarations and the init cannot
+// drift apart
+fn test_the_host_bridge_holds_buffers_of_the_maximum_message() {
+	for mm in [0, 4095] {
+		size := if mm == 0 { 520 } else { mm }
+		edit := fn [mm] (src string) string {
+			return if mm == 0 {
+				src
+			} else {
+				src.replace('functional_id = 0x7DF', 'functional_id = 0x7DF\nmax_message = ${mm}')
+			}
+		}
+		code, out, glue := generate_host('bridge_mm_${mm}', edit, '')
+		assert code == 0, out
+		for want in ['\tconn_diag_req [${size}]u8', '\tconn_diag_resp [${size}]u8',
+			'st.conn_diag.init(u32(0x101), u32(0x102), u32(0x7df), 8, 0, &st.conn_diag_req[0], &st.conn_diag_resp[0], ${size})'] {
+			assert glue.contains(want), '${want} (max_message ${mm})'
 		}
 	}
 }

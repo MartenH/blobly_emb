@@ -303,16 +303,20 @@ fn isotp_round(mut tx isotp.Link, mut rx isotp.Link, payload []u8, mut dst []u8,
 }
 
 fn bench_isotp(size u32) {
-	if size > isotp.max_payload {
-		println('  ${size:5} B: beyond isotp.max_payload (${isotp.max_payload}) — bulk ring or block transfer territory')
+	if size > isotp.default_message {
+		println('  ${size:5} B: beyond a default ISO-TP connection (${isotp.default_message} B) — bulk ring or block transfer territory')
 		return
 	}
 	mut tx := isotp.Link{}
 	mut rx := isotp.Link{}
 	tx.init_defaults()
 	rx.init_defaults()
+	txb := []u8{len: isotp.default_message}
+	rxb := []u8{len: isotp.default_message}
+	tx.bind_tx(&txb[0], txb.len)
+	rx.bind_rx(&rxb[0], rxb.len)
 	payload := []u8{len: int(size), init: u8(index)}
-	mut dst := []u8{len: int(isotp.max_payload)}
+	mut dst := []u8{len: isotp.default_message}
 	// one WARM round discarded, then ONE clock across all measured rounds — and it is
 	// the PROCESS CPU clock: wall time would book preemption on a loaded host as
 	// 'CPU cost' (codex #216). Per-round us truncation was the earlier /review catch.

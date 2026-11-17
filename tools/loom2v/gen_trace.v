@@ -241,8 +241,8 @@ fn trace_scratch_fields(m Model, part string) []string {
 	]
 }
 
-// trace_module_globals: the module lives in __global (the ISO-TP link alone is ~1 KB — keep it
-// off the 4 KB comm stack). Initialised at comm-thread start (trace_module_init). Its ring is
+// trace_module_globals: the module lives in __global (its dump scratch, the 520-byte block the
+// ISO-TP link sends from, and the rest of its state — keep it off the 4 KB comm stack). Initialised at comm-thread start (trace_module_init). Its ring is
 // trace_ring_global, outside the block, since it keeps its C name.
 fn trace_module_globals(m Model) []string {
 	if !m.trace.on {

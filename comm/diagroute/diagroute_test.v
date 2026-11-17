@@ -44,12 +44,22 @@ fn new_node() Node {
 	mut n := Node{}
 	n.link.bs = 0
 	n.link.init_defaults()
+	rxb := []u8{len: isotp.message_limit}
+	txb := []u8{len: isotp.message_limit}
+	n.link.bind_rx(&rxb[0], isotp.message_limit)
+	n.link.bind_tx(&txb[0], isotp.message_limit)
 	return n
 }
 
 fn new_router() Router {
+	return router_at(isotp.default_message)
+}
+
+// router_at: a router of the gateway's maximum message `m`, its storage the owner's
+fn router_at(m int) Router {
 	mut r := Router{}
-	r.init(1, 8)
+	storage := []u8{len: storage_len(m)}
+	r.init(1, 8, &storage[0], m)
 	assert r.add(Route{
 		logical: la
 		bus:     edge
@@ -88,7 +98,7 @@ fn pass(mut r Router, mut n Node, mut ch Chan, now u64) {
 	}
 	ch.tx.clear()
 	if n.link.has_request() {
-		mut buf := []u8{len: isotp.max_payload}
+		mut buf := []u8{len: isotp.message_limit}
 		got := n.link.take(unsafe { &buf[0] })
 		n.requests << buf[..got]
 	}
@@ -106,7 +116,7 @@ fn answer(mut n Node, data []u8) {
 fn take(mut r Router) []u8 {
 	assert r.waiting() > 0
 	a := r.head()
-	out := a.data[..a.len].clone()
+	out := unsafe { a.data.vbytes(a.len) }.clone()
 	r.pop()
 	return out
 }
@@ -337,9 +347,9 @@ fn test_a_refused_frame_ends_the_exchange() {
 
 fn test_an_empty_or_oversized_request_is_refused() {
 	mut r := new_router()
-	req := []u8{len: isotp.max_payload + 1}
+	req := []u8{len: isotp.default_message + 1}
 	assert r.accept(0, &req[0], 0, 1, 1, 1, u64(0)) == .refused
-	assert r.accept(0, &req[0], req.len, 1, 1, 1, u64(0)) == .refused
+	assert r.accept(0, &req[0], req.len, 1, 1, 1, u64(0)) == .too_large
 }
 
 fn test_the_table_holds_each_address_once() {
@@ -566,8 +576,8 @@ fn test_an_invalid_request_leaves_the_exchange_in_flight_alone() {
 	assert r.accept(0, &req[0], req.len, 1, 1, 1, 0) == .accepted
 	r.pump(500, mut ch)
 	r.step(600)
-	big := []u8{len: isotp.max_payload + 1}
-	assert r.accept(0, &big[0], big.len, 1, 2, 1, 700) == .refused
+	big := []u8{len: isotp.default_message + 1}
+	assert r.accept(0, &big[0], big.len, 1, 2, 1, 700) == .too_large
 	assert r.accept(0, &big[0], 0, 1, 3, 1, 800) == .refused
 	assert r.active_bus() == int(edge) // still waiting for the routine's answer
 }
@@ -687,7 +697,7 @@ fn test_the_answer_wait_starts_when_the_request_has_left() {
 // service (it does not, wherever the protocol can tell) — the one table every correlation rule
 // is held to
 fn served(mut srv uds.Server, req []u8) []u8 {
-	mut resp := []u8{len: isotp.max_payload}
+	mut resp := []u8{len: isotp.default_message}
 	n := srv.handle(&req[0], req.len, unsafe { &resp[0] })
 	return resp[..n].clone()
 }
@@ -699,7 +709,7 @@ fn judged(a []u8, req []u8) bool {
 
 fn test_a_real_servers_answers_are_told_apart_by_the_correlation() {
 	mut srv := uds.Server{}
-	srv.init(isotp.max_payload)
+	srv.init(isotp.default_message)
 	srv.dids[0] = uds.Did{
 		id: 0xF190
 	}
@@ -1015,4 +1025,239 @@ fn test_a_queue_that_fills_again_is_held_anew() {
 	}
 	assert !r.room(t), 'a queue full again is held anew'
 	assert r.room(t + gate_hold_us)
+}
+
+// @verifies REQ-CAN-TP-023
+// the router carries a routed request and its answer up to the gateway's own maximum message: at
+// 4095 a request and an answer of that length go whole, one byte more is refused before anything
+// of the exchange is touched, and the storage is the owner's
+fn test_a_router_carries_messages_up_to_the_gateways_maximum() {
+	m := isotp.message_limit
+	assert storage_len(m) == 4 * m
+	mut r := router_at(m)
+	mut n := new_node()
+	mut ch := Chan{}
+	mut now := u64(0)
+	big := []u8{len: m + 1, init: 0x2E}
+	assert r.accept(0, &big[0], big.len, 1, 1, 1, now) == .too_large
+	mut req := []u8{len: m, init: u8(index)}
+	req[0] = 0x2E
+	assert r.accept(0, unsafe { &req[0] }, req.len, 1, 2, 1, now) == .accepted
+	for _ in 0 .. 2000 {
+		now += 1000
+		pass(mut r, mut n, mut ch, now)
+		if n.requests.len > 0 {
+			break
+		}
+	}
+	assert n.requests.len == 1 && n.requests[0] == req
+	mut ans := []u8{len: m, init: u8(index * 3)}
+	ans[0] = 0x6E
+	ans[1] = req[1]
+	ans[2] = req[2]
+	answer(mut n, ans)
+	for _ in 0 .. 2000 {
+		now += 1000
+		pass(mut r, mut n, mut ch, now)
+		if r.waiting() > 0 {
+			break
+		}
+	}
+	assert take(mut r) == ans
+}
+
+// an unbound router's link carries nothing: a request is refused
+fn test_an_unbound_router_refuses() {
+	mut r := Router{}
+	assert r.add(Route{
+		logical: la
+		bus:     edge
+		tx_id:   req_id
+		rx_id:   rsp_id
+	})
+	r.active = -1
+	r.level = 1
+	req := [u8(0x3E), 0x00]
+	assert r.accept(0, &req[0], req.len, 1, 1, 1, u64(0)) == .refused
+}
+
+// @verifies REQ-CAN-TP-025
+// a routed node's answer longer than the gateway's maximum is refused on the bus (FC.OVFLW: the
+// node gives it up at once) and the tester is answered responseTooLong in the node's name, for
+// this request, at once rather than after its P2*; the exchange is over and the next one routes
+fn test_an_answer_longer_than_the_gateways_maximum_is_answered_response_too_long() {
+	mut r := new_router() // the gateway at the default 520
+	mut n := new_node() // the node at 4095
+	mut ch := Chan{}
+	mut now := u64(0)
+	req := [u8(0x22), 0xF1, 0x90, 0xF1, 0x90]
+	assert r.accept(0, &req[0], req.len, 1, 9, 1, now) == .accepted
+	run(mut r, mut n, mut ch, mut &now, 2)
+	assert n.requests.len == 1
+	mut long := []u8{len: isotp.default_message + 21, init: u8(index)}
+	long[0] = 0x62
+	long[1] = 0xF1
+	long[2] = 0x90
+	answer(mut n, long)
+	run(mut r, mut n, mut ch, mut &now, 4)
+	assert n.link.tx_aborts == 1, 'the node was refused by FC.OVFLW, not left to wait out N_Bs'
+	assert r.waiting() == 1
+	a := r.head()
+	assert a.logical == la && a.ticket == 9
+	assert take(mut r) == [u8(0x7F), 0x22, 0x14]
+	assert r.too_long == 1 && r.timeouts == 0
+	assert r.active_bus() == -1 && !r.busy(), 'the exchange ended with the refusal'
+	ok := [u8(0x3E), 0x00]
+	assert r.accept(0, &ok[0], ok.len, 1, 10, 1, now) == .accepted
+	run(mut r, mut n, mut ch, mut &now, 2)
+	answer(mut n, [u8(0x7E), 0x00])
+	run(mut r, mut n, mut ch, mut &now, 2)
+	assert take(mut r) == [u8(0x7E), 0x00]
+}
+
+// @verifies REQ-CAN-TP-023
+// a gateway larger than the node behind it carries a request only up to the node's maximum
+// (Route.max_message): a longer one is refused at once (too_large, DoIP's diagnostic NACK 0x04)
+// rather than forwarded for the node to refuse with FC.OVFLW and the tester left to wait out its
+// P2*; the exchange in flight is left alone, and a request of the node's length goes through. A
+// route without a maximum, or one past the gateway's, carries up to the gateway's.
+fn test_a_request_longer_than_the_routed_node_takes_is_refused_at_once() {
+	mut r := router_at(isotp.message_limit)
+	r.routes[0].max_message = isotp.default_message
+	assert r.route_max(0) == isotp.default_message
+	mut n := new_node()
+	n.link.bind_rx(n.link.rx_buf, isotp.default_message) // the node at 520
+	mut ch := Chan{}
+	mut now := u64(0)
+	tp := [u8(0x3E), 0x00]
+	assert r.accept(0, &tp[0], tp.len, 1, 1, 1, now) == .accepted
+	run(mut r, mut n, mut ch, mut &now, 2)
+	mut big := []u8{len: isotp.default_message + 1, init: u8(index)}
+	big[0] = 0x2E
+	assert r.accept(0, unsafe { &big[0] }, big.len, 1, 2, 1, now) == .too_large
+	assert r.forwarded == 1 && r.active_bus() == int(edge), 'the exchange in flight is untouched'
+	run(mut r, mut n, mut ch, mut &now, 2)
+	assert n.requests.len == 1 && n.link.tx_aborts == 0 && r.failed == 0, 'nothing of it reached the node'
+	answer(mut n, [u8(0x7E), 0x00])
+	run(mut r, mut n, mut ch, mut &now, 2)
+	assert take(mut r) == [u8(0x7E), 0x00]
+	fits := big[..isotp.default_message].clone()
+	assert r.accept(0, unsafe { &fits[0] }, fits.len, 1, 3, 1, now) == .accepted
+	run(mut r, mut n, mut ch, mut &now, 120)
+	assert n.requests.last() == fits
+	// no maximum, or one past the gateway's: the gateway's
+	r.routes[0].max_message = 0
+	assert r.route_max(0) == isotp.message_limit
+	mut g := new_router()
+	g.routes[0].max_message = isotp.message_limit
+	assert g.route_max(0) == isotp.default_message
+}
+
+// @verifies REQ-CAN-TP-025
+// a too-long answer is the request in flight's only when it answers it, like any answer: a late
+// one to an earlier request (its first frame names another service) is refused on the bus with
+// FC.OVFLW as ever, counted stale and not answered responseTooLong — the exchange in flight goes
+// on and its own answer still comes
+fn test_a_late_too_long_answer_to_an_earlier_request_is_not_this_ones() {
+	mut r := new_router() // the gateway at 520
+	mut n := new_node() // the node at 4095
+	mut ch := Chan{}
+	mut now := u64(0)
+	tp := [u8(0x3E), 0x00]
+	assert r.accept(0, &tp[0], tp.len, 1, 4, 1, now) == .accepted
+	run(mut r, mut n, mut ch, mut &now, 2)
+	mut late := []u8{len: isotp.default_message + 21, init: u8(index)}
+	late[0] = 0x62 // the answer to a 0x22 the tester gave up on
+	late[1] = 0xF1
+	late[2] = 0x90
+	answer(mut n, late)
+	run(mut r, mut n, mut ch, mut &now, 4)
+	assert n.link.tx_aborts == 1, 'refused on the bus all the same'
+	assert r.too_long == 0 && r.stale == 1 && r.waiting() == 0
+	assert r.active_bus() == int(edge), 'the exchange in flight goes on'
+	answer(mut n, [u8(0x7E), 0x00])
+	run(mut r, mut n, mut ch, mut &now, 2)
+	assert take(mut r) == [u8(0x7E), 0x00]
+	// first_frame_answers reads the bytes a first frame carries, after an escape length too
+	req := [u8(0x22), 0xF1, 0x90]
+	mut ff := can.Frame{
+		id:  rsp_id
+		len: 8
+	}
+	for i, b in [u8(0x12), 0x15, 0x62, 0xF1, 0x90, 0, 0, 0] {
+		ff.data[i] = b
+	}
+	assert first_frame_answers(&ff, &req[0], req.len, req.len)
+	ff.data[2] = 0x6E
+	assert !first_frame_answers(&ff, &req[0], req.len, req.len)
+	for i, b in [u8(0x10), 0x00, 0x00, 0x00, 0x10, 0x00, 0x7F, 0x22] {
+		ff.data[i] = b
+	}
+	assert first_frame_answers(&ff, &req[0], req.len, req.len)
+	ff.data[7] = 0x2E
+	assert !first_frame_answers(&ff, &req[0], req.len, req.len)
+}
+
+// @verifies REQ-CAN-TP-025
+// a node whose bootloader offers TransferData blocks longer than the gateway carries has its
+// RequestDownload answer lowered to the gateway's maximum (whatever the width of the length), and
+// a block of that length then goes through to it; an offer the gateway carries is left alone
+fn test_a_request_download_answer_is_lowered_to_the_gateways_maximum() {
+	mut r := new_router()
+	mut n := new_node()
+	mut ch := Chan{}
+	mut now := u64(0)
+	rd := [u8(0x34), 0x00, 0x44, 0x08, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00]
+	assert r.accept(0, &rd[0], rd.len, 1, 1, 1, now) == .accepted
+	run(mut r, mut n, mut ch, mut &now, 4)
+	answer(mut n, [u8(0x74), 0x20, 0x0F, 0xE2]) // 4066: a bootloader at 4095
+	run(mut r, mut n, mut ch, mut &now, 2)
+	assert take(mut r) == [u8(0x74), 0x20, 0x02, 0x08] // 520
+	assert r.lowered == 1
+	mut block := []u8{len: isotp.default_message, init: u8(index)}
+	block[0] = 0x36
+	block[1] = 0x01
+	assert r.accept(0, unsafe { &block[0] }, block.len, 1, 2, 1, now) == .accepted
+	run(mut r, mut n, mut ch, mut &now, 120)
+	assert n.requests.last() == block
+	// the offers fit_block_length leaves alone, and the widths it lowers in
+	mut fits := [u8(0x74), 0x20, 0x02, 0x02] // 514: carried
+	assert !fit_block_length(unsafe { &fits[0] }, fits.len, 520) && fits == [u8(0x74), 0x20, 0x02, 0x02]
+	mut wide := [u8(0x74), 0x40, 0x00, 0x00, 0x10, 0x00]
+	assert fit_block_length(unsafe { &wide[0] }, wide.len, 520) && wide == [u8(0x74), 0x40, 0x00, 0x00, 0x02, 0x08]
+	mut narrow := [u8(0x74), 0x10, 0xFF]
+	assert fit_block_length(unsafe { &narrow[0] }, narrow.len, 64) && narrow == [u8(0x74), 0x10, 0x40]
+	for bad in [[u8(0x74), 0x00, 0xFF], [u8(0x74), 0x50, 1, 2, 3, 4, 5], [u8(0x74), 0x20, 0xFF],
+		[u8(0x7F), 0x34, 0x22]] {
+		mut b := bad.clone()
+		assert !fit_block_length(unsafe { &b[0] }, b.len, 8) && b == bad, bad.str()
+	}
+}
+
+// @verifies REQ-CAN-TP-023
+// a routed answer the router never takes is never framed past the gateway's limit either: the
+// router's link holds no more than the gateway's maximum, so an answer one byte longer is not
+// queued as one
+fn test_the_routers_link_takes_no_answer_past_the_gateways_maximum() {
+	mut r := router_at(64)
+	mut n := new_node()
+	mut ch := Chan{}
+	mut now := u64(0)
+	req := [u8(0x22), 0xF1, 0x90]
+	assert r.accept(0, &req[0], req.len, 1, 1, 1, now) == .accepted
+	run(mut r, mut n, mut ch, mut &now, 2)
+	mut exact := []u8{len: 64, init: u8(index)}
+	exact[0] = 0x62
+	exact[1] = 0xF1
+	exact[2] = 0x90
+	answer(mut n, exact)
+	run(mut r, mut n, mut ch, mut &now, 20)
+	assert take(mut r) == exact
+	assert r.accept(0, &req[0], req.len, 1, 2, 1, now) == .accepted
+	run(mut r, mut n, mut ch, mut &now, 2)
+	mut over := exact.clone()
+	over << 0xEE
+	answer(mut n, over)
+	run(mut r, mut n, mut ch, mut &now, 20)
+	assert take(mut r) == [u8(0x7F), 0x22, 0x14], 'not the 65-byte answer'
 }

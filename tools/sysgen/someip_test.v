@@ -1419,6 +1419,12 @@ fn test_a_route_is_lowered_into_the_gateways_doip() {
 	assert sec.contains('logical = 0x7C0')
 	assert sec.contains('bus     = "can1"') // the gateway's interface on the shared bus
 	assert sec.contains('tx_id   = 0x7C0') && sec.contains('rx_id   = 0x7C8')
+	assert !sec.contains('max_message') // the node at the default: the key's own
+	// a node with a larger maximum: the route carries it, so the gateway refuses a longer request
+	// at once (REQ-CAN-TP-023)
+	mut big := route_system()
+	big.nodes[big.nodes.len - 1].view.isotp_conns[0].max_message = 4095
+	assert doip_route_section(big, big.nodes[0]).join('\n').contains('max_message = 4095')
 	// a gateway with no routes, and a node that is no gateway, lower nothing
 	assert doip_route_section(sys, sys.nodes.last()).len == 0
 	assert doip_route_section(doip_system(), doip_system().nodes[0]).len == 0
@@ -1641,6 +1647,35 @@ fn test_an_authored_route_in_a_composed_system_is_checked_for_other_listeners() 
 	gw2.name = 'gw2'
 	sys.nodes << gw2
 	assert twice(sys).len == 1 && twice(sys)[0].contains('"gw2"'), twice(sys).str()
+}
+
+// @verifies REQ-CAN-TP-023
+// an authored route carries its node's maximum message: the gateway refuses a longer routed request
+// by it, so a route whose max_message is not the node's [isotp] max_message is refused — absent, it
+// is the default
+fn test_an_authored_routes_maximum_is_its_nodes() {
+	doc := toml.parse_text('[doip]\nlogical_address = 0x07A0\n\n[[doip.route]]\nnode = "zone"\nlogical = 0x07C0\nbus = "can1"\ntx_id = 0x7C0\nrx_id = 0x7C8\n') or {
+		panic(err)
+	}
+	view := sysmodel.parse_node_view(doc)
+	assert view.doip_routes[0].max_message == 520
+	mut sys := route_system()
+	sys.nodes[0].doip_routes = []
+	sys.nodes[0].view.doip_routes = view.doip_routes
+	sys.nodes.last().diag.has_logical = false
+	sized := fn (s sysmodel.System) []string {
+		return sysmodel.validate_system(s).filter(it.severity == .error && it.req == 'REQ-CAN-TP-023').map(it.msg)
+	}
+	assert sized(sys).len == 0, sized(sys).str()
+	sys.nodes.last().view.isotp_conns[0].max_message = 4095
+	errs := sized(sys)
+	assert errs.len == 1 && errs[0].contains('its max_message is 520')
+		&& errs[0].contains('[isotp] max_message is 4095'), errs.str()
+	big := toml.parse_text('[doip]\nlogical_address = 0x07A0\n\n[[doip.route]]\nnode = "zone"\nlogical = 0x07C0\nbus = "can1"\ntx_id = 0x7C0\nrx_id = 0x7C8\nmax_message = 4095\n') or {
+		panic(err)
+	}
+	sys.nodes[0].view.doip_routes = sysmodel.parse_node_view(big).doip_routes
+	assert sized(sys).len == 0, sized(sys).str()
 }
 
 // an authored route is held to what a system's route is: its node no DoIP entity of its own, its

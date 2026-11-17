@@ -8,6 +8,8 @@ import driver.can
 // returning the reassembled response text — the same wire round trip the GUI does.
 fn pump(mut m ShellModule) string {
 	mut host := isotp.Link{}
+	hbuf := []u8{len: max_rsp}
+	host.bind_rx(&hbuf[0], max_rsp)
 	mut now := u64(1000)
 	mut f := can.Frame{}
 	for _ in 0 .. 200 {
@@ -32,7 +34,7 @@ fn pump(mut m ShellModule) string {
 		}
 		now += 500
 	}
-	mut buf := [isotp.max_payload]u8{}
+	mut buf := [max_rsp]u8{}
 	n := host.take(&buf[0])
 	if n <= 0 {
 		return ''
@@ -147,4 +149,47 @@ fn test_dispatch_gates_mutating_commands() {
 	mut rsp4 := Rsp{}
 	assert m.dispatch(gline('nosuch'), 6, 0, false, mut rsp4)
 	assert rsp4.len > 0
+}
+
+// a frame on the fc id
+fn fc_frame(data []u8) can.Frame {
+	mut f := can.Frame{
+		id:  0x7f2
+		len: 8
+	}
+	for i, b in data {
+		f.data[i] = b
+	}
+	return f
+}
+
+// the response's next frame, if any
+fn next_out(mut m ShellModule, now u64) ?can.Frame {
+	mut f := can.Frame{}
+	if m.produce(now, mut f) {
+		return f
+	}
+	return none
+}
+
+// @verifies REQ-CAN-TP-024
+// a first frame on the fc id starts nothing — idle, or while the response waits for flow control:
+// no frame goes out (no clear-to-send, no overflow), the stream is where it was, and the response
+// still completes on the host's real flow control
+fn test_a_first_frame_on_the_fc_id_is_dropped() {
+	mut m := ShellModule{}
+	m.init(0x7f1)
+	ff := fc_frame([u8(0x10), 20, 1, 2, 3, 4, 5, 6])
+	m.on_fc(0, ff) // idle
+	assert next_out(mut m, 0) == none
+	assert m.link.idle()
+	m.on_in(0, line('help')) // a multi-frame response: its first frame, then flow control awaited
+	first := next_out(mut m, 0) or { panic('no first frame') }
+	assert first.data[0] >> 4 == 1
+	m.on_fc(1, ff) // mid-response, waiting for flow control
+	assert next_out(mut m, 1) == none
+	assert m.link.busy() && m.link.rx == .idle
+	m.on_fc(2, fc_frame([u8(0x30), 0, 0])) // the host's clear-to-send
+	cf := next_out(mut m, 2) or { panic('no consecutive frame') }
+	assert cf.data[0] == 0x21
 }
