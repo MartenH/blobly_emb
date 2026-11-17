@@ -41,11 +41,11 @@ __attribute__((weak)) uint16_t xcore_load_get(int core) { (void)core; return 0u;
 /* Total core load (trace_hooks.c, xcore.h XCORE_BUSY_ADDR): an image without the execution-change
  * hooks, or without a satellite, reports -1 — "not measurable here", never a misleading 0. */
 __attribute__((weak)) void core_load_tick(void) { }
-__attribute__((weak)) int core_busy_permille(void) { return -1; }
-__attribute__((weak)) int core_isr_permille(void) { return -1; }
+__attribute__((weak)) int core_busy_bp(void) { return -1; }
+__attribute__((weak)) int core_isr_bp(void) { return -1; }
 __attribute__((weak)) int core_load_window_ms(void) { return -1; }
-__attribute__((weak)) int core_thread_permille(void *tcb) { (void)tcb; return -1; }
-__attribute__((weak)) void xcore_busy_pub(int core, int pm) { (void)core; (void)pm; }
+__attribute__((weak)) int core_thread_bp(void *tcb) { (void)tcb; return -1; }
+__attribute__((weak)) void xcore_busy_pub(int core, int bp) { (void)core; (void)bp; }
 __attribute__((weak)) int xcore_busy_get(int core) { (void)core; return -1; }
 __attribute__((weak)) void xcore_busy_watch(void) { }
 

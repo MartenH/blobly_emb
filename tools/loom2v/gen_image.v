@@ -67,7 +67,7 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 		g << 'fn C.xcore_ioc_init() // the shared xioc pool (satellite is the writer side)'
 		g << 'fn C.xcore_load_pub(int, u16) // publish this core\'s per-mille load for the owner\'s CpuLoad (xcore.h)'
 		g << 'fn C.core_load_tick() // total core load window (trace_hooks.c)'
-		g << 'fn C.core_busy_permille() int // the last window\'s total busy share, -1 = not measurable'
+		g << 'fn C.core_busy_bp() int // the last window\'s total busy share in basis points, -1 = not measurable'
 		g << 'fn C.xcore_busy_pub(int, int) // this core\'s total load for the owner (xcore_sat.c)'
 		// THIS partition's production decides the handshake role: only the PRODUCING
 		// satellite publishes the layout id — a non-producing image writing the cell
@@ -179,7 +179,7 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 				g << '\t\tC.xcore_load_pub(${m.part.core_of[part] or { 1 }}, sched.load_permille())'
 				// and the core's TOTAL load — every thread and ISR (trace_hooks.c), not the Loom FBs alone
 				g << '\t\tC.core_load_tick()'
-				g << '\t\tC.xcore_busy_pub(${m.part.core_of[part] or { 1 }}, C.core_busy_permille())'
+				g << '\t\tC.xcore_busy_pub(${m.part.core_of[part] or { 1 }}, C.core_busy_bp())'
 			}
 			if ti == 0 {
 				g << emit_bulk_service_arm(m.bulk, m.part, part, '\t\t') // this satellite's cross-core bulk service (poll)
