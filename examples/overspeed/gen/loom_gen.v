@@ -209,6 +209,7 @@ fn diag_refresh_diag(mut srv uds.Server) {
 fn io_can0_10ms(ctx voidptr) {
 	mut st := unsafe { &Bridge_can0_state(ctx) }
 	now := osal.now_us()
+	osal.ioc_acquire(routine_res_self_check_ch, &st.conn_diag.server.routines[0].res, u8(sizeof(st.conn_diag.server.routines[0].res))) // routine "SelfCheck": its FB's latest report, before the deadline is judged
 	st.conn_diag.housekeep(now)
 	if st.rxg.sample(st.conn_diag.server.rx_enabled(), true) { // silent: latch it, frame or not
 		st.rxm_brake_status.silenced()
@@ -246,8 +247,7 @@ fn io_can0_10ms(ctx voidptr) {
 	st.fctl_engine_monitor.gen[1] = st.fmem.control_gen(1)
 	st.fctl_engine_monitor.held[1] = st.fmem.control_held(1)
 	osal.ioc_publish(fault_ctl_engine_monitor_ch, &st.fctl_engine_monitor, u8(sizeof(st.fctl_engine_monitor)))
-	osal.ioc_acquire(routine_res_self_check_ch, &st.conn_diag.server.routines[0].res, u8(sizeof(st.conn_diag.server.routines[0].res))) // routine "SelfCheck": its FB's latest report
-	osal.ioc_publish(routine_req_self_check_ch, &st.conn_diag.server.routines[0].req, u8(sizeof(st.conn_diag.server.routines[0].req))) // ... and the request the server wrote
+	osal.ioc_publish(routine_req_self_check_ch, &st.conn_diag.server.routines[0].req, u8(sizeof(st.conn_diag.server.routines[0].req))) // routine "SelfCheck": the request the server wrote
 	if st.fmem.capture_due() {
 		st.conn_diag.refresh_now()
 		st.fmem.capture(&st.conn_diag.server) // the snapshot: the DIDs as 0x22 reads them now

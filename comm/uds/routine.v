@@ -245,12 +245,12 @@ fn (mut s Server) routine_control(req &u8, req_len int, resp &u8) int {
 			if !r.accepted {
 				return negative(resp, 0x31, nrc_request_sequence_error)
 			}
-			if unsafe { req[1] } & 0x80 != 0 {
-				return 0 // answered at once, so the suppress bit is honoured
-			}
 			n := routine_answer_len(int(r.results_out))
 			if n > s.cap() {
 				return negative(resp, 0x31, nrc_response_too_long)
+			}
+			if unsafe { req[1] } & 0x80 != 0 {
+				return 0 // answered at once, so the suppress bit is honoured — a positive answer only
 			}
 			return routine_answer(resp, 0x03, r, int(r.results_out))
 		}
@@ -262,16 +262,12 @@ fn (mut s Server) routine_control(req &u8, req_len int, resp &u8) int {
 // synchronous start waits until it is no longer running, a stop likewise, and an asynchronous start
 // is answered at the first report.
 fn (mut s Server) routine_owed(resp &u8, cap int) int {
-	mut r := &s.routines[s.pend_idx]
-	if !r.fresh() {
+	if !s.routine_ready() {
 		return 0
 	}
+	mut r := &s.routines[s.pend_idx]
 	if r.res.nrc != 0 {
 		return negative(resp, 0x31, routine_refusal_nrc(r.res.nrc))
-	}
-	st := r.res.state
-	if st == .running && (s.pend_sub == 0x02 || !r.async) {
-		return 0
 	}
 	n := if s.pend_sub == 0x01 { int(r.start_out) } else { 0 }
 	if routine_answer_len(n) > cap {
@@ -281,6 +277,17 @@ fn (mut s Server) routine_owed(resp &u8, cap int) int {
 		r.accepted = true
 	}
 	return routine_answer(resp, s.pend_sub, r, n)
+}
+
+// routine_ready: the FB has reported on the owed start or stop of routine pend_idx so that it is
+// answered (routine_owed's rule): a refusal, a synchronous start or a stop no longer running, an
+// asynchronous start in any state
+fn (s &Server) routine_ready() bool {
+	r := &s.routines[s.pend_idx]
+	if !r.fresh() {
+		return false
+	}
+	return r.res.nrc != 0 || r.res.state != .running || (s.pend_sub == 0x01 && r.async)
 }
 
 // routine_refusal_nrc: the NRC an FB's refusal is answered with — the ones a routine may give

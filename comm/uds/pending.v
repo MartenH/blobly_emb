@@ -12,7 +12,13 @@ module uds
 //     held (pending_tick);
 //   - a timeout answers the owed request conditionsNotCorrect (0x22) and asks the FB to stop at that
 //     moment, the answer abandoned if the transport that asked cannot take it within
-//     P2*server_max after (pending_tick).
+//     P2*server_max after (pending_tick) — unless the answer is READY when the timeout is judged
+//     (the FB's result is in its cell: the owner reads the result cells before tick, so a result
+//     the FB published before the deadline counts), which is then the answer — abandoned likewise
+//     if the transport cannot take it within P2*server_max, its FB then asked to stop as when the
+//     transport is gone (pending_abandon). A session entry in that window fails it (fail_owed)
+//     within the same bound: an owed answer is given up at most timeout + P2*server_max after its
+//     request.
 // The server does not know which transport owes the answer: its owner (comm/diag Connection) does,
 // and calls pending_step only when that transport can take a response.
 //
@@ -52,6 +58,7 @@ fn (mut s Server) go_pending(sid u8, idx int, sub u8, timeout_us u64, resp &u8) 
 	s.pend_next = s.now_us + pending_repeat_us
 	s.pend_until = s.now_us + timeout_us
 	s.pend_fail = false
+	s.pend_late = false
 	return negative(resp, sid, nrc_response_pending)
 }
 
@@ -100,8 +107,8 @@ pub fn (mut s Server) pending_abandon() {
 }
 
 // pending_tick: tick()'s share — S3 held while an answer is owed; at its timeout the owed request is
-// failed (fail_owed), and abandoned if the transport could not take that answer within
-// P2*server_max after
+// failed (fail_owed) unless its answer is ready by then, and either is abandoned if the transport
+// could not take it within P2*server_max after
 fn (mut s Server) pending_tick(now u64) {
 	if s.pend_sid == 0 {
 		return
@@ -110,20 +117,34 @@ fn (mut s Server) pending_tick(now u64) {
 	if now < s.pend_until {
 		return
 	}
-	if s.pend_fail {
-		s.pend_clear() // the transport never freed: the server serves again
+	if s.pend_fail || s.pend_late {
+		// the transport never freed: the server serves again, and a ready answer nobody got is
+		// no one's — its work asked to stop, as pending_abandon does
+		if s.pend_late {
+			s.owed_stop()
+		}
+		s.pend_clear()
+	} else if s.owed_ready() {
+		// the work completed in time — its result is in the cell — and only the transport is late
+		s.pend_late = true
+		s.pend_until = now + p2_star_server_us
 	} else {
 		s.fail_owed()
 	}
 }
 
 // fail_owed: the owed request will be answered conditionsNotCorrect, as soon as its transport can
-// take a response, and the work is asked to stop now; given up P2*server_max later
+// take a response, and the work is asked to stop now; given up P2*server_max later — or, for a
+// ready answer already waiting past its timeout (pend_late), when that wait was to end, so the
+// bound on an owed answer does not grow
 fn (mut s Server) fail_owed() {
 	s.owed_stop()
+	if !s.pend_late {
+		s.pend_until = s.now_us + p2_star_server_us
+	}
 	s.pend_fail = true
+	s.pend_late = false
 	s.pend_next = 0
-	s.pend_until = s.now_us + p2_star_server_us
 }
 
 fn (mut s Server) pend_clear() {
@@ -133,6 +154,7 @@ fn (mut s Server) pend_clear() {
 	s.pend_next = 0
 	s.pend_until = 0
 	s.pend_fail = false
+	s.pend_late = false
 }
 
 // owed_answer: the owed service's final answer once it is ready (0 = not yet)
@@ -140,6 +162,14 @@ fn (mut s Server) owed_answer(resp &u8, cap int) int {
 	return match s.pend_sid {
 		0x31 { s.routine_owed(resp, cap) }
 		else { 0 }
+	}
+}
+
+// owed_ready: owed_answer would give the final answer now
+fn (s &Server) owed_ready() bool {
+	return match s.pend_sid {
+		0x31 { s.routine_ready() }
+		else { false }
 	}
 }
 

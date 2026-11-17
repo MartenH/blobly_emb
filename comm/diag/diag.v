@@ -77,7 +77,8 @@ mut:
 	// the transport an owed answer (uds pending.v) goes back on: the other one (true) or the bus —
 	// set only when a request MAKES the server owe one, so a request dropped meanwhile over the other
 	// transport cannot move it — and a response of it pushed over the other transport and not yet
-	// acknowledged (push_sent)
+	// acknowledged (push_sent; forgotten when its connection drops or the server gives the answer
+	// up, no_longer_owes)
 	pend_remote bool
 	push_out    bool
 }
@@ -120,7 +121,9 @@ pub fn (mut c Connection) housekeep(now u64) {
 	if in_flight(&c.link) || c.remote.inflight || c.push_out {
 		c.server.hold_s3(now) // an exchange still in flight on either transport
 	}
+	was := c.server.pending()
 	c.server.tick(now)
+	c.no_longer_owes(was)
 }
 
 // on_frame takes one received frame. A physical frame feeds the link; a functional request is
@@ -196,6 +199,20 @@ pub fn (mut c Connection) serve() {
 fn (mut c Connection) owes(was bool, remote bool) {
 	if !was && c.server.pending() {
 		c.pend_remote = remote
+	}
+}
+
+// no_longer_owes: the server stopped owing an answer without giving it (its timeout's 0x22, or the
+// answer ready at the timeout, given up because the transport never took it: uds pending_tick) —
+// so a response of it pushed over the other transport is no longer waited for: its acknowledgement
+// may never come (a tester gone without closing), and waiting would hold S3 and every later push
+// for ever. The other edge of owes(); an answer given ends by push_step / pending_bus instead.
+fn (mut c Connection) no_longer_owes(was bool) {
+	if was && !c.server.pending() {
+		if c.pend_remote {
+			c.push_out = false
+		}
+		c.pend_remote = false
 	}
 }
 

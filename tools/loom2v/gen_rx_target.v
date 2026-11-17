@@ -106,10 +106,11 @@ fn rx_iocb_idx(m Model) map[string]int {
 // CommStep is one step of the ThreadX comm thread's pass. comm_pass_order is the ONE order the
 // generator emits them in (emit_run_target), with the reception gate re-sampled at every point that
 // can change it, so no frame is judged by a stale gate:
-//   housekeep  the connection's timers (S3, a pending reset)
+//   housekeep  the routines' results read (a result published before a routine's deadline is in
+//              its cell when the timeout is judged), then the connection's timers (S3, a pending
+//              reset, a routine's timeout)
 //   open       the pass clock; the gate's first sampling; signal-status faults' level steps
-//   reports    the FBs' fault reports consumed, the routines' reports read and their requests
-//              published
+//   reports    the FBs' fault reports consumed, the routines' requests published
 //   remote     a DoIP request served — then the gate re-sampled (a 0x28 over IP)
 //   drain      the FIFO, frame by frame: a CAN request served re-samples the gate (a 0x28 on CAN);
 //              an NM frame that wakes the network re-samples it and starts the operation cycle

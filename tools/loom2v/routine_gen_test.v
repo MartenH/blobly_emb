@@ -2,6 +2,8 @@ module main
 
 import os
 import comm.uds
+import toml
+import tools.cfgschema
 import tools.sysmodel
 
 // [[routine]] generation (docs/diagnostics.md §3.1, gen_routine.v): every refusal REQ-DIAG-087
@@ -256,10 +258,11 @@ fn test_a_routine_is_generated_only_where_it_can_run() {
 	assert diag_unbuilt(bare, 0x31) == 'the node has no [[routine]]'
 }
 
-// @verifies REQ-DIAG-081
+// @verifies REQ-DIAG-081 REQ-DIAG-082
 // The ThreadX emission: the request and result types, the FB's ports, its glue (the op taken once
 // per request; the record copied only inside a reported state, the result published every
-// dispatch), the comm thread's share of `.reports`, the cells configured at boot after the fault
+// dispatch), the comm thread's share of `.housekeep` (the result read before the deadline is judged)
+// and of `.reports`, the cells configured at boot after the fault
 // cells, the server's table, and the byte IOC linked for a routines-only node.
 fn test_the_target_emission() {
 	g := rt_target('emit', rt_ok())
@@ -276,8 +279,12 @@ fn test_the_target_emission() {
 		'\tif st.rtf_test.report(outp.test_result.state, outp.test_result.nrc) {',
 		'\t\t\tst.rtf_test.res.data[k] = outp.test_result.record[k]', '\t\t}', '\t}',
 		'\tC.iocb_pub(1, &st.rtf_test.res)']), g.glue
-	assert in_order(g.glue, ['// pass: reports', 'C.iocb_get(1, &g_diag.server.routines[0].res)',
-		'C.iocb_pub(0, &g_diag.server.routines[0].req)', '// pass: drain']), g.glue
+	// the result read before the housekeeping that judges a routine's deadline (comm/uds
+	// pending.v: a result the FB published before it counts), the request published after it
+	assert in_order(g.glue, ['// pass: housekeep', 'C.iocb_get(1, &g_diag.server.routines[0].res)',
+		'g_diag.housekeep(', '// pass: reports', 'C.iocb_pub(0, &g_diag.server.routines[0].req)',
+		'// pass: drain']), g.glue
+	assert g.glue.count('&g_diag.server.routines[0].res)') == 1, g.glue
 	assert in_order(g.glue, ['pub fn boot() {', 'C.iocb_cfg(0, u16(sizeof(uds.RoutineRequest)))',
 		'C.iocb_cfg(1, u16(sizeof(uds.RoutineResult)))', 'C._tx_initialize_kernel_enter()']), g.glue
 	assert in_order(g.glue, ['g_diag.server.routines[0] = uds.Routine{', 'id:          u16(0x0201)',
@@ -328,4 +335,24 @@ fn test_the_host_emission() {
 		'results:     true', 'results_out: 2', 'st.conn_diag.server.nroutines = 1']), glue
 	sig := os.read_file(os.join_path(rt_host_ex, 'sig', 'signals_gen.v')) or { panic(err) }
 	assert sig.contains('import comm.uds') && sig.contains('pub struct SelfCheckRequest {')
+}
+
+// Every key cfgschema's routine table states is one a [[routine]] takes — loom2v reads the keys from
+// that table, so a key added to the schema is never refused here as unknown.
+fn test_every_schema_key_is_a_routine_key() {
+	mut text := '[[routine]]\n'
+	for k in cfgschema.ecu.table('routine').keys {
+		val := match k.name {
+			'id' { '0x0201' }
+			'name' { '"Full"' }
+			else { k.def }
+		}
+		assert val != '', 'schema row routine.${k.name} has no default: give it a value here'
+		text += '${k.name} = ${val}\n'
+	}
+	doc := toml.parse_text(text) or { panic(err) }
+	rs := parse_routines(doc)
+	assert rs.len == 1 && rs[0].name == 'Full'
+	src := os.read_file(os.join_path(@DIR, 'gen_routine.v')) or { panic(err) }
+	assert src.contains("const routine_keys = cfgschema.ecu.table('routine').names()"), 'the keys a [[routine]] takes are the schema table\'s, not a second list'
 }

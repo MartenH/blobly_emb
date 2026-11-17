@@ -81,6 +81,7 @@ pub fn validate_system_gen(s System) []Issue {
 	issues << check_partial_no_wiring(s)
 	issues << check_routes(s, true)
 	issues << check_signals_dissolved(s)
+	issues << check_routine_use(s)
 	// The someip SEGMENT rules. check_someip_bus / check_someip_membership belong to the
 	// composed model and are not reached from here, which was harmless while any someip signal
 	// was refused outright — lowering them (#245) makes the segment's shape load-bearing, so
@@ -694,7 +695,10 @@ fn check_signals_dissolved(s System) []Issue {
 						msg:      'node "${n.name}": FB writes "${w}" but its declared producer is "${sig.producer}" — only the producer may write a signal'
 					}
 				}
-			} else if w !in n.view.local_signals && w !in n.view.routine_ports {
+			} else if w !in n.view.local_signals && w !in n.view.routine_results
+				&& w !in n.view.routine_requests {
+				// a routine's result is its FB's to write; its request is refused by
+				// check_routine_use, in loom2v's words
 				// a node-local signal (an io output, or a node-internal signal) is
 				// the node's own — only a name that is neither system nor local errors.
 				issues << Issue{
@@ -708,8 +712,11 @@ fn check_signals_dissolved(s System) []Issue {
 			if _ := s.signal_by_name(r) {
 				continue
 			}
-			if r in n.view.local_signals || r in n.view.params || r in n.view.routine_ports {
+			if r in n.view.local_signals || r in n.view.params || r in n.view.routine_requests {
 				continue // a node-local (io) input, a parameter or a routine's request — the node's own
+			}
+			if r in n.view.routine_results {
+				continue // refused by check_routine_use, in loom2v's words
 			}
 			issues << Issue{
 				severity: .error
@@ -727,6 +734,25 @@ fn check_signals_dissolved(s System) []Issue {
 					req:      'REQ-TOPO-001'
 					msg:      'node "${n.name}": signal "${sig}" is read from ${parts.len} partitions (${parts.join(", ")}) — one bus-RX signal has a single reader partition'
 				}
+			}
+		}
+	}
+	return issues
+}
+
+// check_routine_use: each [[routine]]'s request read by exactly one FB handler and written by none,
+// its result written by that handler alone and read by none — the rule, and the words, loom2v
+// refuses the node by (ecumodel.routine_use_refusal), so a system that passes generates
+// (REQ-DIAG-087). Dissolution only: a composed system runs loom2v on every node
+// (check_node_generatable), which says it already.
+fn check_routine_use(s System) []Issue {
+	mut issues := []Issue{}
+	for n in s.nodes {
+		for e in n.view.routine_errors {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-DIAG-087'
+				msg:      'node "${n.name}": ${e}'
 			}
 		}
 	}

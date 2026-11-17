@@ -406,3 +406,38 @@ fn test_the_timeout_holds_whatever_the_transport_does() {
 	tsend(mut t, [u8(0x3E), 0x00])
 	assert passes(mut c, mut &now, mut t, 3).answers == [[u8(0x7E), 0x00]]
 }
+
+// @verifies REQ-DIAG-084
+// A tester that acknowledged the request's own 0x78 and then vanished without closing: a later
+// push is never acknowledged, the routine times out and its 0x22 cannot be pushed; once the server
+// gives that answer up the push is no longer waited for — S3 runs again and the next answer owed
+// over DoIP is pushed.
+fn test_an_answer_given_up_forgets_its_unacknowledged_push() {
+	mut c := rconn()
+	mut t := rtester()
+	mut fb := FbSim{}
+	mut now := r_t0
+	c.housekeep(now)
+	assert remote(mut c, [u8(0x10), 0x03])[0] == 0x50
+	c.remote_sent()
+	assert remote(mut c, [u8(0x31), 0x01, 0x02, 0x03, 0x01]) == owed_78
+	c.remote_sent()
+	fb.run(mut c, 2, .running, [])
+	now += uds.pending_repeat_us
+	passes(mut c, mut &now, mut t, 1)
+	assert push(mut c) == owed_78
+	c.pushed(true) // and never acknowledged
+	for now < r_t0 + 10_000_000 + uds.p2_star_server_us + 2000 {
+		passes(mut c, mut &now, mut t, 1)
+	}
+	assert !c.server.pending(), 'the 0x22 given up'
+	assert c.server.session == uds.session_extended
+	passes(mut c, mut &now, mut t, 2100)
+	assert c.server.session == uds.session_default, 'S3 held by a push of an answer given up'
+	// the next answer owed over DoIP
+	fb.run(mut c, 2, .stopped, []) // the stop the timeout asked
+	assert remote(mut c, [u8(0x31), 0x01, 0x02, 0x03, 0x01]) == owed_78
+	c.remote_sent()
+	fb.run(mut c, 2, .done, [u8(1), 2])
+	assert push(mut c) == [u8(0x71), 0x01, 0x02, 0x03, 0x02, 1, 2], 'a push of an answer given up blocks the next'
+}

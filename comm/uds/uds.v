@@ -279,13 +279,15 @@ pub mut:
 	nroutines int
 	// The answer owed after a responsePending (pending.v): its service (0 = none), the routine and
 	// sub-function it is for, when the next 0x78 is due, when the owed answer runs out (then, with
-	// pend_fail, when it is abandoned), and whether it is to be answered conditionsNotCorrect.
+	// pend_fail or pend_late, when it is abandoned), whether it is to be answered
+	// conditionsNotCorrect, and whether it was ready at its timeout with only the transport late.
 	pend_sid   u8
 	pend_idx   int
 	pend_sub   u8
 	pend_next  u64
 	pend_until u64
 	pend_fail  bool
+	pend_late  bool
 }
 
 // init puts the server in the default session with everything unlocked-state cleared, and

@@ -28,6 +28,7 @@ import toml
 import boot
 import comm.uds
 import driver.doipnet
+import tools.cfgschema
 import tools.ecumodel
 
 // RoutineCfg is one [[routine]].
@@ -45,13 +46,13 @@ struct RoutineCfg {
 	security    int
 }
 
-// request / result: the names its FB's handler reads and writes
+// request / result: the names its FB's handler reads and writes (ecumodel's, the one statement)
 fn (r RoutineCfg) request() string {
-	return r.name + 'Request'
+	return ecumodel.routine_request(r.name)
 }
 
 fn (r RoutineCfg) result() string {
-	return r.name + 'Result'
+	return ecumodel.routine_result(r.name)
 }
 
 // record: the bytes of the FB's result record — the start's and 03's answers both read from it
@@ -59,8 +60,8 @@ fn (r RoutineCfg) record() int {
 	return if r.start_out > r.results_out { r.start_out } else { r.results_out }
 }
 
-const routine_keys = ['id', 'name', 'mode', 'stop', 'results', 'start_in', 'start_out', 'results_out',
-	'timeout_ms', 'sessions', 'security']
+// routine_keys: the keys a [[routine]] takes — cfgschema's routine table, the one statement
+const routine_keys = cfgschema.ecu.table('routine').names()
 
 // the routineIdentifiers a [[routine]] may take: ISO 14229-1 Annex F's vehicle-manufacturer-specific
 // (0x0200..0xDFFF) and system-supplier-specific (0xF000..0xFEFF) ranges — every other range has a
@@ -123,44 +124,6 @@ fn parse_routines(doc toml.Doc) []RoutineCfg {
 		}
 	}
 	return out
-}
-
-// RoutineFbUse is where a routine's request and result appear in the [[fb]] handlers
-struct RoutineFbUse {
-mut:
-	req_readers []string // "Fb.handler"
-	req_writers []string
-	res_readers []string
-	res_writers []string
-	period_ms   int // the reading handler's
-}
-
-fn routine_fb_use(doc toml.Doc, r RoutineCfg) RoutineFbUse {
-	mut u := RoutineFbUse{}
-	for c in ecumodel.toml_arr(doc, 'fb') {
-		cm := c.as_map()
-		fb := (cm['name'] or { toml.Any('') }).string()
-		for h in (cm['handler'] or { toml.Any([]toml.Any{}) }).array() {
-			hm := h.as_map()
-			at := '${fb}.${(hm['name'] or { toml.Any('') }).string()}'
-			reads := (hm['reads'] or { toml.Any([]toml.Any{}) }).array().map(it.string())
-			writes := (hm['writes'] or { toml.Any([]toml.Any{}) }).array().map(it.string())
-			if r.request() in reads {
-				u.req_readers << at
-				u.period_ms = int((hm['period_ms'] or { toml.Any(0) }).int())
-			}
-			if r.request() in writes {
-				u.req_writers << at
-			}
-			if r.result() in reads {
-				u.res_readers << at
-			}
-			if r.result() in writes {
-				u.res_writers << at
-			}
-		}
-	}
-	return u
 }
 
 // routine_fb: the FB that serves routine r (validate_routines made it exactly one)
@@ -283,18 +246,10 @@ fn validate_routines(m Model, doc toml.Doc) map[string]string {
 			panic('loom2v: ${h} needs security ${r.security}, but [uds] services 0x31 needs ${row.security} — one unlock cannot satisfy both (REQ-DIAG-087)')
 		}
 		// its FB: one handler reads the request and writes the result; nothing else touches either
-		u := routine_fb_use(doc, r)
-		if u.req_readers.len != 1 {
-			panic('loom2v: ${h}: `${r.request()}` must be read by exactly one FB handler (the one that runs it), not ${u.req_readers.len} ${u.req_readers} (REQ-DIAG-087)')
-		}
-		if u.req_writers.len > 0 {
-			panic('loom2v: ${h}: `${r.request()}` is written by ${u.req_writers} — the diagnostic server alone writes a routine\'s request (REQ-DIAG-087)')
-		}
-		if u.res_writers != u.req_readers {
-			panic('loom2v: ${h}: `${r.result()}` must be written by the handler that reads `${r.request()}` (${u.req_readers[0]}) and by no other, not ${u.res_writers} (REQ-DIAG-087)')
-		}
-		if u.res_readers.len > 0 {
-			panic('loom2v: ${h}: `${r.result()}` is read by ${u.res_readers} — the diagnostic server alone reads a routine\'s result (REQ-DIAG-087)')
+		// (ecumodel's rule, which sysmodel refuses a system by too)
+		u := ecumodel.routine_use(doc, r.name)
+		if why := ecumodel.routine_use_refusal(r.name, u) {
+			panic('loom2v: ${why}')
 		}
 		fb := u.req_readers[0].all_before('.')
 		thr := m.part.fb_thread[fb] or { '' }
@@ -499,16 +454,30 @@ fn routine_config_lines(m Model, srv string) []string {
 	return g
 }
 
+// routine_target_results: the routines' share of the comm-thread pass's `.housekeep`, BEFORE the
+// connection's housekeeping — each FB's latest report read into the server, so a result the FB
+// published before a routine's deadline is in its cell when the server's tick judges that deadline
+// (comm/uds pending.v)
+fn routine_target_results(m Model) []string {
+	if !routine_target_on(m) {
+		return []string{}
+	}
+	mut g := []string{}
+	for i, r in m.routines {
+		g << '\t\tC.iocb_get(${routine_cell(m, i, true)}, &g_diag.server.routines[${i}].res) // routine "${r.name}": its FB\'s latest report, before the deadline is judged'
+	}
+	return g
+}
+
 // routine_target_pass: the routines' share of the comm-thread pass, in `.reports` after the faults'
-// — each FB's latest report read into the server, and the request the server wrote published
+// — the request the server wrote published (a stop its housekeeping asked included)
 fn routine_target_pass(m Model) []string {
 	if !routine_target_on(m) {
 		return []string{}
 	}
 	mut g := []string{}
 	for i, r in m.routines {
-		g << '\t\tC.iocb_get(${routine_cell(m, i, true)}, &g_diag.server.routines[${i}].res) // routine "${r.name}": its FB\'s latest report'
-		g << '\t\tC.iocb_pub(${routine_cell(m, i, false)}, &g_diag.server.routines[${i}].req) // ... and the request the server wrote'
+		g << '\t\tC.iocb_pub(${routine_cell(m, i, false)}, &g_diag.server.routines[${i}].req) // routine "${r.name}": the request the server wrote'
 	}
 	return g
 }
@@ -526,15 +495,27 @@ fn routine_target_boot(m Model) []string {
 	return g
 }
 
-// routine_bridge_lines: the host bridge's share of its pass, right after the faults' — each FB's
-// latest report read into connection `conn`'s server, and the request it wrote published
+// routine_bridge_results: the host bridge's pass, BEFORE connection `conn`'s housekeeping — each
+// FB's latest report read into its server, so a result the FB published before a routine's
+// deadline is in its cell when the server's tick judges that deadline (comm/uds pending.v)
+fn routine_bridge_results(m Model, conn string) []string {
+	mut g := []string{}
+	for i, r in m.routines {
+		f := snake(r.name)
+		cell := '${conn}.server.routines[${i}]'
+		g << '\tosal.${acquire_fn('triple')}(routine_res_${f}_ch, &${cell}.res, u8(sizeof(${cell}.res))) // routine "${r.name}": its FB\'s latest report, before the deadline is judged'
+	}
+	return g
+}
+
+// routine_bridge_lines: the host bridge's share of its pass, right after the faults' — the request
+// connection `conn`'s server wrote published (a stop its housekeeping asked included)
 fn routine_bridge_lines(m Model, conn string) []string {
 	mut g := []string{}
 	for i, r in m.routines {
 		f := snake(r.name)
 		cell := '${conn}.server.routines[${i}]'
-		g << '\tosal.${acquire_fn('triple')}(routine_res_${f}_ch, &${cell}.res, u8(sizeof(${cell}.res))) // routine "${r.name}": its FB\'s latest report'
-		g << '\tosal.${publish_fn('triple')}(routine_req_${f}_ch, &${cell}.req, u8(sizeof(${cell}.req))) // ... and the request the server wrote'
+		g << '\tosal.${publish_fn('triple')}(routine_req_${f}_ch, &${cell}.req, u8(sizeof(${cell}.req))) // routine "${r.name}": the request the server wrote'
 	}
 	return g
 }

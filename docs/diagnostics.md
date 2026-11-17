@@ -363,7 +363,12 @@ the first `results_out`, 02's none.
   requester.
 - **A timeout** tells the FB to stop at once, then answers 0x22 as soon as the transport can take a
   response; if it cannot within 5 s more (a DoIP tester that vanished without closing), the answer is
-  abandoned and the server serves again — so the drop window is at most `timeout_ms` + 5 s.
+  abandoned and the server serves again — so the drop window is at most `timeout_ms` + 5 s. A result
+  the FB published before the deadline counts: the owner reads the result cells before the pass's
+  housekeeping judges the deadline, and a result in its cell then is the answer — abandoned likewise
+  if the transport cannot take it within 5 s, the FB then told to stop as when the transport is
+  gone; a session entry in that window answers 0x22 within the same 5 s. A push still unacknowledged when the server abandons
+  its answer is no longer waited for, so S3 runs again and the next answer owed over DoIP is pushed.
 - **The NRC order** is ISO 14229-1's for a request with a sub-function: its general checks first
   (length 2, then the sub-function), then 0x31's own (length 4, the identifier, its level, a
   sub-function it does not offer, the exact length, the sequence).
@@ -428,7 +433,7 @@ not queued, while the physical connection is busy ([can-tp.md](can-tp.md) §3.6)
 - **0x78 only for routines** (above): at once, then every 4 s; the final answer sent whatever the
   suppress bit; S3 held until the answer is sent, or abandoned (at most `timeout_ms` + 5 s); a lost
   CAN 0x78 resent in the next pass; over DoIP each later response pushed once the one before it is
-  acknowledged, S3 held until it is. The network stays awake (NM held) while an answer is owed.
+  acknowledged, S3 held until it is (or until its connection drops or the answer is abandoned). The network stays awake (NM held) while an answer is owed.
 - **Stored writes need no 0x78.** A write that must be stored (a parameter's 0x2E, a 0x14) is one
   synchronous journal append that never erases, answered in the pass that served it (REQ-DIAG-062).
   Erases happen at boot, at an NM sleep edge and after an ECUReset's answer (§3.3, "Where writes
@@ -481,8 +486,9 @@ bridge and the comm thread emit the same receive code (`tools/loom2v/gen_rx.v`).
 is armed at start, so a sender absent from boot still reaches `timeout`.
 
 **The comm pass has one order**, because a 0x28, an NM wake and an expired deadline each change
-state inside a pass and must take effect before anything they govern is judged: housekeep → open
-the gate → reports (the faults', then the routines' cells) → a DoIP request → the receive drain → NM tick → operation cycle → settle →
+state inside a pass and must take effect before anything they govern is judged: housekeep (the
+routines' result cells read, then the timers) → open the gate → reports (the faults', then the
+routines' request cells) → a DoIP request → the receive drain → NM tick → operation cycle → settle →
 persist (`comm_pass_order`, `tools/loom2v/gen_rx_target.v`).
 
 ### 3.3 Faults and the fault memory

@@ -3175,6 +3175,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\t// pass: ${step}'
 					match step {
 						.housekeep {
+							glue << routine_target_results(m)
 							glue << diag_target_housekeep(m)
 						}
 						.open {
@@ -4233,9 +4234,9 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 	}
 	if m.isotp_conns.len > 0 {
 		glue << 'import comm.diag' // the diagnostic server on its ISO-TP connection
-		// the glue names uds only for [[did]]s — their tables, the live refresh, 0x27 — and for a
-		// [uds] service table
-		// a [uds] service table, and the programming handoff (uds.reset_into_boot)
+		// the glue names uds only for [[did]]s (their tables, the live refresh, 0x27), a [uds]
+		// service table, the programming handoff (uds.reset_into_boot) and [[routine]]s (their
+		// uds.Routine table on the server, routine_config_lines)
 		if m.dids.len > 0 || m.uds.table || m.boot.on || m.routines.len > 0 {
 			glue << 'import comm.uds' // UDS diagnostic services
 		}

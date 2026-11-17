@@ -162,12 +162,12 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-061 | QM | test | verified | param_target_test.v (pass) |
 | REQ-DIAG-080 | QM | test | verified | routine-control-silicon (approved), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
 | REQ-DIAG-081 | QM | test | verified | routine_gen_test.v (pass), routine_gen_test.v (pass), routine_gen_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
-| REQ-DIAG-082 | QM | test | verified | routine-control-silicon (approved), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
+| REQ-DIAG-082 | QM | test | verified | routine-control-silicon (approved), routine_gen_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
 | REQ-DIAG-083 | QM | test | verified | routine-control-silicon (approved), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
-| REQ-DIAG-084 | QM | test | verified | routine-control-silicon (approved), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
+| REQ-DIAG-084 | QM | test | verified | routine-control-silicon (approved), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
 | REQ-DIAG-085 | QM | test | verified | routine-control-silicon (approved), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
 | REQ-DIAG-086 | QM | test | verified | diagroute_test.v (pass) |
-| REQ-DIAG-087 | QM | test | verified | routine_gen_test.v (pass) |
+| REQ-DIAG-087 | QM | test | verified | model_test.v (pass), routine_gen_test.v (pass) |
 | REQ-E2E-001 | B | test | verified | e2e_test.v (pass) |
 | REQ-E2E-002 | B | test | verified | e2e_test.v (pass), rx_target_test.v (pass), rxmon_test.v (pass) |
 | REQ-E2E-003 | B | test | verified | e2e_test.v (pass) |

@@ -23,12 +23,14 @@ fn test_the_generated_diagnostic_pass_runs_in_order() {
 	// the connection's own steps (housekeeping, one request at a time, the drop while busy) are
 	// comm/diag's and tested there; this pins where the bridge calls them
 	steps := [
+		// a routine's result read BEFORE the housekeeping, whose tick judges the routine's deadline:
+		// a result the FB published before it counts (comm/uds pending.v, gen_routine.v)
+		'osal.ioc_acquire(routine_res_self_check_ch, &st.conn_diag.server.routines[0].res',
 		'st.conn_diag.housekeep(now)',
 		'if st.rxg.sample(st.conn_diag.server.rx_enabled(), true)',
-		// the routines' cells after the fault pass, before the drain: a 0x31 03 reads the newest
-		// report, and a request the server wrote last pass reaches its FB (gen_routine.v)
+		// the request after the fault pass, before the drain: a request the server wrote last pass,
+		// or a stop its housekeeping asked, reaches its FB
 		'osal.ioc_publish(fault_ctl_engine_monitor_ch',
-		'osal.ioc_acquire(routine_res_self_check_ch, &st.conn_diag.server.routines[0].res',
 		'osal.ioc_publish(routine_req_self_check_ch, &st.conn_diag.server.routines[0].req',
 		'for st.chan.recv(mut rx) {',
 		'match st.conn_diag.on_frame(now, rx) {',

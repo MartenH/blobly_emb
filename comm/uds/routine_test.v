@@ -644,3 +644,78 @@ fn test_routine_message_lengths() {
 	fb.dispatch(mut s, 0, .done, 0, [])
 	assert step(mut s, 256).len == routine_answer_len(2)
 }
+
+// requestRoutineResults whose answer the server's buffer cannot hold is refused responseTooLong
+// even with the suppress bit set: suppression withholds a positive answer only (ISO 14229-1).
+fn test_results_too_long_is_refused_under_suppression() {
+	mut s := routine_server()
+	mut fb := Fb{}
+	assert rcall(mut s, rq(0x01, rid_sync, [u8(1)])) == pending_78
+	fb.dispatch(mut s, 0, .done, 0, [u8(0), 4])
+	assert step(mut s, 256)[0] == 0x71
+	s.resp_cap = routine_answer_len(2) - 1 // one byte short of 03's answer
+	assert rcall(mut s, rq(0x03, rid_sync, [])) == [u8(0x7F), 0x31, 0x14]
+	assert rcall(mut s, rq(0x83, rid_sync, [])) == [u8(0x7F), 0x31, 0x14]
+	s.resp_cap = 256
+	assert rcall(mut s, rq(0x83, rid_sync, [])).len == 0
+}
+
+// @verifies REQ-DIAG-082 REQ-DIAG-084
+// A result in its cell when the timeout is judged is the answer, not 0x22: the owner reads the
+// result cells before tick, so a report the FB published before the deadline counts even when the
+// transport takes the answer only after it. If it never does, the answer is given up P2*server_max
+// later and its FB asked to stop, as when the transport is gone — an asynchronous start already
+// reported running included; a session entry in that window answers 0x22 within the same bound.
+// A result that comes after the deadline is too late.
+fn test_a_result_in_its_cell_at_the_timeout_is_the_answer() {
+	mut s := routine_server()
+	mut fb := Fb{}
+	assert rcall(mut s, rq(0x01, rid_sync, [u8(1)])) == pending_78
+	fb.dispatch(mut s, 0, .running, 0, [])
+	s.tick(t0 + 10_000_000 - 1)
+	fb.dispatch(mut s, 0, .done, 0, [u8(0), 7]) // read into the server in the deadline's pass
+	s.tick(t0 + 10_000_000)
+	assert s.routines[0].req.op == .start, 'a completed routine is not asked to stop'
+	assert step(mut s, 256) == [u8(0x71), 0x01, 0x02, 0x01, routine_info_done, 0x00, 7]
+	assert s.routines[0].accepted
+	// ready at the deadline, the transport never free: abandoned P2*server_max later
+	assert rcall(mut s, rq(0x01, rid_sync, [u8(1)])) == pending_78
+	fb.dispatch(mut s, 0, .done, 0, [u8(0), 8])
+	s.tick(t0 + 20_000_000)
+	assert s.pending() && s.routines[0].req.op == .start
+	s.tick(t0 + 20_000_000 + p2_star_server_us - 1)
+	assert s.pending()
+	s.tick(t0 + 20_000_000 + p2_star_server_us)
+	assert !s.pending(), 'abandoned'
+	assert s.routines[0].req.op == .stop, 'an answer nobody got: its FB asked to stop'
+	assert !s.routines[0].accepted
+	fb.dispatch(mut s, 0, .stopped, 0, [])
+	// a result read only after the deadline was judged: 0x22
+	assert rcall(mut s, rq(0x01, rid_sync, [u8(1)])) == pending_78
+	fb.dispatch(mut s, 0, .running, 0, [])
+	s.tick(t0 + 40_000_000)
+	fb.dispatch(mut s, 0, .done, 0, [u8(0), 9])
+	assert step(mut s, 256) == [u8(0x7F), 0x31, 0x22]
+	// an asynchronous start the FB reported running before the deadline: ready, then abandoned
+	// the same way, the routine not left running unanswered
+	unlock(mut s)
+	mut fa := Fb{}
+	assert rcall(mut s, rq(0x01, rid_async, [])) == pending_78
+	fa.dispatch(mut s, 1, .running, 0, [])
+	s.tick(t0 + 50_000_000)
+	assert s.pending() && s.routines[1].req.op == .start
+	s.tick(t0 + 50_000_000 + p2_star_server_us)
+	assert !s.pending()
+	assert s.routines[1].req.op == .stop && !s.routines[1].accepted
+	// a session entry while a ready answer waits past its deadline: 0x22, given up when the wait
+	// was to end — never P2*server_max after the session entry
+	assert rcall(mut s, rq(0x01, rid_sync, [u8(1)])) == pending_78
+	fb.dispatch(mut s, 0, .done, 0, [u8(0), 8])
+	s.tick(t0 + 65_000_000)
+	assert s.pending()
+	s.tick(t0 + 69_000_000)
+	s.end_session()
+	assert s.pending() && s.routines[0].req.op == .stop
+	s.tick(t0 + 65_000_000 + p2_star_server_us)
+	assert !s.pending(), 'the bound did not grow'
+}
