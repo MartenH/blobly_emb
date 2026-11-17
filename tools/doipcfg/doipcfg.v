@@ -13,8 +13,9 @@ import comm.uds
 pub const list_keys = ['testers', 'activation_types']
 pub const int_keys = ['initial_inactivity_ms', 'general_inactivity_ms', 'announce_count',
 	'announce_interval_ms', 'route_level']
-// allow_bench_key: the node may answer 0x27 with blobly_net's PUBLIC reference key over the
-// network — a bench posture, opted into by name (bench_key_refusal)
+// allow_bench_key: the node may unlock with one of blobly_net's PUBLIC bench keys over the network —
+// the 0x27 reference key, or the dev tester key as a 0x29 auth key — a bench posture, opted into by
+// name (bench_key_refusal)
 pub const bench_key = 'allow_bench_key'
 
 // keys: every policy key, lists first
@@ -167,11 +168,12 @@ pub fn (p Policy) lines() []string {
 // One statement for the node gate (loom2v validate_doip) and syscheck (sysmodel check_doip).
 
 // open_services: what a network tester may run before it has authenticated — reach and keep a
-// session (0x10, 0x3E) and authenticate in it (0x27), which no 0x27 gate can itself require, and
+// session (0x10, 0x3E) and authenticate in it (0x27, or 0x29 on a node that unlocks by
+// Authentication), which no security gate can itself require, and
 // read (0x22, 0x19). 0x2E is gated per DID or by its own row (the node gate). Every OTHER service
 // changes ECU state — 0x11 restarts it, 0x14 clears its fault memory, 0x85 freezes it, 0x28
 // silences its bus — so this lists what is exempt, not what is gated.
-pub const open_services = [u8(0x10), 0x19, 0x22, 0x27, 0x2E, 0x3E]
+pub const open_services = [u8(0x10), 0x19, 0x22, 0x27, 0x29, 0x2E, 0x3E]
 
 // needs_unlock: a network tester may run `sid` only once it has authenticated
 pub fn needs_unlock(sid u8) bool {
@@ -223,14 +225,18 @@ pub fn handoff_refusal(boot bool, security i64) string {
 	return '[boot]: the programming handoff (0x10 02) restarts the ECU into its bootloader, and the network reaches this server — over IP it would act for an unauthenticated tester; gate it: [uds] services "0x10 02" = { security = N } (REQ-NET-012)'
 }
 
-// bench_key_refusal: '' unless the 0x27 key a server reachable over the network answers with
-// (`security_key`, [uds]) and `allow_bench_key` disagree. blobly_net's reference key is PUBLIC, so
-// over a routed network it authenticates nobody: allowed only by name, as a bench posture.
-pub fn bench_key_refusal(security_key string, allow bool) string {
+// bench_key_refusal: '' unless the bench keys a server reachable over the network unlocks with and
+// `allow_bench_key` disagree — the 0x27 key (`security_key`, [uds]) and, for a node that unlocks by
+// 0x29, an `auth_keys` entry naming "reference" (`auth_reference`). Both are blobly_net's PUBLIC
+// keys, so over a routed network they authenticate nobody: allowed only by name, as a bench posture.
+pub fn bench_key_refusal(security_key string, auth_reference bool, allow bool) string {
 	if security_key == 'reference' && !allow {
 		return '[uds] security_key = "reference" is blobly_net\'s PUBLIC bench key, and the network reaches this server — over IP it authenticates nobody (REQ-NET-012). Set `${bench_key} = true` for a closed bench, or give the node the OEM\'s key (drop security_key)'
 	}
-	if allow && security_key != 'reference' {
+	if auth_reference && !allow {
+		return '[uds] auth_keys names "reference", blobly_net\'s PUBLIC dev tester key, and the network reaches this server — over IP it authenticates nobody (REQ-NET-012). Set `${bench_key} = true` for a closed bench, or give the level the tester\'s own public key'
+	}
+	if allow && security_key != 'reference' && !auth_reference {
 		return '`${bench_key}` is set, but [uds] uses no bench key — it would mean nothing'
 	}
 	return ''

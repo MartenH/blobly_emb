@@ -252,7 +252,8 @@ A table-driven, no-alloc `Server` — the node's one, configured by `[uds]` — 
 transports (`[isotp]` on CAN, `[doip]` on a ThreadX target's Ethernet). The owner
 hands it a reassembled request and ships the response it builds. Services:
 `0x10` DiagnosticSessionControl, `0x11` ECUReset, `0x22` ReadDataByIdentifier
-(several DIDs per request), `0x27` SecurityAccess, `0x28` CommunicationControl, `0x2E`
+(several DIDs per request), `0x27` SecurityAccess — or `0x29` Authentication on a node with
+`[uds] access = "authentication"`, which then answers `0x27` with 0x11 — `0x28` CommunicationControl, `0x2E`
 WriteDataByIdentifier (on a parameter's DID through `comm/param`: validated, durable before the
 answer — [diagnostics.md](diagnostics.md) §3.4), `0x2F` InputOutputControlByIdentifier (on a live
 DID with a `control`: the output overridden where it is encoded, above), `0x3E` TesterPresent, and — where a fault memory is injected (`comm/fault`,
@@ -262,7 +263,7 @@ Negative responses follow ISO 14229-1's evaluation order.
 
 Which of those a node answers is its **service table**, `[uds] services` — absent, the
 default set above; present, exactly its rows, each optionally narrowed to `sessions` and
-gated on a 0x27 `security` level (0x7F / 0x33 in ISO 14229-1's order). Generation refuses a
+gated on a `security` level, unlocked by 0x27 or 0x29 (0x7F / 0x33 in ISO 14229-1's order). Generation refuses a
 row the build does not perform, so a table never claims a service that does nothing
 ([diagnostics.md](diagnostics.md) §3.1):
 
@@ -309,8 +310,11 @@ reset after a wrong key costs the delay too, while a reset after a correct key o
 once; on a target they survive a power cycle as well, kept in the node's NvM journal (one record,
 written only when it changes, before the answer reporting it is sent — at most `security_attempts`
 writes per level until a correct key, so a stream of wrong keys cannot fill the journal — a node
-that performs 0x27 must declare `[nvm]`, [diagnostics.md](diagnostics.md) §3.1). Seeds and keys come
-from an injected `uds.SecurityOps`, so the stack fixes no key algorithm; the generated host
+that performs 0x27, or 0x29, must declare `[nvm]`, [diagnostics.md](diagnostics.md) §3.1). Seeds and keys come
+from an injected `uds.SecurityOps`, so the stack fixes no key algorithm; a node with
+`[uds] access = "authentication"` unlocks the same levels with `0x29` instead (ISO's ACR with
+Ed25519 against per-level public keys, `comm/udsauth`; [diagnostics.md](diagnostics.md) §3.1
+"Authentication (0x29)"), and 0x27 is not served there; the generated host
 bridge injects `uds.ReferenceSecurity`, blobly_net's reference key (each seed byte XOR
 0xFF) — a SIM key, not a secret. A target image injects the board's (with UDS on the
 target, rung R2).
@@ -331,7 +335,7 @@ id = 0xF1AB; bytes = "00"; write = { session = ["extended"] }   # gated write
 
 `read` / `write` take `{ session = [...], security = N }`: the sessions the access is
 allowed in (default / extended / programming / safety; absent = every session) and the
-0x27 level it needs (1..8; absent = none). A DID not allowed in
+security level it needs (1..8, unlocked by 0x27 or 0x29; absent = none). A DID not allowed in
 the active session is answered as unsupported (`0x31`). A server holds at most 16 DIDs of
 at most 32 bytes each, checked at generation.
 

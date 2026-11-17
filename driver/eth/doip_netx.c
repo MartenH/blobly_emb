@@ -203,7 +203,7 @@ int doip_mb_take_dropped(void) {
 }
 
 /* the further response the server thread pushes (a routine's responsePending, then its next one) */
-#define MB_PUSH_MAX 16
+#define MB_PUSH_MAX 24
 static unsigned char mb_push[MB_PUSH_MAX];
 static int mb_push_len;
 

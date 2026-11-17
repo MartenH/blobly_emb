@@ -100,7 +100,7 @@ fn ecu_schema() Schema {
 			k('clears_per_day', .int).d('24').range(0, 1_000_000).doc('ClearDiagnosticInformation (0x14)'),
 			k('setting_changes_per_day', .int).d('24').range(0, 1_000_000).doc('ControlDTCSetting (0x85) changes'),
 			k('codings_per_day', .int).d('24').range(0, 1_000_000).doc('accepted 0x2E codings of a [[param]]'),
-			k('unlocks_per_day', .int).d('24').range(0, 1_000_000).doc('correct-key SecurityAccess (0x27) unlocks a day, all levels: the 0x27 failed-key state is written at most security_attempts times per level until a correct key, and once more by it; only where the node performs 0x27'),
+			k('unlocks_per_day', .int).d('24').range(0, 1_000_000).doc('correct-key unlocks a day, all levels — SecurityAccess (0x27) keys, or Authentication (0x29) proofs on an access = "authentication" node: the failed-key state (wrong keys, or failed proofs) is written at most security_attempts times per level until a correct key or proof, and once more by it; only where the node unlocks a security level'),
 		]),
 		Table{
 			ctx: 'nm'

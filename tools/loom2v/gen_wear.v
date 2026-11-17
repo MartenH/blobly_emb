@@ -30,7 +30,7 @@ mut:
 	clears   u32 = 24 // 0x14 ClearDiagnosticInformation
 	settings u32 = 24 // 0x85 ControlDTCSetting changes
 	codings  u32 = 24 // accepted 0x2E codings of a [[param]]
-	unlocks  u32 = 24 // correct-key SecurityAccess (0x27) unlocks, all levels
+	unlocks  u32 = 24 // correct-key unlocks (0x27 keys, or 0x29 proofs), all levels
 	declared []string // the keys the configuration states (the rest are the defaults)
 }
 
@@ -96,8 +96,8 @@ fn journal_wear(m Model, doc toml.Doc) Wear {
 	settings := if fp { f64(a.settings) / 24.0 } else { 0.0 }
 	codings := if params { f64(a.codings) / 24.0 } else { 0.0 }
 	sa := sa_persist_on(m)
-	// the 0x27 state: per served level at most `attempts` rises between two correct keys (one per
-	// wrong key below the limit) and one clear by the correct key that follows them, however many
+	// the 0x27 state (which counts a 0x29 node's failed proofs alike): per served level at most
+	// `attempts` rises between two correct keys (one per wrong key below the limit) and one clear by the correct key that follows them, however many
 	// wrong keys a tester sends — so attempts + 1 per unlock, plus the `attempts` per level a tester
 	// may leave counted after the last one (once over the lifetime: nothing but a correct key clears
 	// them, and they saturate)
@@ -121,7 +121,8 @@ fn journal_wear(m Model, doc toml.Doc) Wear {
 		assumed << '${a.codings} 0x2E codings/day${wear_default(a, 'codings_per_day')}'
 	}
 	if sa {
-		assumed << '${a.unlocks} 0x27 unlocks/day${wear_default(a, 'unlocks_per_day')}'
+		way := if m.uds.auth() { '0x29' } else { '0x27' }
+		assumed << '${a.unlocks} ${way} unlocks/day${wear_default(a, 'unlocks_per_day')}'
 	}
 	floor := f64(m.nvm.min_write_ms)
 	// the "now" signals' own floored puts, and how many land inside the cycle-end barrier's grace

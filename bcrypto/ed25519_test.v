@@ -202,3 +202,70 @@ fn test_ed25519_rejects_noncanonical_s() {
 	// same underlying point, non-canonical S -> MUST be rejected
 	assert !verify(pkey, msg, mal)
 }
+
+// job_verify runs a VerifyJob at `budget` multiplications a step: its verdict, how many steps it
+// took, and the most one step spent (counted by driving unit() as step does)
+fn job_verify(pkey [32]u8, msg []u8, sig [64]u8, budget int) (bool, int, int) {
+	mut j := &VerifyJob{}
+	j.start(pkey, sig)
+	if msg.len > 0 {
+		j.update(&msg[0], msg.len)
+	}
+	mut steps := 0
+	mut most := 0
+	for !j.decided() {
+		mut spent := 0
+		for !j.decided() {
+			spent += j.unit()
+			if spent >= budget {
+				break
+			}
+		}
+		steps++
+		if spent > most {
+			most = spent
+		}
+	}
+	return j.verified(), steps, most
+}
+
+// @verifies REQ-BOOT-017 REQ-DIAG-127
+// The stepped verify (VerifyJob, comm/udsauth's) reaches the same verdict as verify at every budget
+// — the RFC 8032 vectors, a tampered signature, a non-canonical S, another key (a point) and a key
+// that is not a point — and a step never spends more than its budget plus one unit.
+fn test_verify_job_agrees_with_verify() {
+	for v in rfc8032 {
+		pkey := fix32(unhex(v.pub))
+		msg := unhex(v.msg)
+		sig := fix64(unhex(v.sig))
+		mut bad := fix64(unhex(v.sig))
+		bad[5] ^= 0x40
+		mut mal := fix64(unhex(v.sig))
+		mal[63] |= 0xF0 // S >= L
+		mut other := fix32(unhex(v.pub))
+		other[0] ^= 0x01
+		assert is_point(other) // decodes: refused by the equation, not the key check
+		mut nokey := [32]u8{}
+		nokey[0] = 2 // y = 2 is not on the curve: refused by the key check (vj_key_post)
+		assert !is_point(nokey)
+		for budget in [1, 18, 144, 1_000_000] {
+			for case in [[0], [1], [2], [3], [4]] {
+				k, s := match case[0] {
+					0 { pkey, sig }
+					1 { pkey, bad }
+					2 { pkey, mal }
+					3 { other, sig }
+					else { nokey, sig }
+				}
+				ok, _, most := job_verify(k, msg, s, budget)
+				assert ok == verify(k, msg, s), 'case ${case[0]} at budget ${budget}'
+				assert most < budget + verify_step_max, 'a step overran its budget'
+			}
+		}
+	}
+	// the whole verify is about 10,300 multiplications: at 144 a step, 70-80 steps
+	v := rfc8032[1]
+	ok, steps, _ := job_verify(fix32(unhex(v.pub)), unhex(v.msg), fix64(unhex(v.sig)), 144)
+	assert ok
+	assert steps >= 65 && steps <= 80, '${steps} steps'
+}

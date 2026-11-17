@@ -58,11 +58,12 @@ mut:
 	// is unacknowledged)
 	remote uds.RemoteReset
 	// the security level unlocked (server.unlocked) was earned over the other transport. An unlock
-	// belongs to the transport that ran 0x27: a request over the other one sees the server locked
+	// belongs to the transport that ran 0x27 (or 0x29): a request over the other one sees the server locked
 	// (REQ-NET-012 — a network tester never inherits a bus tester's unlock, nor the reverse)
 	unlock_remote bool
-	// the SecurityAccess exchange in progress (a seed answered, its key not yet sent) per transport,
-	// [0] the bus's and [1] the other's: a seed asked over one never replaces the other's challenge.
+	// the SecurityAccess exchange in progress (a seed answered, its key not yet sent — or a 0x29
+	// challenge answered, its proof not yet sent) per transport, [0] the bus's and [1] the other's: a
+	// seed or challenge asked over one is never answerable over the other.
 	// Kept with the session ENTRY it began in (server.session_epoch) — any session entry since,
 	// re-entering the same session included, by either transport, S3 or a reset, cancels it, as the
 	// server cancels its own
@@ -81,6 +82,7 @@ mut:
 	// up, no_longer_owes)
 	pend_remote bool
 	push_out    bool
+	auth_challenge [2][uds.auth_challenge_len]u8
 }
 
 // Rx is what on_frame did with a received frame, for the owner's drain.
@@ -256,10 +258,22 @@ pub fn (mut c Connection) push_step(out &u8, cap int) int {
 	if !c.pend_remote || !c.server.pending() || c.push_out || c.remote.inflight {
 		return 0
 	}
-	n := c.server.pending_step(out, cap)
+	n := c.owed_step(out, cap)
 	if n > 0 {
 		c.push_out = true
 	}
+	return n
+}
+
+// owed_step: the server's next response of the owed answer, computed as the transport that owes
+// it sees the server — its own unlock in force, the other's hidden, as for a request (enter /
+// leave): an owed 0x29 unlocks a level in a step, and that unlock is the owing transport's
+// (REQ-NET-012), never the other one's
+fn (mut c Connection) owed_step(out &u8, cap int) int {
+	owing := c.pend_remote
+	before, held := c.enter(owing)
+	n := c.server.pending_step(out, cap)
+	c.leave(before, held, owing)
 	return n
 }
 
@@ -305,7 +319,7 @@ pub fn (mut c Connection) remote_dropped() {
 	}
 	c.remote_owns = false
 	// whoever owns the session, an unlock the dropped tester earned ends with it, and so does its
-	// half-done exchange — the next connection authenticates for itself
+	// half-done exchange (a seed or a 0x29 challenge) — the next connection authenticates for itself
 	if c.unlock_remote {
 		c.server.relock(c.server.unlocked) // the unlock, and the controls and routines it gated
 	}
@@ -341,6 +355,9 @@ fn (mut c Connection) enter(remote bool) (u32, u8) {
 	for k in 0 .. uds.seed_len {
 		c.server.sa_seed[k] = c.sa_seed[i][k]
 	}
+	for k in 0 .. uds.auth_challenge_len {
+		c.server.auth_challenge[k] = c.auth_challenge[i][k]
+	}
 	return before, held
 }
 
@@ -352,6 +369,9 @@ fn (mut c Connection) leave(before u32, held u8, remote bool) {
 	c.sa_level[i] = c.server.sa_level
 	for k in 0 .. uds.seed_len {
 		c.sa_seed[i][k] = c.server.sa_seed[k]
+	}
+	for k in 0 .. uds.auth_challenge_len {
+		c.auth_challenge[i][k] = c.server.auth_challenge[k]
 	}
 	c.sa_epoch[i] = c.server.session_epoch
 	if c.server.unlocked != 0 {
@@ -394,7 +414,7 @@ fn (mut c Connection) pending_bus() {
 	if c.pend_remote || !c.server.pending() || c.link.busy() || c.server.reset_req != 0 {
 		return
 	}
-	n := c.server.pending_step(c.resp, c.link.tx_cap)
+	n := c.owed_step(c.resp, c.link.tx_cap)
 	if n > 0 && !c.link.send(c.resp, n) {
 		c.server.pending_lost()
 	}

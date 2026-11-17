@@ -2940,7 +2940,8 @@ fn check_doip(s System) []Issue {
 		if hand != '' {
 			net012 << hand
 		}
-		bench := doipcfg.bench_key_refusal(n.view.uds_security_key, n.doip_policy.allow_bench_key)
+		bench := doipcfg.bench_key_refusal(n.view.uds_security_key, n.view.uds_auth_reference,
+			n.doip_policy.allow_bench_key)
 		if bench != '' {
 			net012 << bench
 		}

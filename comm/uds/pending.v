@@ -1,8 +1,9 @@
 module uds
 
 // responsePending (0x78) in an application server — generic, not routine-specific: a service whose
-// answer cannot be computed in the pass that serves it (today only a routine's start or stop, run
-// by an FB: routine.v) answers 7F <sid> 78 in that pass, and the server then OWES its answer:
+// answer cannot be computed in the pass that serves it (a routine's start or stop, run by an FB:
+// routine.v; a 0x29 proof, verified a slice per pass: auth.v) answers 7F <sid> 78 in that pass, and
+// the server then OWES its answer:
 //   - the first 0x78 is the request's own answer, sent at once (as the bootloader does: work run by
 //     an FB never completes within P2server — the FB's period plus a comm pass);
 //   - another 0x78 follows at most pending_repeat_us (P2*server_max less a margin) after each one,
@@ -161,6 +162,7 @@ fn (mut s Server) pend_clear() {
 fn (mut s Server) owed_answer(resp &u8, cap int) int {
 	return match s.pend_sid {
 		0x31 { s.routine_owed(resp, cap) }
+		0x29 { s.auth_owed(resp, cap) }
 		else { 0 }
 	}
 }
@@ -169,6 +171,7 @@ fn (mut s Server) owed_answer(resp &u8, cap int) int {
 fn (s &Server) owed_ready() bool {
 	return match s.pend_sid {
 		0x31 { s.routine_ready() }
+		0x29 { s.auth_decided }
 		else { false }
 	}
 }
@@ -182,6 +185,9 @@ fn (mut s Server) owed_stop() {
 			if s.pend_sub == 0x01 {
 				s.routines[s.pend_idx].accepted = false
 			}
+		}
+		0x29 {
+			s.auth_abandon()
 		}
 		else {}
 	}

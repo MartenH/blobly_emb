@@ -385,6 +385,8 @@ pub mut:
 	uds_rows         []doipcfg.ServiceRow
 	did_writes       []doipcfg.DidWrite // [[did]] write sides, for REQ-NET-012 at the system gate
 	uds_security_key string
+	// an [uds] auth_keys entry names "reference", the dev tester key (a 0x29 node's bench key)
+	uds_auth_reference bool
 	// [boot] (the programming handoff) and its "0x10 02" row's level, for the same rule
 	boot                 bool
 	uds_handoff_security i64
@@ -1370,6 +1372,11 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 	if uv := doc.value_opt('uds') {
 		um := uv.as_map()
 		v.uds_security_key = m_str(um, 'security_key')
+		if ak := um['auth_keys'] {
+			if ak is map[string]toml.Any {
+				v.uds_auth_reference = ak.values().any(it is string && it.string() == 'reference')
+			}
+		}
 		if sv := um['services'] {
 			v.uds_table = true
 			for key, row in sv.as_map() {

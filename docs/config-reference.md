@@ -204,7 +204,7 @@ Vehicle usage rates the wear check assumes, per day.
 | `clears_per_day` | integer |  | `24` | 0..1000000 | ClearDiagnosticInformation (0x14) |
 | `setting_changes_per_day` | integer |  | `24` | 0..1000000 | ControlDTCSetting (0x85) changes |
 | `codings_per_day` | integer |  | `24` | 0..1000000 | accepted 0x2E codings of a [[param]] |
-| `unlocks_per_day` | integer |  | `24` | 0..1000000 | correct-key SecurityAccess (0x27) unlocks a day, all levels: the 0x27 failed-key state is written at most security_attempts times per level until a correct key, and once more by it; only where the node performs 0x27 |
+| `unlocks_per_day` | integer |  | `24` | 0..1000000 | correct-key unlocks a day, all levels — SecurityAccess (0x27) keys, or Authentication (0x29) proofs on an access = "authentication" node: the failed-key state (wrong keys, or failed proofs) is written at most security_attempts times per level until a correct key or proof, and once more by it; only where the node unlocks a security level |
 
 <a id="ecu-target"></a>
 
@@ -407,26 +407,28 @@ The diagnostic server's ISO 15765-2 connection on CAN (docs/diagnostics.md).
 
 ### `[uds]`
 
-The node's one ISO 14229 diagnostic server: session and security timing, the 0x27 key, the service table.
+The node's one ISO 14229 diagnostic server: session and security timing, how a security level is unlocked (0x27 or 0x29) and its keys, the service table.
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
 | `s3_ms` | integer |  | `5000` |  | the session timeout back to the default session (ms; 0 = the default) |
-| `security_attempts` | integer |  | `3` | 0..255 | wrong 0x27 keys before the lockout (0 = the default) |
-| `security_delay_ms` | integer |  | `10000` |  | the 0x27 lockout delay after too many wrong keys (ms; 0 = the default) |
-| `security_key` | string |  | — | `"reference"` | "reference" = blobly_net's PUBLIC bench key (a target); absent = the OEM's diag_sa_key_ok |
+| `access` | string |  | `"seed_key"` | `"seed_key"`, `"authentication"` | how a security level is unlocked: "seed_key" = SecurityAccess (0x27), "authentication" = Authentication (0x29, ACR with Ed25519; 0x27 then not served). Both grant the same levels |
+| `security_attempts` | integer |  | `3` | 0..255 | wrong 0x27 keys (or failed 0x29 proofs) before the lockout (0 = the default) |
+| `security_delay_ms` | integer |  | `10000` |  | the lockout delay after too many wrong keys or failed proofs (ms; 0 = the default) |
+| `security_key` | string |  | — | `"reference"` | access = "seed_key" only: "reference" = blobly_net's PUBLIC bench key (a target); absent = the OEM's diag_sa_key_ok |
+| `auth_keys` | table of strings |  | — |  | access = "authentication" only: level ("1".."8") -> the tester's Ed25519 PUBLIC key, 64 hex, or "reference" = blobly_net's dev tester key (the one examples/keys/tester.seed signs with); exactly the levels a gate names |
 | `services` | tables by name → [`[uds] services row`](#ecu-uds-service) |  | — |  | the service table, "0xSID" = { ... } ("0x10 02": the [boot] handoff); absent = every service the build performs |
 
 <a id="ecu-uds-service"></a>
 
 ### `[uds] services row`
 
-One served service: the sessions it is accepted in and the 0x27 level it needs.
+One served service: the sessions it is accepted in and the security level (unlocked by 0x27 or 0x29) it needs.
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
 | `sessions` | array of strings |  | — | `"default"`, `"extended"`, `"programming"`, `"safety"` | the sessions it is accepted in; absent = the service's default sessions |
-| `security` | integer |  | `0` | 0..8 | the 0x27 level that must be unlocked first (0 = none) |
+| `security` | integer |  | `0` | 0..8 | the security level (0x27 or 0x29) that must be unlocked first (0 = none) |
 
 <a id="ecu-doip"></a>
 
@@ -449,7 +451,7 @@ The diagnostic server over DoIP (ISO 13400) too — ThreadX target; one parser f
 | `announce_count` | integer |  | `3` | 0..10 | A_DoIP_Announce_Num: vehicle announcements at start-up |
 | `announce_interval_ms` | integer |  | `500` | 10..10000 | A_DoIP_Announce_Interval (ms); count x interval at most 10000 ms |
 | `route_level` | integer |  | `1` | 1..8 | a gateway's: the security level of its own server a tester must have unlocked over the network before it routes to the nodes behind it (REQ-NET-020); one its [uds] serves |
-| `allow_bench_key` | boolean |  | `false` |  | answer 0x27 with blobly_net's PUBLIC reference key over the network — a bench posture, opted into by name; required (true) when [uds] security_key = "reference" |
+| `allow_bench_key` | boolean |  | `false` |  | unlock with one of blobly_net's PUBLIC bench keys over the network — the 0x27 reference key or the 0x29 dev tester key — a bench posture, opted into by name; required (true) when [uds] security_key = "reference" or an auth_keys entry is "reference" |
 
 <a id="ecu-doip-route"></a>
 
@@ -513,12 +515,12 @@ A data identifier the server reads (0x22) and may write (0x2E). Its value is ONE
 
 ### `[[did]] read/write`
 
-The sessions and the 0x27 level an access needs.
+The sessions and the security level (unlocked by 0x27 or 0x29) an access needs.
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
 | `session` | array of strings |  | — | `"default"`, `"extended"`, `"programming"`, `"safety"` | the sessions it is allowed in; absent = every session |
-| `security` | integer |  | `0` | 0..8 | the 0x27 level that must be unlocked (0 = none) |
+| `security` | integer |  | `0` | 0..8 | the security level (unlocked by 0x27 or 0x29) that must be unlocked (0 = none) |
 
 <a id="ecu-did-control"></a>
 
@@ -616,7 +618,7 @@ A RoutineControl (0x31) routine, run by the FB handler that reads its `<Name>Req
 | `results_out` | integer |  | `0` | 0..32 | the record bytes 03's answer carries (needs `results`) |
 | `timeout_ms` | integer |  | `10000` | 100..100000 | a start or stop its FB has not answered by then is answered 0x22 and the FB asked to stop |
 | `sessions` | array of strings |  | `["extended"]` | `"default"`, `"extended"`, `"safety"` | the sessions it may be started, stopped and read in |
-| `security` | integer |  | `0` | 0..8 | the 0x27 level that must be unlocked (0 = none) |
+| `security` | integer |  | `0` | 0..8 | the security level (unlocked by 0x27 or 0x29) that must be unlocked (0 = none) |
 
 <a id="ecu-fault-memory"></a>
 
@@ -844,7 +846,7 @@ The DoIP entity and its ISO 13400-2 transport policy (one parser for both files:
 | `announce_count` | integer |  | `3` | 0..10 | A_DoIP_Announce_Num: vehicle announcements at start-up |
 | `announce_interval_ms` | integer |  | `500` | 10..10000 | A_DoIP_Announce_Interval (ms); count x interval at most 10000 ms |
 | `route_level` | integer |  | `1` | 1..8 | a gateway's: the security level of its own server a tester must have unlocked over the network before it routes to the nodes behind it (REQ-NET-020); one its [uds] serves |
-| `allow_bench_key` | boolean |  | `false` |  | answer 0x27 with blobly_net's PUBLIC reference key over the network — a bench posture, opted into by name; required (true) when [uds] security_key = "reference" |
+| `allow_bench_key` | boolean |  | `false` |  | unlock with one of blobly_net's PUBLIC bench keys over the network — the 0x27 reference key or the 0x29 dev tester key — a bench posture, opted into by name; required (true) when [uds] security_key = "reference" or an auth_keys entry is "reference" |
 
 <a id="system-sys-signal"></a>
 

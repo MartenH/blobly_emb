@@ -1,0 +1,77 @@
+# uds_auth example: the minimal node (one FB, FB <-> COM) whose diagnostic server unlocks its
+# security level with 0x29 Authentication instead of 0x27 SecurityAccess — ISO 14229-1's
+# challenge-response (ACR) with Ed25519 (comm/uds auth.v, docs/diagnostics.md §3.1).
+[import]
+dbc = "bus.dbc"
+
+[bus.can0]
+interface = "vcan0"
+fd        = false
+core      = 0         # generated COM bridge runs here
+
+[[partition]]
+name    = "app"
+core    = 1
+trusted = false
+  [[partition.thread]]
+  name     = "app_main"
+  priority = 10
+
+[[signal]]
+name = "VehicleSpeed"
+fields = { kph = "u16", status = "RxStatus" }
+from = "can0"
+to   = "app"
+transport = "double"
+
+[[signal]]
+name = "WarnLamp"
+fields = { on = "bool" }
+from = "app"
+to   = "can0"
+transport = "double"
+
+[[frame]]
+name = "Powertrain"
+bus  = "can0"
+rx   = { timeout_ms = 200 }
+
+[[frame]]
+name = "LampFrame"
+bus  = "can0"
+tx   = { mode = "mixed", cycle_ms = 100, min_delay_ms = 20 }
+
+[[fb]]
+name      = "SpeedMonitor"
+thread    = "app_main"
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["VehicleSpeed"]
+  writes    = ["WarnLamp"]
+
+# --- Diagnostics ---------------------------------------------------------------
+# access = "authentication": a tester earns security level 1 with 0x29 05 (a challenge naming the
+# level) and 0x29 06 (an Ed25519 signature over it); 0x27 is not served. auth_keys gives each
+# gated level the tester's PUBLIC key — "reference" is blobly_net's dev tester key
+# (examples/keys/tester.seed), a bench key. Failed proofs count like wrong 0x27 keys: three, then
+# the lockout (security_delay_ms, 1 s here to keep the test short).
+[uds]
+access            = "authentication"
+auth_keys         = { "1" = "reference" }
+security_delay_ms = 1000
+
+[isotp]
+bus      = "can0"
+rx_id    = 0x101   # Request  (DBC)
+tx_id    = 0x102   # Response (DBC)
+functional_id = 0x7DF
+
+[[did]]
+id    = 0xF190
+ascii = "BLOBLY-UDS-AUTH"
+
+[[did]]
+id    = 0xF1B0                  # readable only in extended AND with security level 1
+ascii = "SECRET-LEVEL-1"
+read  = { session = ["extended"], security = 1 }

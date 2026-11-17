@@ -1,10 +1,12 @@
 module main
 
 import toml
+import bcrypto
 import boot
 import boot.bufs
 import comm.fault
 import comm.uds
+import comm.udsauth
 
 // The diagnostic server's wiring (comm/diag.Connection). What the server does in a pass is the
 // module's; what is emitted here is only how an owner configures it and where it calls it — the
@@ -23,6 +25,12 @@ mut:
 	// the 0x27 key on a target: 'reference' = blobly_net's public bench key, opted into by name;
 	// '' = the OEM's diag_sa_key_ok, which the node's glue must supply (no default is linked)
 	security_key string
+	// how a level is unlocked: 'seed_key' (0x27, the default) or 'authentication' (0x29)
+	access string
+	// access = 'authentication': per level, the tester's Ed25519 public key (32 bytes), and whether
+	// the file named it "reference" (the dev tester key — a bench key, REQ-NET-012)
+	auth_keys map[int][]u8
+	auth_ref  map[int]bool
 	// `services` declared: the server answers exactly `services`. Absent = the default table —
 	// every service this build performs (diag_unbuilt), in its default sessions.
 	table    bool
@@ -32,6 +40,16 @@ mut:
 	handoff_row      bool
 	handoff_sessions u8 // uds.in_* mask; 0 = uds.default_handoff_sessions
 	handoff_security u8
+}
+
+// auth: the node unlocks by Authentication (0x29) rather than SecurityAccess (0x27)
+fn (u UdsCfg) auth() bool {
+	return u.access == 'authentication'
+}
+
+// auth_reference: an auth key names the dev tester key (a bench key over the network, REQ-NET-012)
+fn (u UdsCfg) auth_reference() bool {
+	return u.auth_ref.values().any(it)
 }
 
 // BootCfg is [boot]: the node runs behind the bootloader (docs/bootloader.md), so its server's
@@ -76,19 +94,70 @@ fn parse_boot(doc toml.Doc) BootCfg {
 fn boot_key(bm map[string]toml.Any, key string) []u8 {
 	h := (bm[key] or {
 		panic('loom2v: [boot] needs `${key}` — the PUBLIC key (64 hex characters) the bootloader verifies with (examples/keys/README.md)')
-	}).string().trim_space().to_lower()
-	if h.len != 64 || !h.bytes().all(it.is_hex_digit()) {
-		panic('loom2v: [boot] ${key} must be 64 hex characters (a 32-byte Ed25519 public key), got "${h}"')
-	}
-	mut out := []u8{}
-	for i := 0; i < 64; i += 2 {
-		out << u8(h[i..i + 2].parse_uint(16, 8) or { 0 })
-	}
+	}).string()
+	out := hex_key(h) or { panic('loom2v: [boot] ${key} ${err}') }
 	// boot.Prog reads an all-zero key as "no check" (unsigned images, no 0x29): never generated
 	if out.all(it == 0) {
 		panic('loom2v: [boot] ${key} is all zeros — the bootloader would take that as "no check" (boot.Prog); name the real public key')
 	}
 	return out
+}
+
+// hex_key: an Ed25519 public key written as 64 hex characters — the one rule [boot]'s keys and
+// [uds] auth_keys share
+fn hex_key(text string) ![]u8 {
+	h := text.trim_space().to_lower()
+	if h.len != 64 || !h.bytes().all(it.is_hex_digit()) {
+		return error('must be 64 hex characters (a 32-byte Ed25519 public key), got "${h}"')
+	}
+	mut out := []u8{}
+	for i := 0; i < 64; i += 2 {
+		out << u8(h[i..i + 2].parse_uint(16, 8) or { 0 })
+	}
+	return out
+}
+
+// parse_auth_keys: [uds] auth_keys — level ("1".."8") -> "reference" or 64 hex; a key all zeros or
+// not a curve point is refused (it could verify nothing). Which levels need one is validate_uds's.
+fn parse_auth_keys(v toml.Any) (map[int][]u8, map[int]bool) {
+	if v !is map[string]toml.Any {
+		panic('loom2v: [uds] auth_keys must be a table, level = "<key>" (e.g. auth_keys = { "1" = "reference" })')
+	}
+	mut keys := map[int][]u8{}
+	mut refs := map[int]bool{}
+	for lk, kv in v.as_map() {
+		level := if lk.len == 1 && lk[0] >= `1` && lk[0] <= `0` + u8(uds.max_security_level) {
+			int(lk[0] - `0`)
+		} else {
+			0
+		}
+		if level == 0 {
+			panic('loom2v: [uds] auth_keys "${lk}" is not a security level — write "1".."${uds.max_security_level}"')
+		}
+		if kv !is string {
+			panic('loom2v: [uds] auth_keys "${lk}" must be a string: "reference" or 64 hex characters')
+		}
+		text := kv.string()
+		if text == 'reference' {
+			keys[level] = udsauth.reference_key[..].clone()
+			refs[level] = true
+			continue
+		}
+		key := hex_key(text) or { panic('loom2v: [uds] auth_keys "${lk}" ${err}, or "reference"') }
+		if key.all(it == 0) {
+			panic('loom2v: [uds] auth_keys "${lk}" is all zeros — it verifies nothing; name the tester\'s public key')
+		}
+		mut fixed := [32]u8{}
+		for i in 0 .. 32 {
+			fixed[i] = key[i]
+		}
+		if !bcrypto.is_point(fixed) {
+			panic('loom2v: [uds] auth_keys "${lk}" is not an Ed25519 public key (not a curve point) — it would verify nothing')
+		}
+		keys[level] = key
+		refs[level] = false
+	}
+	return keys, refs
 }
 
 // boot_gen_h: gen/boot_gen.h — what the node's bootloader (boot/target/main.v, through
@@ -191,7 +260,20 @@ fn parse_uds(doc toml.Doc) UdsCfg {
 		security_attempts: int((um['security_attempts'] or { toml.Any(0) }).int())
 		security_delay_ms: int((um['security_delay_ms'] or { toml.Any(0) }).int())
 		security_key:      (um['security_key'] or { toml.Any('') }).string()
+		access:            (um['access'] or { toml.Any('seed_key') }).string()
 		table:             'services' in um
+	}
+	if c.access !in schema_key('uds', 'access').choices {
+		panic('loom2v: [uds] access "${c.access}" — "seed_key" (0x27 SecurityAccess, the default) or "authentication" (0x29)')
+	}
+	if akv := um['auth_keys'] {
+		if !c.auth() {
+			panic('loom2v: [uds] auth_keys are the keys 0x29 Authentication verifies with, but access is "${c.access}" — set access = "authentication", or drop auth_keys')
+		}
+		c.auth_keys, c.auth_ref = parse_auth_keys(akv)
+	}
+	if c.auth() && c.security_key != '' {
+		panic('loom2v: [uds] security_key is the 0x27 key, but access = "authentication" unlocks with 0x29 — drop security_key (the keys are auth_keys)')
 	}
 	if c.s3_ms < 0 {
 		panic('loom2v: [uds] s3_ms ${c.s3_ms} is negative (0 = the default ${uds.default_s3_us / 1000} ms)')
@@ -318,7 +400,18 @@ fn diag_unbuilt(m Model, sid u8) string {
 			if m.faults.len == 0 { 'the node has no fault memory (no [[fault]])' } else { '' }
 		}
 		0x27 {
-			if sa_levels(m) == 0 {
+			if m.uds.auth() {
+				'the node unlocks by Authentication ([uds] access = "authentication"), so 0x27 is not served'
+			} else if sa_levels(m) == 0 {
+				'no [[did]] gate or service row names a security level, so there is nothing to unlock'
+			} else {
+				''
+			}
+		}
+		0x29 {
+			if !m.uds.auth() {
+				'the node unlocks by SecurityAccess (0x27); 0x29 is served only with [uds] access = "authentication"'
+			} else if sa_levels(m) == 0 {
 				'no [[did]] gate or service row names a security level, so there is nothing to unlock'
 			} else {
 				''
@@ -342,7 +435,17 @@ fn diag_unbuilt(m Model, sid u8) string {
 	}
 }
 
-// sa_levels: the 0x27 levels the server serves — every level a [[did]] gate or control, a [[routine]] or a
+// auth_on: the node's server unlocks by 0x29 Authentication — a level to unlock, on a connection
+fn auth_on(m Model) bool {
+	return m.uds.auth() && m.isotp_conns.len > 0 && sa_levels(m) != 0
+}
+
+// unlock_sid: the service a tester unlocks this node's levels with
+fn unlock_sid(m Model) u8 {
+	return if m.uds.auth() { u8(0x29) } else { u8(0x27) }
+}
+
+// sa_levels: the 0x27 (or 0x29) levels the server serves — every level a [[did]] gate or control, a [[routine]] or a
 // service row names (bit L-1 for level L). A level nothing is gated on is not offered: unlocking it opens nothing.
 fn sa_levels(m Model) u8 {
 	mut mask := security_levels(m.dids) | routine_levels(m.routines)
@@ -440,6 +543,7 @@ fn validate_uds(m Model) {
 	if sa_levels(m) == 0 && (u.security_attempts != 0 || u.security_delay_ms != 0 || u.security_key != '') {
 		panic('loom2v: [uds] configures security_attempts / security_delay_ms / security_key, but no [[did]] gate or service row names a security level — there is nothing to unlock')
 	}
+	validate_auth(m)
 	if !u.table {
 		validate_did_rows(m) // the default table's rows: 0x2F runs in extended only
 		return
@@ -453,6 +557,10 @@ fn validate_uds(m Model) {
 		if r.sessions & uds.in_programming != 0 {
 			panic('loom2v: [uds] services ${h} names the programming session — an application server refuses it (programming is the bootloader\'s)')
 		}
+		if r.sid == 0x29 && r.sessions & uds.in_default != 0 {
+			// ISO 14229-1 allows Authentication in the default session; this server does not
+			panic('loom2v: [uds] services 0x29 names the default session — ISO 14229-1 allows Authentication there, but this server serves it only in a non-default session, like 0x27 (REQ-DIAG-121, docs/diagnostics.md §3.1): every session entry relocks, so a level unlocked in the default session is gone by the extended session every gate needs; drop "default"')
+		}
 		if uds.default_sessions(r.sid) != 0 && r.sessions & uds.in_default != 0 {
 			panic('loom2v: [uds] services ${h} names the default session, but ISO 14229-1 runs it only in a non-default one')
 		}
@@ -463,15 +571,15 @@ fn validate_uds(m Model) {
 		if !svc_listed(m, 0x10) && mask != 0 && mask & uds.in_default == 0 {
 			panic('loom2v: [uds] services ${h} runs only outside the default session, but the table leaves out 0x10 — it could never be reached')
 		}
-		// 0x27 unlocks in extended (an application refuses programming) and every session entry
-		// relocks: a 0x27 kept out of extended unlocks nothing any gate (always extended) can use
-		if r.sid == 0x27 && mask & uds.in_extended == 0 {
-			panic('loom2v: [uds] services 0x27 leaves out the extended session — an unlock elsewhere is relocked by the session change every gate needs')
+		// 0x27 / 0x29 unlock in extended (an application refuses programming) and every session entry
+		// relocks: one kept out of extended unlocks nothing any gate (always extended) can use
+		if r.sid in [u8(0x27), 0x29] && mask & uds.in_extended == 0 {
+			panic('loom2v: [uds] services ${h} leaves out the extended session — an unlock elsewhere is relocked by the session change every gate needs')
 		}
 		if r.security == 0 {
 			continue
 		}
-		if r.sid in [u8(0x10), 0x27, 0x3E] {
+		if r.sid in [u8(0x10), 0x27, 0x29, 0x3E] {
 			panic('loom2v: [uds] services ${h} cannot need a security level — it is how a tester reaches, unlocks or keeps the session')
 		}
 		if mask != 0 && mask & uds.in_extended == 0 {
@@ -479,8 +587,8 @@ fn validate_uds(m Model) {
 		}
 	}
 	// what the table leaves out must not strand what the rest of the config declares
-	if sa_levels(m) != 0 && !svc_listed(m, 0x27) {
-		panic('loom2v: [uds] services leaves out 0x27, but a [[did]] gate or service row needs a security level — nothing could unlock it')
+	if sa_levels(m) != 0 && !svc_listed(m, unlock_sid(m)) {
+		panic('loom2v: [uds] services leaves out 0x${unlock_sid(m).hex()}, but a [[did]] gate or service row needs a security level — nothing could unlock it')
 	}
 	validate_did_rows(m)
 }
@@ -524,6 +632,37 @@ fn validate_did_rows(m Model) {
 fn access_gate(sessions u8, security u8, row SvcCfg) (u8, u8) {
 	level := if security != 0 { security } else { row.security }
 	return sess_and(sessions, row.sessions), level
+}
+
+// validate_auth refuses an access = "authentication" whose keys do not match the levels it serves
+// (REQ-DIAG-120, REQ-DIAG-126): a served level with no key could never be unlocked, a key for a level
+// nothing gates opens nothing, and a key equal to the bootloader's image key gives the field key
+// the power to sign firmware.
+fn validate_auth(m Model) {
+	u := m.uds
+	if !u.auth() {
+		return
+	}
+	levels := sa_levels(m)
+	if levels == 0 {
+		panic('loom2v: [uds] access = "authentication", but no [[did]] gate or service row names a security level — there is nothing to unlock')
+	}
+	for l in 1 .. uds.max_security_level + 1 {
+		gated := levels & (u8(1) << (l - 1)) != 0
+		if gated && l !in u.auth_keys {
+			panic('loom2v: [uds] access = "authentication": security level ${l} is gated but auth_keys has no key for it — give "${l}" = "<64 hex>" (or "reference")')
+		}
+		if !gated && l in u.auth_keys {
+			panic('loom2v: [uds] auth_keys "${l}": no [[did]] gate or service row names security level ${l} — the key would unlock nothing')
+		}
+	}
+	if m.boot.on {
+		for l, k in u.auth_keys {
+			if k == m.boot.image_key {
+				panic('loom2v: [uds] auth_keys "${l}" is the [boot] image_key — the release (image) key and a tester key must differ, or a tester\'s key signs firmware')
+			}
+		}
+	}
 }
 
 // DidAccess is one [[did]] access (read / write / control) as the service that carries it sees it
@@ -767,12 +906,27 @@ fn did_encode_lines(idx int, expr string, val_type string, ind string) []string 
 // security_init_lines: 0x27 on `srv`, serving exactly the levels a gate names (sa_levels), with the
 // server's attempt limit and lockout delay — every owner's; only the key seam differs
 // (`ops`: the host's reference key object, the target's board C seam).
-fn security_init_lines(m Model, srv string, ops string) []string {
+// `keys` holds the node's udsauth.Keys on an authenticating node (auth_on): each level's public
+// key set, and the server's 0x29 seam pointed at it.
+fn security_init_lines(m Model, srv string, ops string, keys string) []string {
 	levels := sa_levels(m) // validate_uds vetted the settings
 	if levels == 0 {
 		return []string{}
 	}
 	mut g := ['\t${srv}.security = ${ops}', '\t${srv}.security_levels = u8(0x${levels.hex()})']
+	if auth_on(m) {
+		mut ls := m.uds.auth_keys.keys()
+		ls.sort()
+		for l in ls {
+			if m.uds.auth_ref[l] {
+				g << '\t${keys}.set(${l}, &udsauth.reference_key[0]) // level ${l}: the dev tester key ("reference")'
+				continue
+			}
+			g << '\tauth_key_${l} := [' + m.uds.auth_keys[l].map('u8(0x${it.hex()})').join(', ') + ']!'
+			g << '\t${keys}.set(${l}, &auth_key_${l}[0]) // level ${l}: [uds] auth_keys'
+		}
+		g << '\t${srv}.auth = ${keys}.ops() // 0x29 Authentication: 0x27 is not served'
+	}
 	if m.uds.security_attempts != 0 {
 		g << '\t${srv}.sa_attempts = u8(${m.uds.security_attempts})'
 	}
@@ -790,6 +944,7 @@ fn diag_target_sa_fns(m Model) []string {
 	if m.isotp_conns.len == 0 || sa_levels(m) == 0 {
 		return []string{}
 	}
+	// the seed (or, on an authenticating node, the 0x29 challenge) is the board's TRNG
 	mut g := [
 		'',
 		'fn C.diag_sa_init() int',
@@ -799,7 +954,7 @@ fn diag_target_sa_fns(m Model) []string {
 		'\treturn C.diag_sa_seed(out, n) != 0',
 		'}',
 	]
-	if m.uds.security_key != 'reference' {
+	if m.uds.security_key != 'reference' && !m.uds.auth() {
 		g << ''
 		g << 'fn C.diag_sa_key_ok(u8, &u8, &u8, int) int'
 		g << ''
@@ -828,7 +983,7 @@ fn sa_persist_on(m Model) bool {
 // fresh attempts. The host bridge has no power cycle and keeps them in RAM.
 fn validate_sa_target(m Model) {
 	if sa_target_on(m) && !m.nvm.on {
-		panic('loom2v: a security level on the target (a [[did]] gate or control, a [uds] services row or the "0x10 02" handoff) needs [nvm] — the 0x27 failed-key counts and a running lockout are kept in the NvM journal across resets and power loss, so a power cycle between guesses buys nothing (docs/diagnostics.md §3.1); declare the storage')
+		panic('loom2v: a security level on the target (a [[did]] gate or control, a [uds] services row or the "0x10 02" handoff) needs [nvm] — the 0x27 failed-key (or 0x29 failed-proof) counts and a running lockout are kept in the NvM journal across resets and power loss, so a power cycle between guesses buys nothing (docs/diagnostics.md §3.1); declare the storage')
 	}
 }
 
@@ -920,6 +1075,9 @@ fn diag_target_globals(m Model) []string {
 	mut g := ['\tg_diag diag.Connection // the diagnostic server on its ISO-TP connection (bss)',
 		'\tg_diag_req [${mm}]u8 // its request buffer: [isotp] max_message',
 		'\tg_diag_resp [${mm}]u8 // its response buffer']
+	if auth_on(m) {
+		g << '\tg_auth_keys udsauth.Keys // the 0x29 public keys per level (bss, set in diag_target_init)'
+	}
 	for sname in did_xup_sigs(m) {
 		si := m.sig_of[sname] or { continue }
 		g << '\tg_didx_${snake(sname)} [${sig_lanes(si) + 1}]u32 // ${sname}\'s up channel, the live DIDs\' reader: seq, lanes (xcore_poll_n)'
@@ -967,10 +1125,17 @@ fn diag_target_init(m Model) []string {
 		g << boot_target_init(m)
 	}
 	if sa_levels(m) != 0 {
-		key := if m.uds.security_key == 'reference' { 'uds.reference_key_ok' } else { 'diag_sa_key_v' }
 		// the RNG's clock is set up here, once, before the loop — never inside a request
 		g << '\tC.diag_sa_init() // 0 = no RNG: every seed request is then refused'
-		g << security_init_lines(m, 'g_diag.server', 'uds.SecurityOps{\n\t\tseed:   diag_sa_seed_v\n\t\tkey_ok: ${key}\n\t}')
+		if auth_on(m) {
+			// the TRNG draws the 0x29 challenge; there is no key to compare
+			g << security_init_lines(m, 'g_diag.server', 'uds.SecurityOps{\n\t\tseed: diag_sa_seed_v\n\t}',
+				'g_auth_keys')
+		} else {
+			key := if m.uds.security_key == 'reference' { 'uds.reference_key_ok' } else { 'diag_sa_key_v' }
+			g << security_init_lines(m, 'g_diag.server', 'uds.SecurityOps{\n\t\tseed:   diag_sa_seed_v\n\t\tkey_ok: ${key}\n\t}',
+				'')
+		}
 		if sa_persist_on(m) {
 			g << '\tg_diag.server.sa_store = uds.SecurityStore{'
 			g << '\t\tput:      nvm_store_put'
@@ -1099,6 +1264,14 @@ fn diag_message_need(m Model) (int, string) {
 		if n > need {
 			need = n
 			what = '[[did]] 0x${d.id.hex()}\'s 0x22 answer' + if d.writable { ' and 0x2E request' } else { '' }
+		}
+	}
+	if auth_on(m) {
+		// the 0x29 messages exchanged whole: the 06 proof request (88 bytes) is the longest — the 05
+		// answer carrying the challenge is 55, the 06 answer 21
+		if uds.auth_proof_req_len > need {
+			need = uds.auth_proof_req_len
+			what = 'the 0x29 proof request (Authentication, [uds] access = "authentication")'
 		}
 	}
 	if m.faults.len > 0 {

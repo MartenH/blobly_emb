@@ -195,6 +195,19 @@ fn test_every_supported_service_dispatches() {
 		r := call(mut s, [u8(sid), 0x00, 0x00, 0x00])
 		assert !(r.len == 3 && r[0] == 0x7F && r[2] == 0x11), 'SID 0x${u8(sid).hex()} is supported but not dispatched'
 	}
+	// an authenticating node's 0x29 (auth.v) too
+	s.auth = AuthOps{
+		keyed: fn (_ voidptr, _ u8) bool {
+			return true
+		}
+		start: fn (_ voidptr, _ u8, _ &u8, _ int, _ &u8) {}
+		step:  fn (_ voidptr) AuthVerdict {
+			return .invalid
+		}
+	}
+	assert s.service_supported(0x29) && !s.service_supported(0x27)
+	r := call(mut s, [u8(0x29), 0x00, 0x00, 0x00])
+	assert !(r.len == 3 && r[0] == 0x7F && r[2] == 0x11), 'SID 0x29 is supported but not dispatched'
 }
 
 // An owner that does not act on 0x11 / 0x28 must not acknowledge them.
@@ -555,8 +568,8 @@ fn test_security_access_unlocks_with_the_reference_key() {
 	assert call(mut s, [u8(0x2E), 0xF1, 0xAA, 0x01]) == [u8(0x6E), 0xF1, 0xAA]
 }
 
-// REQ-DIAG-008 / REQ-DIAG-004: 0x27's own order — session, length, subfunction, then for sendKey
-// length and sequence; a server with no ops injected does not serve 0x27 at all.
+// REQ-DIAG-008 / REQ-DIAG-004 / REQ-DIAG-032: 0x27's own order — session, length, subfunction,
+// then for sendKey length, sequence and the lockout; a server with no ops injected does not serve 0x27 at all.
 fn test_security_access_nrc_order() {
 	mut s := secured()
 	assert call(mut s, [u8(0x27)]) == [u8(0x7F), 0x27, 0x13]
@@ -565,6 +578,15 @@ fn test_security_access_nrc_order() {
 	assert call(mut s, [u8(0x27), 0x7F]) == [u8(0x7F), 0x27, 0x12]
 	assert call(mut s, [u8(0x27), 0x02, 1, 2, 3]) == [u8(0x7F), 0x27, 0x13]
 	assert send_key(mut s, [u8(1), 2, 3, 4]) == [u8(0x7F), 0x27, 0x24] // no seed requested
+	// REQ-DIAG-032: a seed drawn before its level's lockout began (over another transport —
+	// comm/diag keeps one per transport) buys no key during it: 0x37, after the sequence, the key
+	// not judged and nothing counted, the seed spent
+	seed := call(mut s, [u8(0x27), 0x01])[2..].clone()
+	s.sa_delay_until[0] = s.now_us + 1_000_000
+	assert send_key(mut s, key_for(seed)) == [u8(0x7F), 0x27, 0x37], 'a key was judged during the lockout'
+	assert s.unlocked == 0 && s.sa_since[0] == 0 && s.sa_failed[0] == 0
+	assert send_key(mut s, key_for(seed)) == [u8(0x7F), 0x27, 0x24], 'the seed outlived its refusal'
+	s.sa_delay_until[0] = 0
 	call(mut s, [u8(0x10), 0x01])
 	assert call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x7F]
 	mut plain := started()

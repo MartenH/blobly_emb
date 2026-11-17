@@ -225,7 +225,7 @@ the FB never calls a service API.
   the DoIP gateway forwards each 0x78 (REQ-DIAG-086). zone_a runs a sync and an async routine (bench
   suite `test/routine_zone_a.lua`, run pending), overspeed a sync one (`test/routine.lua`, vcan).
   Left: a routine's FB on a satellite core or in a multi-thread partition (REQ-PLACE-013), start
-  records over 11 bytes on a `[doip]` node, and blobly_net listing and simulating routines (its
+  records over 19 bytes on a `[doip]` node (the push slot, 24), and blobly_net listing and simulating routines (its
   sysview reads no `[[routine]]` yet, so its simulated zone_a answers every 0x31 with 0x11 where the
   board serves it — `tests/diag_described.lua`'s `31 01 FF 00 → 0x11` and sysview's "the format has
   no RoutineControl" are stale until then; docs/diagnostics.md §5)

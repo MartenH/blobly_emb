@@ -444,6 +444,14 @@ the ECU issues a random challenge and the tester returns a **signature** over it
 the ECU verifies with the public key it already holds. Nothing extractable from an ECU
 lets an attacker forge it.
 
+The bootloader's profile is its own: sub-functions 01 (challenge) and 02 (proof). An
+APPLICATION can serve 0x29 too, with `[uds] access = "authentication"` — ISO's 05 / 06
+(requestChallengeForAuthentication, verifyProofOfOwnershipUnidirectional) granting a security
+level instead of the flash services ([diagnostics.md](diagnostics.md) §3.1). Both are one
+signature scheme — Ed25519 over the bare 32-byte challenge, verified by the same `bcrypto`
+verifier — and one dev key: `examples/keys/tester.seed` signs for both, its public half the
+bootloader's `session_key` and an application's `auth_keys = { "1" = "reference" }`.
+
 ```mermaid
 sequenceDiagram
     participant T as Tester

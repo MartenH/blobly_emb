@@ -2719,7 +2719,15 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// 40 B below the DTCM floor mid-put): 8 KB with [nvm], 4 KB without.
 				// the diagnostic server's dispatch copies its UDS server (~1 KB, the DID table) by
 				// value into several frames: 8 KB with [isotp] too
-				comm_stack := if m.nvm.on || m.isotp_conns.len > 0 { 8192 } else { 4096 }
+				// 16 KB on a node that verifies a 0x29 proof in its comm pass: bcrypto's Ed25519
+				// verifier frames, as the bootloader's (boot/target) measured them
+				comm_stack := if auth_on(m) {
+					16384
+				} else if m.nvm.on || m.isotp_conns.len > 0 {
+					8192
+				} else {
+					4096
+				}
 				glue << '\tg_comm_stack [${comm_stack}]u8'
 				// (The load cell is the volatile C scratch in comm_glue.c, via load_pub/load_*.)
 				// Rx accounting: the comm thread counts received frames + keeps the last value, so a
@@ -4267,6 +4275,9 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 		// uds.Routine table on the server, routine_config_lines)
 		if m.dids.len > 0 || m.uds.table || m.boot.on || m.routines.len > 0 {
 			glue << 'import comm.uds' // UDS diagnostic services
+		}
+		if auth_on(m) {
+			glue << 'import comm.udsauth' // 0x29 Authentication: the keys and the Ed25519 verify
 		}
 	}
 	return ports, glue

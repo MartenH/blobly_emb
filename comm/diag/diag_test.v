@@ -732,6 +732,29 @@ fn test_seed_key_exchanges_are_per_transport() {
 	assert exchange(mut c, mut t, mut &now, key) == [u8(0x67), 0x02], 'the CAN challenge was replaced'
 }
 
+// @verifies REQ-DIAG-032 — a seed drawn over one transport before wrong keys over the other started
+// the level's lockout buys no key during it: 0x37, the key not judged and nothing counted, the seed
+// spent — so no transport adds a guess to a lockout window
+fn test_a_seed_drawn_before_a_lockout_buys_no_key_during_it() {
+	mut c := secured_conn()
+	mut t := new_tester()
+	mut now := u64(0)
+	exchange(mut c, mut t, mut &now, [u8(0x10), 0x03])
+	doip_seed := remote(mut c, [u8(0x27), 0x01], false)[2..].clone()
+	for want in [u8(0x35), 0x35, 0x36] {
+		exchange(mut c, mut t, mut &now, [u8(0x27), 0x01])
+		assert exchange(mut c, mut t, mut &now, [u8(0x27), 0x02, 0, 0, 0, 0]) == [u8(0x7F), 0x27,
+			want]
+	}
+	mut key := [u8(0x27), 0x02]
+	for b in doip_seed {
+		key << b ^ 0xFF
+	}
+	assert remote(mut c, key, false) == [u8(0x7F), 0x27, 0x37], 'a key was judged during the lockout'
+	assert c.server.unlocked == 0 && c.server.sa_since[0] == 3 && c.server.sa_failed[0] == 0
+	assert remote(mut c, key, false) == [u8(0x7F), 0x27, 0x24], 'the seed outlived its refusal'
+}
+
 // re-entering the session the bus is in, over the other transport, voids the bus's challenge
 fn test_a_session_reentry_voids_an_outstanding_seed() {
 	mut c := secured_conn()

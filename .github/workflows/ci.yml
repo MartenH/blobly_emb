@@ -300,6 +300,12 @@ jobs:
       - name: A multi-thread gateway links (scripts/glue_link_check.sh)
         run: scripts/glue_link_check.sh
 
+      # Another shape no committed image has: a ThreadX node unlocking by 0x29 Authentication
+      # (zone_a with its 0x27 key swapped for an auth key) — bcrypto's verifier in an application,
+      # the keys filled in a freestanding init path, the 16 KB comm stack. Built in a scratch copy.
+      - name: An authentication node builds for the target (scripts/auth_target_check.sh)
+        run: scripts/auth_target_check.sh
+
       # A [boot] node's bootloader is remade when a header or a textually included backend changes
       # (boot/boot.mk takes them from the compiler's dependency output). Asks make, after the builds.
       - name: The bootloaders track every source (scripts/boot_deps_check.sh)

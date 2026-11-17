@@ -165,7 +165,7 @@
         "clears_per_day": {"type": "integer", "minimum": 0, "maximum": 1000000, "default": 24, "description": "ClearDiagnosticInformation (0x14) Default: 24."},
         "setting_changes_per_day": {"type": "integer", "minimum": 0, "maximum": 1000000, "default": 24, "description": "ControlDTCSetting (0x85) changes Default: 24."},
         "codings_per_day": {"type": "integer", "minimum": 0, "maximum": 1000000, "default": 24, "description": "accepted 0x2E codings of a [[param]] Default: 24."},
-        "unlocks_per_day": {"type": "integer", "minimum": 0, "maximum": 1000000, "default": 24, "description": "correct-key SecurityAccess (0x27) unlocks a day, all levels: the 0x27 failed-key state is written at most security_attempts times per level until a correct key, and once more by it; only where the node performs 0x27 Default: 24."}
+        "unlocks_per_day": {"type": "integer", "minimum": 0, "maximum": 1000000, "default": 24, "description": "correct-key unlocks a day, all levels — SecurityAccess (0x27) keys, or Authentication (0x29) proofs on an access = \"authentication\" node: the failed-key state (wrong keys, or failed proofs) is written at most security_attempts times per level until a correct key or proof, and once more by it; only where the node unlocks a security level Default: 24."}
       },
       "additionalProperties": false
     },
@@ -364,24 +364,26 @@
     },
     "uds": {
       "title": "[uds]",
-      "description": "The node's one ISO 14229 diagnostic server: session and security timing, the 0x27 key, the service table.",
+      "description": "The node's one ISO 14229 diagnostic server: session and security timing, how a security level is unlocked (0x27 or 0x29) and its keys, the service table.",
       "type": "object",
       "properties": {
         "s3_ms": {"type": "integer", "default": 5000, "description": "the session timeout back to the default session (ms; 0 = the default) Default: 5000."},
-        "security_attempts": {"type": "integer", "minimum": 0, "maximum": 255, "default": 3, "description": "wrong 0x27 keys before the lockout (0 = the default) Default: 3."},
-        "security_delay_ms": {"type": "integer", "default": 10000, "description": "the 0x27 lockout delay after too many wrong keys (ms; 0 = the default) Default: 10000."},
-        "security_key": {"type": "string", "enum": ["reference"], "description": "\"reference\" = blobly_net's PUBLIC bench key (a target); absent = the OEM's diag_sa_key_ok"},
+        "access": {"type": "string", "enum": ["seed_key", "authentication"], "default": "seed_key", "description": "how a security level is unlocked: \"seed_key\" = SecurityAccess (0x27), \"authentication\" = Authentication (0x29, ACR with Ed25519; 0x27 then not served). Both grant the same levels Default: \"seed_key\"."},
+        "security_attempts": {"type": "integer", "minimum": 0, "maximum": 255, "default": 3, "description": "wrong 0x27 keys (or failed 0x29 proofs) before the lockout (0 = the default) Default: 3."},
+        "security_delay_ms": {"type": "integer", "default": 10000, "description": "the lockout delay after too many wrong keys or failed proofs (ms; 0 = the default) Default: 10000."},
+        "security_key": {"type": "string", "enum": ["reference"], "description": "access = \"seed_key\" only: \"reference\" = blobly_net's PUBLIC bench key (a target); absent = the OEM's diag_sa_key_ok"},
+        "auth_keys": {"type": "object", "additionalProperties": {"type": "string"}, "description": "access = \"authentication\" only: level (\"1\"..\"8\") -> the tester's Ed25519 PUBLIC key, 64 hex, or \"reference\" = blobly_net's dev tester key (the one examples/keys/tester.seed signs with); exactly the levels a gate names"},
         "services": {"type": "object", "additionalProperties": {"$ref": "#/definitions/uds_service"}, "description": "the service table, \"0xSID\" = { ... } (\"0x10 02\": the [boot] handoff); absent = every service the build performs"}
       },
       "additionalProperties": false
     },
     "uds_service": {
       "title": "[uds] services row",
-      "description": "One served service: the sessions it is accepted in and the 0x27 level it needs.",
+      "description": "One served service: the sessions it is accepted in and the security level (unlocked by 0x27 or 0x29) it needs.",
       "type": "object",
       "properties": {
         "sessions": {"type": "array", "items": {"type": "string", "enum": ["default", "extended", "programming", "safety"]}, "description": "the sessions it is accepted in; absent = the service's default sessions"},
-        "security": {"type": "integer", "minimum": 0, "maximum": 8, "default": 0, "description": "the 0x27 level that must be unlocked first (0 = none) Default: 0."}
+        "security": {"type": "integer", "minimum": 0, "maximum": 8, "default": 0, "description": "the security level (0x27 or 0x29) that must be unlocked first (0 = none) Default: 0."}
       },
       "additionalProperties": false
     },
@@ -403,7 +405,7 @@
         "announce_count": {"type": "integer", "minimum": 0, "maximum": 10, "default": 3, "description": "A_DoIP_Announce_Num: vehicle announcements at start-up Default: 3."},
         "announce_interval_ms": {"type": "integer", "minimum": 10, "maximum": 10000, "default": 500, "description": "A_DoIP_Announce_Interval (ms); count x interval at most 10000 ms Default: 500."},
         "route_level": {"type": "integer", "minimum": 1, "maximum": 8, "default": 1, "description": "a gateway's: the security level of its own server a tester must have unlocked over the network before it routes to the nodes behind it (REQ-NET-020); one its [uds] serves Default: 1."},
-        "allow_bench_key": {"type": "boolean", "default": false, "description": "answer 0x27 with blobly_net's PUBLIC reference key over the network — a bench posture, opted into by name; required (true) when [uds] security_key = \"reference\" Default: false."}
+        "allow_bench_key": {"type": "boolean", "default": false, "description": "unlock with one of blobly_net's PUBLIC bench keys over the network — the 0x27 reference key or the 0x29 dev tester key — a bench posture, opted into by name; required (true) when [uds] security_key = \"reference\" or an auth_keys entry is \"reference\" Default: false."}
       },
       "required": ["address", "logical_address"],
       "additionalProperties": false
@@ -468,11 +470,11 @@
     },
     "did_access": {
       "title": "[[did]] read/write",
-      "description": "The sessions and the 0x27 level an access needs.",
+      "description": "The sessions and the security level (unlocked by 0x27 or 0x29) an access needs.",
       "type": "object",
       "properties": {
         "session": {"type": "array", "items": {"type": "string", "enum": ["default", "extended", "programming", "safety"]}, "description": "the sessions it is allowed in; absent = every session"},
-        "security": {"type": "integer", "minimum": 0, "maximum": 8, "default": 0, "description": "the 0x27 level that must be unlocked (0 = none) Default: 0."}
+        "security": {"type": "integer", "minimum": 0, "maximum": 8, "default": 0, "description": "the security level (unlocked by 0x27 or 0x29) that must be unlocked (0 = none) Default: 0."}
       },
       "additionalProperties": false
     },
@@ -567,7 +569,7 @@
         "results_out": {"type": "integer", "minimum": 0, "maximum": 32, "default": 0, "description": "the record bytes 03's answer carries (needs `results`) Default: 0."},
         "timeout_ms": {"type": "integer", "minimum": 100, "maximum": 100000, "default": 10000, "description": "a start or stop its FB has not answered by then is answered 0x22 and the FB asked to stop Default: 10000."},
         "sessions": {"type": "array", "items": {"type": "string", "enum": ["default", "extended", "safety"]}, "description": "the sessions it may be started, stopped and read in Default: [\"extended\"]."},
-        "security": {"type": "integer", "minimum": 0, "maximum": 8, "default": 0, "description": "the 0x27 level that must be unlocked (0 = none) Default: 0."}
+        "security": {"type": "integer", "minimum": 0, "maximum": 8, "default": 0, "description": "the security level (unlocked by 0x27 or 0x29) that must be unlocked (0 = none) Default: 0."}
       },
       "required": ["id", "name"],
       "additionalProperties": false

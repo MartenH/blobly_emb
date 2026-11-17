@@ -187,7 +187,10 @@ fn (mut s Server) ask_stop(i int) {
 // stop_routines: a session entry (enter_session, reset_state) asks every routine its FB may still
 // be running to stop — a routine gated to a session does not outlive it — and an answer still owed
 // is answered conditionsNotCorrect (fail_owed), on the transport that asked. The server does not
-// wait for any stop to be acknowledged.
+// wait for any stop to be acknowledged. A 0x29 proof still being verified is voided, not counted:
+// every request is dropped while its answer is owed, so the entry is the OTHER transport's doing
+// (its tester disconnecting, comm/diag remote_dropped; its answered reset) — the proof is never
+// judged, and its tester is told 0x22 and keeps the attempt (auth_void).
 fn (mut s Server) stop_routines() {
 	for i in 0 .. s.nroutines {
 		if i >= max_routines {
@@ -198,6 +201,9 @@ fn (mut s Server) stop_routines() {
 		}
 	}
 	if s.pend_sid != 0 && !s.pend_fail {
+		if s.pend_sid == 0x29 {
+			s.auth_void()
+		}
 		s.fail_owed()
 	}
 }
@@ -207,8 +213,9 @@ fn (mut s Server) stop_routines() {
 // FB may still be running is asked to stop, as the controls are returned. A routine's `security` is
 // its EFFECTIVE level, its own else its 0x31 service row's (generation, gen_routine.v routine_gate),
 // so a routine gated through the row is stopped too. No answer can be owed for such a routine: a key
-// is dropped while an answer is owed, and the network tester whose unlock ends had its own owed
-// answer abandoned first (comm/diag remote_dropped).
+// is dropped while an answer is owed, a 0x29 proof is granted while its OWN answer is owed (never a
+// routine's), and the network tester whose unlock ends had its own owed answer abandoned first
+// (comm/diag remote_dropped).
 fn (mut s Server) stop_relocked_routines(level u8, others bool) {
 	for i in 0 .. s.nroutines {
 		if i >= max_routines {

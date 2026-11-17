@@ -55,8 +55,9 @@ pub fn pass[S](mut st S, mut s doip.Server, inb &u8, out &u8) {
 
 // push_max: the most a pushed response holds — driver/eth/doip_netx.c's MB_PUSH_MAX, the mailbox's
 // one push slot (pinned equal by doipnet_test.v), which run_gateway's buffer is sized by. A
-// routine's start answer pushed over DoIP fits it, or generation refuses the routine (REQ-DIAG-087).
-pub const push_max = 16
+// routine's start answer pushed over DoIP fits it, or generation refuses the routine (REQ-DIAG-087);
+// so does a 0x29 06's 21-byte ownershipVerified (comm/uds auth_proof_answer_len, pinned by the test).
+pub const push_max = 24
 
 // push sends a further response the server pushed to the request it answered last (a routine's
 // next responsePending, its answer): to the activated tester, as a diagnostic message. With no

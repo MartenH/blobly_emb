@@ -3,7 +3,8 @@
 > Status (2026-11-17): **the 0x27 failed-key state is a journal writer** — each level's wrong keys
 > since its last correct key, saturating at `security_attempts`, one 10-byte record at the fixed
 > block 0x044E, so neither a reset nor a power cycle between guesses buys fresh attempts
-> ([diagnostics.md](diagnostics.md) §3.1). A ThreadX node that performs 0x27 must declare `[nvm]`;
+> ([diagnostics.md](diagnostics.md) §3.1). A ThreadX node that performs 0x27 — or unlocks by 0x29 Authentication, whose failed proofs
+> are counted in the same record — must declare `[nvm]`;
 > the RAM keep cell that carried the state across the server's own reset is gone. It is written only
 > when it changes — a wrong key below the limit, a correct key clearing a count — so at most
 > `security_attempts` times per level until a correct key, plus once by it, and a tester sending
@@ -200,7 +201,7 @@ resets_per_day          = 24   # ECUResets (0x11) — each also ends a cycle
 clears_per_day          = 24   # 0x14 (counted only with a persisted fault memory)
 setting_changes_per_day = 24   # 0x85 changes (likewise)
 codings_per_day         = 24   # accepted 0x2E codings (only with [[param]]s)
-unlocks_per_day         = 24   # correct-key 0x27 unlocks, all levels (only where the node performs 0x27)
+unlocks_per_day         = 24   # correct-key unlocks (0x27 keys or 0x29 proofs), all levels (only where the node unlocks a level)
 ```
 
 The defaults are deliberately pessimistic — an operation cycle every ten minutes and a tester
@@ -245,7 +246,7 @@ time to make space — is closed structurally, not handled:
   before shutdown needs the room. The sleep flush therefore never erases — it is
   N microsecond-scale appends into space guaranteed to exist. GC-at-shutdown is
   not a case to handle; it is a state that cannot be reached. Generation refuses a
-  sector that cannot hold the live set twice plus, on a node that performs 0x27,
+  sector that cannot hold the live set twice plus, on a node that performs 0x27 (or 0x29),
   every write a tester without the key can make (`security_attempts` per served
   level), so wrong keys alone never fill a sector.
 - **Quiesce ordering, storage holds the door.** Dispatch stops → flush dirty →
@@ -532,7 +533,9 @@ erases it, and until then a put or marker the journal refuses stays refused:
 ## The 0x27 failed-key state
 
 The diagnostic server's SecurityAccess state — each level's wrong keys since its last correct key —
-is one journal value, so a power cycle between guesses buys nothing (REQ-DIAG-065). `comm/uds`
+is one journal value, so a power cycle between guesses buys nothing (REQ-DIAG-065). On a node that
+unlocks by Authentication (0x29) a failed proof is a wrong key of its level: counted, written and
+bounded here exactly as below, the wear check's `unlocks_per_day` then counting verified proofs. `comm/uds`
 `sa_store.v` owns the record and reaches the journal through an injected seam (`SecurityStore`), as
 the fault memory and the parameters do; the comm thread wires it to the journal and restores it
 before the loop, so before the first request.

@@ -208,7 +208,7 @@ fn test_a_target_security_gate_needs_nvm() {
 	} {
 		code, out, _ := generate('sa_nonvm_${name}', bare + extra)
 		assert code != 0, '${name}: loom2v accepted 0x27 on the target without [nvm]'
-		assert out.contains('needs [nvm] — the 0x27 failed-key counts and a running lockout are kept in the NvM journal'), '${name}: ${out}'
+		assert out.contains('needs [nvm] — the 0x27 failed-key (or 0x29 failed-proof) counts and a running lockout are kept in the NvM journal'), '${name}: ${out}'
 	}
 	handoff := '\n[uds]\nsecurity_key = "reference"\n\n[uds.services]\n"0x10" = {}\n"0x10 02" = { security = 1 }\n"0x22" = {}\n"0x27" = {}\n"0x3E" = {}\n'
 	code, out, _ := generate('sa_nonvm_handoff', handoff + boot_conn.replace(tt_nvm, ''))
@@ -1236,4 +1236,108 @@ fn test_a_diagnostic_id_meets_a_routed_frame_only_in_its_format() {
 			}
 		}
 	}
+}
+
+// --- 0x29 Authentication (access = "authentication") ---
+
+const auth_gate = '
+[[did]]
+id    = 0xF1AC
+bytes = "00"
+write = { session = ["extended"], security = 1 }
+'
+
+// a real Ed25519 public key that is not the dev tester's (examples/keys' image key)
+const other_key = '03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8'
+
+fn auth_uds(keys string) string {
+	return '\n[uds]\naccess = "authentication"\nauth_keys = { ${keys} }\n'
+}
+
+// REQ-DIAG-120 / REQ-DIAG-126: an authenticating ThreadX node is wired through its keys — each
+// level's public key set in the init path (the dev key by name, another as its bytes), the server's
+// 0x29 seam pointed at them, the TRNG the challenge, no 0x27 key seam, the failed-proof state in the
+// journal like 0x27's, a 16 KB comm stack for the verifier.
+// @verifies REQ-DIAG-120 REQ-DIAG-126
+fn test_an_authenticating_target_node_is_wired_through_its_keys() {
+	code, out, glue := generate('auth_ok', diag_conn + auth_gate + auth_uds('"1" = "reference"'))
+	assert code == 0, out
+	for want in ['import comm.udsauth', 'g_auth_keys udsauth.Keys',
+		'g_auth_keys.set(1, &udsauth.reference_key[0])', 'g_diag.server.auth = g_auth_keys.ops()',
+		'seed: diag_sa_seed_v', 'C.diag_sa_init()', 'g_diag.server.security_levels = u8(0x01)',
+		'g_diag.server.restore_persisted_security()', 'g_comm_stack [16384]u8'] {
+		assert glue.contains(want), 'missing: ${want}'
+	}
+	assert !glue.contains('diag_sa_key_ok') && !glue.contains('key_ok:'), 'a 0x27 key seam on an authenticating node'
+	in_order(glue, ['g_diag.server.auth = g_auth_keys.ops()', 'g_diag.server.restore_persisted_security()',
+		'for {'])
+	c2, o2, g2 := generate('auth_hex', diag_conn + auth_gate + auth_uds('"1" = "${other_key}"'))
+	assert c2 == 0, o2
+	assert g2.contains('auth_key_1 := [u8(0x03), u8(0xa1)') && g2.contains('g_auth_keys.set(1, &auth_key_1[0])')
+	// a seed-key node is unchanged: no udsauth, the 8 KB stack
+	c3, o3, g3 := generate('auth_none', diag_conn + auth_gate)
+	assert c3 == 0, o3
+	assert !g3.contains('udsauth') && g3.contains('g_comm_stack [8192]u8')
+}
+
+// the host bridge: the keys in its state, the reference generator the challenge source
+fn test_an_authenticating_host_bridge_is_wired_through_its_keys() {
+	edit := fn (src string) string {
+		return src.replace('\n[uds]\n', '\n[uds]\naccess = "authentication"\nauth_keys = { "1" = "reference" }\n')
+	}
+	code, out, glue := generate_host('auth_host', edit, '')
+	assert code == 0, out
+	for want in ['import comm.udsauth', 'auth_keys_diag udsauth.Keys',
+		'st.auth_keys_diag.set(1, &udsauth.reference_key[0])',
+		'st.conn_diag.server.auth = st.auth_keys_diag.ops()'] {
+		assert glue.contains(want), 'missing: ${want}'
+	}
+	assert !glue.contains('sa_store'), 'the host bridge wired a store'
+}
+
+// REQ-DIAG-120 / REQ-DIAG-121 / REQ-DIAG-126 / REQ-DIAG-066 / REQ-CAN-TP-022: what an authenticating
+// node is refused for, each naming its reason.
+// @verifies REQ-DIAG-120 REQ-DIAG-121 REQ-DIAG-126 REQ-DIAG-066 REQ-CAN-TP-022
+fn test_an_authentication_config_that_cannot_work_is_refused() {
+	not_point := '02' + '00'.repeat(31)
+	zero := '00'.repeat(32)
+	table27 := '\n[uds.services]\n"0x10" = {}\n"0x22" = {}\n"0x27" = {}\n"0x2E" = { sessions = ["extended"], security = 1 }\n"0x3E" = {}\n'
+	table29 := table27.replace('"0x27"', '"0x29"')
+	for name, c in {
+		'no_level':     [diag_conn + '\n[uds]\naccess = "authentication"\n', 'there is nothing to unlock']
+		'no_key':       [diag_conn + auth_gate + auth_uds('"2" = "reference"'), 'security level 1 is gated but auth_keys has no key']
+		'extra_key':    [diag_conn + auth_gate + auth_uds('"1" = "reference", "2" = "reference"'), 'auth_keys "2": no [[did]] gate']
+		'short_key':    [diag_conn + auth_gate + auth_uds('"1" = "abcd"'), 'must be 64 hex characters']
+		'zero_key':     [diag_conn + auth_gate + auth_uds('"1" = "${zero}"'), 'is all zeros']
+		'not_point':    [diag_conn + auth_gate + auth_uds('"1" = "${not_point}"'), 'not a curve point']
+		'bad_level':    [diag_conn + auth_gate + auth_uds('"9" = "reference"'), 'is not a security level']
+		'bad_access':   [diag_conn + auth_gate + '\n[uds]\naccess = "password"\n', '[uds] access "password"']
+		'keys_on_27':   [diag_conn + auth_gate + '\n[uds]\nauth_keys = { "1" = "reference" }\n', 'but access is "seed_key"']
+		'sec_key_on_29': [diag_conn + auth_gate + auth_uds('"1" = "reference"') + 'security_key = "reference"\n', 'drop security_key']
+		'row_27':       [diag_conn + auth_gate + auth_uds('"1" = "reference"') + table27, 'so 0x27 is not served']
+		'row_29':       [diag_conn + auth_gate + table29, '0x29 is served only with [uds] access = "authentication"']
+		'row_29_default': [diag_conn + auth_gate + auth_uds('"1" = "reference"') + table29.replace('"0x29" = {}', '"0x29" = { sessions = ["default", "extended"] }'), 'ISO 14229-1 allows Authentication there, but this server serves it only in a non-default session']
+		'no_nvm':       [diag_conn.replace(tt_nvm, '') + auth_gate + auth_uds('"1" = "reference"'), 'needs [nvm]']
+		'short_msg':    [diag_conn.replace('functional_id = 0x7DF', 'functional_id = 0x7DF\nmax_message = 80') + auth_gate +
+			auth_uds('"1" = "reference"'), 'cannot hold the 0x29 proof request']
+	} {
+		code, out, _ := generate('auth_refuse_${name}', c[0])
+		assert code != 0, '${name}: accepted'
+		assert out.contains(c[1]), '${name}: ${out}'
+	}
+	// a table naming 0x29 on an authenticating node is fine, and leaving it out is refused
+	ok, oo, _ := generate('auth_table', diag_conn + auth_gate + auth_uds('"1" = "reference"') + table29)
+	assert ok == 0, oo
+	no29 := table29.replace('"0x29" = {}\n', '')
+	nc, no, _ := generate('auth_table_no29', diag_conn + auth_gate + auth_uds('"1" = "reference"') + no29)
+	assert nc != 0 && no.contains('services leaves out 0x29'), no
+}
+
+// REQ-DIAG-126: a tester key equal to the [boot] image key is refused (the field key must not sign
+// firmware)
+// @verifies REQ-DIAG-126
+fn test_an_auth_key_equal_to_the_image_key_is_refused() {
+	handoff := '\n[uds]\naccess = "authentication"\nauth_keys = { "1" = "${other_key}" }\n\n[uds.services]\n"0x10" = {}\n"0x10 02" = { security = 1 }\n"0x22" = {}\n"0x29" = {}\n"0x3E" = {}\n'
+	code, out, _ := generate('auth_image_key', handoff + boot_conn)
+	assert code != 0 && out.contains('is the [boot] image_key'), out
 }

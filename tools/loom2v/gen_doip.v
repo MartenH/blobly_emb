@@ -426,7 +426,7 @@ fn validate_doip(m Model) {
 		panic('loom2v: [doip] ${hand}')
 	}
 	// ...and the key that level is checked with must not be one anybody can compute
-	why := doipcfg.bench_key_refusal(m.uds.security_key, d.policy.allow_bench_key)
+	why := doipcfg.bench_key_refusal(m.uds.security_key, m.uds.auth_reference(), d.policy.allow_bench_key)
 	if why != '' {
 		panic('loom2v: [doip] ${why}')
 	}

@@ -14,10 +14,11 @@ fn test_allow_bench_key_is_read_written_and_checked() {
 	assert bench_key in keys()
 }
 
-// REQ-NET-012: what is exempt is listed; everything else needs a level, and no table is refused
+// @verifies REQ-NET-012 — what is exempt is listed (0x29, the other unlock service, among it);
+// everything else needs a level, no table is refused, and either bench key needs allow_bench_key
 fn test_every_service_but_the_open_ones_needs_a_level() {
 	for sid in 0 .. 256 {
-		assert needs_unlock(u8(sid)) == (u8(sid) !in [u8(0x10), 0x19, 0x22, 0x27, 0x2E, 0x3E])
+		assert needs_unlock(u8(sid)) == (u8(sid) !in [u8(0x10), 0x19, 0x22, 0x27, 0x29, 0x2E, 0x3E])
 	}
 	assert service_refusals(false, []).len == 1
 	assert service_refusals(true, [ServiceRow{
@@ -31,10 +32,13 @@ fn test_every_service_but_the_open_ones_needs_a_level() {
 	}, ServiceRow{
 		sid: 0x85
 	}]).len == 2
-	assert bench_key_refusal('reference', false) != ''
-	assert bench_key_refusal('reference', true) == ''
-	assert bench_key_refusal('', true) != ''
-	assert bench_key_refusal('', false) == ''
+	assert bench_key_refusal('reference', false, false) != ''
+	assert bench_key_refusal('reference', false, true) == ''
+	assert bench_key_refusal('', false, true) != ''
+	assert bench_key_refusal('', false, false) == ''
+	// a 0x29 node's auth key naming the dev tester key: the same rule (REQ-NET-012)
+	assert bench_key_refusal('', true, false).contains('auth_keys')
+	assert bench_key_refusal('', true, true) == ''
 }
 
 // a level outside 0x27's 1..8 gates nothing — it is refused, never read as authentication
