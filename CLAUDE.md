@@ -443,6 +443,10 @@ Three things that make the loop work:
   test.) On hardware: never flash the bench from two sessions at once.
 - **Update this file in the PR that lands the work**, especially new modules or a changed
   build/flash step. A guide that drifts is worse than none: it gets believed.
+- **A diagram is edited in its script, never by hand.** Every `docs/*.drawio.svg` is drawn by a
+  script in `docs/diagrams/` (`python3 docs/diagrams/<name>.py docs`; `drawio.py` is the
+  generator: plain SVG plus the mxfile draw.io opens), and `scripts/diagrams_check.sh`, in CI,
+  fails when a committed SVG differs from what its script draws.
 
 ### Polling a codex review
 
