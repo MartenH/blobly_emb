@@ -719,3 +719,63 @@ fn test_a_result_in_its_cell_at_the_timeout_is_the_answer() {
 	s.tick(t0 + 65_000_000 + p2_star_server_us)
 	assert !s.pending(), 'the bound did not grow'
 }
+
+// A Routine is plain data its owner fills: one configured with a record its cells cannot hold
+// (past max_routine_record) is never served — an answer would read past the result cell, a start
+// would drop the option bytes past it — so its identifier is answered as not configured (0x31).
+fn test_a_routine_whose_records_overflow_its_cells_is_not_served() {
+	big := u8(max_routine_record + 1)
+	mut s := routine_server()
+	s.routines[0].start_out = big
+	assert rcall(mut s, rq(0x01, rid_sync, [u8(1)])) == [u8(0x7F), 0x31, 0x31]
+	assert !s.pending()
+	s = routine_server()
+	s.routines[0].results_out = big
+	assert rcall(mut s, rq(0x03, rid_sync, [])) == [u8(0x7F), 0x31, 0x31]
+	assert rcall(mut s, rq(0x01, rid_sync, [u8(1)])) == [u8(0x7F), 0x31, 0x31]
+	s = routine_server()
+	s.routines[0].start_in = big
+	mut option := []u8{len: int(big), init: u8(index + 1)}
+	assert rcall(mut s, rq(0x01, rid_sync, option)) == [u8(0x7F), 0x31, 0x31]
+	assert s.routines[0].req.seq == 0, 'nothing written into the request cell'
+	// at the cells' size, served
+	s = routine_server()
+	s.routines[0].start_in = u8(max_routine_record)
+	s.routines[0].start_out = u8(max_routine_record)
+	s.routines[0].results_out = u8(max_routine_record)
+	option = []u8{len: max_routine_record, init: u8(index + 1)}
+	assert rcall(mut s, rq(0x01, rid_sync, option)) == pending_78
+	assert s.routines[0].req.data[max_routine_record - 1] == u8(max_routine_record)
+}
+
+// @verifies REQ-DIAG-081
+// An FB that stopped running after taking a request: every start then times out and asks it to
+// stop, each a request it never sees. Before its last report falls half the sequence range behind
+// — where RoutineFb.take would judge the stop it has not taken older than a start after it — starts
+// are refused (0x22), so when the FB runs again the stop reaches it first; once it reports, a start
+// is served again.
+fn test_a_start_is_refused_while_its_fb_lags_behind() {
+	mut s := routine_server()
+	mut fb := Fb{}
+	mut now := t0
+	assert rcall(mut s, rq(0x01, rid_sync, [u8(1)])) == pending_78
+	assert fb.dispatch(mut s, 0, .running, 0, []) == .start
+	mut refused := false
+	for _ in 0 .. 0x4000 {
+		now += 10_000_000
+		s.tick(now)
+		assert step(mut s, 256) == [u8(0x7F), 0x31, 0x22]
+		a := rcall(mut s, rq(0x01, rid_sync, [u8(1)]))
+		if a == [u8(0x7F), 0x31, 0x22] {
+			refused = true
+			break
+		}
+		assert a == pending_78
+	}
+	assert refused, 'a start served with the FB 0x8000 requests behind'
+	assert u16(s.routines[0].req.seq - s.routines[0].res.seq) < routine_seq_window + 2
+	assert fb.dispatch(mut s, 0, .stopped, 0, []) == .stop, 'the stop the FB has not taken comes first'
+	assert rcall(mut s, rq(0x01, rid_sync, [u8(1)])) == pending_78
+	assert fb.dispatch(mut s, 0, .done, 0, [u8(0), 3]) == .start
+	assert step(mut s, 256)[4] == routine_info_done
+}

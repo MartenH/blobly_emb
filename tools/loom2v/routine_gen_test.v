@@ -175,7 +175,9 @@ fn test_a_routine_is_generated_only_where_it_can_run() {
 		'stop_on_sync':      [rt_conn + rt_runner() + rt_routine_with('stop = true'), 'on a synchronous routine']
 		'results_out':       [rt_conn + rt_runner() + rt_routine_with('results_out = 2'), '`results` is off']
 		'default_no_level':  [rt_conn + rt_runner() + rt_routine_with('sessions = ["default", "extended"]'), 'from the default session with no 0x27 level']
-		'level_no_extended': [rt_conn + rt_runner() + rt_routine_with('sessions = ["safety"]\nsecurity = 1'), 'not allowed in the extended session']
+		'level_no_extended': [rt_conn + rt_runner() + rt_routine_with('sessions = ["safety"]\nsecurity = 1'), 'leave out the extended session']
+		'row_level_safety':  [rt_conn + rt_runner() + rt_routine_with('sessions = ["extended", "safety"]\nsecurity = 1') + '\n[uds.services]\n"0x10" = {}\n"0x22" = {}\n"0x27" = {}\n"0x31" = { sessions = ["safety"] }\n', 'leave out the extended session']
+		'no_session_change': [rt_ok() + '\n[uds.services]\n"0x22" = {}\n"0x31" = {}\n', 'gives no way into the sessions']
 		'row_missing':       [rt_ok() + '\n[uds.services]\n"0x10" = {}\n"0x22" = {}\n', 'leaves out 0x31']
 		'row_disjoint':      [rt_ok() + '\n[uds.services]\n"0x10" = {}\n"0x22" = {}\n"0x31" = { sessions = ["safety"] }\n', 'share none with [uds] services 0x31']
 		'row_level':         [rt_conn + rt_runner() + rt_routine_with('security = 1') + '\n[uds.services]\n"0x10" = {}\n"0x22" = {}\n"0x27" = {}\n"0x31" = { security = 2 }\n', 'one unlock cannot satisfy both']
@@ -186,6 +188,7 @@ fn test_a_routine_is_generated_only_where_it_can_run() {
 		'other_writer':      [rt_conn + rt_fb('Runner', 'load_fast', 50, '"TestRequest"', '') + rt_fb('Second', 'load_fast', 50, '', '"TestResult"') + rt_routine, 'must be written by the handler that reads']
 		'result_read':       [rt_ok() + rt_fb('Second', 'load_fast', 50, '"TestResult"', ''), 'the diagnostic server alone reads']
 		'collides_signal':   [rt_ok() + '\n[[signal]]\nname   = "TestResult"\nfields = { v = "u32" }\nfrom   = "app"\nto     = "app"\n', 'already a signal, a parameter or another routine']
+		'collides_snake':    [rt_ok() + '\n[[signal]]\nname   = "TESTRequest"\nfields = { v = "u32" }\nfrom   = "app"\nto     = "app"\n', 'both are the port `test_request`']
 		'collides_param':    [rt_ok() + '\n[[param]]\nname    = "TestRequest"\nfields  = { v = "u16" }\ndefault = { v = 1 }\n', 'already a signal, a parameter or another routine']
 		'too_long':          [rt_conn.replace('functional_id = 0x7DF', 'functional_id = 0x7DF\nmax_message   = 8') + rt_runner() + rt_routine.replace('start_out = 2', 'start_out = 32'), 'longer than [isotp] max_message = 8 (REQ-DIAG-087)']
 		'doip_start_out':    [rt_conn + rt_doip + rt_runner() + rt_routine.replace('start_out = 2', 'start_out = 12'), 'push_max']
@@ -198,6 +201,11 @@ fn test_a_routine_is_generated_only_where_it_can_run() {
 			assert !g.out.contains('REQ-CAN-TP-022'), 'the routine sizes are their own refusal'
 		}
 	}
+	// the default session in a routine's own list, kept out by its 0x31 row: never started from
+	// default, so it needs no level
+	gd := rt_target('default_row', rt_conn + rt_runner() + rt_routine_with('sessions = ["default", "extended"]') +
+		'\n[uds.services]\n"0x10" = {}\n"0x22" = {}\n"0x31" = { sessions = ["extended"] }\n')
+	assert gd.code == 0, gd.out
 	// the fixture as it is: its partition has three threads
 	gm := rt_gen('refuse_multi_thread', rt_target_ex, rt_same, rt_ok())
 	assert gm.code != 0 && gm.out.contains('multi-thread partition'), gm.out

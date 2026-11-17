@@ -36,6 +36,7 @@ fn main() {
 	ends, _ := ecumodel.signal_endpoints(doc) // as written or derived from the FBs (REQ-INV-007)
 	mut transports := []string{}
 	mut chcount := 0
+	mut chans := map[string]string{} // every channel const emitted -> what it is (claim_channel)
 	b << ''
 	b << '// IOC channels — const = slot id (cross-partition signals, declaration order)'
 	for s in sigs {
@@ -50,7 +51,7 @@ fn main() {
 		if from == 'io' || to == 'io' {
 			tr = 'triple' // derived for io endpoints (docs/io.md), never configured — the runtime table must match loom2v's glue
 		}
-		b << 'pub const ${snake(name)}_ch = ${chcount}'
+		b << claim_channel(mut chans, '${snake(name)}_ch', 'signal "${name}"', chcount)
 		transports << transport_variant(tr)
 		chcount++
 	}
@@ -78,7 +79,8 @@ fn main() {
 			continue // same core: the route stays intra-thread, no channel
 		}
 		tf := (tm['frame'] or { toml.Any('') }).string()
-		b << 'pub const xr_${snake(tb)}_${snake(tf)}_${snake(sig)}_ch = ${chcount}'
+		b << claim_channel(mut chans, 'xr_${snake(tb)}_${snake(tf)}_${snake(sig)}_ch', 'the crossing of route "${sig}"',
+			chcount)
 		// triple, not double: an rx burst (source cadence < the 10 ms bridge tick) laps the
 		// consumer, and the double buffer tears exactly then; the triple buffer's exchange
 		// hands over whole-buffer ownership, tear-free at any rate (codex #200).
@@ -91,10 +93,10 @@ fn main() {
 	//     wait-free and tear-free at any rate, one writer each (SPSC). In first-declaration order.
 	froms := doc.value('fault').array().map(((it.as_map())['from'] or { toml.Any('') }).string())
 	for fb in ecumodel.fault_fbs(froms) {
-		b << 'pub const fault_rep_${snake(fb)}_ch = ${chcount}'
+		b << claim_channel(mut chans, 'fault_rep_${snake(fb)}_ch', 'the fault report of ${fb}', chcount)
 		transports << transport_variant('triple')
 		chcount++
-		b << 'pub const fault_ctl_${snake(fb)}_ch = ${chcount}'
+		b << claim_channel(mut chans, 'fault_ctl_${snake(fb)}_ch', 'the fault control of ${fb}', chcount)
 		transports << transport_variant('triple')
 		chcount++
 	}
@@ -103,11 +105,12 @@ fn main() {
 	//     thread writes its report, the bridge reads). Triple, SPSC, in declaration order.
 	if rv := doc.value_opt('routine') {
 		for r in rv.array() {
-			rname := snake(((r.as_map())['name'] or { toml.Any('') }).string())
-			b << 'pub const routine_req_${rname}_ch = ${chcount}'
+			name := ((r.as_map())['name'] or { toml.Any('') }).string()
+			rname := snake(name)
+			b << claim_channel(mut chans, 'routine_req_${rname}_ch', 'the request cell of routine "${name}"', chcount)
 			transports << transport_variant('triple')
 			chcount++
-			b << 'pub const routine_res_${rname}_ch = ${chcount}'
+			b << claim_channel(mut chans, 'routine_res_${rname}_ch', 'the result cell of routine "${name}"', chcount)
 			transports << transport_variant('triple')
 			chcount++
 		}
@@ -226,4 +229,17 @@ fn transport_variant(s string) string {
 // snake converts CamelCase / mixed names to snake_case identifiers.
 fn snake(name string) string {
 	return ecumodel.snake_name(name) // THE rule: generators must agree byte-for-byte
+}
+
+// claim_channel: the const line of channel `name` (slot `slot`), `what` it carries — refused when an
+// earlier channel already generated that name (a signal `RoutineReqSelfCheck` and routine
+// SelfCheck's request cell both give `routine_req_self_check_ch`): the channel namespace is one
+// across signals, route crossings, fault cells and routine cells.
+fn claim_channel(mut seen map[string]string, name string, what string, slot int) string {
+	if prev := seen[name] {
+		eprintln('cfg2v: ${what} and ${prev} both generate the IOC channel `${name}` — rename one')
+		exit(1)
+	}
+	seen[name] = what
+	return 'pub const ${name} = ${slot}'
 }

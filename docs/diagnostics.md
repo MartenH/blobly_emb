@@ -297,7 +297,7 @@ thread = "front_thread"
 | `stop`, `results` | 02 / 03 offered | `false`; `stop` only on an async routine |
 | `start_in`, `start_out`, `results_out` | fixed record sizes, raw bytes | 0–32; `results_out` needs `results`; on a `[doip]` node `start_out` ≤ 11 |
 | `timeout_ms` | the most a start or stop may wait for its FB | 100–100000, `10000`; above the handler's period + 20 ms |
-| `sessions`, `security` | the routine's gate, like a DID's | `["extended"]`, no level; never the default session with no level, a level only with extended |
+| `sessions`, `security` | the routine's gate, like a DID's | `["extended"]`, no level; judged with the 0x31 row's (the sessions both admit, either's level): never the default session with no level, a level only with extended among them, and a session the table gives a way into (a "0x10" row) unless it is default |
 
 **The FB's contract** (the generated `sig` types say it too):
 
@@ -319,8 +319,10 @@ thread = "front_thread"
   reads it, a start is 0x24, a stop may be asked again). It is that request's answer: progress the FB
   reports afterwards (`running` with a new record) does not undo it.
 - Answer every op — a `.stop` the server issues itself included, which should not be refused: the
-  session the routine ran in has ended. An FB that ignores it cannot wedge the server, but its work
-  goes on.
+  session the routine ran in has ended. An FB that ignores it while it keeps up cannot wedge the
+  server, but its work goes on. One that has fallen 4096 requests behind (a hung thread, below) must
+  answer the stop it takes when it resumes: ignored, that stop leaves its last report as far behind,
+  so every start stays refused 0x22 until the node restarts — no request reaches the FB again.
 - The FB never sees a sequence number: the glue (`uds.RoutineFb`) takes each request once and stamps
   each report with the request it answers, so a stale result is ignored by construction.
 
@@ -335,11 +337,12 @@ the first `results_out`, 02's none.
 | 0x13 | no sub-function (shorter than 2 bytes) |
 | 0x12 | a sub-function other than 01 / 02 / 03 |
 | 0x13 | shorter than 4 bytes |
-| 0x31 | the identifier is not configured, or not allowed in the active session |
+| 0x31 | the identifier is not configured (or configured with a record over 32 bytes, which generation refuses), or not allowed in the active session |
 | 0x33 | the routine's level is not unlocked |
 | 0x12 | 02 or 03 on a routine that does not offer it |
 | 0x13 | not exactly the routine's option record (01) or no record (02 / 03) |
 | 0x24 | a start while the FB reports it running (a refused stop included); a stop while it does not; 03 unless the latest start was answered positively |
+| 0x22 | a start while the FB's last report is 4096 requests behind (`uds.routine_seq_window`: an FB that has stopped running, every start since timed out) — until it reports again |
 | 0x78 | a start or stop, at once; then every 4 s while it runs |
 | 0x22, 0x24, 0x31, 0x72 | the FB refused it with that NRC (any other NRC the FB writes is answered 0x22) |
 | 0x22 | not answered by the FB within `timeout_ms`, or the session ended under it |
@@ -369,9 +372,13 @@ the first `results_out`, 02's none.
   if the transport cannot take it within 5 s, the FB then told to stop as when the transport is
   gone; a session entry in that window answers 0x22 within the same 5 s. A push still unacknowledged when the server abandons
   its answer is no longer waited for, so S3 runs again and the next answer owed over DoIP is pushed.
+- **A reset waits for a push**: an ECUReset (or the programming handoff) is not performed while a
+  response pushed over DoIP — the final answer included — is unacknowledged, as it waits for any
+  DoIP answer: until the tester acknowledges it or its connection drops.
 - **The NRC order** is ISO 14229-1's for a request with a sub-function: its general checks first
   (length 2, then the sub-function), then 0x31's own (length 4, the identifier, its level, a
-  sub-function it does not offer, the exact length, the sequence).
+  sub-function it does not offer, the exact length, the sequence, then a start while its FB lags,
+  0x22).
 - **A start while running, a stop while not, 03 without an accepted start**: 0x24. "Running" is the
   FB's report on the latest request (a stop it refused leaves it running), so after a server-issued
   stop not yet acknowledged a new start is served — the server does not wait for the stop — and
@@ -385,7 +392,13 @@ the first `results_out`, 02's none.
   session ending with its connection) asks every running routine to stop; an answer still owed is
   answered 0x22 on the transport that asked. Only the DoIP connection that drops loses the answer
   owed to it. So a tester that re-sends 0x10 as a keep-alive stops its routines; use 0x3E.
-- **Fixed record sizes**, raw bytes; a record over 32 bytes is not built.
+- **Fixed record sizes**, raw bytes; a record over 32 bytes is not built — and a `uds.Routine`
+  configured with one anyway is never served (0x31), so no answer reads past its cell.
+- **An FB that stops running** (a hung thread) cannot wedge the server: each start times out and asks
+  it to stop. The request cell orders its requests by sequence number (`uds.RoutineFb.take`, half the
+  16-bit range), so once the FB's last report is 4096 requests behind, a start is refused 0x22 until
+  it reports again — the stop it has not taken still reaches it first when it runs, and must be
+  answered (above: ignored, it leaves the routine refused until the node restarts).
 - **A lost final answer is not sent again**, as any answer may be lost; an async routine can be read
   again with 03. A lost 0x78 on CAN goes again in the next pass.
 - **Over DoIP** the first response is the request's answer and every later one (each 0x78, the final
@@ -410,8 +423,9 @@ timing every 0x10 answer announces (`uds.p2_server_us`, `uds.p2_star_server_us`)
 plus no `[isotp]` or a bare-metal target; a request not read by exactly one FB handler, or written by
 any; a result not written by that same handler, written by another or read by any; an FB on a
 satellite core or a hand-written satellite (REQ-PLACE-013), or in a multi-thread partition; a gate
-sharing no session or another level with the 0x31 row, or a table leaving 0x31 out; a request or
-answer longer than `[isotp] max_message`; more than 4 routines (`uds.max_routines`), or more byte
+sharing no session or another level with the 0x31 row, or a table leaving 0x31 out; a
+`<name>Request` / `<name>Result` that is another port's name once snake-cased (the port field); a
+request or answer longer than `[isotp] max_message`; more than 4 routines (`uds.max_routines`), or more byte
 cells than the image has (two per routine, eight per image with the fault and checked-signal cells).
 
 #### Negative responses and functional requests

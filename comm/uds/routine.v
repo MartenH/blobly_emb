@@ -17,6 +17,12 @@ pub const max_routine_record = 32 // the most an option or result record carries
 // conditionsNotCorrect (0x22) and the FB asked to stop (Routine.timeout_us 0 = this)
 pub const default_routine_timeout_us = u64(10_000_000)
 
+// routine_seq_window: how many requests an FB's last report may fall behind before a start is
+// refused (Routine.lagging) — far inside the half range RoutineFb.take orders requests by (a few
+// requests at most are written past it: the stops a session entry or a timeout asks), and far
+// beyond any working FB, which reports on every request it takes
+pub const routine_seq_window = u16(0x1000)
+
 // routineInfo, the byte after the identifier in every positive 0x31 answer (manufacturer-specific
 // in ISO 14229-1; these are blobly's): the state the FB last reported
 pub const routine_info_running = u8(1)
@@ -125,6 +131,25 @@ fn (r &Routine) may_run() bool {
 	return r.res.state == .running || (r.req.op == .start && r.res.seq != r.req.seq)
 }
 
+// sizes_ok: every record size the routine is configured with fits its cells (max_routine_record).
+// A Routine is plain data its owner fills, so the server holds it to this itself: one that does not
+// fit is never served (find_routine), so no answer reads past the result cell and no start drops
+// an option byte the request carried.
+fn (r &Routine) sizes_ok() bool {
+	return r.start_in <= max_routine_record && r.start_out <= max_routine_record
+		&& r.results_out <= max_routine_record
+}
+
+// lagging: the FB's last report is routine_seq_window or more requests behind the latest — it has
+// not run for that many requests (each one a start whose timeout ran out, or a stop). A start is
+// then refused (0x22) until it reports again, so the sequence numbers never get half their range
+// ahead of the FB, where RoutineFb.take would judge a stop it has not taken older than the start
+// after it (seq_after). The FB must answer the stop it takes first when it resumes (the contract's
+// "answer every op"): ignored, that stop leaves res.seq as far behind and no request reaches it again.
+fn (r &Routine) lagging() bool {
+	return u16(r.req.seq - r.res.seq) >= routine_seq_window
+}
+
 fn (r &Routine) timeout() u64 {
 	return if r.timeout_us == 0 { default_routine_timeout_us } else { r.timeout_us }
 }
@@ -177,12 +202,14 @@ fn (mut s Server) stop_routines() {
 	}
 }
 
+// find_routine: the routine of identifier `id` the server serves (-1 = none) — one whose record
+// sizes do not fit its cells is none (sizes_ok)
 fn (s &Server) find_routine(id u16) int {
 	for i in 0 .. s.nroutines {
 		if i >= max_routines {
 			break
 		}
-		if s.routines[i].id == id {
+		if s.routines[i].id == id && s.routines[i].sizes_ok() {
 			return i
 		}
 	}
@@ -192,10 +219,12 @@ fn (s &Server) find_routine(id u16) int {
 // routine_control (0x31): startRoutine (01), stopRoutine (02) where offered, requestRoutineResults
 // (03) where offered. After the service row's checks (dispatch), in ISO 14229-1's order: the
 // general checks of a request with a sub-function — length < 2 (0x13), a sub-function other than
-// 01/02/03 (0x12) — then 0x31's own: length < 4 (0x13); an identifier not configured or not in the
-// active session (0x31); the routine's level (0x33); a sub-function the routine does not offer
-// (0x12); the exact length (0x13); the sequence (0x24): a start while the FB reports it running, a
-// stop while it does not, results with no start answered positively. A start or stop is then
+// 01/02/03 (0x12) — then 0x31's own: length < 4 (0x13); an identifier not configured (or configured
+// with records its cells cannot hold, find_routine) or not in the active session (0x31); the
+// routine's level (0x33); a sub-function the routine does not offer (0x12); the exact length
+// (0x13); the sequence (0x24): a start while the FB reports it running, a stop while it does not,
+// results with no start answered positively; a start while its FB lags (0x22, lagging). A start or
+// stop is then
 // written into the routine's request cell and answered responsePending (0x78) — whatever the
 // suppress bit, since its answer is owed (pending.v); 03 answers at once from the FB's latest report.
 fn (mut s Server) routine_control(req &u8, req_len int, resp &u8) int {
@@ -229,6 +258,9 @@ fn (mut s Server) routine_control(req &u8, req_len int, resp &u8) int {
 		0x01 {
 			if r.running() {
 				return negative(resp, 0x31, nrc_request_sequence_error)
+			}
+			if r.lagging() {
+				return negative(resp, 0x31, nrc_conditions_not_correct)
 			}
 			r.accepted = false
 			r.ask(.start, unsafe { req + 4 }, int(r.start_in))
@@ -361,7 +393,8 @@ pub fn (mut f RoutineFb) take(req &RoutineRequest) RoutineOp {
 	return req.op
 }
 
-// seq_after: sequence number a comes after b (they wrap; the server keeps them within a few)
+// seq_after: sequence number a comes after b (they wrap; the server keeps the latest within
+// routine_seq_window and a few of the FB's last report, Routine.lagging)
 fn seq_after(a u16, b u16) bool {
 	return a != b && u16(a - b) < 0x8000
 }

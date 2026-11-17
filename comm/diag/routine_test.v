@@ -441,3 +441,34 @@ fn test_an_answer_given_up_forgets_its_unacknowledged_push() {
 	fb.run(mut c, 2, .done, [u8(1), 2])
 	assert push(mut c) == [u8(0x71), 0x01, 0x02, 0x03, 0x02, 1, 2], 'a push of an answer given up blocks the next'
 }
+
+// A final answer pushed over DoIP and not yet acknowledged is no longer the server's (it gave it),
+// but it is still in the transport: an ECUReset a bus tester asks meanwhile waits for it — until
+// the push is acknowledged, or dropped with its connection.
+fn test_a_reset_waits_for_an_unacknowledged_push() {
+	for drop in [false, true] {
+		mut c := rconn()
+		c.server.serves_reset = true
+		c.owner_resets = true
+		mut t := rtester()
+		mut fb := FbSim{}
+		mut now := r_t0
+		c.housekeep(now)
+		assert remote(mut c, [u8(0x31), 0x01, 0x02, 0x03, 0x01]) == owed_78
+		c.remote_sent()
+		fb.run(mut c, 2, .done, [u8(1), 2])
+		assert push(mut c) == [u8(0x71), 0x01, 0x02, 0x03, 0x02, 1, 2]
+		c.pushed(true) // in the mailbox, not acknowledged yet
+		assert !c.server.pending()
+		tsend(mut t, [u8(0x11), 0x01])
+		assert passes(mut c, mut &now, mut t, 3).answers == [[u8(0x51), 0x01]]
+		passes(mut c, mut &now, mut t, 3)
+		assert c.reset_due() == 0, 'a reset overtook the pushed answer (drop=${drop})'
+		if drop {
+			c.remote_dropped()
+		} else {
+			c.push_sent()
+		}
+		assert c.reset_due() == 0x01
+	}
+}

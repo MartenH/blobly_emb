@@ -435,9 +435,12 @@ pub fn (c &Connection) active() bool {
 // performs as a reset with the boot request cell written first — whose answer has left the link,
 // or the other transport that carried it (remote_sent), (0 = none) — for an owner that performs the reset itself
 // (`owner_resets`). The link being done is not the wire being done: the
-// owner still waits for its controller to transmit the answer (REQ-BOOT-012).
+// owner still waits for its controller to transmit the answer (REQ-BOOT-012). Nor does a reset
+// overtake a response pushed over the other transport and not yet acknowledged (push_out — an owed
+// answer's final one included, which the server no longer tracks once it gave it): it waits until
+// the push is acknowledged or dropped with its connection, the bound remote.inflight has too.
 pub fn (c &Connection) reset_due() u8 {
-	if c.server.reset_req != 0 && !c.link.busy() && !c.remote.inflight {
+	if c.server.reset_req != 0 && !c.link.busy() && !c.remote.inflight && !c.push_out {
 		return c.server.reset_req
 	}
 	return 0

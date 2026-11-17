@@ -182,12 +182,14 @@ fn validate_routines(m Model, doc toml.Doc) map[string]string {
 	}
 	mut scope := ecumodel.snake_scope('[[routine]]')
 	mut ids := map[int]string{}
-	mut taken := map[string]bool{}
+	// the port namespace: a port field is its name snake-cased, so `SelfCHECKRequest` and routine
+	// SelfCheck's `SelfCheckRequest` are one field (`self_check_request`) — compared snake-cased
+	mut taken := map[string]string{} // snake name -> the name that took it
 	for s in m.sig_names {
-		taken[s] = true
+		taken[ecumodel.snake_name(s)] = s
 	}
 	for p in m.params {
-		taken[p.name] = true
+		taken[ecumodel.snake_name(p.name)] = p.name
 	}
 	for r in m.routines {
 		h := '[[routine]] "${r.name}"'
@@ -198,10 +200,12 @@ fn validate_routines(m Model, doc toml.Doc) map[string]string {
 			panic('loom2v: ${e} (REQ-DIAG-087)')
 		}
 		for n in [r.request(), r.result()] {
-			if n in taken {
-				panic('loom2v: ${h}: its `${n}` is already a signal, a parameter or another routine\'s — rename one (REQ-DIAG-087)')
+			sn := ecumodel.snake_name(n)
+			if prev := taken[sn] {
+				same := if prev == n { '' } else { ' (`${prev}`: both are the port `${sn}`)' }
+				panic('loom2v: ${h}: its `${n}` is already a signal, a parameter or another routine\'s${same} — rename one (REQ-DIAG-087)')
 			}
-			taken[n] = true
+			taken[sn] = n
 		}
 		if m.boot.on && (u16(r.id) == boot.routine_erase || u16(r.id) == boot.routine_check) {
 			panic('loom2v: ${h}: id 0x${r.id.hex()} is the bootloader\'s own routine (its erase / check) on this [boot] node (REQ-DIAG-087)')
@@ -232,18 +236,24 @@ fn validate_routines(m Model, doc toml.Doc) map[string]string {
 		if m.doip.on && uds.routine_answer_len(r.start_out) > doipnet.push_max {
 			panic('loom2v: ${h}: start_out = ${r.start_out} — on a [doip] node a start\'s answer is pushed over DoIP, ${doipnet.push_max} bytes at most (driver/doipnet push_max): start_out <= ${doipnet.push_max - uds.routine_answer_len(0)} (REQ-DIAG-087)')
 		}
-		// the gates: its own and the 0x31 row's, which a request passes both of
-		if r.sessions & uds.in_default != 0 && r.security == 0 && row.security == 0 {
-			panic('loom2v: ${h} can be started from the default session with no 0x27 level — a stray request on a quiet bus must not run a routine; leave the default session out or name a security level (REQ-DIAG-087)')
-		}
-		if r.security != 0 && r.sessions & uds.in_extended == 0 {
-			panic('loom2v: ${h} needs security ${r.security} but is not allowed in the extended session, the only one an application server unlocks in — it could never be opened (REQ-DIAG-087)')
-		}
-		if row.sessions != 0 && row.sessions & r.sessions == 0 {
+		// the gates: its own and the 0x31 row's, which a request passes both of — so what decides is
+		// their intersection, the sessions it can actually be started in, and either's level
+		eff := routine_sessions(r, row)
+		if eff == 0 {
 			panic('loom2v: ${h}: its sessions share none with [uds] services 0x31 — it could never be reached (REQ-DIAG-087)')
 		}
 		if row.security != 0 && r.security != 0 && int(row.security) != r.security {
 			panic('loom2v: ${h} needs security ${r.security}, but [uds] services 0x31 needs ${row.security} — one unlock cannot satisfy both (REQ-DIAG-087)')
+		}
+		level := if r.security != 0 { r.security } else { int(row.security) }
+		if eff & uds.in_default != 0 && level == 0 {
+			panic('loom2v: ${h} can be started from the default session with no 0x27 level — a stray request on a quiet bus must not run a routine; leave the default session out (of the routine or its [uds] services 0x31 row) or name a security level (REQ-DIAG-087)')
+		}
+		if level != 0 && eff & uds.in_extended == 0 {
+			panic('loom2v: ${h} needs security ${level} but the sessions it can be started in (its own and [uds] services 0x31\'s) leave out the extended session, the only one an application server unlocks in — entering another relocks it, so it could never be opened (REQ-DIAG-087)')
+		}
+		if eff & routine_enterable(m) == 0 {
+			panic('loom2v: ${h}: [uds] services gives no way into the sessions it can be started in — no "0x10" row serves a session change from the default session, so the server never leaves it (REQ-DIAG-087)')
 		}
 		// its FB: one handler reads the request and writes the result; nothing else touches either
 		// (ecumodel's rule, which sysmodel refuses a system by too)
@@ -274,6 +284,26 @@ fn validate_routines(m Model, doc toml.Doc) map[string]string {
 		}
 	}
 	return fbs
+}
+
+// routine_sessions: the sessions routine r can actually be started in — its own, narrowed by the
+// 0x31 service row's (0 = every session, on either side)
+fn routine_sessions(r RoutineCfg, row SvcCfg) u8 {
+	all := uds.in_default | uds.in_extended | uds.in_safety
+	own := if r.sessions == 0 { all } else { r.sessions }
+	rs := if row.sessions == 0 { all } else { row.sessions }
+	return own & rs
+}
+
+// routine_enterable: the sessions a tester can bring the server into — default (power-on), and
+// every other only through 0x10, which must then be served in the default session with no level
+// (a level is unlocked only in the extended session, which 0x10 is the way into)
+fn routine_enterable(m Model) u8 {
+	ten, listed := svc_row(m, 0x10)
+	if listed && ten.security == 0 && (ten.sessions == 0 || ten.sessions & uds.in_default != 0) {
+		return uds.in_default | uds.in_extended | uds.in_safety
+	}
+	return uds.in_default
 }
 
 // routine_levels: the 0x27 levels the routines' gates name (bit L-1 for level L) — sa_levels' share
