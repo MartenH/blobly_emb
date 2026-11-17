@@ -163,6 +163,23 @@ signal no route fills, and a frame route forwards its payload as it is.) A targe
 (`ioc_get_ever`): until then the cell holds the slot's zero, which is not a value. An initial value
 is never counted as a saturation.
 
+### A value under input/output control
+
+Where a `[[did]]` declares a `control` (0x2F, [diagnostics.md](diagnostics.md) §3.1) and a tester
+holds it, the producer that encodes the signal substitutes the tester's value for the FB's before
+the encode: the host bridge's per-message encode (the field written over what was acquired, before
+its `_set`), the target's local producer (after `ioc_get_ever`, the value `lane_encode_lines`
+encodes), and a satellite's frame (in `xcore_produce_drain`, the value lane of its wide channel,
+in the frame alone — the latched lanes stay the satellite's). `tx_send_lines` and `pdu_init_lines`
+stay the one place a frame is built. This runs on the thread that serves the diagnostic server —
+the comm thread, or the `[isotp]` bus's bridge — which also holds the control, so nothing crosses a
+thread; the FB keeps writing its cell or channel and never sees the override. While a control is
+active the frame goes out with its value even before the FB's first publish. The value is inside
+the DBC range and on its grid (generation takes the control's bounds from it and refuses a scaling
+that leaves a whole value between two raw steps), so `encode_raw` never saturates nor rounds it and
+`tx_saturations` never counts it; E2E and SecOC stamp the frame after the substitution, and a
+control set or returned is a payload change, so an on-change or mixed frame goes out at once.
+
 This replaces the bridge's unconditional 10 ms send: each PDU runs its own little
 TX state machine (last-sent timestamp, change detection, repeat counter), all
 generated as a static per-PDU table + a shared stepping routine (no-alloc).
@@ -235,7 +252,8 @@ hands it a reassembled request and ships the response it builds. Services:
 `0x10` DiagnosticSessionControl, `0x11` ECUReset, `0x22` ReadDataByIdentifier
 (several DIDs per request), `0x27` SecurityAccess, `0x28` CommunicationControl, `0x2E`
 WriteDataByIdentifier (on a parameter's DID through `comm/param`: validated, durable before the
-answer — [diagnostics.md](diagnostics.md) §3.4), `0x3E` TesterPresent, and — where a fault memory is injected (`comm/fault`,
+answer — [diagnostics.md](diagnostics.md) §3.4), `0x2F` InputOutputControlByIdentifier (on a live
+DID with a `control`: the output overridden where it is encoded, above), `0x3E` TesterPresent, and — where a fault memory is injected (`comm/fault`,
 generated from `[[fault]]` in R4b) — `0x19` 01/02/0A, `0x14` and `0x85`; anything else →
 `0x7F sid 0x11`.
 Negative responses follow ISO 14229-1's evaluation order.

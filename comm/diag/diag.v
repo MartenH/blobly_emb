@@ -307,10 +307,12 @@ pub fn (mut c Connection) remote_dropped() {
 	// whoever owns the session, an unlock the dropped tester earned ends with it, and so does its
 	// half-done exchange — the next connection authenticates for itself
 	if c.unlock_remote {
+		c.server.relocked(c.server.unlocked) // the controls and routines its unlock gated end with it
 		c.server.unlocked = 0
 	}
 	c.unlock_remote = false
 	if c.held_back_remote {
+		c.server.relocked(c.held_back) // and those behind its hidden unlock
 		c.held_back = 0 // a hidden unlock of the dropped tester's is not handed back to anyone
 	}
 	c.sa_level[1] = 0

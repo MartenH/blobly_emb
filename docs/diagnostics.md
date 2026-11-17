@@ -31,22 +31,23 @@ services of its **service table** (`[uds] services`, §3.1), each in the session
 | 0x11 | **ECUReset**<br>01 hardReset, 03 softReset: answered, then performed, never performed unanswered | 02 keyOffOnReset, 04 / 05 rapid power shutdown |
 | 0x14 | **ClearDiagnosticInformation**<br>all DTCs (0xFFFFFF) or one DTC. On a target, stored before the answer (0x72 otherwise) | DTC groups other than "all"; the memorySelection byte |
 | 0x19 | **ReadDTCInformation**<br>01, 02, 03, 04, 06, 0A | every other sub-function (05, 07–09, 0B–19, 42, 55, …) |
-| 0x22 | **ReadDataByIdentifier**<br>several DIDs per request; up to 16 DIDs of up to 32 bytes: constants, live signals, parameters and their status, `tx_saturations`; 0xF186 (the active session) and, with `[boot]`, 0xF195 (the running image's version), served by the server itself | ISO identification DIDs not declared as constants |
+| 0x22 | **ReadDataByIdentifier**<br>several DIDs per request; up to 16 DIDs of up to 32 bytes: constants, live signals, parameters and their status, `tx_saturations`; 0xF186 (the active session) and, with `[boot]`, 0xF195 (the running image's version), served by the server itself. A live DID of a controlled signal reads the value published (the FB's held to its range as the encoder sends it; the initial value before the FB's first publish) | ISO identification DIDs not declared as constants |
 | 0x27 | **SecurityAccess**<br>levels 1–8, a 4-byte seed, attempt limit and lockout delay, the failed-key count kept across a reset | a power-up delay; a securityAccessDataRecord is accepted and ignored |
 | 0x28 | **CommunicationControl**<br>00–03 on normal messages, this network (or all networks on a node with one) | network-management message types; 04 / 05 (enhanced address information) |
 | 0x2E | **WriteDataByIdentifier**<br>writable RAM DIDs (a record of exactly the DID's size) and parameters (stored before the answer) | — |
+| 0x2F | **InputOutputControlByIdentifier**<br>00 return control, 01 reset to default, 02 freeze current state, 03 short-term adjustment, on a live `[[did]]` declared with a `control` (up to 4), applied where the node publishes the signal, never inside an FB (§3.1) | a controlEnableMask (signals of several fields); a signal whose DBC names values outside its range, or whose scaling leaves a whole value between raw steps; functional requests (ignored) |
 | 0x31 | **RoutineControl**<br>01 start, 02 stop, 03 results, per `[[routine]]`, each run by an FB and answered responsePending (0x78) while it runs (§3.1 "Routines"); in the bootloader, its erase and check routines ([bootloader.md](bootloader.md)) | functional requests; identifiers outside 0x0200–0xDFFF and 0xF000–0xFEFF |
 | 0x3E | **TesterPresent**<br>00 | — |
 | 0x85 | **ControlDTCSetting**<br>01 on, 02 off; an option record is accepted and ignored | — |
 | 0x29, 0x34,<br>0x36, 0x37 | **Authentication, RequestDownload, TransferData, RequestTransferExit**<br>by the **bootloader** only: 0x29 authentication, the download ([bootloader.md](bootloader.md)) | in an application (answered 0x11) |
-| others | — | 0x23 / 0x3D memory access, 0x24, 0x2A, 0x2C, 0x2F, 0x35, 0x38, 0x83, 0x84, 0x86, 0x87, OBD services: answered serviceNotSupported (0x11) |
+| others | — | 0x23 / 0x3D memory access, 0x24, 0x2A, 0x2C, 0x35, 0x38, 0x83, 0x84, 0x86, 0x87, OBD services: answered serviceNotSupported (0x11) |
 
 ### Across services
 
 | Topic | What we do |
 |---|---|
 | Negative responses | 0x11 0x12 0x13 0x14 0x22 0x24 0x31 0x33 0x35 0x36 0x37 0x72 0x78 0x7E 0x7F, in ISO 14229-1's evaluation order (§3.1) |
-| Functional requests | single frames only; the ISO-suppressed negative responses (0x11, 0x12, 0x31, 0x7E, 0x7F) are withheld; a functional 0x27 or 0x31 is ignored outright (no seed, no routine, no answer) |
+| Functional requests | single frames only; the ISO-suppressed negative responses (0x11, 0x12, 0x31, 0x7E, 0x7F) are withheld; a functional 0x27, 0x2F or 0x31 is ignored outright (no seed, no control, no routine, no answer) |
 | responsePending (0x78) | sent by an application **only while a routine's answer is owed**: at once, then every 4 s (P2\*server_max − 1 s), then the final answer (§3.1). A write never needs it: every write that must be stored is one synchronous journal append that never erases, well inside P2 |
 | busyRepeatRequest (0x21) | **not sent**. A request that arrives while an answer is in flight, or while a routine's answer is owed, is dropped; the tester retries (the bootloader answers 0x21 during its own routines) |
 | P2 on silicon | P2server_max is announced as 50 ms; measuring it on the bench (REQ-DIAG-064) is still to do |
@@ -61,6 +62,7 @@ services of its **service table** (`[uds] services`, §3.1), each in the session
 | 0x11 | returns the diagnostic state to power-on | resets the MCU once the answer is on the wire |
 | 0x27 failed-key counts across a reset / power cycle | in RAM across its resets (it has no power cycle) | in the NvM journal, across every reset and a power cycle (`[nvm]` required) |
 | 0x10 02 handoff to the bootloader | — | with `[boot]` |
+| 0x2F | a signal the `[isotp]` bus's bridge sends; every request accepted (no application hook) | a signal the comm thread sends (an owner FB's, or a satellite's single-field signal), at most 32 bits; the board's weak `diag_io_ok` may refuse (0x22) |
 | 0x28 | gates the application's frames | gates the application's frames |
 | Fault memory (0x19 / 0x14 / 0x85) | RAM only | stored in the NvM journal; faults may be owned by an FB on a satellite core |
 | Operation cycle | a declared bool signal, or `"power"` | NM (wake to bus sleep), or `"power"` |
@@ -154,28 +156,29 @@ Dispatch checks it after "is the service built in", in ISO 14229-1's order:
 
 then the length check and any per-DID gate.
 
-**Absent, the default table**: every service the build performs; 0x27, 0x28 and 0x85 in the
+**Absent, the default table**: every service the build performs; 0x27, 0x28, 0x2F and 0x85 in the
 extended session only (and programming, in the bootloader), so not in safety; everything else in
 every session; no service-level security.
 
 **What a build performs**: 0x10, 0x22, 0x2E and 0x3E always; 0x11 and 0x28 on both owners;
 0x14, 0x19 and 0x85 with a `[[fault]]` memory; 0x31 with a `[[routine]]` (on the host bridge or a
-ThreadX target, never bare metal); 0x27 when a `[[did]]` gate, a `[[routine]]` or a row names a
-level. A table never claims a service that does nothing: a row for one the build does not perform is
-refused — and a table must list 0x31 when the node has a `[[routine]]` (below).
+ThreadX target, never bare metal); 0x2F when a `[[did]]` declares a `control`; 0x27 when a `[[did]]`
+gate or control, a `[[routine]]` or a row names a level. A table never claims a service that does
+nothing: a row for one the build does not perform is refused — and a table must list 0x31 when the
+node has a `[[routine]]` (below).
 
 **Refused at generation** (each error names `[uds]`):
 
 | Refused | Why |
 |---|---|
-| a service the build does not perform, or `comm/uds` does not implement | a row must not promise nothing |
+| a service the build does not perform, or `comm/uds` does not implement (a `"0x2F"` row with no `control`) | a row must not promise nothing |
 | the programming session in any row | it belongs to the bootloader |
-| 0x27, 0x28 or 0x85 in the default session | ISO 14229-1 runs them only in a non-default one |
+| 0x27, 0x28, 0x2F or 0x85 in the default session | ISO 14229-1 runs them only in a non-default one |
 | a 0x10 row without the default session; a row reachable only outside default with 0x10 left out | a tester could never reach it |
 | a level on 0x10, 0x27 or 0x3E | they are how a tester reaches, unlocks and keeps a session |
 | a level on a row not allowed in extended; a 0x27 row without extended | an application server unlocks only in extended |
-| a table without 0x27 while a level is gated, without 0x22 while a DID exists, without 0x2E while one is writable | the gate would be unreachable |
-| a DID gate sharing no session with its service's row, or naming another level than the row | one unlock cannot satisfy both |
+| a table without 0x27 while a level is gated, without 0x22 while a DID exists, without 0x2E while one is writable, without 0x2F while one has a `control` | the gate would be unreachable |
+| a DID gate or control sharing no session with its service's row (the default table's 0x2F row included), or naming another level than the row | one unlock cannot satisfy both |
 | more than 16 rows (`uds.max_services`) | fixed table |
 
 **The handoff's row**, `"0x10 02" = { sessions = [...], security = N }`, only with `[boot]`: the one
@@ -240,7 +243,8 @@ unanswered**.
 
 - **A DID is one of**: a constant (`ascii`, `bytes`), a live signal (big-endian at its width), a
   parameter (§3.4), the parameter status byte, or `tx_saturations` (the count of sent values held
-  to their DBC range). Up to 16 DIDs of up to 32 bytes.
+  to their DBC range). Up to 16 DIDs of up to 32 bytes. A live signal's DID may carry a `control`
+  (0x2F, below); it is still never writable.
 - **0x22 reads several DIDs per request**; an answer too long for the buffer is 0x14
   responseTooLong.
 - **Per-DID gates**: `read` and `write`, each a session list and a 0x27 level. A DID is writable
@@ -358,7 +362,10 @@ the first `results_out`, 02's none.
   honours it.
 - **Every other request is dropped** while an answer is owed — physical or functional, on CAN or over
   DoIP (a DoIP request gets only its acknowledgement), TesterPresent included — unanswered and
-  unperformed. S3 is held meanwhile, so nothing is lost. The bootloader answers 0x21 during its own
+  unperformed. S3 is held meanwhile, so the session does not time out under the wait. What a tester
+  could not ask meanwhile waits with it — a 0x10 01, and a 0x2F 00 releasing a control: a control in
+  force stays in force until the answer is given or abandoned (at most `timeout_ms` + 5 s), then
+  until a 00 or a session end (S3, if the tester has gone). The bootloader answers 0x21 during its own
   routines instead (below).
 - **A dropped request never moves the answer**: it goes back on the transport whose request made the
   server owe it.
@@ -392,6 +399,10 @@ the first `results_out`, 02's none.
   session ending with its connection) asks every running routine to stop; an answer still owed is
   answered 0x22 on the transport that asked. Only the DoIP connection that drops loses the answer
   owed to it. So a tester that re-sends 0x10 as a keep-alive stops its routines; use 0x3E.
+- **A relock without a session entry** — another level unlocked (0x27 holds one), or a DoIP tester's
+  unlock ending with its connection while the bus keeps the session — asks every running routine
+  gated on the relocked level to stop, as it returns that level's controls (0x2F, below): what a
+  level gated lasts while that level stays unlocked.
 - **Fixed record sizes**, raw bytes; a record over 32 bytes is not built — and a `uds.Routine`
   configured with one anyway is never served (0x31), so no answer reads past its cell.
 - **An FB that stops running** (a hung thread) cannot wedge the server: each start times out and asks
@@ -432,8 +443,9 @@ cells than the image has (two per routine, eight per image with the fault and ch
 
 NRCs come in ISO 14229-1's evaluation order: first for the service, 0x11, 0x7F and the service
 row's 0x33; then within the service, 0x12 / 0x7E, 0x13, 0x22, 0x24, 0x31, and a DID's own 0x33 where
-it is checked. A functional request (on `[isotp] functional_id`, or normal fixed addressing's
-`0x18DB<functional_ta><ta>`; single frames only) is served the moment it is
+it is checked. 0x2F has its own order (below): a session the row allows but the control does not is
+0x31, the row's own sessions 0x7F. A functional request (on `[isotp] functional_id`, or normal fixed
+addressing's `0x18DB<functional_ta><ta>`; single frames only) is served the moment it is
 read, so a functional 0x28 gates the very next frame. Its negative responses 0x11, 0x12, 0x31, 0x7E
 and 0x7F are withheld, so a broadcast into a gated service stays silent on every ECU. It is dropped,
 not queued, while the physical connection is busy ([can-tp.md](can-tp.md) §3.6).
@@ -462,6 +474,74 @@ The comm thread (and the host bridge) gate the application's frames on it: on re
 and the checked frames, on transmission the COM producers, a satellite's included. Routed and
 diagnostic traffic is never gated. While reception is off no receive deadline fires (§3.2).
 
+#### Input/output control (0x2F)
+
+A tester takes over an **output** for a while — the value a function block computes and the node
+sends — to exercise what receives it. The control is a key of the live `[[did]]` that reads the
+signal, so its DID is the one 0x22 reads (ISO practice), and its value is the signal's value field
+at its width, big-endian, as that DID reads it:
+
+```toml
+[[did]]
+id      = 0xF1A0
+signal  = "VehicleSpeed"
+control = { parameters = ["reset_to_default", "freeze_current_state", "short_term_adjustment"] }
+```
+
+| key | what |
+|---|---|
+| `parameters` | the control parameters served besides returnControlToECU (00, served for every control): `reset_to_default` (01), `freeze_current_state` (02), `short_term_adjustment` (03); at least one |
+| `session` | the sessions it is accepted in: `extended` (the default) and/or `safety` — never default (ISO runs 0x2F outside it) or programming (the bootloader's) |
+| `security` | the 0x27 level it needs; 0 (the default) = the `[uds] services` 0x2F row's level, none if the row names none. Either way that level is the control's: it is returned when the level is relocked |
+
+The gate the server enforces is the control's sessions within the 0x2F row's (the default table's
+row runs in extended only) and its level, else the row's. It may not be weaker than the DID's read
+gate — a session the read refuses, or another level than the read's, is refused at generation —
+because the answer carries the value and 00 is accepted wherever the control is (it needs no parameter).
+
+**Where the value goes.** The function blocks never see a control: no FB code and no FB declaration
+changes, and the FB keeps computing and writing its output. The tester's value replaces the FB's
+**where the node encodes the signal into its frame**, on the thread that serves the diagnostic
+server, which also holds the control: on a target the comm thread — an owner FB's signal at its
+local producer, a satellite FB's single-field signal where the comm thread sends its lanes
+([communication.md](communication.md), "A value under input/output control") — and on the host the
+bridge of the `[isotp]` bus. So no
+state crosses a thread. Generation refuses, naming why (REQ-DIAG-104), a control the server could
+not apply: a node with no `[isotp]`; a DID with no `signal`; a signal the node receives (routed ones
+included), keeps inside the node, or — on the host — sends on another bus than the `[isotp]` one
+(another bridge thread); one it writes to an I/O point (the io thread applies it) or sends on an
+Ethernet bus (the eth thread) — whose live DID the single-reader rule refuses first, and the
+control's own rule behind it; a signal of more than one field (no controlEnableMask) or wider than
+32 bits; one whose DBC names a value outside its range; one whose DBC scaling leaves a whole value
+of its field between two raw steps (factor 2, or offset 0.5: the encoder would round it to
+another — every whole value must be a step, so 1 / factor and offset / factor are whole), or whose
+range ends, inside its field's values, at a value that is not one (250.5 of a u16: an FB value past
+it would go out as 250.5, which no published value states); one whose initial value is not a value
+of its field; a second control of one signal; more than 4 (`uds.max_ios`); and the gate rules above.
+
+**The order of its checks** (REQ-DIAG-101), after the service row (0x11, 0x7F, the row's 0x33):
+under 4 bytes **0x13**; a DID with no control, or outside its sessions, **0x31**; its level not
+unlocked **0x33**; the total length — 4 for 00 / 01 / 02, 4 plus the width for 03, whether or not
+the DID serves that parameter — **0x13**, so a controlEnableMask is a length error; a parameter
+above 03 (which has no length of its own) or not served **0x31**; a state outside the range
+**0x31**; the application's refusal **0x22** — ISO 14229-1's order for the service. The positive answer is 0x6F, the DID, the
+parameter and the value published from then on (the controlStatusRecord), at the signal's width.
+
+What ISO leaves open, as built:
+
+| Choice | What we do |
+|---|---|
+| Range and default | the signal's DBC range converted to its field's values, and its initial value (REQ-COM-011: `GenSigStartValue`, else the in-range value nearest 0). A value under control is always inside the range and on the DBC's grid, so it is never saturated, never rounded and never counted in `tx_saturations` |
+| 02 freeze | holds the value being published at that moment: a value already under control stays; else the FB's latest value, held to the range as the encoder sends it; else, before the FB's first publish, the initial value. On a cyclic frame that is what the next frame would carry |
+| 01 reset to default | the initial value |
+| 00 return control | the signal is published as with no control: the FB's value from the next frame. If the FB never published, what the node sends then — on a target the frame at its initial payload; on the host bridge, which sends a frame once one of its signals has been published, nothing until then (a frame another signal publishes carries this one at its initial value) |
+| Before the FB's first publish | an active control is published anyway: the frame carries the tester's value from the next send |
+| Reads | every live DID of the signal, and a fault snapshot that freezes one, reads the value published — under control the tester's; else the FB's, held to the range as the encoder saturates it (an FB writing 300 of a [0\|250] signal reads 250, which the frame carries); before the FB's first publish the initial value (an uncontrolled live DID reads 0 then on a target, whose comm thread reads the signal's cell; on the host bridge, which writes the DID only once the FB has published, its record carries no value bytes until then). One rule (`uds.io_published`) gives the reads, the 0x6F answer and what 02 freezes |
+| On-change frames | setting or returning a control changes the payload, so an on-change or mixed frame sends at once; E2E and SecOC stamp after the substitution |
+| When control returns | on a return to the default session (0x10 01, S3); at any other session entry for a control that needs a level (the entry relocks) or whose sessions leave out the new one; on an ECUReset and any reset of the diagnostic state; when another level is unlocked (0x27 holds one); and when a DoIP tester's level goes with its connection |
+| A functional 0x2F | ignored: no answer, nothing changed (an override is one ECU's) |
+| The application's conditions | a target's board seam `diag_io_ok(did, parameter)`, weak and accepting (`boards/common/diag_io_ok.h`, which `diag_board.c` includes, so a host test runs the default a target links); a node states its conditions (the vehicle moving, say) by defining it in its glue: 0 answers 0x22 with nothing changed. Never asked for 00. The host bridge has no such hook and accepts every request |
+
 #### On a DoIP node
 
 `[doip]` carries the same server over TCP: a CAN and a DoIP tester share one session, while an
@@ -469,7 +549,10 @@ unlock stays with its transport. Because a network reaches further than a bus, a
 held to more at generation (REQ-NET-012, [net.md](net.md)):
 
 - a service table is required (the default one serves 0x11 to anyone);
-- every row changing ECU state (anything but 0x10, 0x19, 0x22, 0x27, 0x2E, 0x3E) needs a level;
+- every row changing ECU state (anything but 0x10, 0x19, 0x22, 0x27, 0x2E, 0x3E) needs a level —
+  0x2F included: every control inherits the row's level, so a network tester's controls end with its
+  unlock (its connection), and every session entry returns them — and its routines (0x31 rows need a
+  level too) are asked to stop then likewise;
 - a writable DID needs a level on its write gate or on the 0x2E row;
 - a `[boot]` node's `"0x10 02"` row needs a level;
 - `security_key = "reference"` needs `[doip] allow_bench_key = true`.
@@ -731,7 +814,8 @@ param_status = true                         # one byte per parameter: 0 default,
 | D5 | The 0x27 key | a board / OEM seam; the bench uses blobly_net's reference key | real keys are OEM secrets |
 | D6 | First 0x19 sub-functions | 01, 02, 0A, then 03, 04, 06 with persistence | what a workshop reads first |
 | D7 | How a routine runs | in an FB, through a request cell and a result cell; the server answers 0x78 meanwhile | the server stays one comm-thread service with no application code in it, and an FB is where vehicle work runs |
-| D8 | Requests while an answer is owed | dropped, unanswered and unperformed (the bootloader keeps 0x21) | one request at a time already drops (REQ-DIAG-037); S3 is held, so nothing is lost |
+| D8 | Requests while an answer is owed | dropped, unanswered and unperformed (the bootloader keeps 0x21) — a 0x2F 00 included, so a control outlasts the wait | one request at a time already drops (REQ-DIAG-037); S3 is held, so the session survives the wait, and the wait is bounded (`timeout_ms` + 5 s) |
+| D9 | Input/output control (0x2F) | overrides an output at publication, on a live `[[did]]` with a `control`; returned by events (a session entry, a reset, a relock — which also stops the routines its level gated) | no FB sees it and one thread holds and applies it; the DID 0x22 reads is the control's, as ISO practice has it; a control lasts exactly while its gate would still grant it, and may not read through a stricter read gate |
 
 ## 5. Not supported
 
@@ -739,7 +823,11 @@ param_status = true                         # one byte per parameter: 0 default,
 - a second diagnostic server on one node;
 - OBD / emissions services and J1939 DM1;
 - ODX / PDX import (the manifest carries what blobly_net needs);
-- 0x2F InputOutputControl, 0x23 / 0x3D memory access;
+- 0x23 / 0x3D memory access;
+- 0x2F with a controlEnableMask (a control of a signal of several fields), a control of a signal
+  whose DBC names a value outside its range or whose scaling leaves a whole value of its field
+  between two raw steps (or ends its range, inside its field, off one), and a functionally
+  addressed 0x2F (ignored);
 - busyRepeatRequest (0x21) in an application;
 - responsePending (0x78) for anything but a routine.
 
@@ -749,6 +837,7 @@ param_status = true                         # one byte per parameter: 0 default,
 - an operation-cycle signal on a target;
 - faults in a multi-thread partition or a hand-written satellite;
 - parameters on the host bridge, and a coding record behind one DID;
+- an application refusal seam for 0x2F on the host bridge (it accepts every request);
 - a host-side DoIP transport;
 - an incremental flash path: stored writes are synchronous (bounded, no erase at run time);
 - a routine run by an FB on a satellite core, a hand-written satellite or in a multi-thread
@@ -759,7 +848,12 @@ param_status = true                         # one byte per parameter: 0 default,
   note at Start, where the board serves it. Its described-ecu-demo copy of zone_a and
   `tests/diag_described.lua` (`31 01 FF 00` answered 0x11, "the answer the real zone_a gives") and
   `sysview/ecudesc.v`'s "the format has no RoutineControl" describe zone_a as it was before its
-  routines; a blobly_net change listing routines and serving a simulated 0x31 makes them true again.
+  routines; a blobly_net change listing routines and serving a simulated 0x31 makes them true again;
+- **input/output control in blobly_net's simulated ECUs**: its system-model reader skips a
+  `[[did]]`'s `control` too, so a node it simulates from its ecu.toml — domain's 0xF1A0 and 0xF1A2 —
+  answers every 0x2F with 0x11, with no note at Start, where the board serves it (its simulated
+  server serves 0x2F only for IO DIDs a blobly_net project declares, by its own rules rather than the
+  control's parameters, range and gate). A blobly_net change reading `control` makes it serve them.
 
 ## 6. Guarantees and how they are proved
 
@@ -772,7 +866,8 @@ param_status = true                         # one byte per parameter: 0 default,
 | The session survives the handoff: the bootloader opens programming, locked, so 0x29 follows directly | `boot/prog_test.v` `test_a_handed_off_boot_opens_the_programming_session` |
 | A non-default session, a CAN exchange in flight or a routine's owed answer holds NM awake | generation (`g_nm.hold`); `comm/diag/routine_test.v` (`active()`) |
 | A routine's FB sees each request exactly once, and a stale result is ignored | `comm/uds/routine_test.v`; `tools/loom2v/routine_gen_test.v` (the glue) |
-| While a routine's answer is owed, every other request is dropped, the answer stays with its transport, S3 is held and a 0x78 comes within P2\* — the final answer even under the suppress bit; a timeout, a session change and a dropped connection end it | `comm/uds/routine_test.v`, `comm/diag/routine_test.v`; bench `test/routine_zone_a.lua` |
+| While a routine's answer is owed, every other request is dropped (a 0x2F 00 included), the answer stays with its transport, S3 is held and a 0x78 comes within P2\* — the final answer even under the suppress bit; a timeout, a session change and a dropped connection end it | `comm/uds/routine_test.v`, `comm/diag/routine_test.v`; bench `test/routine_zone_a.lua` |
+| A relock without a session entry (another level unlocked, a DoIP tester's unlock ending with its connection) asks the routines its level gated to stop, as it returns that level's controls | `comm/uds/routine_test.v` `test_a_relock_asks_the_routines_it_gated_to_stop`; `comm/diag/io_control_test.v` `test_a_network_testers_routine_ends_with_its_unlock` |
 | A gateway forwards every 0x78 of a routed node and keeps the exchange open through them | `comm/diagroute/diagroute_test.v` `test_several_responses_pending_keep_a_long_exchange_open`; bench `test/routine_zone_a.lua` (through sysnode) |
 | A routine is generated only where it can run | `tools/loom2v/routine_gen_test.v` (REQ-DIAG-087) |
 | A sender absent from boot reaches `timeout`; NM sleep suspends the deadlines | `comm/com/rxmon_test.v` |
@@ -789,11 +884,12 @@ param_status = true                         # one byte per parameter: 0 default,
 | Counters have fixed widths and saturate | `comm/fault/records_test.v` `test_counters_saturate_at_their_width` |
 | A parameter's record is restored only under its exact header, and revalidated against the current range | `comm/param/param_test.v`; `tools/loom2v/param_target_test.v` |
 | Physical ids are unique per bus; a functional id is never another node's physical id | syscheck tests |
+| 0x2F overrides an output only where the node encodes it, on the thread serving the server: served per control with its gate and NRC order, the four parameters, a value under control always in range and on the DBC grid, one rule for the value published (read, answered and frozen alike), control returned on a session entry, S3, a reset and a relock (a DoIP tester's included), the target's conditions seam, a functional 0x2F ignored; a control the server cannot apply refused at generation | `comm/uds/io_control_test.v`; `comm/diag/io_control_test.v`; `tools/loom2v/io_control_test.v` (the substitution on the target's local producer, a satellite's lanes and the host bridge, each with the encode reading it; an uncontrolled node's glue unchanged; every refusal); CI's cross build of domain (both target paths) and host build of overspeed. On the bus: `test/ioctl_domain.lua` (bench) and overspeed's `test/ioctl.lua` (vcan) |
 | The 0x27 failed-key counts survive a power cycle on a target: restored as after a reset (a count at the limit as a lockout from start-up), written only when they change — a wrong key below the limit, a correct key clearing a count — and before the CAN answer, so at most `security_attempts` writes per level between correct keys plus one per correct key, whatever a tester sends, resets or power-cycles, and a wrong-key stream never fills the journal for the other writers; a refused or unconfirmed write changing no answer and retried until the journal holds the record; a full journal never erased at run time, an ECUReset's flush or an NM sleep edge freeing it; a node that performs 0x27 without `[nvm]` is refused | `comm/uds/sa_store_test.v` (a randomised bound over keys, resets, ECUResets, power cycles, refused and unconfirmed writes, at the default limit and at 5 and 1); `comm/uds/uds_test.v` (a reset after an ended lockout, the attempts after it); `comm/diag/sa_persist_test.v` (power cuts anywhere, the boot's own work included; three hours of wrong keys; a filled journal holding the counts in RAM until a reset's flush or a sleep edge; a refused clear); `tools/loom2v/diag_target_test.v`; `tools/loom2v/wear_test.v`. On the bench: `uds-on-target-journal` (REQ-DIAG-033, on the build before the rework; a re-run on this rule is recommended) — no real power removal yet |
 
 Bench suites on `examples/system_full` (blobly_net over the CANsub), their runs recorded in
 `requirements/verifications.toml`: `test/diag_domain.lua`, `test/diag_nodes.lua`,
 `test/doip_sysnode.lua`, `test/faults_zone_a.lua` and `test/faults_zone_a_persist.lua` (with a power
 cut). Written, with no recorded run: `test/boot_handoff.lua`, `test/rx_faults_zone_a.lua`,
-`test/param_zone_a.lua`, `test/routine_zone_a.lua`. On the host, `examples/overspeed/test/routine.lua`
-(vcan0, `make test`).
+`test/param_zone_a.lua`, `test/routine_zone_a.lua`, `test/ioctl_domain.lua`. On the host,
+`examples/overspeed/test/routine.lua` and `examples/overspeed/test/ioctl.lua` (vcan0, `make test`).

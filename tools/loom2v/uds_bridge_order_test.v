@@ -12,9 +12,9 @@ import os
 //   during it → one request served (one that completes while a response is still in
 //   flight is dropped — half-duplex, the tester retries) →
 //   response transmitted → the rx gate re-sampled and the rx deadlines checked (after the pass's
-//   requests, so a 0x28 suspends them first) → the 0x28 tx gate sampled → application tx. A
-//   functional request is served ON ARRIVAL inside the drain (quiet link, no reset pending) and
-//   re-samples the rx gate at once.
+//   requests, so a 0x28 suspends them first) → the 0x28 tx gate sampled → application tx, a value
+//   under 0x2F control written over the FB's before the encode. A functional request is served
+//   ON ARRIVAL inside the drain (quiet link, no reset pending) and re-samples the rx gate at once.
 fn test_the_generated_diagnostic_pass_runs_in_order() {
 	glue := os.read_file(os.join_path(@VMODROOT, 'examples', 'overspeed', 'gen', 'loom_gen.v')) or {
 		assert false, '${err}'
@@ -42,6 +42,9 @@ fn test_the_generated_diagnostic_pass_runs_in_order() {
 		'if st.rxg.sample(st.conn_diag.server.rx_enabled(), true)',
 		'if st.rxg.settle()',
 		'diag_tx_ok :=',
+		'warn_lamp_io_on, warn_lamp_io_v := st.conn_diag.server.io_held(0)', // 0x2F (gen_ioctl.v)
+		'warn_lamp.on = warn_lamp_io_v != 0',
+		'lamp_frame_warn_lamp_set(mut tx_lamp_frame.data, if warn_lamp.on {',
 		'if tx_lamp_frame_any && diag_tx_ok',
 	]
 	mut at := -1

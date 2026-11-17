@@ -108,6 +108,12 @@ struct DidCfg {
 	param          string // the [[param]] this DID codes (0x2E) and reads back (0x22); '' = none
 	param_status   bool   // the parameters' status: one byte per [[param]] (comm/param status_*)
 	tx_saturations bool   // the count of sent values com.encode_raw saturated: a u32, big-endian
+	// `control` (0x2F, gen_ioctl.v): the parameters served (bit p for parameter p, bit 0 —
+	// returnControlToECU — always; 0 = no control), its sessions (uds.in_*, extended by default)
+	// and its 0x27 level (0 = none)
+	control_params   u8
+	control_sessions u8
+	control_security u8
 }
 
 // Route is one [[route]] on a gateway. A RAW (frame) route forwards a PDU unchanged
@@ -1158,6 +1164,13 @@ fn parse_dids(doc toml.Doc) []DidCfg {
 		}
 		rd_s, rd_sec := parse_did_access(m, 'read', id)
 		wr_s, wr_sec := parse_did_access(m, 'write', id)
+		mut ctl_p, mut ctl_s, mut ctl_sec := u8(0), u8(0), u8(0)
+		if cv := m['control'] {
+			if (m['signal'] or { toml.Any('') }).string() == '' {
+				panic('loom2v: [[did]] 0x${id.hex()} has a `control` but no `signal` — 0x2F controls the output signal a live DID reads')
+			}
+			ctl_p, ctl_s, ctl_sec = parse_did_control(cv, id)
+		}
 		if 'write' in m && 'writable' in m && !(m['writable'] or { toml.Any(false) }).bool() {
 			panic('loom2v: [[did]] 0x${id.hex()} has writable = false AND a write = {...} gate — say which')
 		}
@@ -1182,6 +1195,9 @@ fn parse_dids(doc toml.Doc) []DidCfg {
 			write_sessions: wr_s
 			read_security:  rd_sec
 			write_security: wr_sec
+			control_params:   ctl_p
+			control_sessions: ctl_s
+			control_security: ctl_sec
 		}
 	}
 	// one id, one row: the server serves the FIRST row of an id, so a repeat would carry gates and
@@ -1842,6 +1858,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	validate_signal_routes_model(m, doc)
 	validate_uds(m)
 	validate_live_dids(m)
+	validate_io_controls(m)
 	validate_faults(m, doc)
 	m.routine_fbs = validate_routines(m, doc)
 	validate_max_message(m) // after the DIDs and faults it measures are known good
@@ -2573,6 +2590,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			}
 			glue << shell_cmd_fns(m, comm_thread_on)
 			glue << diag_target_fns(m, ioc_idx)
+			glue << io_target_fns(m)
 			glue << diag_target_sa_fns(m)
 			glue << diag_target_c_decls(m)
 			glue << boot_target_fns(m)
@@ -3322,8 +3340,18 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\t\t}'
 					// until the FB's first publish the cell holds no value, only its zero: the frame
 					// goes out at its initial payload, and nothing is encoded or counted
-					glue << tx_send_lines(si, 'tf', 'tf_sat', 'C.ioc_get_ever(${idx}, &tv_a, &tv_b) != 0',
-						lane_encode_lines(si, 0, si.val_type, 'tv_a', 'tf', 'tf_sat', '\t\t\t\t'), '\t\t\t')
+					if k := io_index(m, si.name) {
+						// a 0x2F control (gen_ioctl.v): the tester's value in place of the FB's, from
+						// boot, encoded here — the FB keeps writing its cell and never sees it
+						glue << '\t\t\ttv_io_on, tv_io_v := g_diag.server.io_held(${k}) // 0x2F'
+						mut enc := ['\t\t\t\ttv_pub := if tv_io_on { u32(tv_io_v) } else { tv_a }']
+						enc << lane_encode_lines(si, 0, si.val_type, 'tv_pub', 'tf', 'tf_sat', '\t\t\t\t')
+						glue << tx_send_lines(si, 'tf', 'tf_sat', 'C.ioc_get_ever(${idx}, &tv_a, &tv_b) != 0 || tv_io_on',
+							enc, '\t\t\t')
+					} else {
+						glue << tx_send_lines(si, 'tf', 'tf_sat', 'C.ioc_get_ever(${idx}, &tv_a, &tv_b) != 0',
+							lane_encode_lines(si, 0, si.val_type, 'tv_a', 'tf', 'tf_sat', '\t\t\t\t'), '\t\t\t')
+					}
 					glue << '\t\t}'
 				}
 				glue << trace_produce_drain(m)
@@ -5152,7 +5180,8 @@ fn validate_live_dids(m Model) {
 		}
 		if d.writable || d.write_sessions != 0 || d.write_security != 0 {
 			panic('loom2v: [[did]] 0x${d.id.hex()} reads signal "${d.signal}" and is writable — a write would be ' +
-				'acknowledged and then overwritten by the next refresh; a live DID is read-only')
+				'acknowledged and then overwritten by the next refresh; a live DID is read-only (to override ' +
+				'what the node publishes, give it a `control`: 0x2F)')
 		}
 		si := m.sig_of[d.signal] or { continue }
 		if _ := did_value_width(si.val_type) {

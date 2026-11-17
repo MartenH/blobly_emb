@@ -581,6 +581,103 @@ fn test_requests_are_dropped_and_s3_held_while_an_answer_is_owed() {
 	assert s.session == session_default, 'S3 did not run again after the answer'
 }
 
+// While a routine's answer is owed a 0x2F is dropped like every other request — unanswered, and
+// no control taken; once the answer is out it is served, and the default session returns it.
+fn test_an_io_control_is_dropped_while_an_answer_is_owed() {
+	mut s := routine_server()
+	s.ios[0] = IoControl{
+		did:      0x0300
+		width:    1
+		lo:       0
+		hi:       250
+		params:   0x09
+		sessions: in_extended
+	}
+	s.nio = 1
+	mut fb := Fb{}
+	set := [u8(0x2F), 0x03, 0x00, 0x03, 42]
+	assert rcall(mut s, rq(0x01, rid_sync, [u8(1)])) == pending_78
+	assert rcall(mut s, set).len == 0, 'a 0x2F answered while an answer is owed'
+	on, _ := s.io_held(0)
+	assert !on, 'a dropped 0x2F took control'
+	fb.dispatch(mut s, 0, .done, 0, [])
+	assert step(mut s, 256)[0] == 0x71
+	assert rcall(mut s, set) == [u8(0x6F), 0x03, 0x00, 0x03, 42]
+	on2, v := s.io_held(0)
+	assert on2 && v == 42
+	assert rcall(mut s, [u8(0x10), 0x01])[0] == 0x50
+	on3, _ := s.io_held(0)
+	assert !on3, 'the default session did not return the control'
+}
+
+// A returnControlToECU is dropped like every other request while an answer is owed: the control
+// stays in force through the wait — S3 held, so not even a tester gone ends it — and ends when the
+// answer is out (here a timeout's 0x22), by a 00 then or by S3 once the session is quiet.
+fn test_a_return_control_is_dropped_while_an_answer_is_owed() {
+	mut s := routine_server()
+	s.ios[0] = IoControl{
+		did:      0x0300
+		width:    1
+		lo:       0
+		hi:       250
+		params:   0x09
+		sessions: in_extended
+	}
+	s.nio = 1
+	assert rcall(mut s, [u8(0x2F), 0x03, 0x00, 0x03, 42])[0] == 0x6F
+	assert rcall(mut s, rq(0x01, rid_sync, [u8(1)])) == pending_78
+	assert rcall(mut s, [u8(0x2F), 0x03, 0x00, 0x00]).len == 0, 'a 00 answered while an answer is owed'
+	on, v := s.io_held(0)
+	assert on && v == 42, 'a dropped 00 returned the control'
+	s.tick(t0 + 9_000_000) // past S3, inside the routine's timeout: nothing ends
+	on2, _ := s.io_held(0)
+	assert on2 && s.session == session_extended
+	s.tick(t0 + 10_000_001) // the timeout: answered 0x22
+	assert step(mut s, 256) == [u8(0x7F), 0x31, 0x22]
+	on3, _ := s.io_held(0)
+	assert on3, 'the timeout is no session entry'
+	s.tick(t0 + 15_000_002) // the session quiet for S3: back to default, the control returned
+	on4, _ := s.io_held(0)
+	assert s.session == session_default && !on4
+}
+
+// @verifies REQ-DIAG-085
+// A level relocked without a session entry ends the routines it gated, as it returns the controls
+// (REQ-DIAG-105): another level unlocked, or relocked (the network tester that held it dropped) —
+// each asks a running routine gated on the old level to stop; an ungated one runs on.
+fn test_a_relock_asks_the_routines_it_gated_to_stop() {
+	mut s := routine_server()
+	s.security_levels = 0x03
+	mut fb_sync := Fb{}
+	mut fb := Fb{}
+	unlock(mut s)
+	assert rcall(mut s, rq(0x01, rid_async, [])) == pending_78
+	fb.dispatch(mut s, 1, .running, 0, [])
+	assert step(mut s, 256)[0] == 0x71
+	// level 2 unlocked: level 1 is relocked, its routine asked to stop
+	seed := rcall(mut s, [u8(0x27), 0x03])
+	assert seed[0] == 0x67
+	mut key := [u8(0x27), 0x04]
+	key << seed[2..].map(it ^ 0xFF)
+	assert rcall(mut s, key) == [u8(0x67), 0x04]
+	assert fb.dispatch(mut s, 1, .stopped, 0, []) == .stop
+	// relocked: the level's routine asked to stop, 0 and another level relock nothing, and an
+	// ungated routine runs on
+	unlock(mut s)
+	assert rcall(mut s, rq(0x01, rid_async, [])) == pending_78
+	fb.dispatch(mut s, 1, .running, 0, [])
+	assert step(mut s, 256)[0] == 0x71
+	s.relocked(0)
+	s.relocked(2)
+	assert fb.dispatch(mut s, 1, .none, 0, []) == .none
+	s.relocked(1)
+	assert fb.dispatch(mut s, 1, .stopped, 0, []) == .stop
+	assert rcall(mut s, rq(0x01, rid_sync, [u8(1)])) == pending_78
+	fb_sync.dispatch(mut s, 0, .running, 0, [])
+	s.relocked(1)
+	assert fb_sync.dispatch(mut s, 0, .none, 0, []) == .none, 'an ungated routine was stopped'
+}
+
 // @verifies REQ-DIAG-085
 // Every session entry asks a running routine to stop — re-entering the session, S3, a reset — and
 // an answer still owed is answered 0x22 (never abandoned by the server itself). A start after a

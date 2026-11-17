@@ -202,6 +202,25 @@ fn (mut s Server) stop_routines() {
 	}
 }
 
+// stop_relocked_routines: a security level was relocked without a session entry — every routine
+// gated on it that its FB may still be running is asked to stop, as its controls are returned
+// (io_control.v): level `level` relocked (`others` false), or every level but `level` (`others`
+// true: a key unlocked `level`, and 0x27 holds one). No answer can be owed for such a routine: a key
+// is dropped while an answer is owed, and the network tester whose unlock ends had its own owed
+// answer abandoned first (comm/diag remote_dropped).
+fn (mut s Server) stop_relocked_routines(level u8, others bool) {
+	for i in 0 .. s.nroutines {
+		if i >= max_routines {
+			break
+		}
+		sec := s.routines[i].security
+		hit := if others { sec != 0 && sec != level } else { level != 0 && sec == level }
+		if hit && s.routines[i].may_run() {
+			s.ask_stop(i)
+		}
+	}
+}
+
 // find_routine: the routine of identifier `id` the server serves (-1 = none) — one whose record
 // sizes do not fit its cells is none (sizes_ok)
 fn (s &Server) find_routine(id u16) int {

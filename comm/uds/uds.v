@@ -9,6 +9,7 @@ module uds
 // DIDs per request), 0x27 SecurityAccess (with injected SecurityOps), 0x28 CommunicationControl,
 // 0x14 / 0x19 / 0x85 over an injected FaultOps (comm/fault),
 // 0x2E WriteDataByIdentifier (a BOUND DID — a parameter — through the injected DidWrite, comm/param),
+// 0x2F InputOutputControlByIdentifier (a live signal's DID with a control, io_control.v),
 // 0x31 RoutineControl (each configured routine run by an FB through two cells, routine.v),
 // 0x3E TesterPresent. Anything else -> 0x11 serviceNotSupported.
 // A routine's start or stop is answered responsePending (0x78) until its FB has reported, every
@@ -24,14 +25,15 @@ module uds
 // subfunction supported (0x12) → exact length (0x13) → conditions / range. The DID services follow
 // their own flow: 0x22 — length, then each DID's support and session (0x31 when none answers),
 // then security (0x33), then the response size (0x14); 0x2E — length, then the DID's support,
-// writability and session (0x31), then security (0x33), then the record length (0x13). 0x31 —
+// writability and session (0x31), then security (0x33), then the record length (0x13); 0x2F — its
+// own order (io_control.v). 0x31 —
 // length < 2 (0x13), subfunction (0x12), length < 4 (0x13), the routine's identifier and session
 // (0x31), its level (0x33), a subfunction it does not offer (0x12), the exact length (0x13), the
 // sequence (0x24), then its FB's own refusal. 0x27 —
 // subfunction (0x12), then requestSeed: the lockout delay (0x37); sendKey: length (0x13), a seed
 // of that level outstanding (0x24), the key (0x35, or 0x36 on the last allowed attempt). A
 // FUNCTIONAL request never answers 0x11, 0x12, 0x31, 0x7E or 0x7F (handle_functional) — a broadcast
-// into an unsupported or gated service stays silent — and a functional 0x27 or 0x31 is ignored
+// into an unsupported or gated service stays silent — and a functional 0x27, 0x2F or 0x31 is ignored
 // outright.
 
 pub const max_dids = 16
@@ -288,6 +290,13 @@ pub mut:
 	pend_until u64
 	pend_fail  bool
 	pend_late  bool
+	// Input/output control (0x2F, io_control.v): the controlled DIDs, nio == 0 = 0x2F not served.
+	ios [max_ios]IoControl
+	nio int
+	// io_ok is the application's conditions seam for 0x2F (REQ-DIAG-106): false answers
+	// conditionsNotCorrect (0x22) and nothing changes; never asked for returnControlToECU. nil =
+	// allowed — the server knows no vehicle state, and only the application can.
+	io_ok fn (did u16, parameter u8) bool = unsafe { nil }
 }
 
 // init puts the server in the default session with everything unlocked-state cleared, and
@@ -346,6 +355,7 @@ pub fn (mut s Server) reset_state() {
 	s.reset_req = 0
 	s.last_rx_us = 0
 	s.rx_seen = false
+	s.io_return_all() // every input/output control back to the ECU
 }
 
 // tick advances the server's clock and applies S3: a non-default session with no request for
@@ -400,8 +410,10 @@ pub fn (mut s Server) handle(req &u8, req_len int, resp &u8) int {
 // handle_functional dispatches a FUNCTIONALLY addressed request: identical, except the
 // negative responses ISO 14229-1 forbids for functional requests are withheld.
 pub fn (mut s Server) handle_functional(req &u8, req_len int, resp &u8) int {
-	if req_len >= 1 && unsafe { req[0] == 0x27 || req[0] == 0x31 } && s.resp_cap >= 0 {
+	if req_len >= 1 && unsafe { req[0] == 0x27 || req[0] == 0x2F || req[0] == 0x31 }
+		&& s.resp_cap >= 0 {
 		// SecurityAccess is physical-only: a broadcast key would spend a guess on every ECU. So is
+		// InputOutputControl: an override is one ECU's, never every ECU's at once. And so is
 		// RoutineControl: a routine is an action on one ECU, its answer owed to one requester. Each
 		// is still a request, so it keeps the session alive like any other (S3).
 		s.last_rx_us = s.now_us
@@ -455,6 +467,7 @@ fn (mut s Server) dispatch(req &u8, req_len int, resp &u8) int {
 		0x85 { return s.dtc_setting(req, req_len, resp) }
 		0x28 { return s.communication_control(req, req_len, resp) }
 		0x2E { return s.write_did(req, req_len, resp) }
+		0x2F { return s.io_control(req, req_len, resp) }
 		0x31 { return s.routine_control(req, req_len, resp) }
 		else { return negative(resp, sid, nrc_service_not_supported) }
 	}
@@ -470,6 +483,7 @@ fn (s &Server) service_supported(sid u8) bool {
 		0x85 { s.faults.avail != 0 && s.faults.set_setting != unsafe { nil } }
 		0x27 { s.security.seed != unsafe { nil } && s.security.key_ok != unsafe { nil } && s.security_levels != 0 }
 		0x28 { s.serves_comm_control }
+		0x2F { s.nio > 0 }
 		0x31 { s.nroutines > 0 }
 		else { false }
 	}
@@ -501,13 +515,14 @@ fn (s &Server) service_row(sid u8) (Service, bool) {
 }
 
 // default_sessions: where each service may run unless the table says otherwise (0 = every
-// session). CommunicationControl, SecurityAccess and ControlDTCSetting are non-default-session
-// services (a tester must enter extended first, so a stray request on a quiet bus cannot silence
-// an ECU, spend its key attempts or freeze its fault memory) — a table never opens them in the
-// default session (loom2v refuses that). Per-DID gating sits on top for 0x22/0x2E.
+// session). CommunicationControl, SecurityAccess, InputOutputControl and ControlDTCSetting are
+// non-default-session services (a tester must enter extended first, so a stray request on a quiet
+// bus cannot silence an ECU, spend its key attempts, override its outputs or freeze its fault
+// memory) — a table never opens them in the default session (loom2v refuses that). Per-DID gating
+// sits on top for 0x22/0x2E/0x2F.
 pub fn default_sessions(sid u8) u8 {
 	return match sid {
-		0x27, 0x28, 0x85 { in_extended | in_programming }
+		0x27, 0x28, 0x2F, 0x85 { in_extended | in_programming }
 		else { u8(0) }
 	}
 }
@@ -552,6 +567,7 @@ fn (mut s Server) enter_session(session u8) {
 		s.normal_rx_off = false
 		s.restore_dtc_setting()
 	}
+	s.io_session_entered(session) // the controls this entry's relock or session ends
 }
 
 // restore_dtc_setting turns DTC setting back on when a session ends (explicitly, by S3, or by a
@@ -847,6 +863,9 @@ fn (mut s Server) send_key(level u8, req &u8, req_len int, resp &u8) int {
 	s.sa_failed[level - 1] = 0
 	s.sa_since[level - 1] = 0
 	s.unlocked = level
+	// the level unlocked before is relocked: its controls are returned, its routines asked to stop
+	s.io_unlocked(level)
+	s.stop_relocked_routines(level, true)
 	if unsafe { req[1] } & 0x80 != 0 {
 		return 0
 	}

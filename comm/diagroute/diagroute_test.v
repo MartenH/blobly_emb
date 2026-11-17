@@ -790,6 +790,21 @@ fn test_a_real_servers_answers_are_told_apart_by_the_correlation() {
 		len:      1
 	}
 	srv.ndid = 2
+	srv.ios[0] = uds.IoControl{
+		did:      0xF1A0
+		width:    1
+		hi:       200
+		params:   0x0E
+		sessions: 0xFF
+	}
+	srv.ios[1] = uds.IoControl{
+		did:      0xF1A2
+		width:    1
+		hi:       200
+		params:   0x0E
+		sessions: 0xFF
+	}
+	srv.nio = 2
 	cases := [
 		// request, another request of the same service
 		[[u8(0x10), 0x03], [u8(0x10), 0x01]],
@@ -797,6 +812,8 @@ fn test_a_real_servers_answers_are_told_apart_by_the_correlation() {
 		[[u8(0x22), 0xF1, 0x90], [u8(0x22), 0x01, 0x02]],
 		[[u8(0x22), 0xF1, 0xFF, 0xF1, 0x90], [u8(0x22), 0x01, 0x02]], // F1FF unserved: answered from F190
 		[[u8(0x2E), 0x01, 0x02, 0x05], [u8(0x2E), 0xF1, 0x90, 0x05]],
+		[[u8(0x2F), 0xF1, 0xA0, 0x03, 0x07], [u8(0x2F), 0xF1, 0xA2, 0x03, 0x07]], // another DID
+		[[u8(0x2F), 0xF1, 0xA0, 0x02], [u8(0x2F), 0xF1, 0xA0, 0x00]], // another parameter
 	]
 	for c in cases {
 		srv.session = 0x03 // the extended session the writes and resets ask for
