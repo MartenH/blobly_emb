@@ -244,7 +244,10 @@ time to make space — is closed structurally, not handled:
   makes compaction due during NORMAL runtime, on the comm thread's schedule, long
   before shutdown needs the room. The sleep flush therefore never erases — it is
   N microsecond-scale appends into space guaranteed to exist. GC-at-shutdown is
-  not a case to handle; it is a state that cannot be reached.
+  not a case to handle; it is a state that cannot be reached. Generation refuses a
+  sector that cannot hold the live set twice plus, on a node that performs 0x27,
+  every write a tester without the key can make (`security_attempts` per served
+  level), so wrong keys alone never fill a sector.
 - **Quiesce ordering, storage holds the door.** Dispatch stops → flush dirty →
   clean marker → (compact now if the watermark says so — on same-bank boards this
   IS the designated erase window; other-bank boards already compacted at runtime)

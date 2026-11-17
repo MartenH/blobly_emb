@@ -222,6 +222,24 @@ fn test_a_target_security_gate_needs_nvm() {
 	assert gh.contains('security_levels') && !gh.contains('sa_store'), 'the host bridge wired a store'
 }
 
+// A sector holds every write a tester without the key can make beside the live set and its rewrite
+// (REQ-DIAG-068): one served level at security_attempts = 255 needs 255 records more, so a 256-record
+// sector, which takes the default attempts, is refused, naming the burst (no unlocks assumed, so the
+// wear check passes and the capacity check is what refuses).
+// @verifies REQ-DIAG-068
+fn test_the_sector_holds_the_wrong_key_writes() {
+	gated := '\n[[did]]\nid = 0xF1AC\nbytes = "00"\nwrite = { session = ["extended"], security = 1 }\n'
+	small := diag_conn.replace('sector_records = 4096', 'sector_records = 256')
+	c1, o1, _ := generate('sa_burst_ok', small + gated)
+	assert c1 == 0, o1
+	many := '\n[uds]\nsecurity_attempts = 255\n\n[nvm.assume]\nunlocks_per_day = 0\n'
+	code, out, _ := generate('sa_burst', small + gated + many)
+	assert code != 0, 'loom2v accepted a sector the wrong keys alone can fill'
+	assert out.contains('255 0x27 wrong-key writes'), out
+	c3, o3, _ := generate('sa_burst_big', diag_conn + gated + many)
+	assert c3 == 0, o3
+}
+
 // The 0x27 state's block is FIXED (docs/nvm.md): nvm_hash16("uds:security") = 0x044E, never a
 // schema hash, so no firmware update moves it. A parameter on that DID is refused naming its own
 // pin (the fixed block cannot move), and so is a signal pinned onto it.

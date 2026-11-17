@@ -414,7 +414,9 @@ fn derive_fault_nvm(m Model) (u16, []u16, []u16) {
 // and the parameters — against the pool and the sector, ONCE, after every block is derived. The
 // pool: a row per block (a fault's two snapshot blocks both: a freed one stays as a tombstone),
 // within derive_nvm's migration headroom. The sector, the docs/nvm.md headroom rule: the live set
-// plus a full rewrite of it fits one sector, so a flush never needs an erase.
+// plus a full rewrite of it fits one sector, so a flush never needs an erase — and beside them every
+// write a tester without the key can make (the attempts per served level, REQ-DIAG-068), so wrong
+// keys alone never fill a sector for the journal's other writers.
 fn check_journal_capacity(m Model) {
 	if !nvm_on(m) {
 		return
@@ -426,8 +428,14 @@ fn check_journal_capacity(m Model) {
 		panic('loom2v: ${what} exceed the safe journal pool budget (48 of nvm.max_blocks)')
 	}
 	live := journal_live_records(m)
-	if live + live > int(m.nvm.sector_records) {
-		panic('loom2v: the journal needs ${live + live} records of sector headroom (live set ${live}: ${what}, docs/nvm.md) but [nvm] sector_records = ${m.nvm.sector_records}')
+	burst := if sa_persist_on(m) {
+		sa_level_count(m) * int(uds.attempts_of(u8(m.uds.security_attempts))) * chain_records(uds.sa_record_len)
+	} else {
+		0
+	}
+	if live + live + burst > int(m.nvm.sector_records) {
+		of_sa := if burst > 0 { ' + ${burst} 0x27 wrong-key writes (security_attempts per served level)' } else { '' }
+		panic('loom2v: the journal needs ${live + live + burst} records of sector headroom (live set ${live}, twice: ${what}${of_sa}, docs/nvm.md) but [nvm] sector_records = ${m.nvm.sector_records}')
 	}
 }
 

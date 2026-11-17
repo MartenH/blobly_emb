@@ -114,7 +114,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-065 | QM | test | verified | sa_persist_test.v (pass), sa_store_test.v (pass) |
 | REQ-DIAG-066 | QM | test | verified | diag_target_test.v (pass) |
 | REQ-DIAG-067 | QM | test | verified | diag_target_test.v (pass), sa_persist_test.v (pass), sa_store_test.v (pass) |
-| REQ-DIAG-068 | QM | test | verified | sa_persist_test.v (pass), sa_store_test.v (pass) |
+| REQ-DIAG-068 | QM | test | verified | diag_target_test.v (pass), sa_persist_test.v (pass), sa_store_test.v (pass) |
 | REQ-DIAG-034 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-035 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-036 | QM | test | verified | uds_test.v (pass) |

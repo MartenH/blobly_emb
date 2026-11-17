@@ -316,7 +316,7 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-DIAG-068"
 title = "Wrong keys write the journal a bounded number of times"
-text = "The persisted SecurityAccess state shall be written at most the configured attempts times per level between two correct keys of that level, plus once by a correct key that follows a wrong one, however many wrong keys a tester sends and however often the ECU is reset or powered off, so that a tester without the key writes at most the configured attempts records per level until an authorised unlock and can neither fill the persistence journal for its other writers nor wear it beyond what the wear check proved (REQ-NVM-010); no write budget is needed, and retrying a write the journal refused is not a further write."
+text = "The persisted SecurityAccess state shall be written at most the configured attempts times per level between two correct keys of that level, plus once by a correct key that follows a wrong one, however many wrong keys a tester sends and however often the ECU is reset or powered off, so that a tester without the key writes at most the configured attempts records per level until an authorised unlock and can neither fill the persistence journal for its other writers (generation refuses a sector that cannot hold those writes beside the live set and its rewrite) nor wear it beyond what the wear check proved (REQ-NVM-010); no write budget is needed, and retrying a write the journal refused is not a further write."
 status = "agreed"
 method = "test"
 asil = "QM"
