@@ -59,8 +59,14 @@ Planned: queued (every-occurrence) signals, handlers triggered on reception, and
 ## Quick start
 
 Everything here runs on a Linux PC (or WSL2) with no hardware. You need the V compiler CI uses,
-at the commit in [`.v-version`](.v-version) (V3, built from source; Blobly Net pins the same
-commit, and its `scripts/setup_env.sh` installs it), and `can-utils` to watch the bus.
+V3 at the commit in [`.v-version`](.v-version), built with the bootstrap in
+[`.vc-version`](.vc-version) (a plain `make` would fetch a newer bootstrap), and `can-utils` to
+watch the bus. This repo's installer builds the pinned pair:
+
+```sh
+. scripts/v_toolchain.sh && v_toolchain_install ~/v "$(cat .v-version)" "$(cat .vc-version)"
+export PATH=~/v:$PATH
+```
 
 ```sh
 make vcan                                # bring up vcan0..vcan7 (needs sudo)
@@ -156,8 +162,8 @@ pub mut:
 ```
 
 and a [`signal-map.md`](examples/overspeed/signal-map.md) that follows each signal from the FB
-that writes it to its readers and, for a bus signal, to its DBC frame, bits and scaling. In this example 347 lines of `ecu.toml`, 156 lines of FBs and a
-25-line `main.v` generate 2,319 lines of V.
+that writes it to its readers and, for a bus signal, to its DBC frame, bits and scaling. In this example about 350 lines of `ecu.toml`, 160 lines of FBs and a
+25-line `main.v` generate about 2,300 lines of V.
 
 ## What it does
 
@@ -288,25 +294,26 @@ integration tests run.
 
 | what | how much |
 |---|---|
-| Host unit tests | 131 V test files, 1,722 test functions |
-| Example builds | every host example generated and built; the end-to-end tests in `examples/*/e2e_test.v` run |
+| Host unit tests | every module's V tests (`make unit`) |
+| Example builds | every host example generated and built, and the examples' own V tests run |
 | Freshness | committed generated code, the config reference and the traceability report must match a fresh run |
 | Config gates | `ecucheck` on every example `ecu.toml` (a system's nodes through `syscheck`), `syscheck` on every example `system.toml` |
 | No heap | a source lint, compiler allocation warnings on generated host code, and an allocator check on every linked ELF |
-| Cross builds | all 16 STM32H7 images (13 applications, 3 bootloaders) |
+| Cross builds | every STM32H7 image: the applications and their bootloaders |
 | Requirements | `make trace-check` runs the tagged tests and regenerates [docs/traceability.md](docs/traceability.md) |
 
-**Requirements:** 337, of which 13 are ASIL B and 324 QM; 244 verified, 30 covered and pending
-a run, 63 uncovered, 0 failed. The method is in [requirements/README.md](requirements/README.md).
-It follows ISO 26262 in spirit; nothing here is safety-certified.
+**Requirements:** over 300, each with its ASIL (QM or B), in `requirements/*.toml`; the generated
+[docs/traceability.md](docs/traceability.md) counts how many are verified, covered or uncovered,
+per execution context. The method is in [requirements/README.md](requirements/README.md). It follows
+ISO 26262 in spirit; nothing here is safety-certified.
 
 **On silicon, by hand:** bench runs are recorded per board in
-[requirements/verifications.toml](requirements/verifications.toml) with date and who signed: 47
-recorded reviews, mostly bench runs per board, 40 approved and 7 pending. `make hwtest` runs the scripted on-target checks,
-which flash an image and check it on the board.
+[requirements/verifications.toml](requirements/verifications.toml), each with its date, outcome and
+who signed it. `make hwtest` runs the scripted on-target checks, which flash an image and check it
+on the board.
 
-**What CI does not cover:** the 35 Lua suites run by hand: 18 on `vcan` against Blobly Net, the
-rest on the flashed boards.
+**What CI does not cover:** the Lua suites run by hand: the examples' suites on `vcan` against
+Blobly Net, and `system_full`'s on the flashed boards.
 The ST HAL and AUTOSAR CanIf CAN backends and the ThreadX-on-Linux demo are not built in CI.
 
 ## Limits

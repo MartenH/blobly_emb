@@ -47,7 +47,7 @@ d.text(40, 440, 740, 100,
        'N_Cr stops once a block is complete and starts again when the next CTS is handed over.\n'
        'FC WAIT restarts N_Bs, at most 16 in a row (WFTmax); FC OVFLW or an undefined flow status ends the transfer at once.\n'
        'While consecutive frames are leaving, N_Bs also bounds a transmit FIFO that stays full; each CF refreshes it.\n'
-       'A first frame announcing more than 520 bytes is answered with FC OVFLW.',
+       'A first frame announcing more than max_message (520 by default) is answered with FC OVFLW.',
        fs=11, color='#333333', valign='top')
 d.write(f'{out}/can-tp-sequence.drawio.svg')
 
@@ -59,11 +59,11 @@ s.box(180, 70, 120, 40, 'idle', 'plain')
 s.box(180, 200, 120, 40, 'waiting for FC', 'plain')
 s.box(180, 330, 120, 40, 'sending CFs', 'plain')
 s.box(330, 195, 115, 50, 'abandoned\n(tx_aborts + 1)', 'red', fs=11)
-# send() 1–7 bytes: a single frame, back to idle
+# send() of what fits a single frame: one SF, back to idle
 s.line([(180, 82), (150, 82), (150, 98), (180, 98)])
-s.text(30, 76, 114, 28, 'send(), 1–7 bytes:\none SF', align='right')
+s.text(30, 76, 114, 28, 'send(), what fits an SF:\none SF', align='right')
 s.line([(225, 110), (225, 200)])
-s.text(80, 141, 138, 28, 'send(), 8–520 bytes:\nFF; N_Bs starts', align='right')
+s.text(80, 141, 138, 28, 'send(), more, up to\nmax_message: FF; N_Bs starts', align='right')
 s.line([(180, 212), (150, 212), (150, 228), (180, 228)])
 s.text(30, 206, 114, 28, 'FC WAIT: N_Bs restarts,\nat most 16 in a row', align='right')
 s.line([(225, 240), (225, 330)], '#6c8ebf')
@@ -88,7 +88,7 @@ s.box(660, 70, 120, 40, 'idle', 'plain')
 s.box(660, 200, 120, 40, 'receiving', 'plain')
 s.box(650, 330, 140, 40, 'message ready\nfor take()', 'green', fs=11)
 s.line([(705, 110), (705, 200)])
-s.text(546, 141, 152, 28, 'FF past an SF, ≤ 520 B:\nCTS; N_Cr starts', align='right')
+s.text(546, 141, 152, 28, 'FF past an SF, ≤ max_message:\nCTS; N_Cr starts', align='right')
 s.line([(660, 212), (630, 212), (630, 228), (660, 228)])
 s.text(526, 192, 98, 56, 'CF in sequence:\nN_Cr restarts;\nCTS after BS CFs\n(when BS > 0)', align='right')
 s.line([(705, 240), (705, 330)], '#82b366')
@@ -99,7 +99,7 @@ s.line([(780, 90), (870, 90), (870, 350), (790, 350)], '#82b366')
 s.text(876, 206, 60, 28, 'SF,\n1–62 bytes', color='#2d6a2d', bold=True)
 s.text(536, 400, 396, 103,
        'A valid SF or FF during a reception discards it; it starts over.\n'
-       'An FF over 520 bytes (or the escape FF): FC OVFLW, nothing received.\n'
+       'An FF over max_message (or the escape FF): FC OVFLW, nothing received.\n'
        'Ignored: an SF of length 0 or past its frame, an FF that fits an SF,\n'
        'a CF outside a reception or of the wrong length, a frame of a length\n'
        'no CAN-FD frame has, and any frame too short for its PCI.',

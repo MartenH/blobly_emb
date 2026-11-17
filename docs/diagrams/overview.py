@@ -6,7 +6,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from drawio import Diagram
 
-d = Diagram('overview', 'From ecu.toml to a running ECU', 980, 475)
+d = Diagram('overview', 'From ecu.toml to a running ECU', 980, 480)
 # inputs
 d.box(20, 40, 150, 50, 'ecu.toml\none node\'s configuration', 'yellow', fs=11)
 d.box(20, 110, 150, 50, 'bus DBC\nframes and signals', 'yellow', fs=11)
@@ -31,8 +31,10 @@ d.box(410, 370, 155, 70, 'Linux process\non vcan (simulation)', 'green', fs=11)
 d.box(585, 370, 155, 70, 'STM32H7\nThreadX AMP or bare metal', 'green', fs=11)
 d.line([(487, 320), (487, 370)])
 d.line([(662, 320), (662, 370)])
-# the tester
-d.box(800, 370, 160, 70, 'Blobly Net\ntests both over\nCAN, CAN-FD and DoIP', 'plain', bold=True, fs=11)
+# the tester: DoIP only where the target has it (a ThreadX node with Ethernet)
+d.box(800, 370, 160, 70, 'Blobly Net\ntests both', 'plain', bold=True, fs=11)
 d.line([(800, 405), (740, 405)], both=True)
+d.text(742, 380, 58, 22, 'CAN, CAN-FD,\nDoIP', fs=9, align='center')
 d.line([(880, 440), (880, 458), (487, 458), (487, 440)], both=True)
+d.text(600, 459, 160, 14, 'CAN, CAN-FD', fs=9, align='center')
 d.write(os.path.join(sys.argv[1], 'overview.drawio.svg'))
