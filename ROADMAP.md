@@ -78,6 +78,12 @@ no H735 image carries them until sysnode gains a `[shell]` / `[trace]`.
   thread rejects routes)
 - ✅ **ISO-TP / UDS** — beyond the boot-loader's request path: the generated diagnostic
   server, on the host so far (see *Diagnostics & variant coding*)
+- ✅ **ISO-TP 29-bit addressing** — normal addressing on 29-bit ids (`[isotp] ext`) and normal
+  fixed addressing (`addressing = "normal_fixed"`, `sa` / `ta`, priority 6), in the server, the
+  bootloader, a gateway's routes and the system model; the id format is part of the identity
+  everywhere (docs/can-tp.md §3.8). Not supported: extended and mixed addressing. Open: hardware
+  acceptance filters (every controller accepts all ids today), and no 29-bit ISO-TP has run on a
+  wire yet (a vcan / bench case is the next step)
 - ✅ **Wide cross-core signals** (`#211` — the derivation rung; **REQ-INV-006
   itself stays draft/covered**, closing only when the silicon review signs off) —
   a cross-core signal carries 1..16 u32 lanes (`xioc_n`), pair cell preserved:

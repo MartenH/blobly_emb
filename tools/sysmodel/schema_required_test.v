@@ -28,6 +28,8 @@ const conditional = {
 	'sys_doip.routes':          'a node declares a diag `logical` (a gateway must route to it)'
 	'sys_node.doip':            'a node declares a diag `logical` (its gateway routes to it over DoIP)'
 	'sys_diag.logical':         'a gateway names the node in its doip `routes`'
+	'sys_diag.req':             "the node has an [isotp], which serves on its allocation (REQ-TOPO-014)"
+	'sys_diag.rsp':             "the node has an [isotp], which serves on its allocation (REQ-TOPO-014)"
 	'sys_frame_e2e.timeout_ms': 'the event is not mode = "event"'
 	'sys_node.endpoint':        'a member of a someip bus, or a DoIP entity'
 	'sys_route.signal':         'exactly one of frame / signal'
@@ -38,7 +40,8 @@ const absent = ['sys_bus.bitrate', 'sys_bus_nm.repeat_ms', 'sys_bus_nm.wait_slee
 	'sys_doip.functional', 'sys_doip.activation_types', 'sys_doip.initial_inactivity_ms',
 	'sys_doip.general_inactivity_ms', 'sys_doip.announce_count', 'sys_doip.announce_interval_ms',
 	'sys_doip.route_level',
-	'sys_route.frame', 'sys_endpoint.netmask', 'sys_endpoint.gateway', 'sys_endpoint.address']
+	'sys_route.frame', 'sys_endpoint.netmask', 'sys_endpoint.gateway', 'sys_endpoint.address',
+	'sys_diag.addressing', 'sys_diag.ext', 'sys_diag.sa', 'sys_diag.ta', 'sys_diag.functional_ta']
 
 struct Drop {
 	row  string // ctx.key

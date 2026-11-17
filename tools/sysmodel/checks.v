@@ -48,6 +48,8 @@ pub fn validate_system(s System) []Issue {
 	issues << check_node_configs(s)
 	issues << check_node_generatable(s)
 	issues << check_bus_membership(s)
+	issues << check_diag_shape(s)
+	issues << check_diag_conn(s)
 	issues << check_identity_uniqueness(s)
 	issues << check_bus_single_writer(s)
 	issues << check_frame_single_writer(s)
@@ -71,6 +73,9 @@ pub fn validate_system_gen(s System) []Issue {
 	issues << check_topology_wellformed(s)
 	issues << check_subnets(s)
 	issues << check_node_name_is_an_identifier(s)
+	issues << check_diag_shape(s)
+	issues << check_diag_conn(s)
+	issues << check_diag_lowered(s)
 	issues << check_identity_alloc(s)
 	issues << check_dissolved_nodes(s)
 	issues << check_partial_no_wiring(s)
@@ -408,7 +413,7 @@ fn is_route_gateway(s System, name string) bool {
 fn check_identity_alloc(s System) []Issue {
 	mut issues := []Issue{}
 	mut nm_seen := map[u32]string{}
-	mut diag_seen := map[u32]string{}
+	mut diag_seen := map[string]string{} // diag_key: an id is its number and its format
 	mut trace_seen := map[int]string{}
 	for n in s.nodes {
 		if n.has_nm_alloc {
@@ -429,14 +434,15 @@ fn check_identity_alloc(s System) []Issue {
 			if id == 0 {
 				continue
 			}
-			if prev := diag_seen[id] {
+			key := diag_key(id, n.diag.ext)
+			if prev := diag_seen[key] {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-002'
-					msg:      'diagnostic ${kind} id 0x${id.hex()} (node "${n.name}") collides with an id already used by "${prev}"'
+					msg:      'diagnostic ${kind} id ${id_text(id, n.diag.ext)} (node "${n.name}") collides with an id already used by "${prev}"'
 				}
 			} else {
-				diag_seen[id] = n.name
+				diag_seen[key] = n.name
 			}
 		}
 		if n.trace != 0 {
@@ -1455,7 +1461,7 @@ fn check_identity_uniqueness(s System) []Issue {
 	mut nm_seen := map[u32]string{}
 	mut alive_seen := map[u32]string{}
 	mut alive_binding_seen := map[string]string{}
-	mut diag_seen := map[u32]string{}
+	mut diag_seen := map[string]string{} // diag_key: an id is its number and its format
 	mut trace_seen := map[int]string{}
 	for n in s.nodes {
 		// key uniqueness/consistency on ALLOCATION PRESENCE, not on a nonzero
@@ -1550,7 +1556,8 @@ fn check_identity_uniqueness(s System) []Issue {
 		}
 		// ALL diagnostic ids (req AND rsp, across every node) must be distinct —
 		// two ECUs answering on the same rsp id collide, and one node's rsp equal
-		// to another's req cross-wires the two sessions.
+		// to another's req cross-wires the two sessions. An id is its number AND its
+		// format: an 11-bit and a 29-bit id of one number are two frames, no collision.
 		for kind, id in {
 			'request':  n.diag.req
 			'response': n.diag.rsp
@@ -1558,37 +1565,36 @@ fn check_identity_uniqueness(s System) []Issue {
 			if id == 0 {
 				continue
 			}
-			if prev := diag_seen[id] {
+			key := diag_key(id, n.diag.ext)
+			if prev := diag_seen[key] {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-002'
-					msg:      'diagnostic ${kind} id 0x${id.hex()} (node "${n.name}") collides with an id already used by "${prev}"'
+					msg:      'diagnostic ${kind} id ${id_text(id, n.diag.ext)} (node "${n.name}") collides with an id already used by "${prev}"'
 				}
 			} else {
-				diag_seen[id] = n.name
+				diag_seen[key] = n.name
 			}
 		}
 		// the ECU's ACTUAL [isotp] rx_id/tx_id are the on-wire diagnostic ids
 		// (loom2v emits them, id 0 INCLUDED); system.toml `diag` is only the
 		// allocation. Register the real ids in the SAME map so two nodes physically
 		// using one diagnostic CAN id collide even when their diag allocations differ.
-		mut isotp_ids := []u32{}
 		for c in n.view.isotp_conns {
-			isotp_ids << c.rx_id
-			isotp_ids << c.tx_id
-		}
-		for iid in isotp_ids {
-			if prev := diag_seen[iid] {
-				if prev == n.name {
-					continue // the node's own diag allocation == its isotp id (expected)
+			for iid in [c.rx_id, c.tx_id] {
+				key := diag_key(iid, c.ext)
+				if prev := diag_seen[key] {
+					if prev == n.name {
+						continue // the node's own diag allocation == its isotp id (expected)
+					}
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-002'
+						msg:      'node "${n.name}": [isotp] diagnostic id ${id_text(iid, c.ext)} collides with an id already used by "${prev}"'
+					}
+				} else {
+					diag_seen[key] = n.name
 				}
-				issues << Issue{
-					severity: .error
-					req:      'REQ-TOPO-002'
-					msg:      'node "${n.name}": [isotp] diagnostic id 0x${iid.hex()} collides with an id already used by "${prev}"'
-				}
-			} else {
-				diag_seen[iid] = n.name
 			}
 		}
 		// trace id uniqueness by DECLARED presence — 0 is a valid trace id, so two
@@ -3149,11 +3155,15 @@ fn check_doip_routes(s System) []Issue {
 				}
 			} else {
 				c := t.view.isotp_conns[0]
-				if c.rx_id != t.diag.req || c.tx_id != t.diag.rsp {
+				// the comparison of a node's server with the allocation's physical ids (REQ-TOPO-014),
+				// which check_diag_conn leaves to this check for a routed node — the ids the gateway
+				// forwards on: said once, with the route. Its functional id is no route's (the router
+				// forwards physical requests only), so check_diag_conn says that one for every node.
+				if mismatch := diag_conn_physical(t) {
 					issues << Issue{
 						severity: .error
 						req:      'REQ-NET-019'
-						msg:      '${where}: its [isotp] listens on 0x${c.rx_id.hex()} and answers on 0x${c.tx_id.hex()}, but its diag allocation is 0x${t.diag.req.hex()} / 0x${t.diag.rsp.hex()} — the gateway forwards to the allocation'
+						msg:      '${where}: ${mismatch} — the gateway forwards to the allocation'
 					}
 				}
 				// the gateway carries routed messages up to its own maximum: a target that exchanges
@@ -3191,6 +3201,126 @@ fn check_doip_routes(s System) []Issue {
 				req:      'REQ-NET-019'
 				msg:      'node "${n.name}": diag `logical` 0x${n.diag.logical_raw.hex()} names an address no gateway routes to — name the node in a DoIP gateway\'s doip `routes`'
 			}
+		}
+	}
+	return issues
+}
+
+// diag_key: a diagnostic id as an identity — its number AND its format (an 11-bit and a 29-bit id
+// of one number are two frames on the wire)
+fn diag_key(id u32, ext bool) string {
+	return '${id}#${ext}'
+}
+
+// id_text: an id as a refusal names it, its format said where it is 29-bit
+fn id_text(id u32, ext bool) string {
+	return '0x${id.hex()}' + if ext { ' (29-bit)' } else { '' }
+}
+
+// check_diag_shape: a node's diag allocation states its ids one way — req / rsp, 11-bit or with
+// `ext` 29-bit, or normal fixed addressing's sa / ta — read by the reader an [isotp] is read by
+// (ecumodel.diag_ids); what it refused is said here (REQ-TOPO-013)
+fn check_diag_shape(s System) []Issue {
+	mut issues := []Issue{}
+	for n in s.nodes {
+		for e in n.diag.errs {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-013'
+				msg:      e
+			}
+		}
+	}
+	return issues
+}
+
+// diag_conn_physical: how a node's own diagnostic connection ([isotp]) differs from its diag
+// allocation in the physical ids — request id, response id and their format — or none when they
+// agree, or the node lacks either side (REQ-TOPO-014). check_diag_conn asks it of every node a
+// gateway does not route to, check_doip_routes of a routed one, with the route's consequence.
+fn diag_conn_physical(n Node) ?string {
+	if (n.diag.req == 0 && n.diag.rsp == 0) || n.view.isotp_conns.len != 1 {
+		return none
+	}
+	c := n.view.isotp_conns[0]
+	if !c.ids_stated {
+		return none // it took the allocation (lower_diag), or states nothing the gate accepts
+	}
+	if c.rx_id != n.diag.req || c.tx_id != n.diag.rsp || c.ext != n.diag.ext {
+		return 'its [isotp] listens on ${id_text(c.rx_id, c.ext)} and answers on ${id_text(c.tx_id,
+			c.ext)}, but its diag allocation is ${id_text(n.diag.req, n.diag.ext)} / ${id_text(n.diag.rsp,
+			n.diag.ext)}'
+	}
+	return none
+}
+
+// diag_conn_functional: how a node's connection differs from its diag allocation in the functional
+// id, where the allocation states one (normal fixed addressing's functional_ta) — or none
+// (REQ-TOPO-014). A node's own listener, never a route's: check_diag_conn asks it of every node.
+fn diag_conn_functional(n Node) ?string {
+	if n.diag.functional == 0 || n.view.isotp_conns.len != 1 {
+		return none
+	}
+	c := n.view.isotp_conns[0]
+	if !c.ids_stated {
+		return none // as diag_conn_physical
+	}
+	// the number: a format that differs is the physical ids' difference too, said there
+	if c.functional_id != n.diag.functional {
+		got := if c.functional_id == 0 { 'none' } else { id_text(c.functional_id, c.ext) }
+		return 'its [isotp] functional id is ${got}, but its diag functional_ta makes it ${id_text(n.diag.functional,
+			n.diag.ext)}'
+	}
+	return none
+}
+
+// check_diag_conn: a node with both a diag allocation and its own diagnostic connection serves on
+// the allocation — the ids testers, gateways and blobly_net address it by (REQ-TOPO-014). The
+// physical ids of a node a DoIP gateway routes to are check_doip_routes' to judge, with the
+// route's consequence, so each difference is said once; its functional id is said here.
+fn check_diag_conn(s System) []Issue {
+	mut routed := map[string]bool{}
+	for gw in s.nodes {
+		for name in gw.doip_routes {
+			routed[name] = true
+		}
+	}
+	mut issues := []Issue{}
+	for n in s.nodes {
+		mut mismatches := []string{}
+		if n.name !in routed {
+			if m := diag_conn_physical(n) {
+				mismatches << m
+			}
+		}
+		if m := diag_conn_functional(n) {
+			mismatches << m
+		}
+		for m in mismatches {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-014'
+				msg:      'node "${n.name}": ${m} — a node serves on its diagnostic allocation'
+			}
+		}
+	}
+	return issues
+}
+
+// check_diag_lowered: a dissolved node's [isotp] that states no ids serves on its diag allocation,
+// which sysgen lowers into it — so it needs one (REQ-TOPO-014). A diag the reader refused is
+// check_diag_shape's to say.
+fn check_diag_lowered(s System) []Issue {
+	mut issues := []Issue{}
+	for n in s.nodes {
+		if n.view.isotp_conns.len != 1 || n.view.isotp_conns[0].ids_stated
+			|| n.view.isotp_conns[0].lowered || n.diag.errs.len > 0 {
+			continue
+		}
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-014'
+			msg:      'node "${n.name}": its [isotp] states no ids, and it has no diag allocation for sysgen to lower into it — give the node a `diag` in system.toml, or state the ids in its [isotp]'
 		}
 	}
 	return issues

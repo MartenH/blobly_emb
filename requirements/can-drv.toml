@@ -38,10 +38,10 @@ id = "REQ-CAN-DRV-004"
 title = "CAN-FD frames"
 text = "When configured for CAN-FD, the CAN driver shall transmit and receive frames with up to 64 payload bytes."
 # implemented: socket (canfd_frame), fdcan (M_CAN: FDOE/BRSE + DBTP, 64-byte
-# message-RAM elements, DLC-code encode/decode), st-hal (FDFormat/BRS). NOT yet
-# verified — the verification vehicle is the h755_canfd echo on FDCAN silicon
-# (bench run + sign-off pending); a host SocketCAN test is blocked (the blobly_net
-# Lua runner is classic-only, 8-byte can_frame). Stays draft until that sign-off.
+# message-RAM elements, DLC-code encode/decode), st-hal (FDFormat/BRS). The register-level
+# FDCAN backend exchanged 64-byte CAN-FD frames both ways on H723 silicon (isotp-canfd-silicon:
+# zone_a at TX_DL 64); the ST-HAL backend and a host SocketCAN run are not verified yet, so it
+# stays draft.
 status = "draft"
 method = "test"
 asil = "QM"
@@ -107,6 +107,22 @@ text = "When the CAN controller enters bus-off, a driver backend that owns the c
 # latch (TEC > 255, PSR.BO, CCCR.INIT set by hardware) could not be forced on this bench, so the
 # recovery path is correct-by-construction and register-reachability-checked, verification of the
 # actual BO->recover transition still pending (needs deterministic error injection).
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-COMMS-001"
+
+[[req]]
+id = "REQ-CAN-DRV-010"
+title = "29-bit identifiers"
+text = "The CAN driver shall transmit and receive data frames with a 29-bit extended identifier as well as with an 11-bit standard one — classic frames, and when configured for CAN-FD also CAN-FD frames — carrying the whole identifier and reporting its width with each received frame."
+# The ISO-TP connection's identity is (id, format) (REQ-CAN-TP-040..043), so every backend must
+# keep the width in both directions and on an FD frame too: fdcan writes and reads XTD (T0/R0
+# bit 30) independently of FDF/BRS, st-hal sets IdType beside FDFormat, socket sets CAN_EFF_FLAG
+# on both frame structs, canif keeps an ext column per PDU. Verified on host for the socket
+# backend's encoding (driver/can/can_test.v, through a socket pair: no kernel CAN layer); no
+# 29-bit frame has run on a wire yet (docs/can-tp.md §5) — the FDCAN backends await a 29-bit
+# node on silicon (zone_a on normal fixed addressing at TX_DL 64), so it stays draft.
 status = "draft"
 method = "test"
 asil = "QM"

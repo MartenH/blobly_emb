@@ -25,6 +25,7 @@ struct ModuleFrame {
 	id         u32
 	bound      bool
 	unresolved string // the binding name if it named a DBC message that doesn't exist
+	ext        bool   // a 29-bit id (a diagnostic connection's; every other module frame is 11-bit)
 }
 
 // resolve_binding maps a module id binding to its CAN id: a name resolves against
@@ -45,15 +46,27 @@ fn resolve_binding(dbs map[string]candb.Database, busname string, id u32, name s
 	return id, false
 }
 
-// module_frame builds a ModuleFrame, resolving an optional DBC-name binding and
-// flagging an unresolved name (loom2v would fail generation on it).
-fn module_frame(dbs map[string]candb.Database, s System, iface string, label string, id u32, name string) ModuleFrame {
-	rid, ok := resolve_binding(dbs, tbus_name(s, iface), id, name)
-	return ModuleFrame{iface, label, rid, name != '', if name != '' && !ok { name } else { '' }}
+// module_frame builds a ModuleFrame, resolving an optional DBC-name binding against the DBC of
+// the bus node `n` names `iface` (frame_bus) and flagging an unresolved name (loom2v would fail
+// generation on it).
+fn module_frame(dbs map[string]candb.Database, s System, n Node, iface string, label string, id u32, name string) ModuleFrame {
+	bus := if b := frame_bus(s, n, iface) { b.name } else { tbus_name(s, iface) }
+	rid, ok := resolve_binding(dbs, bus, id, name)
+	return ModuleFrame{iface, label, rid, name != '', if name != '' && !ok { name } else { '' }, false}
+}
+
+// frame_bus: the system CAN bus a frame of node `n` rides, its config naming the bus `iface` —
+// by the node's local name for it (a node on one bus calls it can0, whatever the system calls it)
+// or by the bus's interface (node_can_bus). Never another bus of that interface the node is not
+// on: placing a single-bus node's can0 frames by interface alone put them on whichever system
+// bus is can0, and checked them against that bus's frames.
+fn frame_bus(s System, n Node, iface string) ?Bus {
+	return node_can_bus(s, n, iface)
 }
 
 // module_frames returns every comm-module tx frame a node emits, each tagged with
-// the bus interface it rides. Telemetry + trace run on the host target too; shell
+// the bus interface it rides — its diagnostic answers included (its [isotp], else its diag
+// allocation). Telemetry + trace run on the host target too; shell
 // is the threadx comm thread only. Trace rides [trace].bus (else the telemetry bus).
 // trace_generated reports whether loom2v actually emits the trace module for a
 // node: always for a threadx target, and for a HOST target only in the
@@ -124,10 +137,10 @@ fn module_frames(n Node, s System, dbs map[string]candb.Database) []ModuleFrame 
 	// [telemetry]: CpuLoad is always sent (effective id, 0 if omitted); detail only
 	// when detail_id != 0. (No DBC-name binding — always a numeric/default id.)
 	if n.view.has_telemetry && n.view.telem_bus != '' {
-		out << ModuleFrame{n.view.telem_bus, 'telemetry id', n.view.telem_id, false, ''}
+		out << ModuleFrame{n.view.telem_bus, 'telemetry id', n.view.telem_id, false, '', false}
 		// the host trace runner sends inline CpuLoad only — never the detail frame.
 		if n.view.telem_detail_id != 0 && !is_trace_host(n, s) {
-			out << ModuleFrame{n.view.telem_bus, 'telemetry detail_id', n.view.telem_detail_id, false, ''}
+			out << ModuleFrame{n.view.telem_bus, 'telemetry detail_id', n.view.telem_detail_id, false, '', false}
 		}
 	}
 	// [trace]: the TraceModule transmits the record stream AND command responses,
@@ -135,63 +148,97 @@ fn module_frames(n Node, s System, dbs map[string]candb.Database) []ModuleFrame 
 	if trace_generated(n, s) {
 		tbus := if n.view.trace_bus != '' { n.view.trace_bus } else { n.view.telem_bus }
 		if tbus != '' {
-			out << module_frame(dbs, s, tbus, 'trace record id', n.view.trace_record_id,
+			out << module_frame(dbs, s, n, tbus, 'trace record id', n.view.trace_record_id,
 				n.view.trace_record_name)
-			out << module_frame(dbs, s, tbus, 'trace rsp id', n.view.trace_rsp_id,
+			out << module_frame(dbs, s, n, tbus, 'trace rsp id', n.view.trace_rsp_id,
 				n.view.trace_rsp_name)
 		}
 	}
 	// [shell]: the threadx comm thread transmits shell.out responses on the comm
 	// (telemetry) channel.
 	if effective_comm_thread(n, s) && n.view.shell_on && n.view.telem_bus != '' {
-		out << module_frame(dbs, s, n.view.telem_bus, 'shell out id', n.view.shell_out_id,
+		out << module_frame(dbs, s, n, n.view.telem_bus, 'shell out id', n.view.shell_out_id,
 			n.view.shell_out_name)
 	}
-	// [isotp]: the ISO-TP bridge TRANSMITS responses at tx_id on the isotp bus.
-	for c in n.view.isotp_conns {
-		if c.iface != '' {
-			out << ModuleFrame{c.iface, 'isotp tx id', c.tx_id, false, ''}
-		}
-	}
+	// its diagnostic answers
+	out << diag_frames(n, s, false)
 	return out
 }
 
 // module_rx_frames returns the RECEIVE endpoint ids a node's runtime listens on
-// (trace cmd + dump_fc, shell in + fc). Another node TRANSMITTING at one of these
+// (trace cmd + dump_fc, shell in + fc, its diagnostic requests: its [isotp], else its diag
+// allocation). Another node TRANSMITTING at one of these
 // ids would drive this node's module state, so they are reserved on the bus.
 fn module_rx_frames(n Node, s System, dbs map[string]candb.Database) []ModuleFrame {
 	mut out := []ModuleFrame{}
 	if trace_generated(n, s) {
 		tbus := if n.view.trace_bus != '' { n.view.trace_bus } else { n.view.telem_bus }
 		if tbus != '' {
-			out << module_frame(dbs, s, tbus, 'trace cmd (rx) id', n.view.trace_cmd_id,
+			out << module_frame(dbs, s, n, tbus, 'trace cmd (rx) id', n.view.trace_cmd_id,
 				n.view.trace_cmd_name)
 			// dump_fc receives ONLY when explicitly bound (loom2v emits its rx arm
 			// under dump_fc_bound) — otherwise there is no receiver to reserve.
 			if n.view.trace_dump_fc_bound {
-				out << module_frame(dbs, s, tbus, 'trace dump_fc (rx) id', n.view.trace_dump_fc_id,
+				out << module_frame(dbs, s, n, tbus, 'trace dump_fc (rx) id', n.view.trace_dump_fc_id,
 					n.view.trace_dump_fc_name)
 			}
 		}
 	}
 	if effective_comm_thread(n, s) && n.view.shell_on && n.view.telem_bus != '' {
-		out << module_frame(dbs, s, n.view.telem_bus, 'shell in (rx) id', n.view.shell_in_id,
+		out << module_frame(dbs, s, n, n.view.telem_bus, 'shell in (rx) id', n.view.shell_in_id,
 			n.view.shell_in_name)
-		out << module_frame(dbs, s, n.view.telem_bus, 'shell fc (rx) id', n.view.shell_fc_id,
+		out << module_frame(dbs, s, n, n.view.telem_bus, 'shell fc (rx) id', n.view.shell_fc_id,
 			n.view.shell_fc_name)
 	}
-	// [isotp]: the ISO-TP bridge RECEIVES requests at rx_id on the isotp bus.
+	// its diagnostic requests
+	out << diag_frames(n, s, true)
+	return out
+}
+
+// diag_frames: a node's diagnostic frames on its diagnostic bus, each in its format — received
+// (`rx`): its physical requests and its functional ones (reserved against transmitters, while
+// several servers listening on a functional id is what functional addressing is for);
+// transmitted: its answers. From its [isotp] (each connection on the bus it names), else from its
+// diag allocation, so every check of a node's frames holds a diag-only node's ids to the other
+// frames on its bus as a connection's are (REQ-TOPO-002). A node with an [isotp] is covered by
+// its connection's frames, which REQ-TOPO-014 holds to the allocation; an allocation whose bus
+// cannot be told (several CAN buses) is skipped.
+fn diag_frames(n Node, s System, rx bool) []ModuleFrame {
+	mut out := []ModuleFrame{}
 	for c in n.view.isotp_conns {
-		if c.iface != '' {
-			out << ModuleFrame{c.iface, 'isotp rx (rx) id', c.rx_id, false, ''}
-			// the functional id is received too — reserved against transmitters, while several
-			// servers listening on it is what functional addressing is for
-			if c.functional_id != 0 {
-				out << ModuleFrame{c.iface, 'isotp functional (rx) id', c.functional_id, false, ''}
-			}
+		if c.iface == '' {
+			continue
+		}
+		if !rx {
+			out << ModuleFrame{c.iface, 'isotp tx id', c.tx_id, false, '', c.ext}
+			continue
+		}
+		out << ModuleFrame{c.iface, 'isotp rx (rx) id', c.rx_id, false, '', c.ext}
+		if c.functional_id != 0 {
+			out << ModuleFrame{c.iface, 'isotp functional (rx) id', c.functional_id, false, '', c.ext}
 		}
 	}
+	if n.view.isotp_conns.len > 0 || (n.diag.req == 0 && n.diag.rsp == 0) {
+		return out
+	}
+	bus := s.diag_bus(n) or { return out }
+	if bus.interface == '' {
+		return out // a frame is placed on its bus by interface
+	}
+	if !rx {
+		out << ModuleFrame{bus.interface, 'diag rsp id', n.diag.rsp, false, '', n.diag.ext}
+		return out
+	}
+	out << ModuleFrame{bus.interface, 'diag req (rx) id', n.diag.req, false, '', n.diag.ext}
+	if n.diag.functional != 0 {
+		out << ModuleFrame{bus.interface, 'diag functional (rx) id', n.diag.functional, false, '', n.diag.ext}
+	}
 	return out
+}
+
+// frame_key: a frame on a bus as an identity — the bus, the id and its format
+fn frame_key(bus string, id u32, ext bool) string {
+	return '${bus}#${id}#${ext}'
 }
 
 // check_bus_dbcs: every DECLARED bus DBC must parse. loom2v loads a DBC lazily
@@ -227,6 +274,51 @@ fn message_of_signal(db candb.Database, signame string) ?candb.Message {
 		}
 	}
 	return none
+}
+
+// ProducedFrame — a DBC frame a node transmits, on the system bus it rides
+struct ProducedFrame {
+	bus string // the system bus name
+	msg candb.Message
+}
+
+// produced_frames: the DBC frames node `n` transmits, once each — by its own [[signal]] endpoints
+// (a composed node's `to = <bus>`) and by system.toml's signals naming it their producer (a
+// dissolved node, whose partial authors no wiring: the signal names its bus and its frame).
+// Every check of what a node transmits asks this, so a dissolved system's productions are seen
+// as a composed one's are.
+fn produced_frames(s System, n Node, dbs map[string]candb.Database) []ProducedFrame {
+	mut out := []ProducedFrame{}
+	mut seen := map[string]bool{}
+	for iface, sigs in n.view.produces {
+		bus := frame_bus(s, n, iface) or { continue }
+		db := dbs[bus.name] or { continue }
+		for sig in sigs {
+			m := message_of_signal(db, sig) or { continue }
+			key := frame_key(bus.name, m.id, m.ext)
+			if key !in seen {
+				seen[key] = true
+				out << ProducedFrame{bus.name, m}
+			}
+		}
+	}
+	for sig in s.signals {
+		if sig.producer != n.name || sig.frame == '' {
+			continue
+		}
+		db := dbs[sig.bus] or { continue }
+		for m in db.messages {
+			if m.name == sig.frame {
+				key := frame_key(sig.bus, m.id, m.ext)
+				if key !in seen {
+					seen[key] = true
+					out << ProducedFrame{sig.bus, m}
+				}
+				break
+			}
+		}
+	}
+	return out
 }
 
 // check_frame_single_writer: each CAN frame on a bus has exactly one transmitting
@@ -309,19 +401,22 @@ fn node_can_bus(s System, n Node, iface string) ?Bus {
 	return none
 }
 
-// RouteTx — a DoIP gateway's route as a transmitter: it sends the routed node's requests on `id`
+// RouteTx — a DoIP gateway's route as a transmitter: it sends the routed node's requests on `id`,
+// in its format (`ext`: 29-bit, REQ-NET-021)
 struct RouteTx {
 	gw     string
 	target string
 	bus    string // the system bus
 	id     u32
+	ext    bool
 }
 
-// serves_on: node `t` has an [isotp] on system bus `bus` that listens on `rx` and answers on `tx`
-fn serves_on(s System, t Node, bus string, rx u32, tx u32) bool {
+// serves_on: node `t` has an [isotp] on system bus `bus` that listens on `rx` and answers on `tx`,
+// both in the format `ext` says
+fn serves_on(s System, t Node, bus string, rx u32, tx u32, ext bool) bool {
 	for c in t.view.isotp_conns {
 		b := node_can_bus(s, t, c.iface) or { continue }
-		if b.name == bus && c.rx_id == rx && c.tx_id == tx {
+		if b.name == bus && c.rx_id == rx && c.tx_id == tx && c.ext == ext {
 			return true
 		}
 	}
@@ -372,7 +467,7 @@ fn check_route_ids(s System) []Issue {
 			if t.diag.req == 0 && t.diag.rsp == 0 {
 				continue // no diag allocation (check_doip_routes); CAN id 0 alone is an id like any
 			}
-			routes << RouteTx{gw.name, t.name, bus.name, t.diag.req}
+			routes << RouteTx{gw.name, t.name, bus.name, t.diag.req, t.diag.ext}
 		}
 		mut authored := []string{} // this gateway's [[doip.route]] targets so far
 		for r in gw.view.doip_routes {
@@ -427,11 +522,12 @@ fn check_route_ids(s System) []Issue {
 					logical_of[r.logical] = t.name
 				}
 			}
-			if !serves_on(s, t, bus.name, r.tx_id, r.rx_id) {
+			if !serves_on(s, t, bus.name, r.tx_id, r.rx_id, r.ext) {
 				issues << Issue{
 					severity: .error
-					req:      'REQ-NET-019'
-					msg:      '${where} sends on 0x${r.tx_id.hex()} and listens on 0x${r.rx_id.hex()} on bus "${bus.name}", but no [isotp] of "${t.name}" there listens and answers on those ids — every routed request would go unanswered'
+					req:      'REQ-NET-021'
+					msg:      '${where} sends on ${id_text(r.tx_id, r.ext)} and listens on ${id_text(r.rx_id,
+						r.ext)} on bus "${bus.name}", but no [isotp] of "${t.name}" there listens and answers on those ids in that format — every routed request would go unanswered'
 				}
 			}
 			// what the route carries of the node's [isotp] must be the node's own: the gateway
@@ -439,7 +535,7 @@ fn check_route_ids(s System) []Issue {
 			// the node with FC.OVFLW and the tester left unanswered (REQ-CAN-TP-023); it sends at the
 			// route's tx_dl, which the node's TX_DL is (REQ-CAN-TP-026)
 			for c in t.view.isotp_conns {
-				if c.rx_id != r.tx_id || c.tx_id != r.rx_id {
+				if c.rx_id != r.tx_id || c.tx_id != r.rx_id || c.ext != r.ext {
 					continue
 				}
 				if c.max_len() != r.max_len() {
@@ -457,7 +553,7 @@ fn check_route_ids(s System) []Issue {
 					}
 				}
 			}
-			routes << RouteTx{gw.name, t.name, bus.name, r.tx_id}
+			routes << RouteTx{gw.name, t.name, bus.name, r.tx_id, r.ext}
 		}
 	}
 	if routes.len == 0 {
@@ -471,11 +567,12 @@ fn check_route_ids(s System) []Issue {
 			}
 			for f in module_rx_frames(n, s, dbs) {
 				b := node_can_bus(s, n, f.iface) or { continue }
-				if b.name == rt.bus && f.id == rt.id {
+				if b.name == rt.bus && f.id == rt.id && f.ext == rt.ext {
 					issues << Issue{
 						severity: .error
 						req:      'REQ-NET-019'
-						msg:      'node "${rt.gw}": doip route to "${rt.target}" sends its requests on 0x${f.id.hex()} on bus "${rt.bus}", which is also the ${f.label} of "${n.name}" — it would take the routed requests as its own'
+						msg:      'node "${rt.gw}": doip route to "${rt.target}" sends its requests on ${id_text(f.id,
+							f.ext)} on bus "${rt.bus}", which is also the ${f.label} of "${n.name}" — it would take the routed requests as its own'
 					}
 				}
 			}
@@ -485,11 +582,13 @@ fn check_route_ids(s System) []Issue {
 		// transmission there lands on the target's [isotp] rx id, which check_telemetry_frames and
 		// check_identity_alloc already refuse)
 		if db := dbs[rt.bus] {
-			if m := db.lookup_frame(rt.id, false) {
+			// the frame that IS this id in this format: no J1939 PGN match (0x18DA.... ids share one)
+			if m := db.frame_exact(rt.id, rt.ext) {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-NET-019'
-					msg:      'node "${rt.gw}": doip route to "${rt.target}" sends its requests on 0x${rt.id.hex()} on bus "${rt.bus}", which is DBC application frame "${m.name}" there — two transmitters of one id, and its payloads would reach "${rt.target}" as requests'
+					msg:      'node "${rt.gw}": doip route to "${rt.target}" sends its requests on ${id_text(rt.id,
+						rt.ext)} on bus "${rt.bus}", which is DBC application frame "${m.name}" there — two transmitters of one id, and its payloads would reach "${rt.target}" as requests'
 				}
 			}
 		}
@@ -522,7 +621,7 @@ fn check_telemetry_frames(s System) []Issue {
 		}
 		// RESERVE each node's module RECEIVE ids: a frame transmitted at one of them
 		// is misrouted into the module (seeded, not reported — two listeners on one
-		// rx id is not itself a collision).
+		// rx id is not itself a collision). A diag-only node's allocation too.
 		for f in module_rx_frames(n, s, dbs) {
 			if f.unresolved != '' {
 				issues << Issue{
@@ -532,12 +631,34 @@ fn check_telemetry_frames(s System) []Issue {
 				}
 				continue
 			}
-			bus := s.bus_by_interface(f.iface) or { continue }
-			key := '${bus.name}#${f.id}#false' // modules are standard 11-bit (id>0x7ff rejected)
+			bus := frame_bus(s, n, f.iface) or { continue }
+			// an id is its number and its format: modules are 11-bit, a diagnostic id either
+			key := frame_key(bus.name, f.id, f.ext)
 			reserved[key] = '${f.label} of "${n.name}"'
 			if _ := owner[key] {
 			} else {
 				owner[key] = '${f.label} of "${n.name}"'
+			}
+		}
+	}
+	// a frame already reported as a DBC application frame: the produced-frame scan below would
+	// report the same frame again
+	mut aliased := map[string]bool{}
+	// a node's diagnostic REQUEST ids against EVERY DBC frame on its bus, in their format —
+	// whoever sends one there (a node of the system, by its own [[signal]] or by system.toml's, or
+	// an ECU the system does not build), its payloads reach the node's diagnostic link as requests
+	// (REQ-TOPO-002). Its answers are module tx frames, held to every DBC frame below.
+	for n in s.nodes {
+		for f in diag_frames(n, s, true) {
+			bus := frame_bus(s, n, f.iface) or { continue }
+			db := dbs[bus.name] or { continue }
+			if m := db.frame_exact(f.id, f.ext) {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-002'
+					msg:      'node "${n.name}": ${f.label} ${id_text(f.id, f.ext)} is DBC application frame "${m.name}" on bus "${bus.name}" — its payloads would reach the diagnostic server as requests'
+				}
+				aliased[frame_key(bus.name, f.id, f.ext)] = true
 			}
 		}
 	}
@@ -554,10 +675,11 @@ fn check_telemetry_frames(s System) []Issue {
 				}
 				continue
 			}
-			bus := s.bus_by_interface(f.iface) or { continue }
-			key := '${bus.name}#${f.id}#false' // modules are standard 11-bit (id>0x7ff rejected)
-			// FDCAN masks id & 0x7ff — an id above that is truncated on the wire
-			if f.id > 0x7ff {
+			bus := frame_bus(s, n, f.iface) or { continue }
+			key := frame_key(bus.name, f.id, f.ext)
+			// an 11-bit id above 0x7ff is truncated on the wire (a 29-bit diagnostic id is sent
+			// with the extended id, whole)
+			if !f.ext && f.id > 0x7ff {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-002'
@@ -568,7 +690,7 @@ fn check_telemetry_frames(s System) []Issue {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-002'
-					msg:      'node "${n.name}": ${f.label} 0x${f.id.hex()} collides with its own ${prev} on bus "${bus.name}"'
+					msg:      'node "${n.name}": ${f.label} ${id_text(f.id, f.ext)} collides with its own ${prev} on bus "${bus.name}"'
 				}
 				continue // already reported this node's id; don't double-count in owner
 			}
@@ -578,7 +700,7 @@ fn check_telemetry_frames(s System) []Issue {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-002'
-					msg:      'bus "${bus.name}": ${f.label} 0x${f.id.hex()} of "${n.name}" collides with ${prev} — these are single-writer per bus'
+					msg:      'bus "${bus.name}": ${f.label} ${id_text(f.id, f.ext)} of "${n.name}" collides with ${prev} — these are single-writer per bus'
 				}
 			} else {
 				owner[key] = 'the ${f.label} of "${n.name}"'
@@ -588,19 +710,21 @@ fn check_telemetry_frames(s System) []Issue {
 			// named trace/shell bindings).
 			if !f.bound {
 				if db := dbs[bus.name] {
-					// module frames (telem/trace/shell) are standard 11-bit, so they only
-					// alias a STANDARD DBC frame of the same id — not an extended one.
-					if m := db.lookup_frame(f.id, false) {
+					// a frame aliases only a DBC frame of the same id AND format (module frames
+					// are 11-bit; a diagnostic id either) — exactly: no J1939 PGN match
+					if m := db.frame_exact(f.id, f.ext) {
 						issues << Issue{
 							severity: .error
 							req:      'REQ-TOPO-002'
-							msg:      'node "${n.name}": ${f.label} 0x${f.id.hex()} aliases DBC application frame "${m.name}" on bus "${bus.name}"'
+							msg:      'node "${n.name}": ${f.label} ${id_text(f.id, f.ext)} aliases DBC application frame "${m.name}" on bus "${bus.name}"'
 						}
+						aliased[key] = true
 					}
 				}
 			}
-			// collision with the node's own NM peer range, when the frame rides its NM bus
-			if n.view.has_nm && n.view.nm_enabled && f.iface == n.view.nm_bus
+			// collision with the node's own NM peer range (11-bit alive ids), when the frame rides
+			// its NM bus
+			if !f.ext && n.view.has_nm && n.view.nm_enabled && f.iface == n.view.nm_bus
 				&& f.id >= n.view.peers_lo && f.id <= n.view.peers_hi {
 				issues << Issue{
 					severity: .error
@@ -615,18 +739,17 @@ fn check_telemetry_frames(s System) []Issue {
 	// telemetry): the application traffic would be routed into that module's
 	// on_cmd/receiver, or contend with a module transmitter, on the same CAN id.
 	for n in s.nodes {
-		for iface, sigs in n.view.produces {
-			bus := s.bus_by_interface(iface) or { continue }
-			db := dbs[bus.name] or { continue }
-			for sig in sigs {
-				m := message_of_signal(db, sig) or { continue }
-				key := '${bus.name}#${m.id}#${m.ext}'
-				if prev := reserved[key] {
-					issues << Issue{
-						severity: .error
-						req:      'REQ-TOPO-002'
-						msg:      'bus "${bus.name}": application frame "${m.name}" 0x${m.id.hex()} produced by "${n.name}" collides with ${prev} — application traffic would be misrouted into that module / contend for the id'
-					}
+		for pf in produced_frames(s, n, dbs) {
+			key := frame_key(pf.bus, pf.msg.id, pf.msg.ext)
+			if key in aliased {
+				continue // said above, as the DBC frame it is
+			}
+			if prev := reserved[key] {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-002'
+					msg:      'bus "${pf.bus}": application frame "${pf.msg.name}" ${id_text(pf.msg.id,
+						pf.msg.ext)} produced by "${n.name}" collides with ${prev} — application traffic would be misrouted into that module / contend for the id'
 				}
 			}
 		}

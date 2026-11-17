@@ -2,6 +2,7 @@ module diag
 
 // @verifies REQ-BOOT-003 REQ-DIAG-001 REQ-DIAG-002 REQ-DIAG-006 REQ-DIAG-007 REQ-DIAG-022 REQ-DIAG-028
 // @verifies REQ-DIAG-037 REQ-CAN-TP-013 REQ-CAN-TP-019
+// @verifies REQ-CAN-TP-040 REQ-CAN-TP-042 REQ-CAN-TP-043
 import comm.isotp
 import comm.uds
 import driver.can
@@ -278,9 +279,13 @@ fn test_a_link_expiring_in_the_pass_does_not_hold_s3() {
 
 fn test_frames_that_are_not_this_connections_are_left_alone() {
 	mut c := new_conn()
+	// an 11-bit connection: its numbers as 29-bit ids are other frames, physical and functional
 	mut ext := sf(rx, [u8(0x3E), 0x00])
 	ext.ext = true
 	assert c.on_frame(0, ext) == .other
+	mut fext := sf(fid, [u8(0x3E), 0x00])
+	fext.ext = true
+	assert c.on_frame(0, fext) == .other
 	assert c.on_frame(0, sf(0x123, [u8(0x3E), 0x00])) == .other
 	// a first frame on the functional id is this connection's, and no request: dropped
 	mut ff := sf(fid, [u8(0x3E), 0x00])
@@ -1214,4 +1219,144 @@ fn test_n_ar_releases_a_connection_whose_flow_control_cannot_leave() {
 	c.housekeep(start + 999_999 + 5001)
 	assert c.server.session == uds.session_default
 	assert c.on_frame(start + 1_005_000, sf(fid, [u8(0x3E), 0x00])) == .served
+}
+
+// ---- 29-bit identifiers (REQ-CAN-TP-040..043): the format is part of the id ----
+
+// a node on normal fixed addressing: its own address 0x10, the tester 0xF1, functional 0x33
+const rx29 = u32(0x18DA10F1)
+const tx29 = u32(0x18DAF110)
+const fid29 = u32(0x18DB33F1)
+
+fn conn29() Connection {
+	mut c := new_conn()
+	c.rx_id = rx29
+	c.tx_id = tx29
+	c.functional_id = fid29
+	c.ext = true
+	return c
+}
+
+// sf_on: a single frame on `id` in a format
+fn sf_on(id u32, ext bool, req []u8) &can.Frame {
+	mut f := sf(id, req)
+	f.ext = ext
+	return f
+}
+
+// pass_on: pass() on the connection's own ids and format — the tester sends on rx_id as the
+// connection's format says, and every frame the connection sends is on tx_id in that format
+fn pass_on(mut c Connection, now u64, mut t isotp.Link) {
+	c.housekeep(now)
+	mut p := isotp.Pdu{}
+	for t.poll(now, mut p) {
+		mut f := frame_of(c.rx_id, p)
+		f.ext = c.ext
+		if c.on_frame(now, f) == .request {
+			break
+		}
+	}
+	c.serve()
+	mut f := can.Frame{}
+	for c.produce(now, mut f) {
+		assert f.id == c.tx_id && f.ext == c.ext
+		t.on_frame(now, pdu_of(&f))
+	}
+}
+
+fn exchange_on(mut c Connection, mut t isotp.Link, mut now &u64, req []u8) []u8 {
+	assert t.send(&req[0], req.len)
+	for _ in 0 .. 50 {
+		unsafe {
+			*now += 1000
+		}
+		pass_on(mut c, *now, mut t)
+		if t.has_request() {
+			mut buf := []u8{len: isotp.message_limit}
+			n := t.take(unsafe { &buf[0] })
+			return buf[..n]
+		}
+	}
+	assert false, 'no answer to ${req}'
+	return []u8{}
+}
+
+fn test_a_29_bit_connection_takes_29_bit_requests_and_answers_in_29_bit() {
+	mut c := conn29()
+	// the same number as an 11-bit frame is another frame
+	assert c.on_frame(0, sf_on(rx29, false, [u8(0x3E), 0x00])) == .other
+	assert c.on_frame(0, sf_on(rx29, true, [u8(0x3E), 0x00])) == .request
+	c.serve()
+	mut f := can.Frame{}
+	assert c.produce(0, mut f)
+	assert f.ext && f.id == tx29
+	assert f.data[0] == 0x02 && f.data[1] == 0x7E && f.data[2] == 0x00
+}
+
+fn test_a_29_bit_connection_takes_29_bit_functional_requests_only() {
+	mut c := conn29()
+	assert c.on_frame(0, sf_on(fid29, false, [u8(0x3E), 0x00])) == .other
+	assert c.on_frame(0, sf_on(fid29, true, [u8(0x3E), 0x00])) == .served
+	mut f := can.Frame{}
+	assert c.produce(0, mut f) // its answer, on the physical response id
+	assert f.ext && f.id == tx29
+}
+
+// normal fixed addressing at priority 6: an id is compared whole, so the same request at priority 7
+// (0x1CDA10F1) is not this connection's
+fn test_a_normal_fixed_request_at_another_priority_is_not_served() {
+	mut c := conn29()
+	assert c.on_frame(0, sf_on(0x1CDA10F1, true, [u8(0x3E), 0x00])) == .other
+	assert c.on_frame(0, sf_on(0x1CDB33F1, true, [u8(0x3E), 0x00])) == .other
+	assert c.link.idle()
+}
+
+// a multi-frame request and answer, the tester's flow control and ours all 29-bit
+fn test_a_29_bit_connection_runs_a_multi_frame_exchange() {
+	mut c := conn29()
+	mut t := new_tester()
+	mut now := u64(0)
+	mut want := [u8(0x62), 0xF1, 0x90]
+	want << name.bytes()
+	assert exchange_on(mut c, mut t, mut &now, [u8(0x22), 0xF1, 0x90]) == want
+	// a 10-byte write request arrives as a first frame and consecutive frames: refused (no
+	// writable DID) only once it is whole, so the flow control it needed went out as 29-bit
+	got := exchange_on(mut c, mut t, mut &now, [u8(0x2E), 0xF1, 0x90, 1, 2, 3, 4, 5, 6, 7])
+	assert got.len == 3 && got[0] == 0x7F && got[1] == 0x2E
+}
+
+// 29-bit on small ids: `ext` with an id at or below 0x7FF is a 29-bit id still, never the 11-bit one
+fn test_a_29_bit_connection_on_small_ids_ignores_their_11_bit_frames() {
+	mut c := new_conn()
+	c.ext = true
+	assert c.on_frame(0, sf(rx, [u8(0x3E), 0x00])) == .other
+	assert c.on_frame(0, sf(fid, [u8(0x3E), 0x00])) == .other
+	assert c.on_frame(0, sf_on(rx, true, [u8(0x3E), 0x00])) == .request
+	c.serve()
+	mut f := can.Frame{}
+	assert c.produce(0, mut f)
+	assert f.ext && f.id == tx
+}
+
+// @verifies REQ-CAN-TP-027 REQ-CAN-TP-040
+// a 29-bit connection at TX_DL 64: the format and the frame length apply together — its 20-byte
+// answer is one 29-bit frame of 24 bytes behind the escape, and a tester's 29-bit 64-byte frames
+// reassemble into a 200-byte request that is answered on its 29-bit response id
+fn test_a_29_bit_connection_at_tx_dl_64_exchanges_fd_frames() {
+	mut c := conn29()
+	c.link.tx_dl = 64
+	c.server.dids[1].len = 17 // 62 F1 A0 + 17 bytes: a 20-byte answer
+	assert c.on_frame(0, sf_on(rx29, true, [u8(0x22), 0xF1, 0xA0])) == .request
+	c.serve()
+	mut f := can.Frame{}
+	assert c.produce(0, mut f)
+	assert f.ext && f.id == tx29 && f.len == 24
+	assert f.data[..5] == [u8(0x00), 20, 0x62, 0xF1, 0xA0]
+	mut t := new_tester()
+	t.tx_dl = 64
+	mut now := u64(0)
+	mut req := []u8{len: 200, init: u8(index)}
+	req[0] = 0x3E // a TesterPresent 200 bytes long: answered incorrectMessageLength once whole
+	req[1] = 0x00
+	assert exchange_on(mut c, mut t, mut &now, req) == [u8(0x7F), 0x3E, 0x13]
 }

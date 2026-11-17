@@ -22,6 +22,7 @@ struct DoipRoute {
 	bus     string // the gateway's [bus.*] the node is on
 	tx_id   int    // the node's physical request id: what the gateway sends on
 	rx_id   int    // its response id: what the gateway receives on
+	ext     bool   // both are 29-bit identifiers (the node's 29-bit or normal fixed addressing)
 	// its [isotp] max_message: the longest request the gateway forwards to it
 	max_message int
 	// its [isotp] tx_dl: the frame length the gateway sends to it with (above 8 only on a CAN-FD
@@ -57,8 +58,10 @@ fn parse_doip(doc toml.Doc) DoipCfg {
 			node:    (r['node'] or { toml.Any('') }).string()
 			logical: toml_int(r, 'logical', 0, 0, 0xFFFF, '[[doip.route]]')
 			bus:     (r['bus'] or { toml.Any('') }).string()
-			tx_id:   toml_int(r, 'tx_id', 0, 0, 0x7FF, '[[doip.route]]')
-			rx_id:   toml_int(r, 'rx_id', 0, 0, 0x7FF, '[[doip.route]]')
+			// 11-bit unless ext — ecumodel.validate (route_id_errors) has refused a wider one
+			tx_id:   toml_int(r, 'tx_id', 0, 0, i64(isotp.ext_id_max), '[[doip.route]]')
+			rx_id:   toml_int(r, 'rx_id', 0, 0, i64(isotp.ext_id_max), '[[doip.route]]')
+			ext:     (r['ext'] or { toml.Any(false) }).bool()
 			max_message: schema_int(r, 'doip_route', 'max_message', isotp.default_message,
 				'[[doip.route]]')
 			tx_dl:       read_tx_dl(r, 'doip_route', doc, (r['bus'] or { toml.Any('') }).string(),
@@ -141,8 +144,9 @@ fn validate_doip_routes(m Model) {
 			if c.functional_id != 0 { // 0: no functional id (no listener on 0)
 				own << c.functional_id
 			}
-			if c.bus == r.bus && (r.tx_id in own || r.rx_id in own) {
-				panic('${where}: its ids 0x${r.tx_id.hex()} / 0x${r.rx_id.hex()} are this node\'s own [isotp] ids on bus "${r.bus}"')
+			// an id is its number and its format: the same number in the other width is another frame
+			if c.bus == r.bus && c.ext == r.ext && (r.tx_id in own || r.rx_id in own) {
+				panic('${where}: its ids 0x${r.tx_id.hex()} / 0x${r.rx_id.hex()} (${id_format(r.ext)}) are this node\'s own [isotp] ids on bus "${r.bus}"')
 			}
 		}
 		// a routed exchange neither holds the network awake nor wakes it, and would transmit on a
@@ -155,8 +159,9 @@ fn validate_doip_routes(m Model) {
 	// two routes on one bus are two nodes: they must not share a diagnostic id there
 	for i, a in d.routes {
 		for b in d.routes[i + 1..] {
-			if a.bus == b.bus && (a.tx_id in [b.tx_id, b.rx_id] || a.rx_id in [b.tx_id, b.rx_id]) {
-				panic('loom2v: [[doip.route]] "${a.node}" and "${b.node}" share a diagnostic id on bus "${a.bus}" (0x${a.tx_id.hex()} / 0x${a.rx_id.hex()} and 0x${b.tx_id.hex()} / 0x${b.rx_id.hex()}) — one request would reach both')
+			if a.bus == b.bus && a.ext == b.ext
+				&& (a.tx_id in [b.tx_id, b.rx_id] || a.rx_id in [b.tx_id, b.rx_id]) {
+				panic('loom2v: [[doip.route]] "${a.node}" and "${b.node}" share a diagnostic id on bus "${a.bus}" (0x${a.tx_id.hex()} / 0x${a.rx_id.hex()} and 0x${b.tx_id.hex()} / 0x${b.rx_id.hex()}, ${id_format(a.ext)}) — one request would reach both')
 			}
 		}
 	}
@@ -164,6 +169,11 @@ fn validate_doip_routes(m Model) {
 	if level < 1 || level > 8 || sa_levels(m) & (u8(1) << (level - 1)) == 0 {
 		panic('loom2v: [doip] route_level ${level} is not a security level this node\'s [uds] serves — a tester could never earn the unlock routing needs (REQ-NET-020)')
 	}
+}
+
+// id_format: how a refusal names an id's format
+fn id_format(ext bool) string {
+	return if ext { '29-bit' } else { '11-bit' }
 }
 
 // doip_route_init: on the comm thread before its loop — the router (comm/diagroute), its routes and
@@ -180,6 +190,9 @@ fn doip_route_init(m Model) []string {
 		g << '\t\tbus:     u8(${route_bus_index(r.bus)})'
 		g << '\t\ttx_id:   u32(0x${r.tx_id.hex()})'
 		g << '\t\trx_id:   u32(0x${r.rx_id.hex()})'
+		if r.ext {
+			g << '\t\text:     true // 29-bit identifiers: the node\'s format (REQ-NET-021)'
+		}
 		g << '\t\tmax_message: ${r.max_message} // its [isotp] max_message: a longer request is refused at once'
 		if r.tx_dl != 8 {
 			g << '\t\ttx_dl:   u8(${r.tx_dl}) // its [isotp] tx_dl: CAN-FD frames to it, on a CAN-FD bus'

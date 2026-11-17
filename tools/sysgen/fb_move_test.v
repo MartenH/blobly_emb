@@ -11,6 +11,9 @@ import sysmodel
 // or be refused with one of the reasons below: what a satellite cannot do yet (#424). The list
 // shrinks as those close; a move refused for any other reason is a new gap, and fails here.
 // FBs of one shape (fb_shape) move alike, so one of each is moved; FB_MOVE_ALL=1 moves every FB.
+// The same harness builds system_full with zone_a on normal fixed addressing
+// (test_a_normal_fixed_node_and_its_route_compile): the one compile of a 29-bit connection's
+// generated code and of a route carrying the format.
 
 const move_full_dir = os.join_path(@VMODROOT, 'examples', 'system_full')
 
@@ -257,7 +260,33 @@ fn v_check(entry string, tasks string, paths []string) os.Result {
 fn images_compile(dir string, node string) string {
 	gen := os.join_path(dir, 'gen-${node}.toml')
 	doc := toml.parse_file(gen) or { panic(err) }
-	dbc := os.join_path(dir, (doc.value_opt('import.dbc') or { toml.Any('') }).string())
+	nd := os.join_path(dir, 'nodes', node)
+	owner_main := if os.is_file(os.join_path(nd, 'main.v')) { os.join_path(nd, 'main.v') } else { os.join_path(dir, 'main.v') }
+	return images_compile_on(dir, node, os.join_path(dir, (doc.value_opt('import.dbc') or {
+		toml.Any('')
+	}).string()), owner_main)
+}
+
+// gateway_compiles: images_compile for a gateway, on its buses' DBCs merged into one and from the
+// system's main.v, as its Makefile builds the target image (dbcmerge: both frames of every route
+// resolve in one DBC)
+fn gateway_compiles(dir string, node string, dbcs []string) string {
+	nd := os.join_path(dir, 'nodes', node)
+	os.mkdir_all(os.join_path(nd, 'gen')) or { panic(err) }
+	merged := os.join_path(nd, 'gen', 'merged.dbc')
+	dbcmerge := sysmodel.tool_binary('dbcmerge') or { panic(err) }
+	mut args := [dbcmerge, merged]
+	args << dbcs.map(os.join_path(dir, it))
+	m := os.exec(args)
+	if m.exit_code != 0 {
+		return 'dbcmerge: ${m.output}'
+	}
+	return images_compile_on(dir, node, merged, os.join_path(dir, 'main.v'))
+}
+
+fn images_compile_on(dir string, node string, dbc string, owner_main string) string {
+	gen := os.join_path(dir, 'gen-${node}.toml')
+	doc := toml.parse_file(gen) or { panic(err) }
 	nd := os.join_path(dir, 'nodes', node)
 	for sub in ['sig', 'ports', 'gen'] {
 		os.mkdir_all(os.join_path(nd, sub)) or { panic(err) }
@@ -274,7 +303,6 @@ fn images_compile(dir string, node string) string {
 	if l.exit_code != 0 {
 		return 'loom2v: ${l.output}'
 	}
-	owner_main := if os.is_file(os.join_path(nd, 'main.v')) { os.join_path(nd, 'main.v') } else { os.join_path(dir, 'main.v') }
 	o := v_check(owner_main, loom_tasks(os.join_path(nd, 'gen', 'loom_build.mk')), [nd])
 	if o.exit_code != 0 {
 		return 'owner image: ${o.output}'
@@ -381,4 +409,55 @@ fn test_the_unmoved_node_compiles_on_both_cores() {
 	assert r.exit_code == 0, r.output
 	why := images_compile(dir, 'domain')
 	assert why == '', why
+}
+
+// @verifies REQ-CAN-TP-041 REQ-NET-021 REQ-TOPO-014
+// zone_a on normal fixed addressing, stated once — its diag in system.toml by sa / ta /
+// functional_ta, its [isotp] stating no ids — generates: sysgen lowers the allocation into its
+// [isotp] and into its gateway's route (the derived ids and the format), and both images
+// type-check: zone_a's connection told its format, sysnode's router given a 29-bit route
+fn test_a_normal_fixed_node_and_its_route_compile() {
+	dir := stage_move('normal_fixed')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	sys := os.join_path(dir, 'system.toml')
+	text := os.read_file(sys) or { panic(err) }
+	diag := 'diag  = { req = 0x7C0, rsp = 0x7C8, logical = 0x07C0 }'
+	assert text.count(diag) == 1, 'zone_a\'s diag changed shape — update this test'
+	os.write_file(sys, text.replace(diag, 'diag  = { addressing = "normal_fixed", sa = 0xC0, ta = 0xF1, functional_ta = 0x33, logical = 0x07C0 }')) or {
+		panic(err)
+	}
+	ecu := os.join_path(dir, 'nodes', 'zone_a', 'ecu.toml')
+	src := os.read_file(ecu) or { panic(err) }
+	mut lines := []string{}
+	mut dropped := 0
+	for l in src.split('\n') {
+		if l.all_before('=').trim_space() in ['rx_id', 'tx_id', 'functional_id'] && dropped < 3 {
+			dropped++
+			continue
+		}
+		lines << l
+	}
+	assert dropped == 3, 'zone_a\'s [isotp] ids changed shape — update this test'
+	os.write_file(ecu, lines.join('\n')) or { panic(err) }
+	r := run_sysgen(dir)
+	assert r.exit_code == 0, r.output
+	gen := os.read_file(os.join_path(dir, 'gen-zone_a.toml')) or { panic(err) }
+	lowered := gen.all_after('\n[isotp]\n')
+	assert lowered.starts_with('# lowered by sysgen from the node\'s diag in system.toml (REQ-TOPO-014)\naddressing = "normal_fixed"\nsa = 0xC0\nta = 0xF1\nfunctional_ta = 0x33\nbus'), gen
+	gw := os.read_file(os.join_path(dir, 'gen-sysnode.toml')) or { panic(err) }
+	assert gw.contains('tx_id   = 0x18DAC0F1') && gw.contains('rx_id   = 0x18DAF1C0'), gw
+	assert gw.contains('ext     = true'), gw
+	why := images_compile(dir, 'zone_a')
+	assert why == '', why
+	zone := os.read_file(os.join_path(dir, 'nodes', 'zone_a', 'gen', 'loom_gen.v')) or { panic(err) }
+	assert zone.contains('g_diag.ext = true')
+	assert zone.contains('u32(0x18dac0f1), u32(0x18daf1c0), u32(0x18db33f1)'), 'the lowered ids'
+	why2 := gateway_compiles(dir, 'sysnode', ['compute.dbc', 'edge.dbc'])
+	assert why2 == '', why2
+	route := os.read_file(os.join_path(dir, 'nodes', 'sysnode', 'gen', 'loom_gen.v')) or {
+		panic(err)
+	}
+	assert route.contains('ext:     true')
 }

@@ -108,6 +108,7 @@ fn boot_gen_h(m Model, can_idx string, fd bool) []string {
 		'#define BOOT_CAN_FD ${if fd { 1 } else { 0 }} /* its frame format, as the application opens it */',
 		'#define BOOT_RX_ID 0x${c.rx_id.hex()}u',
 		'#define BOOT_TX_ID 0x${c.tx_id.hex()}u',
+		'#define BOOT_EXT ${int(c.ext)} /* [isotp] ext or normal_fixed: BOOT_RX_ID / BOOT_TX_ID are 29-bit */',
 		'#define BOOT_BS ${c.bs}u',
 		'#define BOOT_STMIN ${c.stmin}u',
 		'#define BOOT_TX_DL ${c.tx_dl}u /* [isotp] tx_dl: the frame length it answers with (above 8 only with BOOT_CAN_FD) */',
@@ -534,6 +535,10 @@ fn conn_init_lines(m Model, c IsotpConn, conn string) []string {
 	if c.tx_dl != 8 {
 		// its channel is opened CAN-FD: read_tx_dl refused the rest (REQ-CAN-TP-026)
 		g << '\t${conn}.link.tx_dl = ${c.tx_dl} // [isotp] tx_dl: CAN-FD frames of up to ${c.tx_dl} bytes'
+	}
+	if c.ext {
+		// emitted only when set: an 11-bit node's generated code stays as it was
+		g << '\t${conn}.ext = true // [isotp]: 29-bit identifiers (REQ-CAN-TP-040/041)'
 	}
 	g << '\t${srv}.no_programming = true // programming is the bootloader\'s'
 	if m.boot.on {

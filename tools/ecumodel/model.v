@@ -1558,8 +1558,17 @@ const isotp_server_keys = ['s3_ms', 'security_attempts', 'security_delay_ms', 's
 
 // validate_diag_layout refuses the pre-[uds] diagnostic layout, naming the move it needs rather
 // than translating it: [[isotp]] (an array, with a `name`) is now the [isotp] table — a node has
-// ONE diagnostic server, and so one connection — and the server's own keys moved to [uds].
+// ONE diagnostic server, and so one connection — and the server's own keys moved to [uds]. Then
+// the connection's ids, by the one reader of how an id is stated (addressing.v diag_ids: normal or
+// normal fixed addressing, 11- or 29-bit, REQ-CAN-TP-040/041), and a gateway's routes' ids in
+// their node's format (route_id_errors, REQ-NET-021).
 pub fn validate_diag_layout(doc toml.Doc) []string {
+	mut errs := isotp_layout_errors(doc)
+	errs << route_id_errors(doc)
+	return errs
+}
+
+fn isotp_layout_errors(doc toml.Doc) []string {
 	mut errs := []string{}
 	iv := doc.value_opt('isotp') or { return errs }
 	if iv is []toml.Any {
@@ -1590,5 +1599,7 @@ pub fn validate_diag_layout(doc toml.Doc) []string {
 	if 'name' in im {
 		errs << '[isotp] `name` is gone: a node has one diagnostic connection — drop it (docs/diagnostics.md)'
 	}
+	_, id_errs := diag_ids(cfgschema.ecu, isotp_keys, im, '[isotp]')
+	errs << id_errs
 	return errs
 }

@@ -210,9 +210,14 @@ stmin_ms = 0        # min separation time we request
 max_message = 520   # optional: the longest message either way (8..4095)
 ```
 
-What is implemented — normal addressing on 11-bit ids, 8-byte frames by default and CAN-FD frames up
-to 64 bytes per `[isotp] tx_dl` (any length received; every frame a CAN-FD frame on an FD bus),
-single, first, consecutive and flow-control frames, N_Bs / N_Cr / N_Ar / WFTmax — and how it
+The ids above are normal addressing on 11-bit ids; `ext = true` makes them 29-bit, and
+`addressing = "normal_fixed"` states the node's address `sa` and the tester's `ta` in their place,
+from which the 29-bit ids `0x18DA<sa><ta>` (requests) and `0x18DA<ta><sa>` (answers) derive.
+
+What is implemented — normal addressing on 11- or 29-bit ids and normal fixed addressing (not
+extended or mixed addressing), 8-byte frames by default and CAN-FD frames up to 64 bytes per
+`[isotp] tx_dl` (any length received; every frame a CAN-FD frame on an FD bus), single, first,
+consecutive and flow-control frames, N_Bs / N_Cr / N_Ar / WFTmax — and how it
 behaves where the standard leaves the choice, is [can-tp.md](can-tp.md); the requirements are
 [requirements/can-tp.toml](../requirements/can-tp.toml).
 

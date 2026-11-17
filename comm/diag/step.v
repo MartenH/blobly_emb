@@ -48,18 +48,18 @@ pub fn take_request(mut l isotp.Link, buf &u8, blocked bool) int {
 	return if l.busy() || blocked { 0 } else { got }
 }
 
-// next_frame: the next frame of the answer in flight, paced by the peer's flow control, at the
-// length the link gives it — 8 bytes, or up to its TX_DL on a CAN-FD connection, which only an
-// owner whose channel is opened CAN-FD configures. Ask only while the channel is ready: the link
-// counts the frame as sent.
-pub fn next_frame(mut l isotp.Link, tx_id u32, now u64, mut f can.Frame) bool {
+// next_frame: the next frame of the answer in flight, paced by the peer's flow control, on
+// `tx_id` in its format (`ext`: a 29-bit id), at the length the link gives it — 8 bytes, or up to
+// its TX_DL on a CAN-FD connection, which only an owner whose channel is opened CAN-FD configures.
+// Ask only while the channel is ready: the link counts the frame as sent.
+pub fn next_frame(mut l isotp.Link, tx_id u32, ext bool, now u64, mut f can.Frame) bool {
 	mut p := isotp.Pdu{}
 	if !l.poll(now, mut p) {
 		return false
 	}
 	f.id = tx_id
 	f.len = u8(p.len)
-	f.ext = false
+	f.ext = ext
 	for i in 0 .. p.len {
 		f.data[i] = p.data[i]
 	}
@@ -69,9 +69,9 @@ pub fn next_frame(mut l isotp.Link, tx_id u32, now u64, mut f can.Frame) bool {
 // pump sends the answer in flight while the channel is ready. A frame the channel REFUSES aborts
 // the transfer (the rest could never be reassembled) and returns false: the owner must then treat
 // the answer as lost — a reset it announced does not happen (REQ-BOOT-012: never reset unanswered).
-pub fn pump[H](mut l isotp.Link, tx_id u32, now u64, mut ch H) bool {
+pub fn pump[H](mut l isotp.Link, tx_id u32, ext bool, now u64, mut ch H) bool {
 	mut f := can.Frame{}
-	for ch.tx_ready() && next_frame(mut l, tx_id, now, mut f) {
+	for ch.tx_ready() && next_frame(mut l, tx_id, ext, now, mut f) {
 		if !ch.send(f) {
 			l.abort_tx()
 			return false
@@ -109,12 +109,14 @@ pub fn wire_drain[H](mut ch H, clock fn () u64) bool {
 // req and resp hold the link's capacities, and may be the link's own buffers (the bootloader binds
 // them so): a request is read from req before the pass goes on, and resp is written only while the
 // link is idle, so neither is touched under a transfer in flight.
-pub fn serve_step[T, H](mut s T, mut l isotp.Link, rx_id u32, tx_id u32, now u64, mut ch H, req &u8, resp &u8, clock fn () u64) bool {
+// rx_id and tx_id are 29-bit identifiers when `ext` (the node's [isotp] ext, or normal fixed
+// addressing), else 11-bit: a frame is taken only on rx_id in that format, every frame goes out in it.
+pub fn serve_step[T, H](mut s T, mut l isotp.Link, rx_id u32, tx_id u32, ext bool, now u64, mut ch H, req &u8, resp &u8, clock fn () u64) bool {
 	l.tick(now)
 	mut f := can.Frame{}
 	for ch.recv(mut f) {
-		if f.id != rx_id || f.ext {
-			continue // this connection's physical request id only
+		if f.id != rx_id || f.ext != ext {
+			continue // this connection's physical request id, in its format, only (REQ-CAN-TP-042)
 		}
 		if take_frame(mut l, now, &f) {
 			break // one request at a time: the next frame stays queued until this one is served
@@ -130,7 +132,7 @@ pub fn serve_step[T, H](mut s T, mut l isotp.Link, rx_id u32, tx_id u32, now u64
 			lost = true
 		}
 	}
-	if !pump(mut l, tx_id, now, mut ch) {
+	if !pump(mut l, tx_id, ext, now, mut ch) {
 		s.cancel_reset()
 		lost = true
 	}
@@ -149,7 +151,7 @@ pub fn serve_step[T, H](mut s T, mut l isotp.Link, rx_id u32, tx_id u32, now u64
 	}
 	if s.work_pending() && !l.busy() {
 		wn := s.work(now, resp)
-		if wn > 0 && (!l.send(resp, wn) || !pump(mut l, tx_id, now, mut ch)) {
+		if wn > 0 && (!l.send(resp, wn) || !pump(mut l, tx_id, ext, now, mut ch)) {
 			s.cancel_reset()
 			s.work_lost()
 		}

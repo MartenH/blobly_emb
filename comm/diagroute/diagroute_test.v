@@ -3,7 +3,7 @@ module diagroute
 // The router between a DoIP tester and a node behind the gateway, against a scripted node on its
 // own ISO-TP link: what is forwarded, what comes back and in which order, how long the gateway
 // waits, and who may route at all.
-// @verifies REQ-NET-019 REQ-NET-020
+// @verifies REQ-NET-019 REQ-NET-020 REQ-NET-021 REQ-CAN-TP-042
 import comm.isotp
 import comm.uds
 import driver.can
@@ -298,7 +298,7 @@ fn test_frames_of_another_bus_id_or_format_are_not_the_routes() {
 	assert !r.on_frame(edge, &f, 1000) // another node's answer
 	f.id = rsp_id
 	f.ext = true
-	assert !r.on_frame(edge, &f, 1000) // an extended id
+	assert !r.on_frame(edge, &f, 1000) // the response number as a 29-bit id: another frame
 	f.ext = false
 	assert r.on_frame(edge, &f, 1000)
 	assert r.waiting() == 1
@@ -1522,4 +1522,131 @@ fn test_an_answer_whose_flow_control_cannot_leave_ends_at_n_ar() {
 	assert r.timeouts == 1
 	assert take(mut r) == long
 	assert !r.busy()
+}
+
+// ---- a node on 29-bit ids (its [[doip.route]] ext, REQ-NET-021) ----
+
+// the node at address 0x20 on normal fixed addressing, the tester address 0xF1
+const req29 = u32(0x18DA20F1)
+const rsp29 = u32(0x18DAF120)
+
+fn router29() Router {
+	mut r := Router{}
+	storage := []u8{len: storage_len(isotp.default_message)}
+	r.init(1, 8, &storage[0], isotp.default_message)
+	assert r.add(Route{
+		logical: la
+		bus:     edge
+		tx_id:   req29
+		rx_id:   rsp29
+		ext:     true
+	})
+	return r
+}
+
+// pass29: pass() on the 29-bit route — every frame the router sends is 29-bit on the request id,
+// and the node's frames come back 29-bit on its response id
+fn pass29(mut r Router, mut n Node, mut ch Chan, now u64) {
+	r.step(now)
+	r.pump(now, mut ch)
+	for f in ch.tx {
+		assert f.id == req29 && f.ext
+		n.link.on_frame(now, pdu(f))
+	}
+	ch.tx.clear()
+	if n.link.has_request() {
+		mut buf := []u8{len: isotp.message_limit}
+		got := n.link.take(unsafe { &buf[0] })
+		n.requests << buf[..got]
+	}
+	mut p := isotp.Pdu{}
+	for n.link.poll(now, mut p) {
+		mut f := frame(rsp29, p)
+		f.ext = true
+		r.on_frame(edge, &f, now)
+	}
+}
+
+fn test_a_29_bit_route_sends_and_takes_29_bit_frames() {
+	mut r := router29()
+	mut n := new_node()
+	mut ch := Chan{}
+	mut now := u64(0)
+	// a multi-frame request: its first frame goes out, and the rest on the node's 29-bit flow control
+	mut req := [u8(0x2E), 0xF1, 0x90]
+	for i in 0 .. 20 {
+		req << u8(i)
+	}
+	assert r.accept(0, unsafe { &req[0] }, req.len, 1, 1, 1, now) == .accepted
+	for _ in 0 .. 6 {
+		now += 1000
+		pass29(mut r, mut n, mut ch, now)
+	}
+	assert n.requests == [req]
+	answer(mut n, [u8(0x6E), 0xF1, 0x90])
+	for _ in 0 .. 3 {
+		now += 1000
+		pass29(mut r, mut n, mut ch, now)
+	}
+	assert take(mut r) == [u8(0x6E), 0xF1, 0x90]
+	// a multi-frame answer, under our 29-bit flow control
+	read := [u8(0x22), 0xF1, 0x90]
+	assert r.accept(0, &read[0], read.len, 1, 2, 1, now) == .accepted
+	for _ in 0 .. 3 {
+		now += 1000
+		pass29(mut r, mut n, mut ch, now)
+	}
+	assert n.requests.last() == read
+	mut ans := [u8(0x62), 0xF1, 0x90]
+	for i in 0 .. 30 {
+		ans << u8(0x80 + i)
+	}
+	answer(mut n, ans)
+	for _ in 0 .. 6 {
+		now += 1000
+		pass29(mut r, mut n, mut ch, now)
+	}
+	assert take(mut r) == ans
+}
+
+fn test_a_29_bit_route_ignores_its_numbers_as_11_bit_frames() {
+	mut r := router29()
+	req := [u8(0x3E), 0x00]
+	assert r.accept(0, &req[0], req.len, 1, 1, 1, u64(0)) == .accepted
+	mut ch := Chan{}
+	r.pump(500, mut ch) // the request out: what comes now is its answer
+	assert ch.tx.len == 1 && ch.tx[0].ext && ch.tx[0].id == req29
+	mut f := can.Frame{
+		id:  rsp29
+		len: 8
+	}
+	f.data[0] = 0x02
+	f.data[1] = 0x7E
+	assert !r.on_frame(edge, &f, 1000) // the response number as an 11-bit frame
+	f.ext = true
+	assert r.on_frame(edge, &f, 1000)
+	assert r.waiting() == 1
+}
+
+// @verifies REQ-CAN-TP-026 REQ-NET-021
+// a 29-bit route at its node's TX_DL 64: the request goes out in 29-bit frames of up to 64 bytes
+// (a first frame of 64, the rest in one consecutive frame) and reaches the node whole
+fn test_a_29_bit_route_sends_at_its_nodes_tx_dl() {
+	mut r := router29()
+	r.routes[0].tx_dl = 64
+	mut n := new_node()
+	mut ch := Chan{}
+	mut now := u64(0)
+	mut req := []u8{len: 100, init: u8(index)}
+	req[0] = 0x2E
+	assert r.accept(0, unsafe { &req[0] }, req.len, 1, 1, 1, now) == .accepted
+	r.pump(now, mut ch)
+	assert ch.tx.len == 1 && ch.tx[0].ext && ch.tx[0].id == req29 && ch.tx[0].len == 64
+	n.link.on_frame(now, pdu(ch.tx[0]))
+	ch.tx.clear()
+	for _ in 0 .. 4 {
+		now += 1000
+		pass29(mut r, mut n, mut ch, now)
+	}
+	assert n.requests == [req]
 }

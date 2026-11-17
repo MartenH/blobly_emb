@@ -23,9 +23,14 @@ pub struct Connection {
 pub mut:
 	link          isotp.Link
 	server        uds.Server
-	rx_id         u32 // physical requests (standard id)
+	rx_id         u32 // physical requests
 	tx_id         u32 // responses
 	functional_id u32 // functional requests, shared by every server on the bus; 0 = none
+	// ext: rx_id, tx_id and functional_id are 29-bit identifiers ([isotp] ext, or normal fixed
+	// addressing); false = 11-bit. The format is part of the id: a frame of the same number in the
+	// other format is not this connection's, and every frame it sends goes out in this format.
+	// Set after init() (no field defaults: the _vinit rule)
+	ext bool
 	// handoff_remote: the bootloader also serves the other transport (DoIP — a [boot] node with
 	// [doip], boot/target), so a programming handoff may be asked for over it. False: the server
 	// refuses a remote 0x10 02 with conditionsNotCorrect, since a bootloader answering on CAN only
@@ -112,9 +117,11 @@ pub fn (mut c Connection) housekeep(now u64) {
 }
 
 // on_frame takes one received frame. A physical frame feeds the link; a functional request is
-// served at once, in bus order, so a functional 0x28 gates the very next frame of the drain.
+// served at once, in bus order, so a functional 0x28 gates the very next frame of the drain. A
+// frame is this connection's only when its id AND its format are (REQ-CAN-TP-042): the same
+// number as an 11-bit and as a 29-bit id are two different frames.
 pub fn (mut c Connection) on_frame(now u64, f &can.Frame) Rx {
-	if f.ext {
+	if f.ext != c.ext {
 		return .other
 	}
 	if f.id == c.rx_id {
@@ -288,13 +295,13 @@ fn (mut c Connection) leave(before u32, held u8, remote bool) {
 // produce yields the next frame of the answer in flight, paced by the peer's flow control, for the
 // owner to send. Ask only while the channel is ready: poll counts the frame as sent.
 pub fn (mut c Connection) produce(now u64, mut f can.Frame) bool {
-	return next_frame(mut c.link, c.tx_id, now, mut f)
+	return next_frame(mut c.link, c.tx_id, c.ext, now, mut f)
 }
 
 // pump sends the answer in flight on `ch` while it is ready (step.v pump): a frame the channel
 // refuses aborts the transfer, and the answer is lost — a reset it announced does not happen.
 pub fn (mut c Connection) pump(now u64, mut ch can.Channel) {
-	if !pump(mut c.link, c.tx_id, now, mut ch) {
+	if !pump(mut c.link, c.tx_id, c.ext, now, mut ch) {
 		c.answer_lost()
 	}
 }

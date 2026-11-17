@@ -47,6 +47,24 @@ CM_ SG_ 2147483904 ExtSig "extended signal";
 	assert e.name == 'ExtFrame', 'lookup_frame(0x100,true)=${e.name}'
 }
 
+// frame_exact is the frame that IS an id in a width — no J1939 PGN match, which lookup_frame falls
+// back to for an extended id: every 0x18DAxxxx message shares PGN 0xDA00, and a diagnostic id
+// checked against a bus's frames must not read as one of them
+fn test_frame_exact_matches_id_and_width_only() {
+	db := parse_dbc('BO_ 2564428017 DiagLike: 8 Gw
+ SG_ V : 0|8@1+ (1,0) [0|255] "" Sink
+') or { panic(err) } // 0x98DA10F1: extended 0x18DA10F1
+	assert (db.frame_exact(0x18DA10F1, true) or { panic('miss') }).name == 'DiagLike'
+	if _ := db.frame_exact(0x18DA10F1, false) {
+		assert false, 'an 11-bit id matched an extended frame'
+	}
+	if _ := db.frame_exact(0x18DA20F1, true) {
+		assert false, 'another 29-bit id matched'
+	}
+	// the PGN fallback, which frame_exact has not
+	assert (db.lookup_frame(0x18DA20F1, true) or { panic('no PGN match') }).name == 'DiagLike'
+}
+
 // blobly_net#271: the E2E contract's four attributes, parsed as blobly_net's candb parses them
 // (the spellings its writer and cmd/arxml2dbc emit).
 fn test_e2e_contract_attributes() {

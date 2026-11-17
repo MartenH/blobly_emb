@@ -345,15 +345,20 @@
       "type": "object",
       "properties": {
         "bus": {"type": "string", "description": "the CAN bus ([bus.*] name) the connection runs on"},
-        "rx_id": {"type": "integer", "minimum": 0, "maximum": 2047, "description": "the CAN id physical requests arrive on (11-bit)"},
-        "tx_id": {"type": "integer", "minimum": 0, "maximum": 2047, "description": "the CAN id responses are sent on (11-bit)"},
+        "addressing": {"type": "string", "enum": ["normal", "normal_fixed"], "default": "normal", "description": "how the ids are stated (docs/can-tp.md §2): \"normal\" gives rx_id / tx_id (11-bit, or 29-bit with ext); \"normal_fixed\" gives sa / ta, from which the 29-bit ids derive (ISO 15765-2 normal fixed addressing, priority 6). Extended and mixed addressing are not supported Default: \"normal\"."},
+        "rx_id": {"type": "integer", "minimum": 0, "maximum": 536870911, "description": "the CAN id physical requests arrive on: 11-bit (0x000..0x7FF) unless ext; required with normal addressing (a dissolved node's [isotp] that states no ids takes its system diag, lowered by sysgen), refused with normal_fixed"},
+        "tx_id": {"type": "integer", "minimum": 0, "maximum": 536870911, "description": "the CAN id responses are sent on: 11-bit (0x000..0x7FF) unless ext; required with normal addressing (a dissolved node's [isotp] that states no ids takes its system diag, lowered by sysgen), refused with normal_fixed"},
+        "ext": {"type": "boolean", "default": false, "description": "normal addressing: rx_id, tx_id and functional_id are 29-bit identifiers (0x00000000..0x1FFFFFFF), frames received and sent with the extended id; false = 11-bit. Refused with normal_fixed (always 29-bit) Default: false."},
+        "sa": {"type": "integer", "minimum": 0, "maximum": 255, "description": "normal_fixed: this node's own address — the target address of the requests it receives (0x18DA<sa><ta>) and the source address of its answers (0x18DA<ta><sa>); required there, refused with normal"},
+        "ta": {"type": "integer", "minimum": 0, "maximum": 255, "description": "normal_fixed: the tester's address (e.g. 0xF1) — the source address of the requests and the target address of the answers; not sa; required there, refused with normal"},
+        "functional_ta": {"type": "integer", "minimum": 0, "maximum": 255, "description": "normal_fixed: the functional target address (conventionally 0x33, ISO 15765-4) — functional requests arrive on 0x18DB<functional_ta><ta>; absent = none; refused with normal"},
         "bs": {"type": "integer", "minimum": 0, "maximum": 255, "default": 0, "description": "the block size granted in our Flow Control, one byte on the wire (0 = the whole message at once) Default: 0."},
         "stmin_ms": {"type": "integer", "minimum": 0, "maximum": 127, "default": 0, "description": "the STmin (ms) we ask a sender to keep between consecutive frames; ISO 15765-2 encodes milliseconds only up to 127 Default: 0."},
-        "functional_id": {"type": "integer", "minimum": 0, "maximum": 2047, "description": "the functional (broadcast) request id, e.g. 0x7DF, single frames only; absent = none"},
+        "functional_id": {"type": "integer", "minimum": 0, "maximum": 536870911, "description": "the functional (broadcast) request id, e.g. 0x7DF, single frames only: 11-bit unless ext; absent (or 0) = none; refused with normal_fixed (functional_ta)"},
         "max_message": {"type": "integer", "minimum": 8, "maximum": 4095, "default": 520, "description": "the longest diagnostic message either way, in bytes (the escape first frame above 4095 is not supported). It sizes the server's buffers and response capacity, the DoIP entity's message limit, a gateway's routed messages and the bootloader's TransferData block; generation refuses one smaller than the largest message the configuration determines Default: 520."},
         "tx_dl": {"type": "integer", "enum": [8, 12, 16, 20, 24, 32, 48, 64], "default": 8, "description": "the frame length (TX_DL) the connection transmits with, in bytes: 8, 12, 16, 20, 24, 32, 48 or 64. Above 8 only on a CAN-FD bus ([bus.*] fd = true): single frames of up to TX_DL - 2 bytes behind the escape, consecutive frames of TX_DL - 1. Frames of any length are received without it; the bootloader and a gateway's route to the node send with it too (REQ-CAN-TP-026) Default: 8."}
       },
-      "required": ["bus", "rx_id", "tx_id"],
+      "required": ["bus"],
       "additionalProperties": false
     },
     "uds": {
@@ -410,8 +415,9 @@
         "node": {"type": "string", "description": "the routed node (named in refusals and the generated code)"},
         "logical": {"type": "integer", "description": "its DoIP logical address (0x0001..0x0DFF or 0x1000..0x7FFF); not this entity's own or its functional address"},
         "bus": {"type": "string", "description": "the CAN bus ([bus.*] name) it is on"},
-        "tx_id": {"type": "integer", "minimum": 0, "maximum": 2047, "description": "its physical request id: what the gateway sends on (11-bit)"},
-        "rx_id": {"type": "integer", "minimum": 0, "maximum": 2047, "description": "its response id: what the gateway receives on (11-bit)"},
+        "tx_id": {"type": "integer", "minimum": 0, "maximum": 536870911, "description": "its physical request id: what the gateway sends on (11-bit unless ext)"},
+        "rx_id": {"type": "integer", "minimum": 0, "maximum": 536870911, "description": "its response id: what the gateway receives on (11-bit unless ext)"},
+        "ext": {"type": "boolean", "default": false, "description": "the routed node's ids are 29-bit identifiers (its 29-bit or normal fixed addressing): the gateway sends and receives them with the extended id (REQ-NET-021); sysgen writes it from the node's diag Default: false."},
         "max_message": {"type": "integer", "minimum": 8, "maximum": 4095, "default": 520, "description": "its [isotp] max_message: the gateway refuses a longer routed request at once (diagnostic NACK 0x04) rather than forward one the node would refuse on its bus (REQ-CAN-TP-023); sysgen writes it when the node's is not the default Default: 520."},
         "tx_dl": {"type": "integer", "enum": [8, 12, 16, 20, 24, 32, 48, 64], "default": 8, "description": "its [isotp] tx_dl: the frame length the gateway sends to it with (8, 12, 16, 20, 24, 32, 48 or 64; above 8 only on a CAN-FD bus); sysgen writes it when the node's is not 8, and syscheck refuses an authored route whose tx_dl is not its node's (REQ-CAN-TP-026) Default: 8."}
       },

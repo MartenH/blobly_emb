@@ -791,7 +791,8 @@ approved_by = "Claude (coding agent) on Marten Hildell's bench — system_full z
 date = "2026-11-17"
 
 # [isotp] tx_dl on silicon: system_full flashed from one build, zone_a (H723, the CAN-FD edge bus) at
-# TX_DL 64 and its bootloader at BOOT_TX_DL 64, every other node at 8. isotp_len.lua: zone_a
+# TX_DL 64 and its bootloader at BOOT_TX_DL 64, every other node at 8 (zone_a's driver is the
+# register-level FDCAN backend, so its 64-byte frames both ways are REQ-CAN-DRV-004 there). isotp_len.lua: zone_a
 # exchanges 64-byte CAN-FD frames both ways with blobly_net's tester at TX_DL 64 (an escape single
 # frame, a 64-byte first frame and consecutive frames), messages over 520 still whole both ways; the
 # two routed legs (through sysnode over DoIP) were not run, the bench Ethernet segment not being
@@ -804,7 +805,7 @@ date = "2026-11-17"
 id = "isotp-canfd-silicon"
 method = "review"
 context = "h723/ThreadX"
-verifies = ["REQ-CAN-TP-027", "REQ-CAN-TP-028"]
+verifies = ["REQ-CAN-TP-027", "REQ-CAN-TP-028", "REQ-CAN-DRV-004"]
 approved_by = "Claude (coding agent) on Marten Hildell's bench — system_full zone_a, domain, sysnode vs CANsub.4"
 date = "2026-11-17"
 

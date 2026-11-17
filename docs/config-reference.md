@@ -389,11 +389,16 @@ The diagnostic server's ISO 15765-2 connection on CAN (docs/diagnostics.md).
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
 | `bus` | string | yes | — |  | the CAN bus ([bus.*] name) the connection runs on |
-| `rx_id` | integer | yes | — | 0x0..0x7FF | the CAN id physical requests arrive on (11-bit) |
-| `tx_id` | integer | yes | — | 0x0..0x7FF | the CAN id responses are sent on (11-bit) |
+| `addressing` | string |  | `"normal"` | `"normal"`, `"normal_fixed"` | how the ids are stated (docs/can-tp.md §2): "normal" gives rx_id / tx_id (11-bit, or 29-bit with ext); "normal_fixed" gives sa / ta, from which the 29-bit ids derive (ISO 15765-2 normal fixed addressing, priority 6). Extended and mixed addressing are not supported |
+| `rx_id` | integer |  | — | 0x0..0x1FFFFFFF | the CAN id physical requests arrive on: 11-bit (0x000..0x7FF) unless ext; required with normal addressing (a dissolved node's [isotp] that states no ids takes its system diag, lowered by sysgen), refused with normal_fixed |
+| `tx_id` | integer |  | — | 0x0..0x1FFFFFFF | the CAN id responses are sent on: 11-bit (0x000..0x7FF) unless ext; required with normal addressing (a dissolved node's [isotp] that states no ids takes its system diag, lowered by sysgen), refused with normal_fixed |
+| `ext` | boolean |  | `false` |  | normal addressing: rx_id, tx_id and functional_id are 29-bit identifiers (0x00000000..0x1FFFFFFF), frames received and sent with the extended id; false = 11-bit. Refused with normal_fixed (always 29-bit) |
+| `sa` | integer |  | — | 0x0..0xFF | normal_fixed: this node's own address — the target address of the requests it receives (0x18DA<sa><ta>) and the source address of its answers (0x18DA<ta><sa>); required there, refused with normal |
+| `ta` | integer |  | — | 0x0..0xFF | normal_fixed: the tester's address (e.g. 0xF1) — the source address of the requests and the target address of the answers; not sa; required there, refused with normal |
+| `functional_ta` | integer |  | — | 0x0..0xFF | normal_fixed: the functional target address (conventionally 0x33, ISO 15765-4) — functional requests arrive on 0x18DB<functional_ta><ta>; absent = none; refused with normal |
 | `bs` | integer |  | `0` | 0..255 | the block size granted in our Flow Control, one byte on the wire (0 = the whole message at once) |
 | `stmin_ms` | integer |  | `0` | 0..127 | the STmin (ms) we ask a sender to keep between consecutive frames; ISO 15765-2 encodes milliseconds only up to 127 |
-| `functional_id` | integer |  | — | 0x0..0x7FF | the functional (broadcast) request id, e.g. 0x7DF, single frames only; absent = none |
+| `functional_id` | integer |  | — | 0x0..0x1FFFFFFF | the functional (broadcast) request id, e.g. 0x7DF, single frames only: 11-bit unless ext; absent (or 0) = none; refused with normal_fixed (functional_ta) |
 | `max_message` | integer |  | `520` | 8..4095 | the longest diagnostic message either way, in bytes (the escape first frame above 4095 is not supported). It sizes the server's buffers and response capacity, the DoIP entity's message limit, a gateway's routed messages and the bootloader's TransferData block; generation refuses one smaller than the largest message the configuration determines |
 | `tx_dl` | integer |  | `8` | 8, 12, 16, 20, 24, 32, 48, 64 | the frame length (TX_DL) the connection transmits with, in bytes: 8, 12, 16, 20, 24, 32, 48 or 64. Above 8 only on a CAN-FD bus ([bus.*] fd = true): single frames of up to TX_DL - 2 bytes behind the escape, consecutive frames of TX_DL - 1. Frames of any length are received without it; the bootloader and a gateway's route to the node send with it too (REQ-CAN-TP-026) |
 
@@ -456,8 +461,9 @@ A node behind this DoIP gateway that diagnostic messages to its logical address 
 | `node` | string | yes | — |  | the routed node (named in refusals and the generated code) |
 | `logical` | integer | yes | — |  | its DoIP logical address (0x0001..0x0DFF or 0x1000..0x7FFF); not this entity's own or its functional address |
 | `bus` | string | yes | — |  | the CAN bus ([bus.*] name) it is on |
-| `tx_id` | integer | yes | — | 0x0..0x7FF | its physical request id: what the gateway sends on (11-bit) |
-| `rx_id` | integer | yes | — | 0x0..0x7FF | its response id: what the gateway receives on (11-bit) |
+| `tx_id` | integer | yes | — | 0x0..0x1FFFFFFF | its physical request id: what the gateway sends on (11-bit unless ext) |
+| `rx_id` | integer | yes | — | 0x0..0x1FFFFFFF | its response id: what the gateway receives on (11-bit unless ext) |
+| `ext` | boolean |  | `false` |  | the routed node's ids are 29-bit identifiers (its 29-bit or normal fixed addressing): the gateway sends and receives them with the extended id (REQ-NET-021); sysgen writes it from the node's diag |
 | `max_message` | integer |  | `520` | 8..4095 | its [isotp] max_message: the gateway refuses a longer routed request at once (diagnostic NACK 0x04) rather than forward one the node would refuse on its bus (REQ-CAN-TP-023); sysgen writes it when the node's is not the default |
 | `tx_dl` | integer |  | `8` | 8, 12, 16, 20, 24, 32, 48, 64 | its [isotp] tx_dl: the frame length the gateway sends to it with (8, 12, 16, 20, 24, 32, 48 or 64; above 8 only on a CAN-FD bus); sysgen writes it when the node's is not 8, and syscheck refuses an authored route whose tx_dl is not its node's (REQ-CAN-TP-026) |
 
@@ -752,7 +758,7 @@ A member ECU and its system-owned identities.
 | `buses` | array of strings | yes | `[]` |  | the system buses it sits on; more than one CAN bus makes it a [[route]] gateway |
 | `nm` | integer |  | — | 0..255 | its NM node id (alive = peers lo + nm); absent = not an NM node; required for a ThreadX member of a bus with an NM cluster |
 | `trace` | integer |  | — |  | its trace node id, unique across the system (checked only, not generated) |
-| `diag` | table → [`[[node]] diag`](#system-sys-diag) |  | — |  | its ISO-TP diagnostic ids, unique across the system (checked only, not generated); required with `doip` |
+| `diag` | table → [`[[node]] diag`](#system-sys-diag) |  | — |  | its ISO-TP diagnostic ids, unique across the system by number and format: `{ req, rsp [, ext] }` or `{ addressing = "normal_fixed", sa, ta [, functional_ta] }` — sysgen lowers them into the node's [isotp] where that states no ids, and into a routing gateway's [[doip.route]]; an [isotp] that states its ids must state these (REQ-TOPO-014); required with `doip` |
 | `endpoint` | table → [`[[node]] endpoint`](#system-sys-endpoint) |  | — |  | its network identity: the address SOME/IP and DoIP answer at; required on a someip bus member (a plain IP host on the segment too) and on a DoIP entity |
 | `doip` | table → [`[[node]] doip`](#system-sys-doip) |  | — |  | the node is a DoIP entity at its endpoint address (lowered into [doip]; dissolved systems only) |
 
@@ -760,11 +766,18 @@ A member ECU and its system-owned identities.
 
 ### `[[node]] diag`
 
+The node's diagnostic allocation, stated one of two ways (as its [isotp] states them): `req` / `rsp` (normal addressing, 11-bit or with `ext` 29-bit), or `addressing = "normal_fixed"` with `sa` / `ta`, from which the 29-bit ids derive. sysgen lowers it into the node's [isotp] where that states no ids (a node without an [isotp] runs no server, and gets none) and into the [[doip.route]] of a gateway that routes to it.
+
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
-| `req` | integer |  | — |  | the diagnostic request CAN id |
-| `rsp` | integer |  | — |  | the diagnostic response CAN id |
-| `logical` | integer |  | — |  | its DoIP logical address behind a DoIP gateway that routes to it (a gateway's doip `routes`; 0x0001..0x0DFF or 0x1000..0x7FFF; unique among every logical address); needs `req` and `rsp` |
+| `addressing` | string |  | `"normal"` | `"normal"`, `"normal_fixed"` | "normal" (req / rsp) or "normal_fixed" (sa / ta: requests 0x18DA<sa><ta>, answers 0x18DA<ta><sa>) |
+| `req` | integer |  | — | 0x0..0x1FFFFFFF | the diagnostic request CAN id: 11-bit (0x000..0x7FF) unless ext; refused with normal_fixed |
+| `rsp` | integer |  | — | 0x0..0x1FFFFFFF | the diagnostic response CAN id: 11-bit unless ext; refused with normal_fixed |
+| `ext` | boolean |  | `false` |  | req and rsp are 29-bit identifiers; refused with normal_fixed (always 29-bit) |
+| `sa` | integer |  | — | 0x0..0xFF | normal_fixed: the node's own address (the target address of its requests) |
+| `ta` | integer |  | — | 0x0..0xFF | normal_fixed: the tester's address (e.g. 0xF1); not sa |
+| `functional_ta` | integer |  | — | 0x0..0xFF | normal_fixed: the functional target address (conventionally 0x33) — functional requests on 0x18DB<functional_ta><ta>; absent = none |
+| `logical` | integer |  | — |  | its DoIP logical address behind a DoIP gateway that routes to it (a gateway's doip `routes`; 0x0001..0x0DFF or 0x1000..0x7FFF; unique among every logical address); needs an allocation (req and rsp, or sa and ta) |
 
 <a id="system-sys-endpoint"></a>
 

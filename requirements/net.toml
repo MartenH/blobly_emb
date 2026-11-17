@@ -198,3 +198,12 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-NET-001"
+
+[[req]]
+id = "REQ-NET-021"
+title = "A route carries its node's identifier format"
+text = "A gateway's route to a node behind it shall carry the node's identifier format: the gateway shall send the routed requests and its flow control on the node's request identifier, and take the node's answers only on its response identifier, both in that format — 29-bit for a node with 29-bit or normal fixed addressing — and the system check shall refuse a route whose identifiers or format are not those its node's connection serves on."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NET-001"

@@ -12,11 +12,16 @@ fn ecu_diag_tables() []Table {
 	return [
 		tbl('isotp', '[isotp]', "The diagnostic server's ISO 15765-2 connection on CAN (docs/diagnostics.md).", [
 			req('bus', .str).doc('the CAN bus ([bus.*] name) the connection runs on'),
-			req('rx_id', .int).range(0, 0x7FF).hex().doc('the CAN id physical requests arrive on (11-bit)'),
-			req('tx_id', .int).range(0, 0x7FF).hex().doc('the CAN id responses are sent on (11-bit)'),
+			k('addressing', .str).d('"normal"').one_of(addressing_formats()).own_check().doc('how the ids are stated (docs/can-tp.md §2): "normal" gives rx_id / tx_id (11-bit, or 29-bit with ext); "normal_fixed" gives sa / ta, from which the 29-bit ids derive (ISO 15765-2 normal fixed addressing, priority 6). Extended and mixed addressing are not supported'),
+			k('rx_id', .int).range(0, i64(isotp.ext_id_max)).hex().own_check().doc('the CAN id physical requests arrive on: 11-bit (0x000..0x7FF) unless ext; required with normal addressing (a dissolved node\'s [isotp] that states no ids takes its system diag, lowered by sysgen), refused with normal_fixed'),
+			k('tx_id', .int).range(0, i64(isotp.ext_id_max)).hex().own_check().doc('the CAN id responses are sent on: 11-bit (0x000..0x7FF) unless ext; required with normal addressing (a dissolved node\'s [isotp] that states no ids takes its system diag, lowered by sysgen), refused with normal_fixed'),
+			k('ext', .boolean).d('false').own_check().doc('normal addressing: rx_id, tx_id and functional_id are 29-bit identifiers (0x00000000..0x1FFFFFFF), frames received and sent with the extended id; false = 11-bit. Refused with normal_fixed (always 29-bit)'),
+			k('sa', .int).range(0, 255).hex().own_check().doc('normal_fixed: this node\'s own address — the target address of the requests it receives (0x18DA<sa><ta>) and the source address of its answers (0x18DA<ta><sa>); required there, refused with normal'),
+			k('ta', .int).range(0, 255).hex().own_check().doc('normal_fixed: the tester\'s address (e.g. 0xF1) — the source address of the requests and the target address of the answers; not sa; required there, refused with normal'),
+			k('functional_ta', .int).range(0, 255).hex().own_check().doc('normal_fixed: the functional target address (conventionally 0x33, ISO 15765-4) — functional requests arrive on 0x18DB<functional_ta><ta>; absent = none; refused with normal'),
 			k('bs', .int).d('0').range(0, 255).doc('the block size granted in our Flow Control, one byte on the wire (0 = the whole message at once)'),
 			k('stmin_ms', .int).d('0').range(0, 127).doc('the STmin (ms) we ask a sender to keep between consecutive frames; ISO 15765-2 encodes milliseconds only up to 127'),
-			k('functional_id', .int).range(0, 0x7FF).hex().doc('the functional (broadcast) request id, e.g. 0x7DF, single frames only; absent = none'),
+			k('functional_id', .int).range(0, i64(isotp.ext_id_max)).hex().own_check().doc('the functional (broadcast) request id, e.g. 0x7DF, single frames only: 11-bit unless ext; absent (or 0) = none; refused with normal_fixed (functional_ta)'),
 			k('max_message', .int).d('${isotp.default_message}').range(isotp.min_message, isotp.message_limit).doc('the longest diagnostic message either way, in bytes (the escape first frame above 4095 is not supported). It sizes the server\'s buffers and response capacity, the DoIP entity\'s message limit, a gateway\'s routed messages and the bootloader\'s TransferData block; generation refuses one smaller than the largest message the configuration determines'),
 			k('tx_dl', .int).d('8').one_of_ints(tx_dls()).doc('the frame length (TX_DL) the connection transmits with, in bytes: ${tx_dl_list()}. Above 8 only on a CAN-FD bus ([bus.*] fd = true): single frames of up to TX_DL - 2 bytes behind the escape, consecutive frames of TX_DL - 1. Frames of any length are received without it; the bootloader and a gateway\'s route to the node send with it too (REQ-CAN-TP-026)'),
 		]),
@@ -36,8 +41,9 @@ fn ecu_diag_tables() []Table {
 			req('node', .str).doc('the routed node (named in refusals and the generated code)'),
 			req('logical', .int).hex().doc('its DoIP logical address (0x0001..0x0DFF or 0x1000..0x7FFF); not this entity\'s own or its functional address'),
 			req('bus', .str).doc('the CAN bus ([bus.*] name) it is on'),
-			req('tx_id', .int).range(0, 0x7FF).hex().doc('its physical request id: what the gateway sends on (11-bit)'),
-			req('rx_id', .int).range(0, 0x7FF).hex().doc('its response id: what the gateway receives on (11-bit)'),
+			req('tx_id', .int).range(0, i64(isotp.ext_id_max)).hex().own_check().doc('its physical request id: what the gateway sends on (11-bit unless ext)'),
+			req('rx_id', .int).range(0, i64(isotp.ext_id_max)).hex().own_check().doc('its response id: what the gateway receives on (11-bit unless ext)'),
+			k('ext', .boolean).d('false').own_check().doc('the routed node\'s ids are 29-bit identifiers (its 29-bit or normal fixed addressing): the gateway sends and receives them with the extended id (REQ-NET-021); sysgen writes it from the node\'s diag'),
 			k('max_message', .int).d('${isotp.default_message}').range(isotp.min_message, isotp.message_limit).doc('its [isotp] max_message: the gateway refuses a longer routed request at once (diagnostic NACK 0x04) rather than forward one the node would refuse on its bus (REQ-CAN-TP-023); sysgen writes it when the node\'s is not the default'),
 			k('tx_dl', .int).d('8').one_of_ints(tx_dls()).doc('its [isotp] tx_dl: the frame length the gateway sends to it with (${tx_dl_list()}; above 8 only on a CAN-FD bus); sysgen writes it when the node\'s is not 8, and syscheck refuses an authored route whose tx_dl is not its node\'s (REQ-CAN-TP-026)'),
 		]),
@@ -100,6 +106,13 @@ fn ecu_diag_tables() []Table {
 			k('entries', .int).range(1, fault.max_entries).doc('snapshot entries (default one per fault with `freeze`); fewer = displacement'),
 		]),
 	]
+}
+
+// addressing_formats: the ISO 15765-2 addressing formats a diagnostic connection may state its ids
+// in ([isotp] addressing, a system node's diag `addressing`); extended and mixed addressing are not
+// supported. (A function, not a const: the schema consts are built from it.)
+pub fn addressing_formats() []string {
+	return ['normal', 'normal_fixed']
 }
 
 // session_names: the UDS sessions a gate may name (comm/uds session bits)
