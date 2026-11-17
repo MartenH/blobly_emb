@@ -117,6 +117,11 @@ jobs:
       - name: No-heap gate tests (scripts/check_no_heap_test.sh)
         run: bash scripts/check_no_heap_test.sh
 
+      # Every docs/*.drawio.svg is what its script in docs/diagrams/ draws, so a diagram is
+      # always regenerable and editable from its source.
+      - name: Diagrams match their scripts (scripts/diagrams_check.sh)
+        run: bash scripts/diagrams_check.sh
+
       # The no-alloc + isolation lint. AGENTS.md calls this MUST pass, and it guards the defining
       # constraint of the whole stack — no dynamic allocation — so it belongs in the gate, not in
       # a habit of remembering to run it.
