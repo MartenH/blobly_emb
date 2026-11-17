@@ -422,11 +422,11 @@ fn (l &Link) misfit(p &Pdu) bool {
 // frame above all, is dropped rather than start a reception whose flow control would go out
 // inside the stream (REQ-CAN-TP-024). True when the frame was taken in.
 pub fn (mut l Link) on_flow_control(now u64, data &u8, n int) bool {
-	if n < 1 || unsafe { data[0] } >> 4 != 3 {
+	if n < 1 || n > 64 || unsafe { data[0] } >> 4 != 3 {
 		return false
 	}
 	mut p := Pdu{
-		len: if n > 64 { 64 } else { n }
+		len: n
 	}
 	for i in 0 .. p.len {
 		p.data[i] = unsafe { data[i] }
@@ -594,10 +594,6 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 	}
 }
 
-// tick advances the link's time-based state (the N_Bs flow-control timeout) independently
-// of poll(). A caller that gates poll() on Tx-FIFO space (`for tx_ready() && poll(...)`) must
-// call tick() every cycle so a full FIFO can't wedge the link in wait_fc forever — otherwise a
-// dump on a down/quiet bus (FF sent, no FC, FIFO stays full) never reaches its abort deadline.
 // init_defaults sets the protocol timeouts every embedded consumer must run with
 // (N_Bs, N_Cr and N_Ar 1 s, WFTmax 16 — the standard's timeout values). Field defaults can't do
 // this job: on a freestanding target a __global's initializers live in the never-called _vinit, so
@@ -609,6 +605,11 @@ pub fn (mut l Link) init_defaults() {
 	l.n_ar_us = 1_000_000
 }
 
+// tick advances the link's time-based state independently of poll(): the N_Bs flow-control
+// timeout, and N_Cr and N_Ar on a reception. A caller that gates poll() on Tx-FIFO space
+// (`for tx_ready() && poll(...)`) must call tick() every cycle so a full FIFO can't wedge the link
+// forever — otherwise a dump on a down/quiet bus (FF sent, no FC, FIFO stays full) never reaches
+// its abort deadline, and a flow control that cannot leave never reaches N_Ar.
 pub fn (mut l Link) tick(now u64) {
 	// Abort a tx that made no progress within its deadline — in wait_fc (no flow control) OR in
 	// send_cf (CTS received, but backpressure kept the FIFO full so no CF went out). fc_deadline

@@ -285,10 +285,9 @@ pub fn (mut m ShellModule) produce(now u64, mut f can.Frame) bool {
 	m.link.tick(now)
 	mut p := isotp.Pdu{}
 	if m.link.poll(now, mut p) {
-		// the link transmits at TX_DL 8 (its tx_dl is never set): every frame is 8 bytes
 		f.id = m.out_id
 		f.len = u8(p.len)
-		for i in 0 .. 8 {
+		for i in 0 .. p.len { // 8 bytes: the link transmits at TX_DL 8 (its tx_dl is never set)
 			f.data[i] = p.data[i]
 		}
 		return true

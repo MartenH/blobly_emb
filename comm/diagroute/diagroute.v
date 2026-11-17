@@ -679,7 +679,7 @@ fn (mut r Router) end_exchange() {
 // (isotp overflows), of the frame as diag.take_frame hands it over: a frame too short for its PCI,
 // or of a length no CAN-FD frame has, is nothing, not a refusal to answer for.
 fn oversize_first_frame(l &isotp.Link, f &can.Frame) bool {
-	if f.len < 1 {
+	if f.len < 1 || f.len > can.max_dlc {
 		return false
 	}
 	p := diag.pdu_of(f)

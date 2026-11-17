@@ -647,6 +647,14 @@ fn test_pdu_of_takes_only_the_bytes_that_arrived() {
 	mut l := new_link()
 	f.len = 0
 	assert !take_frame(mut l, 0, &f) && l.idle()
+	f.len = 200 // a length no controller delivers is refused, never clipped to 64 and read
+	f.data[0] = 0x00 // an escape single frame, valid in a 64-byte frame
+	f.data[1] = 0x02
+	f.data[2] = 0x3E
+	f.data[3] = 0x00
+	assert !take_frame(mut l, 0, &f) && l.idle()
+	f.len = 64
+	assert take_frame(mut l, 0, &f), 'the same frame at 64 bytes is a request'
 }
 
 // @verifies REQ-CAN-TP-027 REQ-CAN-TP-028

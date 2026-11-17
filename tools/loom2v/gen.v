@@ -237,7 +237,7 @@ fn schema_int(m map[string]toml.Any, ctx string, key string, def i64, what strin
 fn read_tx_dl(m map[string]toml.Any, ctx string, doc toml.Doc, bus string, what string) int {
 	k := schema_key(ctx, 'tx_dl')
 	v := toml_int(m, 'tx_dl', k.default_int(), min_i64, max_i64, what) // the set below judges it
-	if !k.in_range(v) || !isotp.valid_dl(v) {
+	if !k.in_range(v) { // the schema's choices are isotp.valid_dl's (cfgschema tx_dls)
 		panic('loom2v: ${what} tx_dl = ${v} is not a frame length ISO-TP transmits with — give ${cfgschema.tx_dl_list()} (REQ-CAN-TP-026)')
 	}
 	if v > 8 && !ecumodel.bus_fd(doc, bus) {

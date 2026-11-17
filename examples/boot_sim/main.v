@@ -134,8 +134,8 @@ fn main() {
 		now := u64(time.sys_mono_now() / 1000)
 		mut f := can.Frame{}
 		for ch.recv(mut f) {
-			if f.id != req_id {
-				continue
+			if f.id != req_id || f.len < 1 || f.len > can.max_dlc {
+				continue // another id, or no frame a controller delivers
 			}
 			mut pdu := isotp.Pdu{
 				len: int(f.len) // the link reads only the bytes that arrived

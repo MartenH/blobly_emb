@@ -32,7 +32,7 @@ pub fn pdu_of(f &can.Frame) isotp.Pdu {
 // length it arrived: a classic frame, or a CAN-FD one up to 64 bytes (the link judges the length
 // against its PCI and the reception — isotp on_frame). True when it completed a request.
 pub fn take_frame(mut l isotp.Link, now u64, f &can.Frame) bool {
-	if f.len < 1 {
+	if f.len < 1 || f.len > can.max_dlc { // no frame, or a length no controller delivers
 		return false
 	}
 	l.on_frame(now, pdu_of(f))

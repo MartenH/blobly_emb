@@ -870,6 +870,8 @@ fn test_a_transmit_only_link_takes_only_flow_control() {
 		assert !l.on_flow_control(1, &f[0], f.len), f.str()
 	}
 	assert l.rx == .idle && !l.fc_send && !l.fc_ovflw && !l.has_request()
+	long := []u8{len: 70, init: if index == 0 { u8(0x30) } else { u8(0) }}
+	assert !l.on_flow_control(1, &long[0], long.len), 'a length no controller delivers was taken'
 	assert !l.poll(1, mut p), 'nothing goes out on a frame that is not flow control'
 	cts := [u8(0x30), 0, 0, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA] // CAN-FD padded
 	assert l.on_flow_control(2, &cts[0], cts.len)
