@@ -791,22 +791,22 @@ approved_by = "Claude (coding agent) on Marten Hildell's bench — system_full z
 date = "2026-11-17"
 
 # The 0x27 state in the NvM journal on silicon (U3a, the keep cell removed): all three system_full CAN
-# nodes flashed from one build — domain (H755, both banks), zone_a (H723) and sysnode (H735, its
-# bootloader reflashed for the new map: app in sectors 1..5, the journal in 6 + 7 erased once).
-# diag_domain.lua 14/14 (wrong keys still counted after a reset; a lockout runs on through a reset)
-# and diag_nodes.lua 11/11 (on sysnode and zone_a, the lockout runs on through ECUReset) over the
-# CANsub. With no RAM cell left, what a reset keeps it keeps in the journal, so these runs verify
-# REQ-DIAG-033 on the journal. A power removal was not done (unattended run): REQ-DIAG-065 rests on
-# its tests (comm/diag sa_persist_test.v over the real journal) until one is. doip_sysnode.lua was
-# not run: the bench Ethernet segment (192.168.77.0/24) was not connected.
-# The run was on the build with the write budget (since replaced by the monotonic record: each
-# level's wrong keys since its last correct key, saturating, written only when it changes). The flows
-# it exercised — each test ending with a correct key, a count below the limit restored and arming the
-# delay, a lockout running on through a reset — answer the same under the reworked rule. The clause
-# the rework added — a reset after a lockout that has ENDED costing the full delay, with the full
-# attempts after it — rests on comm/uds uds_test.v and sa_store_test.v and comm/diag
-# sa_persist_test.v until diag_domain and diag_nodes are re-run on the reworked build, which is
-# recommended before merge.
+# nodes flashed from one build of the reworked rule (each level's wrong keys since its last correct
+# key, saturating, written only when it changes; a delay per level) — domain (H755, both banks),
+# zone_a (H723) and sysnode (H735: app in sectors 1..5, the journal in 6 + 7). diag_domain.lua 15/15
+# (wrong keys still counted after a reset; a lockout runs on through a reset; a reset after an ENDED
+# lockout runs the full delay from boot and then grants the attempts again, and after the right key
+# the next restart does not wait) and diag_nodes.lua 11/11 (on sysnode and zone_a, the lockout runs
+# on through ECUReset) over the CANsub; boot_handoff.lua roundtrip 3/3 (no special flush before the
+# handoff). An ECUReset is a real restart and no RAM cell is left, so what these runs see after one
+# came from the journal: they verify REQ-DIAG-033 on the journal. sysnode's journal sectors read over
+# SWD before and after a field update through its bootloader (boot_bench.sh sysnode, 893 blocks):
+# the 192 bytes of records before it unchanged after it (the bootloader leaves sectors 6 + 7 alone),
+# and the records decoded: the earlier 11-byte layout (ignored), three count writes (1, 2, 3) and one
+# clear from diag_nodes' wrong keys and correct key, two clean markers (the ECUReset and the handoff
+# flush) — no write by a correct key on a clear count. A power removal was not done (unattended run):
+# REQ-DIAG-065 rests on its tests (comm/diag sa_persist_test.v over the real journal) until one is.
+# doip_sysnode.lua was not run: the bench Ethernet segment (192.168.77.0/24) was not connected.
 [[review]]
 id = "uds-on-target-journal"
 method = "review"
