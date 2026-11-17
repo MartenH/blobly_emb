@@ -101,7 +101,8 @@ message first (see [add-a-frame.md](add-a-frame.md)).
 
 The lean ThreadX target codec has rules (loom2v enforces them loudly):
 - layout: plain unsigned little-endian 32-bit at bit 0, factor 1, offset 0,
-- 11-bit id, DLC ≤ 8, one FB-read signal per rx message,
+- an 11-bit or 29-bit id (the DBC marks a 29-bit one extended), DLC ≤ 8, one FB-read signal
+  per rx message,
 - a tx signal is written by exactly ONE FB (the IOC cell is single-writer),
 - everything rides the one comm-thread bus (`[telemetry] bus`).
 
