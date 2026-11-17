@@ -907,8 +907,9 @@ fn test_a_boot_node_gets_its_bootloader_config() {
 	assert !(os.read_file(os.join_path(tmp2, 'loom_build.mk')) or { '' }).contains('boot.mk')
 }
 
-// an FD bus opens the bootloader in FD as it opens the application (zone_a: the edge bus is CAN-FD,
-// its ISO-TP classic-sized) — the frame format a tester sees does not change across the handoff
+// an FD bus opens the bootloader in FD as it opens the application (zone_a: the edge bus is CAN-FD)
+// — the frame format a tester sees does not change across the handoff, and the bootloader answers
+// at the node's TX_DL (BOOT_TX_DL, test_the_frame_length_is_configured_and_refused_off_a_can_fd_bus)
 fn test_a_boot_on_an_fd_bus_opens_it_in_fd() {
 	mut m := Model{}
 	m.isotp_conns = [IsotpConn{
@@ -1045,4 +1046,54 @@ fn test_the_host_bridge_holds_buffers_of_the_maximum_message() {
 			assert glue.contains(want), '${want} (max_message ${mm})'
 		}
 	}
+}
+
+// @verifies REQ-CAN-TP-026
+// [isotp] tx_dl: absent the connection transmits at 8 — no line for the link, BOOT_TX_DL 8; 64 on
+// a CAN-FD bus sets the link's and the bootloader's, beside BOOT_CAN_FD 1 and the channel opened
+// CAN-FD by the same reading; a length ISO-TP does not transmit with (the schema row's set, below 8
+// and past 64 alike), and one above 8 on a bus that is not CAN-FD (fd = false, or no fd at all) are
+// refused, never narrowed
+fn test_the_frame_length_is_configured_and_refused_off_a_can_fd_bus() {
+	tx := 'tx_id         = 0x7B8'
+	assert boot_conn.contains(tx), 'the fixture [isotp] changed shape — update this test'
+	fd_on := fn (src string) string {
+		return src.replace('fd        = false', 'fd        = true')
+	}
+	tmp8 := os.join_path(os.temp_dir(), 'diag_target_dl8_${os.getpid()}')
+	defer {
+		os.rmdir_all(tmp8) or {}
+	}
+	c8, o8, g8 := run_in_scratch(tmp8, fixture_dir, fn (src string) string {
+		return src
+	}, boot_conn)
+	assert c8 == 0, o8
+	assert !g8.contains('link.tx_dl')
+	h8 := os.read_file(os.join_path(tmp8, 'boot_gen.h')) or { panic(err) }
+	assert h8.contains('#define BOOT_TX_DL 8u'), h8
+	tmp64 := os.join_path(os.temp_dir(), 'diag_target_dl64_${os.getpid()}')
+	defer {
+		os.rmdir_all(tmp64) or {}
+	}
+	c64, o64, g64 := run_in_scratch(tmp64, fixture_dir, fd_on, boot_conn.replace(tx, tx + '\ntx_dl = 64'))
+	assert c64 == 0, o64
+	assert g64.contains('g_diag.link.tx_dl = 64 // [isotp] tx_dl'), g64
+	assert g64.contains("ch.open('0', true)"), 'the connection\'s channel opened CAN-FD'
+	h64 := os.read_file(os.join_path(tmp64, 'boot_gen.h')) or { panic(err) }
+	assert h64.contains('#define BOOT_TX_DL 64u') && h64.contains('#define BOOT_CAN_FD 1'), h64
+	for i, c in [['tx_dl = 13', '[isotp] tx_dl = 13 is not a frame length ISO-TP transmits with — give 8, 12, 16, 20, 24, 32, 48 or 64'],
+		['tx_dl = 10', '[isotp] tx_dl = 10 is not a frame length'],
+		['tx_dl = 4', '[isotp] tx_dl = 4 is not a frame length'],
+		['tx_dl = 128', '[isotp] tx_dl = 128 is not a frame length']] {
+		code, out, _ := generate_edited('dl_bad_${i}', fd_on, diag_conn.replace(tx, tx + '\n' + c[0]))
+		assert code != 0, 'loom2v accepted [isotp] ${c[0]}'
+		assert out.contains(c[1]), out
+	}
+	classic := '[isotp] tx_dl = 64 needs a CAN-FD bus, and bus "can0" is not one'
+	code1, out1, _ := generate('dl_classic', diag_conn.replace(tx, tx + '\ntx_dl = 64'))
+	assert code1 != 0 && out1.contains(classic), out1
+	code2, out2, _ := generate_edited('dl_no_fd', fn (src string) string {
+		return src.replace('fd        = false\n', '')
+	}, diag_conn.replace(tx, tx + '\ntx_dl = 64'))
+	assert code2 != 0 && out2.contains(classic), out2
 }

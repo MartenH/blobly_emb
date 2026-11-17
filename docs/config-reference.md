@@ -395,6 +395,7 @@ The diagnostic server's ISO 15765-2 connection on CAN (docs/diagnostics.md).
 | `stmin_ms` | integer |  | `0` | 0..127 | the STmin (ms) we ask a sender to keep between consecutive frames; ISO 15765-2 encodes milliseconds only up to 127 |
 | `functional_id` | integer |  | — | 0x0..0x7FF | the functional (broadcast) request id, e.g. 0x7DF, single frames only; absent = none |
 | `max_message` | integer |  | `520` | 8..4095 | the longest diagnostic message either way, in bytes (the escape first frame above 4095 is not supported). It sizes the server's buffers and response capacity, the DoIP entity's message limit, a gateway's routed messages and the bootloader's TransferData block; generation refuses one smaller than the largest message the configuration determines |
+| `tx_dl` | integer |  | `8` | 8, 12, 16, 20, 24, 32, 48, 64 | the frame length (TX_DL) the connection transmits with, in bytes: 8, 12, 16, 20, 24, 32, 48 or 64. Above 8 only on a CAN-FD bus ([bus.*] fd = true): single frames of up to TX_DL - 2 bytes behind the escape, consecutive frames of TX_DL - 1. Frames of any length are received without it; the bootloader and a gateway's route to the node send with it too (REQ-CAN-TP-026) |
 
 <a id="ecu-uds"></a>
 
@@ -458,6 +459,7 @@ A node behind this DoIP gateway that diagnostic messages to its logical address 
 | `tx_id` | integer | yes | — | 0x0..0x7FF | its physical request id: what the gateway sends on (11-bit) |
 | `rx_id` | integer | yes | — | 0x0..0x7FF | its response id: what the gateway receives on (11-bit) |
 | `max_message` | integer |  | `520` | 8..4095 | its [isotp] max_message: the gateway refuses a longer routed request at once (diagnostic NACK 0x04) rather than forward one the node would refuse on its bus (REQ-CAN-TP-023); sysgen writes it when the node's is not the default |
+| `tx_dl` | integer |  | `8` | 8, 12, 16, 20, 24, 32, 48, 64 | its [isotp] tx_dl: the frame length the gateway sends to it with (8, 12, 16, 20, 24, 32, 48 or 64; above 8 only on a CAN-FD bus); sysgen writes it when the node's is not 8, and syscheck refuses an authored route whose tx_dl is not its node's (REQ-CAN-TP-026) |
 
 <a id="ecu-boot"></a>
 

@@ -517,6 +517,24 @@ rx_id   = 0x7C8
 // a route on can0, the bus of the node's own diagnostic server, telemetry and DBC frames
 const doip_route_can0 = doip_route_more.replace('"can1"', '"can0"')
 
+// @verifies REQ-CAN-TP-026
+// a route carries its node's tx_dl: absent (8) no line; 64 on a CAN-FD route bus generates it, the
+// route bus opened CAN-FD by the same reading; 64 on a classic route bus, or a length ISO-TP does
+// not transmit with, is refused
+fn test_a_route_carries_its_nodes_frame_length() {
+	_, _, glue := generate('doip_route_dl8', doip_conn + doip_route)
+	assert !glue.contains('tx_dl:'), 'a route at 8 states nothing'
+	fd_route := doip_route.replace('fd        = false', 'fd        = true')
+	code, out, g64 := generate('doip_route_dl64', doip_conn + fd_route + 'tx_dl = 64\n')
+	assert code == 0, out
+	assert g64.contains('tx_dl:   u8(64) // its [isotp] tx_dl'), g64
+	assert g64.contains("ch_can1.open('1', true)"), 'the route bus opened CAN-FD'
+	c1, o1, _ := generate('doip_route_dl64_classic', doip_conn + doip_route + 'tx_dl = 64\n')
+	assert c1 != 0 && o1.contains('[[doip.route]] "zone_a" tx_dl = 64 needs a CAN-FD bus, and bus "can1" is not one'), o1
+	c2, o2, _ := generate('doip_route_dl13', doip_conn + fd_route + 'tx_dl = 13\n')
+	assert c2 != 0 && o2.contains('tx_dl = 13 is not a frame length ISO-TP transmits with — give 8, 12, 16, 20, 24, 32, 48 or 64'), o2
+}
+
 fn test_a_gateway_routes_from_the_comm_thread() {
 	code, out, glue := generate('doip_route_ok', doip_conn + doip_route)
 	assert code == 0, out

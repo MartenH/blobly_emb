@@ -1,6 +1,6 @@
 module trace
 
-// @verifies REQ-TRACE-009
+// @verifies REQ-TRACE-009 REQ-CAN-TP-026
 // (the STREAMING half: one ISO-TP transfer sequence carries one self-describing
 //  block per core. The command/bitmask half is comm/trace/control_test.v's
 //  core-mask tests, and the cross-core GATHER — a satellite block fetched over
@@ -15,6 +15,7 @@ fn pump_dump(mut tx isotp.Link, mut rx isotp.Link, now u64) {
 	for _ in 0 .. 4000 {
 		mut p := isotp.Pdu{}
 		if tx.poll(now, mut p) {
+			assert p.len == 8 // a link nobody gave a TX_DL transmits 8-byte frames (REQ-CAN-TP-026)
 			rx.on_frame(now, p)
 			continue
 		}

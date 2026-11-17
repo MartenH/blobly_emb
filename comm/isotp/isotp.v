@@ -1,9 +1,9 @@
 module isotp
 
 // ISO-TP (ISO 15765-2) segmentation/reassembly, no-alloc and transport-agnostic:
-// a Link works on bare 8-byte PDUs (one CAN frame's worth) and knows nothing about
-// CAN ids or the driver — the bridge filters by rx_id and stamps tx_id, so this
-// module stays above the driver-port boundary like the rest of comm/.
+// a Link works on bare PDUs of up to 64 bytes (one CAN or CAN-FD frame's worth, each carrying its
+// length) and knows nothing about CAN ids or the driver — the bridge filters by rx_id and stamps
+// tx_id, so this module stays above the driver-port boundary like the rest of comm/.
 //
 // One Link is a half-duplex diagnostic connection: it reassembles messages from
 // incoming PDUs and segments an outgoing message. Poll-based to fit the bridge tick:
@@ -14,6 +14,10 @@ module isotp
 //
 // PDU types (N_PCI high nibble of byte 0):
 //   0x0 SF single   0x1 FF first   0x2 CF consecutive   0x3 FC flow-control
+//
+// Frame length: a Link transmits with its TX_DL (`tx_dl`: 8, or a CAN-FD length up to 64 on a
+// CAN-FD bus) and receives any length without a setting — a reception's RX_DL is its first frame's
+// length (ISO 15765-2:2016). Flow control frames are always 8 bytes.
 
 // A Link holds no message storage of its own: its owner gives it a receive buffer and a transmit
 // buffer (bind_rx / bind_tx) and their capacities, which are the longest message the link takes in
@@ -35,11 +39,101 @@ pub const default_message = 520
 // refused with FC.OVFLW (REQ-CAN-TP-015), so no capacity above this is ever used.
 pub const message_limit = 4095
 
-// Pdu is one CAN frame's worth of ISO-TP bytes (always 8, padded). No id: the
-// bridge owns the rx/tx addressing.
+// Pdu is one CAN or CAN-FD frame's worth of ISO-TP bytes: `len` of the 64 are the frame (CAN_DL). A
+// len of 0 reads as 8, so a Pdu built by hand is a classic frame. No id: the bridge owns the rx/tx
+// addressing.
 pub struct Pdu {
 pub mut:
-	data [8]u8
+	data [64]u8
+	len  int
+}
+
+// dl: the frame's length, a len of 0 read as 8
+fn (p &Pdu) dl() int {
+	return if p.len == 0 { 8 } else { p.len }
+}
+
+// valid_dl: `dl` is a frame length ISO-TP may transmit with (TX_DL) and a reception may run at
+// (RX_DL): 8, or a longer length a CAN-FD DLC expresses.
+pub fn valid_dl(dl int) bool {
+	return match dl {
+		8, 12, 16, 20, 24, 32, 48, 64 { true }
+		else { false }
+	}
+}
+
+// sf_max is the longest message a single frame carries in a frame of `dl` bytes: 7 behind the
+// 4-bit length of a frame of up to 8 bytes, dl - 2 behind the escape of a longer CAN-FD one.
+pub fn sf_max(dl int) int {
+	return if dl <= 8 { 7 } else { dl - 2 }
+}
+
+// frame_len_ok: a received frame of `n` bytes is one a controller delivers — 1 to 8, or a CAN-FD
+// length. Every decoder below asks it first, so no caller reads past what such a frame holds.
+fn frame_len_ok(n int) bool {
+	return n >= 1 && (n <= 8 || valid_dl(n))
+}
+
+// fd_padded: the length a frame carrying `n` bytes goes out at — 8, or past 8 the next length a
+// CAN-FD DLC expresses (12, 16, 20, 24, 32, 48, 64)
+fn fd_padded(n int) int {
+	return if n <= 8 {
+		8
+	} else if n <= 12 {
+		12
+	} else if n <= 16 {
+		16
+	} else if n <= 20 {
+		20
+	} else if n <= 24 {
+		24
+	} else if n <= 32 {
+		32
+	} else if n <= 48 {
+		48
+	} else {
+		64
+	}
+}
+
+// single_frame decodes a received single frame of `n` bytes at `data`: where its message starts
+// and how long it is, the length 0 meaning the frame is not a valid single frame. In a frame of up
+// to 8 bytes the length is the first byte's low nibble, 1..7; in a longer (CAN-FD) one the first
+// byte is 0x00, the escape, and the length the second byte, 1 up to the frame's length less 2. A
+// classic single frame in a frame longer than 8 bytes is not a single frame (ISO 15765-2:2016;
+// blobly_net's software ISO-TP and the Linux kernel's decide alike). Nor is a frame of a length no
+// CAN-FD frame has (9..11, 13..15, ...): that rule is this link's own (frame_len_ok) — blobly_net's
+// single_frame and the kernel's take such a frame when it holds its length, though no controller
+// delivers one. The physical request id (on_frame) and the functional one (comm/diag) both ask it,
+// so the two cannot disagree about a frame; the caller bounds the length by its own capacity.
+pub fn single_frame(data &u8, n int) (int, int) {
+	if !frame_len_ok(n) {
+		return 0, 0
+	}
+	b0 := unsafe { data[0] }
+	if b0 >> 4 != 0 {
+		return 0, 0
+	}
+	if n > 8 {
+		len := int(unsafe { data[1] })
+		if b0 != 0 || len < 1 || len > n - 2 {
+			return 0, 0
+		}
+		return 2, len
+	}
+	len := int(b0 & 0x0F)
+	if len < 1 || len > 7 || 1 + len > n {
+		return 0, 0
+	}
+	return 1, len
+}
+
+// FfVerdict is what a received first frame gets: ignored (no flow control), refused with FC.OVFLW,
+// or accepted (a reception starts, a CTS is owed)
+enum FfVerdict {
+	ignore
+	overflow
+	accept
 }
 
 enum RxPhase {
@@ -59,6 +153,11 @@ pub struct Link {
 pub mut:
 	bs    u8 // BlockSize we grant in our FC (0 = whole message at once)
 	stmin u8 // STmin we ask of the sender (ms)
+	// TX_DL: the frame length this link transmits with — 8, or a CAN-FD length up to 64 (valid_dl)
+	// that only an owner whose channel is opened CAN-FD may set; 0 or any other value reads as 8.
+	// send() takes it for the whole message, so a change never alters a transfer in flight. No
+	// field default (the _vinit rule): a zeroed link transmits classic frames.
+	tx_dl u8
 	// N_Bs: max time to wait for a flow-control frame before aborting the tx. A lost
 	// or never-sent FC must not wedge the link busy forever (ISO 15765-2 N_Bs).
 	// 0 disables the timeout (wait indefinitely). NO field default: a __global's
@@ -87,6 +186,16 @@ pub mut:
 	// directions; the gap was documented in move-data.md and is now closed).
 	// 0 disables. No field default — the _vinit rule again: init_defaults() sets it.
 	n_cr_us u64
+	// N_Ar: max time a flow control we owe (a CTS, or an OVFLW) may wait to be handed to the
+	// controller — a transmit FIFO that never drains (bus-off, nobody acknowledging) — before the
+	// reception it belongs to is abandoned (ISO 15765-2 N_Ar, REQ-CAN-TP-029). Measured from when
+	// the flow control first became owed; a repeated first frame does not restart it. 0 disables.
+	// No field default — init_defaults() sets it.
+	n_ar_us u64
+	// receptions the link abandoned because a timer ran out (N_Cr, N_Ar) — counted, so an owner
+	// bounding an exchange tells a reception given up from one still running. An owner's own
+	// abort_rx is not counted. Zero from the zeroed struct.
+	rx_aborts u32
 	// reassembly (rx): rx_buf holds rx_cap bytes, the owner's (bind_rx). The nil default is a zero
 	// value, so it is no _vinit initializer: an unbound link has rx_cap 0 and takes nothing.
 	rx        RxPhase
@@ -94,6 +203,7 @@ pub mut:
 	rx_cap    int
 	rx_len    int
 	rx_pos    int
+	rx_dl     int // the reception's RX_DL: its first frame's length, every CF but the last as long
 	rx_sn     u8
 	rx_count  u8 // CFs since our last FC
 	fc_send   bool
@@ -106,6 +216,7 @@ pub mut:
 	tx_cap     int
 	tx_len     int
 	tx_pos     int
+	tx_fl      int // the frame length of the transmission in flight: tx_dl as send() found it
 	tx_sn      u8
 	peer_bs    u8  // BlockSize the receiver granted (0 = unlimited)
 	peer_stmin u64 // STmin the receiver asked (us)
@@ -113,7 +224,13 @@ pub mut:
 	next_us     u64 // earliest time to send the next CF
 	fc_deadline u64 // abort the tx if still in wait_fc past this (N_Bs); set on entry
 	rx_deadline u64 // abort the rx if no CF arrived by this (N_Cr); set on FF, refreshed per CF
+	ar_deadline u64 // abandon the rx if the flow control owed has not gone by this (N_Ar); 0 = none owed
 	wft_count   u8  // consecutive FC.WAIT frames seen for the current block (vs wft_max)
+}
+
+// dl: the link's TX_DL — tx_dl when it is a length ISO-TP transmits with, else 8
+fn (l &Link) dl() int {
+	return if valid_dl(int(l.tx_dl)) { int(l.tx_dl) } else { 8 }
 }
 
 // bind_rx gives the link its receive buffer: `cap` bytes at `buf`, the longest message it takes
@@ -148,7 +265,8 @@ fn bounded_cap(buf &u8, cap int) int {
 // send starts transmitting `len` bytes from `src`, copied into the transmit buffer, so `src` may be
 // reused at once — unless it IS the transmit buffer, which then holds the message until the link
 // is idle again. Refused if a tx is already in flight or the message exceeds the transmit
-// capacity (REQ-CAN-TP-014).
+// capacity (REQ-CAN-TP-014). A message of up to sf_max(TX_DL) bytes goes as a single frame, a
+// longer one as a first frame and consecutive frames (REQ-CAN-TP-027).
 pub fn (mut l Link) send(src &u8, len int) bool {
 	if l.tx != .idle || len <= 0 || len > l.tx_cap {
 		return false
@@ -164,7 +282,8 @@ pub fn (mut l Link) send(src &u8, len int) bool {
 	l.tx_pos = 0
 	l.tx_sn = 1
 	l.wft_count = 0
-	l.tx = if len <= 7 { TxPhase.send_sf } else { TxPhase.send_ff }
+	l.tx_fl = l.dl() // the frame length for the whole message, whatever tx_dl becomes meanwhile
+	l.tx = if len <= sf_max(l.tx_fl) { TxPhase.send_sf } else { TxPhase.send_ff }
 	return true
 }
 
@@ -191,10 +310,29 @@ fn (mut l Link) give_up_tx() {
 // flow control — for an owner that is done with the exchange they belonged to (a gateway's
 // routed request superseded by the tester's next one).
 pub fn (mut l Link) abort_rx() {
+	l.fc_ovflw = false
+	l.end_rx()
+	l.ready = false
+}
+
+// end_rx: the reception in progress is over, and no CTS is owed for it (nor N_Ar armed, unless an
+// OVFLW is still owed)
+fn (mut l Link) end_rx() {
 	l.rx = .idle
 	l.fc_send = false
-	l.fc_ovflw = false
-	l.ready = false
+	if !l.fc_ovflw {
+		l.ar_deadline = 0
+	}
+}
+
+// owe: a flow control is about to become owed at `now` — N_Ar runs from here, unless one is owed
+// already: a repeated first frame, or one replacing a reception whose CTS has not gone, is the
+// same pending flow control and keeps the earlier deadline (REQ-CAN-TP-029). Call before setting
+// fc_send / fc_ovflw.
+fn (mut l Link) owe(now u64) {
+	if !(l.fc_send || l.fc_ovflw) {
+		l.ar_deadline = now + l.n_ar_us
+	}
 }
 
 // idle reports that nothing is in flight in EITHER direction: no tx segmenting or awaiting flow
@@ -228,18 +366,51 @@ pub fn (mut l Link) take(dst &u8) int {
 	return n
 }
 
-// on_frame feeds a received PDU (the bridge passes only rx_id frames).
-// truncated: a received frame (PCI byte `pci`, `n` bytes arrived) is too short for what its PCI
-// says, and must be dropped before on_frame — which reads all eight bytes, so a short frame's
-// missing tail would be invented. A consecutive frame is full unless it carries the last bytes of
-// the reception; a first frame is always full (ISO 15765-2); a flow control needs its block size
-// and STmin. The one rule for every owner of a Link: the application's connection and the boot.
-pub fn (l &Link) truncated(pci u8, n int) bool {
-	left := l.rx_len - l.rx_pos
-	return match pci >> 4 {
-		0 { int(pci & 0x0F) >= n }
-		1 { n < 8 }
-		2 { n < 8 && n - 1 < left }
+// ff_verdict judges a received first frame (PCI type 1) at the frame's length, its RX_DL: one of 8
+// bytes or a CAN-FD length, else ignored as a frame too short for its PCI or of a length no CAN-FD
+// frame has. The escape first frame (FF_DL 0, a 32-bit length) is refused with FC.OVFLW whatever
+// length it states (REQ-CAN-TP-015: no capacity reaches past 4095 — ISO 15765-2:2016 and blobly_net
+// ignore one stating 4095 or less instead); a length that fits a single frame of the same RX_DL is
+// ignored, as a message that must have been sent as one (REQ-CAN-TP-028); a length past the receive
+// buffer is refused with FC.OVFLW (REQ-CAN-TP-014/015).
+fn (l &Link) ff_verdict(p &Pdu) FfVerdict {
+	n := p.dl()
+	if n < 8 || !frame_len_ok(n) {
+		return .ignore
+	}
+	total := int((u32(p.data[0] & 0x0F) << 8) | u32(p.data[1]))
+	if total == 0 {
+		return .overflow
+	}
+	if total <= sf_max(n) {
+		return .ignore
+	}
+	if total > l.rx_cap {
+		return .overflow
+	}
+	return .accept
+}
+
+// overflows: `p` is a first frame the link refuses with FC.OVFLW (ff_verdict) — for an owner that
+// answers for that refusal itself (a DoIP gateway, comm/diagroute).
+pub fn (l &Link) overflows(p &Pdu) bool {
+	return p.data[0] >> 4 == 1 && l.ff_verdict(p) == .overflow
+}
+
+// misfit: a received consecutive frame or flow control whose length its PCI and the reception do
+// not allow — read nothing of it (REQ-CAN-TP-013, REQ-CAN-TP-028). A length no controller delivers;
+// a consecutive frame longer than the reception's RX_DL, or shorter while it does not carry all
+// that is left of the message (only the last may be short: its padding off); a flow control
+// shorter than its FS, BS and STmin. A consecutive frame of the wrong length is ignored and the
+// reception kept, as the Linux kernel's isotp does (blobly_net aborts instead; on the wire both
+// end alike, since the sender's next frame then carries the following sequence number).
+fn (l &Link) misfit(p &Pdu) bool {
+	n := p.dl()
+	if !frame_len_ok(n) {
+		return true
+	}
+	return match p.data[0] >> 4 {
+		2 { n > l.rx_dl || (n < l.rx_dl && n - 1 < l.rx_len - l.rx_pos) }
 		3 { n < 3 }
 		else { false }
 	}
@@ -251,89 +422,114 @@ pub fn (l &Link) truncated(pci u8, n int) bool {
 // frame above all, is dropped rather than start a reception whose flow control would go out
 // inside the stream (REQ-CAN-TP-024). True when the frame was taken in.
 pub fn (mut l Link) on_flow_control(now u64, data &u8, n int) bool {
-	if n < 1 || unsafe { data[0] } >> 4 != 3 || l.truncated(unsafe { data[0] }, n) {
+	if n < 1 || unsafe { data[0] } >> 4 != 3 {
 		return false
 	}
-	mut p := Pdu{}
-	for i in 0 .. (if n > 8 { 8 } else { n }) {
+	mut p := Pdu{
+		len: if n > 64 { 64 } else { n }
+	}
+	for i in 0 .. p.len {
 		p.data[i] = unsafe { data[i] }
+	}
+	if l.misfit(&p) {
+		return false
 	}
 	l.on_frame(now, p)
 	return true
 }
 
+// on_frame feeds a received PDU (the bridge passes only rx_id frames), of `p.len` bytes: only those
+// are read, and a frame too short for its PCI, or of a length its reception does not allow, is
+// ignored (single_frame, ff_verdict, misfit).
 pub fn (mut l Link) on_frame(now u64, p Pdu) {
+	n := p.dl()
 	pci := p.data[0] & 0xF0
 	low := p.data[0] & 0x0F
 	match pci {
-		0x00 { // single frame
-			n := int(low)
-			if n > 0 && n <= 7 && n <= l.rx_cap {
-				for i in 0 .. n {
+		0x00 { // single frame: classic, or behind the CAN-FD escape (REQ-CAN-TP-003, -028)
+			at, sn := single_frame(&p.data[0], n)
+			if sn > 0 && sn <= l.rx_cap {
+				for i in 0 .. sn {
 					unsafe {
-						l.rx_buf[i] = p.data[1 + i]
+						l.rx_buf[i] = p.data[at + i]
 					}
 				}
 				l.ready = true
-				l.ready_len = n
-				l.rx = .idle // a reception it interrupts is over (REQ-CAN-TP-012), and so is its CTS
-				l.fc_send = false
-				l.fc_ovflw = false // and a refusal still owed for an earlier first frame
+				l.ready_len = sn
+				// a reception it interrupts is over (REQ-CAN-TP-012), and so is its CTS — and a
+				// refusal still owed for an earlier first frame
+				l.fc_ovflw = false
+				l.end_rx()
 				l.progress++
 			}
 		}
 		0x10 { // first frame
-			// 0 is the escape first frame: a 32-bit length follows, always above 4095
-			total := int((u32(low) << 8) | u32(p.data[1]))
-			if total > 7 && total <= l.rx_cap {
-				l.fc_ovflw = false // a refusal owed for an earlier first frame is moot now
-				// a first frame that replaces a reception in progress restarts it, and moves
-				// nothing: a sender repeating its first frame is not a transfer advancing
-				fresh := l.rx != .receiving
-				for i in 0 .. 6 {
-					unsafe {
-						l.rx_buf[i] = p.data[2 + i]
+			match l.ff_verdict(&p) {
+				.accept {
+					total := int((u32(low) << 8) | u32(p.data[1]))
+					// N_Ar runs from the first flow control owed: one still owed for the reception
+					// this restarts, or an OVFLW still owed, keeps its deadline
+					l.owe(now)
+					l.fc_ovflw = false // a refusal owed for an earlier first frame is moot now
+					// a first frame that replaces a reception in progress restarts it, and moves
+					// nothing: a sender repeating its first frame is not a transfer advancing
+					fresh := l.rx != .receiving
+					head := n - 2 // RX_DL - 2 bytes of the message ride in the first frame
+					for i in 0 .. head {
+						unsafe {
+							l.rx_buf[i] = p.data[2 + i]
+						}
+					}
+					l.rx_len = total
+					l.rx_pos = head
+					l.rx_dl = n // the reception's RX_DL: every CF but the last as long
+					l.rx_sn = 1
+					l.rx_count = 0
+					l.rx = .receiving
+					l.rx_deadline = 0 // unarm: a stale deadline from a PRIOR transfer would let
+					// tick() abort this fresh receive before its CTS ever goes out (codex #218)
+					l.fc_send = true // answer with FC (CTS); N_Cr is armed when the CTS is
+					// actually emitted (poll), not here — a backpressured bridge may hold the
+					// CTS for a while and the sender is correctly waiting for it
+					if fresh {
+						l.progress++
 					}
 				}
-				l.rx_len = total
-				l.rx_pos = 6
-				l.rx_sn = 1
-				l.rx_count = 0
-				l.rx = .receiving
-				l.rx_deadline = 0 // unarm: a stale deadline from a PRIOR transfer would let
-				// tick() abort this fresh receive before its CTS ever goes out (codex #218)
-				l.fc_send = true // answer with FC (CTS); N_Cr is armed when the CTS is
-				// actually emitted (poll), not here — a backpressured bridge may hold the
-				// CTS for a while and the sender is correctly waiting for it
-				if fresh {
-					l.progress++
+				.overflow {
+					// more than we can hold (the escape first frame always is, above
+					// message_limit): refuse it at once with FC.OVFLW, so the sender fails now
+					// rather than waiting out its N_Bs (REQ-CAN-TP-015); like any first frame it
+					// ends a reception in progress (REQ-CAN-TP-012). A flow control owed already
+					// keeps its N_Ar deadline
+					l.owe(now)
+					l.fc_ovflw = true
+					l.end_rx()
 				}
-			} else if total == 0 || total > l.rx_cap {
-				// more than we can hold (the escape first frame always is, above message_limit): refuse it at once with FC.OVFLW, so the sender fails now
-				// rather than waiting out its N_Bs (REQ-CAN-TP-015); like any first frame it ends a
-				// reception in progress (REQ-CAN-TP-012)
-				l.rx = .idle
-				l.fc_send = false
-				l.fc_ovflw = true
+				.ignore {}
 			}
 		}
 		0x20 { // consecutive frame
+			if l.misfit(&p) {
+				return // the wrong length: nothing of it read, the reception kept (REQ-CAN-TP-028)
+			}
 			if l.rx == .receiving && l.n_cr_us != 0 && l.rx_deadline != 0 && now >= l.rx_deadline {
-				l.rx = .idle // N_Cr expired: the transfer is dead — a late CF must not resurrect it
-				l.fc_send = false // and no stale CTS for it (codex #218)
+				// N_Cr expired: the transfer is dead — a late CF must not resurrect it, and no
+				// stale CTS is owed for it (codex #218)
+				l.end_rx()
+				l.rx_aborts++
 			}
 			if l.rx == .receiving && low == (l.rx_sn & 0x0F) {
 				l.rx_deadline = now + l.n_cr_us // progress: the N_Cr window restarts per CF
-				mut n := l.rx_len - l.rx_pos
-				if n > 7 {
-					n = 7
+				mut m := l.rx_len - l.rx_pos
+				if m > n - 1 {
+					m = n - 1
 				}
-				for i in 0 .. n {
+				for i in 0 .. m {
 					unsafe {
 						l.rx_buf[l.rx_pos + i] = p.data[1 + i]
 					}
 				}
-				l.rx_pos += n
+				l.rx_pos += m
 				l.rx_sn = (l.rx_sn + 1) & 0x0F
 				l.rx_count++
 				// progress only once our flow control has gone: a sender running ahead of it (and
@@ -349,13 +545,17 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 					l.rx_count = 0
 					l.rx_deadline = 0 // block full: the sender now waits for the next CTS, so
 					// unarm N_Cr — it re-arms when poll() emits that CTS, not before (codex #218)
+					l.owe(now)
 					l.fc_send = true
 				}
 			} else if l.rx == .receiving {
-				l.rx = .idle // sequence error -> abort
+				l.end_rx() // sequence error -> abort, and no CTS owed for it
 			}
 		}
 		0x30 { // flow control (for our tx)
+			if l.misfit(&p) {
+				return // too short for FS, BS and STmin
+			}
 			if l.tx == .wait_fc {
 				// A FC that arrives after N_Bs has already elapsed is too late: the transfer
 				// has timed out. Abort rather than resurrect it — a caller that processes rx
@@ -394,19 +594,19 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 	}
 }
 
-// poll produces the next PDU to send, if any (FC has priority, then the tx FSM).
 // tick advances the link's time-based state (the N_Bs flow-control timeout) independently
 // of poll(). A caller that gates poll() on Tx-FIFO space (`for tx_ready() && poll(...)`) must
 // call tick() every cycle so a full FIFO can't wedge the link in wait_fc forever — otherwise a
 // dump on a down/quiet bus (FF sent, no FC, FIFO stays full) never reaches its abort deadline.
 // init_defaults sets the protocol timeouts every embedded consumer must run with
-// (N_Bs 1 s, WFTmax 16). Field defaults can't do this job: on a freestanding
-// target a __global's initializers live in the never-called _vinit, so every
-// module init path calls this explicitly (the build lint enforces the class).
+// (N_Bs, N_Cr and N_Ar 1 s, WFTmax 16 — the standard's timeout values). Field defaults can't do
+// this job: on a freestanding target a __global's initializers live in the never-called _vinit, so
+// every module init path calls this explicitly (the build lint enforces the class).
 pub fn (mut l Link) init_defaults() {
 	l.n_bs_us = 1_000_000
 	l.wft_max = 16
 	l.n_cr_us = 1_000_000
+	l.n_ar_us = 1_000_000
 }
 
 pub fn (mut l Link) tick(now u64) {
@@ -416,29 +616,42 @@ pub fn (mut l Link) tick(now u64) {
 	if l.n_bs_us != 0 && (l.tx == .wait_fc || l.tx == .send_cf) && now >= l.fc_deadline {
 		l.give_up_tx()
 	}
+	// N_Ar: a flow control we owe that the controller never took (a transmit FIFO that stays full)
+	// abandons the reception it belongs to, so the link goes idle — S3 runs again and functional
+	// requests are served (REQ-CAN-TP-029)
+	if l.n_ar_us != 0 && l.ar_deadline != 0 && now >= l.ar_deadline && (l.fc_send || l.fc_ovflw) {
+		l.fc_ovflw = false
+		l.end_rx()
+		l.rx_aborts++
+	}
 	// N_Cr: a receive whose sender went quiet mid-transfer is abandoned, so the link
 	// (and its reassembly buffer) cannot stay .receiving forever (REQ-CAN-TP-008). Only
 	// armed deadlines count — rx_deadline == 0 means the CTS hasn't been emitted yet,
 	// so the sender is correctly waiting for flow control, not stalling (codex #218).
 	if l.n_cr_us != 0 && l.rx == .receiving && l.rx_deadline != 0 && now >= l.rx_deadline {
-		l.rx = .idle
-		l.fc_send = false // don't emit a stale CTS for an abandoned transfer (codex #218)
+		l.end_rx() // and no stale CTS for an abandoned transfer (codex #218)
+		l.rx_aborts++
 	}
 }
 
+// poll produces the next PDU to send, if any (FC has priority, then the tx FSM), its length in
+// out.len: a flow control 8 bytes; a single, first or consecutive frame at most the TX_DL send()
+// took, padded with 0x00 to 8 or past 8 to the next CAN-FD length (REQ-CAN-TP-027).
 pub fn (mut l Link) poll(now u64, mut out Pdu) bool {
 	if l.fc_ovflw {
-		zero(mut out)
+		zero(mut out, 8)
 		out.data[0] = 0x32 // FC, OVFLW
 		l.fc_ovflw = false
+		l.ar_deadline = 0 // handed over: N_Ar met
 		return true
 	}
 	if l.fc_send {
-		zero(mut out)
+		zero(mut out, 8)
 		out.data[0] = 0x30 // FC, CTS
 		out.data[1] = l.bs
 		out.data[2] = l.stmin
 		l.fc_send = false
+		l.ar_deadline = 0 // handed over: N_Ar met
 		// N_Cr starts NOW: the sender only sends CFs after it sees this CTS, so the
 		// receive deadline must be measured from CTS emission, not FF reception — both
 		// the initial FF and every block boundary (codex #218)
@@ -447,22 +660,33 @@ pub fn (mut l Link) poll(now u64, mut out Pdu) bool {
 	}
 	match l.tx {
 		.send_sf {
-			zero(mut out)
-			out.data[0] = 0x00 | u8(l.tx_len)
-			for i in 0 .. l.tx_len {
-				out.data[1 + i] = unsafe { l.tx_buf[i] }
+			if l.tx_len <= 7 {
+				zero(mut out, 8)
+				out.data[0] = 0x00 | u8(l.tx_len)
+				for i in 0 .. l.tx_len {
+					out.data[1 + i] = unsafe { l.tx_buf[i] }
+				}
+			} else {
+				// behind the CAN-FD escape: 0x00, then the length (only with a TX_DL above 8)
+				zero(mut out, fd_padded(2 + l.tx_len))
+				out.data[1] = u8(l.tx_len)
+				for i in 0 .. l.tx_len {
+					out.data[2 + i] = unsafe { l.tx_buf[i] }
+				}
 			}
 			l.tx = .idle
 			return true
 		}
 		.send_ff {
-			zero(mut out)
+			// a first frame of TX_DL bytes, TX_DL - 2 of them the message
+			zero(mut out, l.tx_fl)
 			out.data[0] = 0x10 | u8((u32(l.tx_len) >> 8) & 0x0F)
 			out.data[1] = u8(l.tx_len & 0xFF)
-			for i in 0 .. 6 {
+			head := l.tx_fl - 2
+			for i in 0 .. head {
 				out.data[2 + i] = unsafe { l.tx_buf[i] }
 			}
-			l.tx_pos = 6
+			l.tx_pos = head
 			l.tx_sn = 1
 			l.tx = .wait_fc
 			l.fc_deadline = now + l.n_bs_us
@@ -480,16 +704,17 @@ pub fn (mut l Link) poll(now u64, mut out Pdu) bool {
 			if now < l.next_us {
 				return false
 			}
-			zero(mut out)
-			out.data[0] = 0x20 | (l.tx_sn & 0x0F)
-			mut n := l.tx_len - l.tx_pos
-			if n > 7 {
-				n = 7
+			// TX_DL - 1 bytes of the message each, the last only what is left
+			mut m := l.tx_len - l.tx_pos
+			if m > l.tx_fl - 1 {
+				m = l.tx_fl - 1
 			}
-			for i in 0 .. n {
+			zero(mut out, fd_padded(1 + m))
+			out.data[0] = 0x20 | (l.tx_sn & 0x0F)
+			for i in 0 .. m {
 				out.data[1 + i] = unsafe { l.tx_buf[l.tx_pos + i] }
 			}
-			l.tx_pos += n
+			l.tx_pos += m
 			l.tx_sn = (l.tx_sn + 1) & 0x0F
 			l.next_us = now + l.peer_stmin
 			l.fc_deadline = now + l.n_bs_us // progress made -> refresh the send_cf stall bound
@@ -510,10 +735,12 @@ pub fn (mut l Link) poll(now u64, mut out Pdu) bool {
 	}
 }
 
-fn zero(mut p Pdu) {
-	for i in 0 .. 8 {
+// zero starts a PDU of `n` bytes: its length, every byte the fill byte (0x00)
+fn zero(mut p Pdu, n int) {
+	for i in 0 .. n {
 		p.data[i] = 0
 	}
+	p.len = n
 }
 
 // decode_stmin maps the FC STmin byte to microseconds: 0x00-0x7F ms, 0xF1-0xF9

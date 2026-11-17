@@ -37,6 +37,7 @@ fn C.boot_can_idx() int
 fn C.boot_can_fd() int
 fn C.boot_bs() u8
 fn C.boot_stmin() u8
+fn C.boot_tx_dl() u8
 fn C.boot_keys(image &u8, session &u8)
 fn C.boot_buf() &u8
 fn C.boot_buf_len() int
@@ -133,9 +134,14 @@ fn entry() {
 	// node's own, from its [boot]
 	C.boot_keys(&g_prog.image_key[0], &g_prog.session_key[0])
 	g_prog.rng = rng_hook // the 0x29 challenge source (the board's TRNG)
-	g_link.init_defaults() // ISO-TP N_Bs/WFTmax — 0 would wait forever on a lost FC
-	g_link.bs = C.boot_bs() // the flow control the node's [isotp] grants
-	g_link.stmin = C.boot_stmin()
+	// ISO-TP's timers (0 would wait forever on a lost FC), the flow control the node's [isotp]
+	// grants and the frame length it answers with: its tx_dl, above 8 only on a CAN-FD bus, which
+	// BOOT_CAN_FD opens the channel in (generation refuses the rest)
+	boot.LinkCfg{
+		bs:    C.boot_bs()
+		stmin: C.boot_stmin()
+		tx_dl: C.boot_tx_dl()
+	}.configure(mut g_link)
 	// the link reassembles into the request buffer and sends from the response buffer: the server
 	// reads a request before the pass goes on and writes an answer only while the link is idle
 	g_link.bind_rx(region(lay.req), max_message)

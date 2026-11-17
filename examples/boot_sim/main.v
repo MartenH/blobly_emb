@@ -137,8 +137,10 @@ fn main() {
 			if f.id != req_id {
 				continue
 			}
-			mut pdu := isotp.Pdu{}
-			for i in 0 .. 8 {
+			mut pdu := isotp.Pdu{
+				len: int(f.len) // the link reads only the bytes that arrived
+			}
+			for i in 0 .. int(f.len) {
 				pdu.data[i] = f.data[i]
 			}
 			link.on_frame(now, pdu)
@@ -157,9 +159,9 @@ fn main() {
 		for ch.tx_ready() && link.poll(now, mut out) {
 			mut tf := can.Frame{
 				id:  rsp_id
-				len: 8
+				len: u8(out.len) // 8: the channel is classic, the link's TX_DL 8
 			}
-			for i in 0 .. 8 {
+			for i in 0 .. out.len {
 				tf.data[i] = out.data[i]
 			}
 			ch.send(tf)

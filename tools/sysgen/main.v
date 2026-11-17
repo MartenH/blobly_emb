@@ -955,6 +955,11 @@ fn doip_route_section(sys sysmodel.System, node sysmodel.Node) []string {
 		if t.view.isotp_conns.len == 1 && t.view.isotp_conns[0].max_len() != isotp.default_message {
 			b << 'max_message = ${t.view.isotp_conns[0].max_len()}'
 		}
+		// the frame length the gateway sends to it with: the node's own (written only when not 8;
+		// loom2v refuses one above 8 on a route bus that is not CAN-FD)
+		if t.view.isotp_conns.len == 1 && t.view.isotp_conns[0].dl() != 8 {
+			b << 'tx_dl = ${t.view.isotp_conns[0].dl()}'
+		}
 		b << ''
 	}
 	return b

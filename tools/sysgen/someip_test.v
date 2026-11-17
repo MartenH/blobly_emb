@@ -1430,6 +1430,20 @@ fn test_a_route_is_lowered_into_the_gateways_doip() {
 	assert doip_route_section(doip_system(), doip_system().nodes[0]).len == 0
 }
 
+// @verifies REQ-CAN-TP-026
+// the route carries the node's [isotp] tx_dl, written only when it is not 8 (the key's own), so the
+// gateway sends to a node on a CAN-FD bus at the frame length the node sends at
+fn test_a_route_carries_its_nodes_tx_dl() {
+	sys := route_system()
+	assert !doip_route_section(sys, sys.nodes[0]).join('\n').contains('tx_dl') // 0: none read
+	mut eight := route_system()
+	eight.nodes[eight.nodes.len - 1].view.isotp_conns[0].tx_dl = 8
+	assert !doip_route_section(eight, eight.nodes[0]).join('\n').contains('tx_dl')
+	mut fd := route_system()
+	fd.nodes[fd.nodes.len - 1].view.isotp_conns[0].tx_dl = 64
+	assert doip_route_section(fd, fd.nodes[0]).join('\n').contains('tx_dl = 64')
+}
+
 fn test_a_route_the_system_cannot_serve_is_refused() {
 	cases := {
 		'no such node':                          fn (mut s sysmodel.System) {
@@ -1676,6 +1690,37 @@ fn test_an_authored_routes_maximum_is_its_nodes() {
 	}
 	sys.nodes[0].view.doip_routes = sysmodel.parse_node_view(big).doip_routes
 	assert sized(sys).len == 0, sized(sys).str()
+}
+
+// @verifies REQ-CAN-TP-026
+// an authored route carries its node's frame length: the gateway sends to the node at the route's
+// tx_dl, so a route whose tx_dl is not the node's [isotp] tx_dl is refused — absent, either is 8
+fn test_an_authored_routes_tx_dl_is_its_nodes() {
+	doc := toml.parse_text('[doip]\nlogical_address = 0x07A0\n\n[[doip.route]]\nnode = "zone"\nlogical = 0x07C0\nbus = "can1"\ntx_id = 0x7C0\nrx_id = 0x7C8\n') or {
+		panic(err)
+	}
+	view := sysmodel.parse_node_view(doc)
+	assert view.doip_routes[0].tx_dl == 8 && view.doip_routes[0].dl() == 8
+	mut sys := route_system()
+	sys.nodes[0].doip_routes = []
+	sys.nodes[0].view.doip_routes = view.doip_routes
+	sys.nodes.last().diag.has_logical = false
+	framed := fn (s sysmodel.System) []string {
+		return sysmodel.validate_system(s).filter(it.severity == .error && it.req == 'REQ-CAN-TP-026').map(it.msg)
+	}
+	assert framed(sys).len == 0, framed(sys).str()
+	sys.nodes.last().view.isotp_conns[0].tx_dl = 64
+	errs := framed(sys)
+	assert errs.len == 1 && errs[0].contains('its tx_dl is 8')
+		&& errs[0].contains('[isotp] tx_dl is 64'), errs.str()
+	fd := toml.parse_text('[doip]\nlogical_address = 0x07A0\n\n[[doip.route]]\nnode = "zone"\nlogical = 0x07C0\nbus = "can1"\ntx_id = 0x7C0\nrx_id = 0x7C8\ntx_dl = 64\n') or {
+		panic(err)
+	}
+	sys.nodes[0].view.doip_routes = sysmodel.parse_node_view(fd).doip_routes
+	assert sys.nodes[0].view.doip_routes[0].tx_dl == 64
+	assert framed(sys).len == 0, framed(sys).str()
+	sys.nodes.last().view.isotp_conns[0].tx_dl = 0 // a node at the default: the route's 64 is wrong
+	assert framed(sys).len == 1, framed(sys).str()
 }
 
 // an authored route is held to what a system's route is: its node no DoIP entity of its own, its

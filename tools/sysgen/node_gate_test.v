@@ -170,3 +170,22 @@ fn test_loom2v_failure_is_never_clean() {
 	assert errs.len > 0, 'an unparsable config must not pass the node gate'
 	assert !errs.any(it.contains('generation failed')), 'the panic text is kept: ${errs}'
 }
+
+// @verifies REQ-CAN-TP-026
+// system_full's zone_a states [isotp] tx_dl = 64 in its ecu.toml: the system reads it from the file,
+// and sysgen lowers it onto sysnode's route to zone_a, so the gateway sends zone_a 64-byte frames —
+// while the gateway's own connection stays at 8 (a route at 8 carries no tx_dl:
+// test_a_route_carries_its_nodes_tx_dl)
+fn test_system_full_lowers_zone_as_frame_length_onto_its_route() {
+	mut sys := sysmodel.parse_system(os.join_path(full_dir, 'system.toml')) or { panic(err) }
+	errs := sys.load_nodes_partial()
+	assert errs.len == 0, errs.str()
+	zone := sys.nodes.filter(it.name == 'zone_a')[0]
+	assert zone.view.isotp_conns.len == 1 && zone.view.isotp_conns[0].tx_dl == 64
+	gw := sys.nodes.filter(it.name == 'sysnode')[0]
+	assert gw.view.isotp_conns.len == 1 && gw.view.isotp_conns[0].dl() == 8
+	routes := doip_route_section(sys, gw).join('\n').split('[[doip.route]]')[1..]
+	to_zone := routes.filter(it.contains('node    = "zone_a"'))
+	assert to_zone.len == 1, routes.str()
+	assert to_zone[0].contains('tx_dl = 64'), to_zone[0]
+}

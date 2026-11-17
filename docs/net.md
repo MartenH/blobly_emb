@@ -477,15 +477,18 @@ answer a pending reset waits on) to the comm thread's router (`comm/diagroute`),
 buses. The router's verdict comes back at once: forwarded, and the doip thread acknowledges from
 zone_a's address; or refused, and it NACKs from that address (0x06 target unreachable: not
 authorised; 0x05: the previous request is still being sent). The router is zone_a's tester on the
-edge bus — one ISO-TP link, its flow control granting BS 8 (the bus's receive FIFO depth) — and
-each answer it reassembles goes back through the channel's answer slot; the doip thread frames it
-from the routed node's address. While the request is leaving only flow control is taken from the
-node; a send ISO-TP gives up on (no flow control within N_Bs, more WAITs than WFTmax 16, an
-overflow) ends the exchange; and frames that stop moving either way for 5 s while something is in
-flight — the request's next frame, or our flow control for an answer, waiting for a transmit FIFO
-that takes nothing — end it too, while a transfer that keeps moving however slowly (STmin 127 ms;
-a node asking WAIT again and again, which N_Bs and WFTmax bound) is never cut off. Moving is what
-the link took (`isotp` `progress`), never a frame it ignored or rejected. Once the request has
+edge bus — one ISO-TP link, sending to each node at that node's `[isotp] tx_dl` (zone_a's 64:
+CAN-FD frames of up to 64 bytes; `[[doip.route]] tx_dl`, which sysgen lowers), taking its answers at
+any frame length, its flow control granting BS 8 (the bus's receive FIFO depth) — and each answer
+it reassembles goes back through the channel's answer slot; the doip thread frames it from the
+routed node's address. While the request is leaving only flow control is taken from the node; a
+send ISO-TP gives up on (no flow control within N_Bs, more WAITs than WFTmax 16, an overflow) ends
+the exchange; so does an answer reception ISO-TP gives up — N_Cr, or our flow control for it
+waiting 1 s (ISO-TP's N_Ar) for a transmit FIFO that takes nothing — counted in `timeouts`; and
+frames that stop moving either way for 5 s while something is in flight — the request's single or
+first frame waiting for that FIFO — end it too, while a transfer that keeps moving however slowly
+(STmin 127 ms; a node asking WAIT again and again, which N_Bs and WFTmax bound) is never cut off.
+Moving is what the link took (`isotp` `progress`), never a frame it ignored or rejected. Once the request has
 left, the node's answer must BEGIN within 6 s (P2*max + 1 s; a multi-frame answer under way is
 ISO-TP's to bound, N_Cr) — counted from the request's last frame — and a responsePending renews
 the wait. An answer must answer THIS request: a negative one names its service, a positive one
@@ -533,8 +536,9 @@ OWN maximum message length (its `[isotp] max_message`, which sizes its router's 
   bootloader, which takes any block up to what it offered, is reprogrammed through it in smaller
   blocks (REQ-CAN-TP-025).
 
-syscheck refuses a gateway's own `[[doip.route]]` whose `max_message` is not its node's, and warns of
-a routed node whose `max_message` is larger than its gateway's (REQ-CAN-TP-023) — the other way
+syscheck refuses a gateway's own `[[doip.route]]` whose `max_message` is not its node's, or whose
+`tx_dl` is not its node's (REQ-CAN-TP-026: the gateway sends to the node at the route's frame length),
+and warns of a routed node whose `max_message` is larger than its gateway's (REQ-CAN-TP-023) — the other way
 round nothing is lost, the route carrying the node's maximum:
 system_full's zone_a, at 4095 behind sysnode at 520, is such a node — its messages longer than 520
 bytes, and its bootloader's 4066-byte blocks, are for a tester on its own bus; through sysnode it is

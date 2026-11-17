@@ -87,6 +87,9 @@ struct IsotpConn {
 	// the longest message either way (REQ-CAN-TP-021): the connection's buffers, the server's
 	// response capacity, the DoIP entity's limit, the bootloader's block all follow it
 	max_message int
+	// the frame length it transmits with (REQ-CAN-TP-026): 8, or a CAN-FD length on an fd bus; the
+	// bootloader and a gateway's route to the node take it too
+	tx_dl int
 }
 
 // DidCfg is one [[did]]: constant bytes, a writable RAM cell, and/or a live signal.
@@ -224,6 +227,23 @@ fn schema_int(m map[string]toml.Any, ctx string, key string, def i64, what strin
 		panic('loom2v: schema row ${ctx}.${key} is not a plain range — schema_int cannot bound it')
 	}
 	return toml_int(m, key, def, k.min, k.max, what)
+}
+
+// read_tx_dl reads a tx_dl key ([isotp], or a [[doip.route]] — `ctx`) of a connection on bus `bus`:
+// its schema default (8) when absent; refused, never narrowed, unless it is one of the schema row's
+// values — the frame lengths ISO-TP transmits with (cfgschema.tx_dls, isotp.valid_dl), so ecucheck
+// and generation refuse alike — and refused above 8 on a bus that is not CAN-FD, whose channel is
+// opened classic and refuses every longer frame (REQ-CAN-TP-026).
+fn read_tx_dl(m map[string]toml.Any, ctx string, doc toml.Doc, bus string, what string) int {
+	k := schema_key(ctx, 'tx_dl')
+	v := toml_int(m, 'tx_dl', k.default_int(), min_i64, max_i64, what) // the set below judges it
+	if !k.in_range(v) || !isotp.valid_dl(v) {
+		panic('loom2v: ${what} tx_dl = ${v} is not a frame length ISO-TP transmits with — give ${cfgschema.tx_dl_list()} (REQ-CAN-TP-026)')
+	}
+	if v > 8 && !ecumodel.bus_fd(doc, bus) {
+		panic('loom2v: ${what} tx_dl = ${v} needs a CAN-FD bus, and bus "${bus}" is not one ([bus.${bus}] fd = true) — a classic frame carries 8 bytes (REQ-CAN-TP-026)')
+	}
+	return v
 }
 
 fn parse_nvm_id(name string, v int) u16 {
@@ -1066,6 +1086,8 @@ fn parse_isotp(doc toml.Doc) []IsotpConn {
 		functional_id: toml_int(m, 'functional_id', 0, 0, 0x1FFFFFFF, '[isotp]')
 		// refused outside 8..4095, never narrowed (REQ-CAN-TP-021); 520 when not configured
 		max_message: schema_int(m, 'isotp', 'max_message', isotp.default_message, '[isotp]')
+		// a frame length ISO-TP transmits with, above 8 only on a CAN-FD bus (REQ-CAN-TP-026)
+		tx_dl: read_tx_dl(m, 'isotp', doc, (m['bus'] or { toml.Any('') }).string(), '[isotp]')
 	}
 	// the connection matches and sends its ids as standard frames: a wider value never matches
 	// on receive and goes out masked on transmit
@@ -1847,8 +1869,8 @@ fn build_model(doc toml.Doc, dbc string) Model {
 fn validate_signal_routes_model(m Model, doc toml.Doc) {
 	mut bus_fd := map[string]bool{}
 	if bv := doc.value_opt('bus') {
-		for bname, bc in bv.as_map() {
-			bus_fd[bname] = (bc.as_map()['fd'] or { toml.Any(false) }).bool()
+		for bname, _ in bv.as_map() {
+			bus_fd[bname] = ecumodel.bus_fd(doc, bname)
 		}
 	}
 	for r in m.routes {
@@ -2476,9 +2498,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			// (the bus-index derivation is skipped entirely for a bus-less
 			// [[io.gpio]]-only node and an eth-only node — both app entries are
 			// channel-free; the eth thread opens a socket, not an FDCAN index)
-			if bc := doc.value('bus').as_map()[m.telem.bus] {
-				tx_bus_fd = (bc.as_map()['fd'] or { toml.Any(false) }).bool()
-			}
+			tx_bus_fd = ecumodel.bus_fd(doc, m.telem.bus)
 			// CAN-FD on a generated target: the fdcan backend handles FD framing (h755_canfd) and
 			// the pack/unpack paths carry up to com.max_pdu (64) bytes, so a bus.fd = true opens the
 			// channel FD (can.v flags every send from Channel.fd). The per-board data-phase timing
@@ -3092,11 +3112,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				gw_extra := gateway_extra_buses(m)
 				for b in gw_extra {
 					bidx := fdcan_index_of(b)
-					bfd := if bc := doc.value('bus').as_map()[b] {
-						(bc.as_map()['fd'] or { toml.Any(false) }).bool()
-					} else {
-						false
-					}
+					bfd := ecumodel.bus_fd(doc, b)
 					glue << '\tmut ch_${snake(b)} := can.Channel{} // gateway route bus ${b}'
 					glue << "\tif !ch_${snake(b)}.open('${bidx}', ${bfd}) { // board must init FDCAN${bidx.int() + 1} pins for silicon"
 					glue << '\t\tfor { C._tx_thread_sleep(1000) } // dead route bus — park'
@@ -5038,11 +5054,8 @@ fn main() {
 			// the node's bootloader: its config header, and the build of it (boot/boot.mk), which
 			// also links the application at the board's app slot
 			bus := m.isotp_conns[0].bus
-			fd := (doc.value('bus').as_map()[bus] or { toml.Any(map[string]toml.Any{}) }).as_map()['fd'] or {
-				toml.Any(false)
-			}
 			bpath := os.join_path(os.dir(args[5]), 'boot_gen.h')
-			os.write_file(bpath, boot_gen_h(m, fdcan_index(bus), fd.bool()).join('\n') + '\n') or {
+			os.write_file(bpath, boot_gen_h(m, fdcan_index(bus), ecumodel.bus_fd(doc, bus)).join('\n') + '\n') or {
 				panic('write ${bpath}: ${err}')
 			}
 			// the image key too, so `make image` refuses a signing seed this bootloader would reject

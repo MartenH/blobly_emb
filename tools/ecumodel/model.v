@@ -376,6 +376,18 @@ pub:
 	typ    string
 }
 
+// bus_fd: whether [bus.<bus>] is CAN-FD (`fd = true`); a bus or key absent reads false. The ONE
+// reading of that key: cfg2v's `<bus>_fd` constants (how a host node's channels are opened),
+// loom2v (the comm thread's channel, a gateway's route buses, the bootloader's BOOT_CAN_FD, and
+// what a frame on the bus may be — a route's frame lengths, a tx_dl above 8) and sysmodel (a
+// member's bus against the system's) all ask it here, so no generated code can send a long frame
+// on a channel another tool opened classic.
+pub fn bus_fd(doc toml.Doc, bus string) bool {
+	bv := doc.value_opt('bus') or { return false }
+	bc := bv.as_map()[bus] or { return false }
+	return (bc.as_map()['fd'] or { toml.Any(false) }).bool()
+}
+
 // eth_bus_of returns the (single, ecucheck-enforced) kind = "eth" bus, or ''.
 pub fn eth_bus_of(doc toml.Doc) string {
 	if bv := doc.value_opt('bus') {

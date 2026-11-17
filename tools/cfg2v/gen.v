@@ -184,9 +184,8 @@ fn main() {
 		if bus.len > 0 {
 			b << ''
 			b << '// Bus config (per bus)'
-			for name, cfg in bus {
-				m := cfg.as_map()
-				b << 'pub const ${snake(name)}_fd = ${(m['fd'] or { toml.Any(false) }).bool()}'
+			for name, _ in bus {
+				b << 'pub const ${snake(name)}_fd = ${ecumodel.bus_fd(doc, name)}'
 				// NOTE: the bus *interface* name (e.g. "vcan0") is a platform binding and
 				// lives in the hand-written main.v (the no-heap exempt entry), not here —
 				// gen/ is no-`string` runtime config.

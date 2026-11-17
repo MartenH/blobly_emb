@@ -143,18 +143,19 @@ The boot manager is **one program** — `boot/target/main.v` with its C half
 |---|---|---|
 | flash layout, cells | the board's `bootmap.h` (`boards/h755zi`, `h735dk`, `h723`) | C macros; `scripts/boot_layout.sh` reads the same header for make (the boot's link limit, the app's link at `APP_VECTORS`, the flash addresses) |
 | flash driver | the board's `BOARD_FLASH` (board.mk) | `boards/h755zi/flash.c` (dual bank); `boards/common/flash_h72x.c` for the single-bank H723 and H735 |
-| bus, ids, flow control, frame format | the node's `[isotp]` and its bus | `gen/boot_gen.h` (loom2v): the comm thread's FDCAN index, its `fd`, `rx_id`/`tx_id`, `bs`/`stmin` |
+| bus, ids, flow control, frame format and length | the node's `[isotp]` and its bus | `gen/boot_gen.h` (loom2v): the comm thread's FDCAN index, its `fd`, `rx_id`/`tx_id`, `bs`/`stmin`, `tx_dl` (`BOOT_TX_DL`: the frame length it answers with, above 8 only with `BOOT_CAN_FD`); the link takes the flow control and frame length through `boot.LinkCfg` (`boot/link.v`), every field required, so the image cannot leave one out |
 | keys | the node's `[boot]` `image_key` / `session_key` (public, 64 hex; required — no silent default) | `gen/boot_gen.h` |
 | 0x29 challenge | the board's TRNG | `diag_board.c`'s `diag_sa_init`/`diag_sa_seed`, the RNG driver the application's 0x27 uses |
 
-Its serve loop is not its own either: the transport side — frame intake with the truncation
-rule, a request dropped while an answer is in flight, the answer pumped with a refused frame
+Its serve loop is not its own either: the transport side — frame intake at the length a frame
+arrived, judged against its PCI by the link, a request dropped while an answer is in flight, the answer pumped with a refused frame
 aborting it (and its reset), S3 held while an exchange is in flight, the wire drain before a reset —
 is `comm/diag/step.v`, the one the application's `Connection` uses; the boot runs it whole
 (`diag.serve_step`) and keeps only the decision, the flash ops and the stay-window.
 
 So a tester addresses the application and then its bootloader **identically**: same bus, same
-ids, and on zone_a's CAN-FD edge bus the same FD frames with classic-sized ISO-TP. The boot also
+ids, and on zone_a's CAN-FD edge bus the same FD frames at the node's TX_DL (64, its `[isotp] tx_dl`;
+a tester's frames of any length are taken, docs/can-tp.md §3.5). The boot also
 answers DID 0xF195 (the installed image's `sw_version`), the DID the application serves.
 
 `make` on a `[boot]` node builds both images (`all: boot`) with the application linked at the

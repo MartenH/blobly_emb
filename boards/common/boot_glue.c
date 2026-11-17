@@ -35,6 +35,7 @@ int boot_can_idx(void) { return BOOT_CAN_IDX; }
 int boot_can_fd(void) { return BOOT_CAN_FD; }
 uint8_t boot_bs(void) { return BOOT_BS; }
 uint8_t boot_stmin(void) { return BOOT_STMIN; }
+uint8_t boot_tx_dl(void) { return BOOT_TX_DL; }
 
 /* the message buffers: one block, sized by the generator from the node's maximum message length
  * (BOOT_MAX_MESSAGE, its [isotp] max_message) through boot.bufs' layout, which the V side carves

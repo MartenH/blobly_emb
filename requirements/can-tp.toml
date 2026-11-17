@@ -6,14 +6,17 @@
 #
 # Scope — what this transport deliberately does NOT do (non-goals until a requirement here
 # says otherwise; silence is not compliance):
-#   * 8-byte frames only (TX_DL 8, sent as CAN-FD frames on an FD bus): no CAN FD frame formats
-#     (the SF_DL escape, CAN_DL > 8), and an escape first frame (FF_DL > 4095) is only refused
-#     (REQ-CAN-TP-015);
+#   * CAN FD frame formats as ISO 15765-2:2016 defines them for normal addressing: a node opts into
+#     a transmit frame length (TX_DL) above 8 per [isotp] tx_dl (REQ-CAN-TP-026..028), any received
+#     length is taken without configuration; the escape first frame (FF_DL > 4095) is only refused,
+#     even one stating 4095 or less, which ISO has a receiver ignore (REQ-CAN-TP-015);
 #   * normal addressing on 11-bit identifiers only: no extended, mixed or 29-bit normal-fixed
 #     addressing (`[isotp] rx_id` / `tx_id` are 0x000..0x7FF);
 #   * a fixed padding byte (0x00) on every frame sent; no configurable fill value;
 #   * no enforcement of the peer's STmin or block size on frames WE receive (ISO 15765-2 leaves
-#     that to the sender), and no N_Br / N_Cs performance targets.
+#     that to the sender), and no N_Br / N_Cs performance targets;
+#   * no N_As timer for a single or first frame that never reaches the controller (N_Bs bounds a
+#     send from its first frame on).
 #
 # Status: a requirement a passing test verifies is `agreed` (gated by `make trace-check`); one
 # that is known not to hold yet, or has no test, stays `draft`.
@@ -39,7 +42,7 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-CAN-TP-003"
 title = "Single frame"
-text = "The transport shall send a message of 1 to 7 bytes as one single frame, and shall deliver a received single frame whose length is 1 to 7 as a complete message; a single frame claiming length 0 or above 7 shall be ignored."
+text = "The transport shall send a message of 1 to 7 bytes as one single frame with its length in the first byte's low nibble, and shall deliver as a complete message a received single frame of at most 8 bytes whose length is 1 to 7; a single frame of at most 8 bytes claiming length 0 or above 7 shall be ignored. Single frames longer than 8 bytes are REQ-CAN-TP-027 and REQ-CAN-TP-028."
 status = "agreed"
 method = "test"
 asil = "QM"
@@ -120,7 +123,7 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-CAN-TP-012"
 title = "Unexpected first or single frame"
-text = "A first frame or single frame that arrives while a reception is in progress shall end that reception and be handled as a new one; the partial message shall not be delivered."
+text = "A first frame or single frame that arrives while a reception is in progress shall end that reception and be handled as a new one; the partial message shall not be delivered. A first or single frame the transport ignores (REQ-CAN-TP-003, REQ-CAN-TP-013, REQ-CAN-TP-028) is no new message and leaves the reception running."
 status = "agreed"
 method = "test"
 asil = "QM"
@@ -129,7 +132,7 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-CAN-TP-013"
 title = "Truncated frame"
-text = "The transport shall discard a received frame shorter than its protocol control information requires — a single frame shorter than its length plus one, a first frame shorter than 8 bytes, a consecutive frame shorter than 8 bytes that does not carry the last bytes of the message, a flow control shorter than 3 bytes — rather than read bytes that did not arrive."
+text = "The transport shall discard a received frame shorter than its protocol control information requires — a single frame shorter than its length plus its PCI, a first frame shorter than 8 bytes, a consecutive frame shorter than its reception's first frame that does not carry the last bytes of the message, a flow control shorter than 3 bytes — rather than read bytes that did not arrive."
 status = "agreed"
 method = "test"
 asil = "QM"
@@ -238,6 +241,42 @@ derives = "SYS-REQ-DIAG-001"
 id = "REQ-CAN-TP-025"
 title = "A gateway fits routed answers to its maximum"
 text = "A DoIP gateway shall refuse on the bus, with an overflow flow control, a routed node's answer longer than the gateway's maximum message length, and shall answer the tester in that node's name with responseTooLong (0x14) for the request it routed — when that answer's first frame answers the request in flight, a late too-long answer to an earlier request being refused on the bus and dropped like any late answer; and it shall lower the block length a routed RequestDownload answer offers to its own maximum message length, so a node whose maximum exceeds the gateway's is reprogrammed through it in blocks it carries."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-CAN-TP-026"
+title = "Configurable frame length (TX_DL)"
+text = "The frame length a node's diagnostic connection transmits with (TX_DL) shall be configurable as 8, 12, 16, 20, 24, 32, 48 or 64 bytes, and shall be 8 when not configured. Generation shall refuse any other value, and a value above 8 on a bus that is not CAN-FD, never narrowing it. The node's bootloader and a DoIP gateway's route to the node shall transmit with the node's TX_DL — a system's route lowered with it, and a gateway's authored route whose TX_DL is not its node's refused by the system check; the shell response and the trace dump transmit with 8."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-CAN-TP-027"
+title = "CAN-FD frames sent"
+text = "With a TX_DL above 8 the transport shall send a message of 8 to TX_DL - 2 bytes as one single frame behind the escape (first byte 0x00, the length in the second byte); a longer message as a first frame of TX_DL bytes carrying TX_DL - 2 bytes of it, then consecutive frames carrying TX_DL - 1 bytes each, the last only what is left. It shall pad every frame it sends with 0x00 to 8 bytes or, when longer, to the next length a CAN-FD frame has (12, 16, 20, 24, 32, 48, 64), never past TX_DL. Flow control frames shall be 8 bytes whatever the TX_DL."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-CAN-TP-028"
+title = "CAN-FD frames received"
+text = "The transport shall take any received frame length without configuration. A reception's frame length (RX_DL) shall be its first frame's length, which shall be 8 or a CAN-FD length; a first frame of another length, or whose FF_DL fits a single frame of RX_DL (7 at RX_DL 8, RX_DL - 2 above), shall be ignored without flow control. A consecutive frame longer than RX_DL, or shorter than RX_DL while it does not carry all that is left of the message, shall be ignored, the reception kept. A single frame longer than 8 bytes shall be delivered when its first byte is 0x00 and its second byte gives a length of 1 up to the frame's length less 2 and up to the connection's maximum message length, and ignored otherwise (a single frame has no flow control to refuse it with), alike on the physical and the functional request identifier. A frame longer than 8 bytes whose length is not a CAN-FD length shall be ignored."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-CAN-TP-029"
+title = "Flow control that cannot be sent (N_Ar)"
+text = "When a flow control the transport owes (a clear-to-send, or an overflow) has not been handed to the CAN controller within N_Ar (1000 ms) of first becoming owed — a repeated first frame not restarting it — the transport shall abandon the reception it belongs to, owe no flow control for it, and count it with the receptions N_Cr abandons, so a transmit FIFO that never drains cannot hold the connection busy, its session timer held or its functional requests dropped. A DoIP gateway shall end a routed exchange whose answer's reception its transport abandoned."
 status = "agreed"
 method = "test"
 asil = "QM"

@@ -168,12 +168,19 @@ pub mut:
 	tx_id         u32
 	functional_id u32 // 0 = none; a SHARED receive id (every server on the bus may listen)
 	max_message   int // the longest diagnostic message either way ([isotp] max_message, 520 absent)
+	tx_dl         int // the frame length it transmits with ([isotp] tx_dl, 8 absent)
 }
 
 // max_len: the connection's maximum message length — its [isotp] max_message, the default where
 // none was read (a connection built in code)
 pub fn (c IsotpConn) max_len() int {
 	return if c.max_message > 0 { c.max_message } else { isotp.default_message }
+}
+
+// dl: the frame length the connection transmits with — its [isotp] tx_dl, 8 where none was read
+// (a connection built in code); sysgen lowers it onto a gateway's route to the node
+pub fn (c IsotpConn) dl() int {
+	return if c.tx_dl > 0 { c.tx_dl } else { 8 }
 }
 
 // SysSignal — a cross-node signal declared ONCE at system scope (the full
@@ -275,12 +282,19 @@ pub:
 	logical     u32
 	has_logical bool // an integer `logical` was given (loom2v refuses the rest)
 	max_message int  // the longest request the gateway forwards to it (520 absent)
+	tx_dl       int  // the frame length the gateway sends to it with (8 absent)
 }
 
 // max_len: the longest request the route forwards — its max_message, the default where none was
 // read (a route built in code)
 pub fn (r AuthoredRoute) max_len() int {
 	return if r.max_message > 0 { r.max_message } else { isotp.default_message }
+}
+
+// dl: the frame length the route sends with — its tx_dl, 8 where none was read (a route built in
+// code)
+pub fn (r AuthoredRoute) dl() int {
+	return if r.tx_dl > 0 { r.tx_dl } else { 8 }
 }
 
 // NodeView — the system-relevant slice of a node's ecu.toml: what it produces
@@ -1005,7 +1019,7 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 			resolved := if iface != '' { iface } else { name }
 			key_iface[name] = resolved
 			v.local_buses << resolved
-			v.local_bus_fd[resolved] = m_bool(cm, 'fd')
+			v.local_bus_fd[resolved] = ecumodel.bus_fd(doc, name)
 		}
 	}
 	iface_of := fn [key_iface] (logical string) ?string {
@@ -1256,6 +1270,7 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 						logical:     m_u32(rm, 'logical')
 						has_logical: 'logical' in rm && m_is_int(rm, 'logical')
 						max_message: int((rm['max_message'] or { toml.Any(isotp.default_message) }).int())
+						tx_dl:       int((rm['tx_dl'] or { toml.Any(8) }).int())
 					}
 				}
 			}
@@ -1341,6 +1356,7 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 				tx_id:         m_u32(cm, 'tx_id')
 				functional_id: m_u32(cm, 'functional_id')
 				max_message:   int((cm['max_message'] or { toml.Any(isotp.default_message) }).int())
+				tx_dl:         int((cm['tx_dl'] or { toml.Any(8) }).int())
 			}
 		}
 	}

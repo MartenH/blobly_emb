@@ -202,8 +202,10 @@ fn cmd_frame(opcode u8) can.Frame {
 	return f
 }
 
+// @verifies REQ-CAN-TP-026
 // The ISO-TP block dump: dump_fc bound -> the frozen ring streams as ONE pack_block payload
-// through the link, flow-controlled by a host-side Link — the format blobly_net consumes.
+// through the link, flow-controlled by a host-side Link — the format blobly_net consumes, in
+// 8-byte frames whatever the node's TX_DL.
 fn test_trace_module_isotp_block_dump() {
 	mut backing := [8]Record{}
 	buf := new_buffer(&backing[0], 8, .ring, 0)
@@ -228,6 +230,7 @@ fn test_trace_module_isotp_block_dump() {
 	for _ in 0 .. 64 {
 		if m.produce(now, mut f) {
 			assert f.id == 0x7e5
+			assert f.len == 8 // the dump stream transmits at TX_DL 8 (REQ-CAN-TP-026)
 			mut p := isotp.Pdu{}
 			for j in 0 .. 8 {
 				p.data[j] = f.data[j]

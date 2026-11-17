@@ -24,6 +24,9 @@ struct DoipRoute {
 	rx_id   int    // its response id: what the gateway receives on
 	// its [isotp] max_message: the longest request the gateway forwards to it
 	max_message int
+	// its [isotp] tx_dl: the frame length the gateway sends to it with (above 8 only on a CAN-FD
+	// route bus, REQ-CAN-TP-026)
+	tx_dl int
 }
 
 struct DoipCfg {
@@ -58,6 +61,8 @@ fn parse_doip(doc toml.Doc) DoipCfg {
 			rx_id:   toml_int(r, 'rx_id', 0, 0, 0x7FF, '[[doip.route]]')
 			max_message: schema_int(r, 'doip_route', 'max_message', isotp.default_message,
 				'[[doip.route]]')
+			tx_dl:       read_tx_dl(r, 'doip_route', doc, (r['bus'] or { toml.Any('') }).string(),
+				'[[doip.route]] "${(r['node'] or { toml.Any('') }).string()}"')
 		}
 	}
 	return DoipCfg{
@@ -176,6 +181,9 @@ fn doip_route_init(m Model) []string {
 		g << '\t\ttx_id:   u32(0x${r.tx_id.hex()})'
 		g << '\t\trx_id:   u32(0x${r.rx_id.hex()})'
 		g << '\t\tmax_message: ${r.max_message} // its [isotp] max_message: a longer request is refused at once'
+		if r.tx_dl != 8 {
+			g << '\t\ttx_dl:   u8(${r.tx_dl}) // its [isotp] tx_dl: CAN-FD frames to it, on a CAN-FD bus'
+		}
 		g << '\t})'
 	}
 	return g

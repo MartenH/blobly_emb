@@ -126,21 +126,19 @@ pub fn (mut c Connection) on_frame(now u64, f &can.Frame) Rx {
 	return .other
 }
 
-// functional serves one functional request — a single frame (ISO 15765-2: PCI 0x0N, N = 1..7).
-// Nothing queues: while the link is not quiet both ways, or a reset is pending, it is dropped, as a
-// busy server does; a functional TesterPresent is periodic and simply comes again.
+// functional serves one functional request — a single frame (ISO 15765-2), decoded as the physical
+// id decodes one (isotp.single_frame): PCI 0x0N, N = 1..7, in a frame of up to 8 bytes, or behind
+// the escape in a longer CAN-FD frame. Nothing queues: while the link is not quiet both ways, or a
+// reset is pending, it is dropped, as a busy server does; a functional TesterPresent is periodic and
+// simply comes again.
 fn (mut c Connection) functional(f &can.Frame) Rx {
-	if f.len < 2 || f.data[0] >> 4 != 0 {
-		return .taken // not a single frame: nothing a functional request may be
-	}
-	n := int(f.data[0] & 0x0F)
-	// <= 7: a CAN-FD frame may claim more
-	if n < 1 || n > 7 || n >= int(f.len) || !c.link.idle() || c.server.reset_req != 0 {
-		return .taken
+	at, n := isotp.single_frame(&f.data[0], int(f.len))
+	if n == 0 || n > c.link.rx_cap || !c.link.idle() || c.server.reset_req != 0 {
+		return .taken // not a single frame — nothing a functional request may be — or not now
 	}
 	c.refresh_dids()
 	before, held := c.enter(false)
-	rlen := c.server.handle_functional(&f.data[1], n, c.resp)
+	rlen := c.server.handle_functional(&f.data[at], n, c.resp)
 	c.leave(before, held, false)
 	c.remote.asked(false) // a reset asked here is the bus's (none was pending, or this was not served)
 	if rlen > 0 && !c.link.send(c.resp, rlen) {
