@@ -693,6 +693,9 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			}
 			if sa_levels(m) != 0 {
 				glue << '\tsa_${tp} uds.ReferenceSecurity // 0x27 on the host: the SIM key (not a secret, decision D5)'
+				if auth_on(m) {
+					glue << '\tauth_keys_${tp} udsauth.Keys // 0x29: the public keys per level ([uds] auth_keys)'
+				}
 			}
 		}
 		for d in dests {
@@ -1264,7 +1267,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\tst.conn_${tp}.refresh = diag_refresh_${tp}'
 			}
 			// the host bridge injects the reference key (blobly_net's), seeded from the clock
-			glue << security_init_lines(m, srv, 'st.sa_${tp}.ops(u32(osal.now_us()))')
+			// (on an authenticating node its seed is the 0x29 challenge, and the keys are auth_keys)
+			glue << security_init_lines(m, srv, 'st.sa_${tp}.ops(u32(osal.now_us()))', 'st.auth_keys_${tp}')
 			if m.faults.len > 0 {
 				glue << fault_slot_lines(m, 'st.fmem', '\t')
 				glue << signal_fault_init(m, '\t')

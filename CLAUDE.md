@@ -40,9 +40,9 @@ comm/   comms stack: com (tx modes; encode_raw, the ONE send encode — emitted 
         bridge and the ThreadX comm thread both run, emitted by tools/loom2v/gen_rx.v), e2e (AUTOSAR E2E
         Profile 1), secoc (AES-CMAC), isotp (15765-2: a link holds no buffer — its owner binds them, sized by the node's `[isotp] max_message`, 8..4095, default 520; it transmits at the node's `[isotp] tx_dl` — 8, or a CAN-FD length up to 64 on an fd bus — and receives any frame length; N_Bs / N_Cr / N_Ar; ids by normal addressing, 11-bit or 29-bit with `ext`, or normal fixed addressing — `sa` / `ta`, `addressing.v` `fixed_id` — read by ONE reader, `tools/ecumodel` `diag_ids`, for `[isotp]` and a system node's `diag` alike — a dissolved node's `[isotp]` that states no physical ids takes its `diag`, which sysgen lowers into it (a `functional_id`, and an `ext` agreeing with the allocation, may be stated beside a normal-addressing one), and one that states them must equal it (REQ-TOPO-014); a `diag` with one of `req` / `rsp` is refused; the format is part of the id everywhere; run on silicon once (zone_a, `isotp-29bit-silicon`); no extended or mixed addressing, no hardware acceptance filters; docs/can-tp.md), uds (14229 — it
         serves 0x31 `[[routine]]`s, each run by an FB through two cells, and answers responsePending
-        0x78 while one runs: routine.v, pending.v; and 0x2F on a live `[[did]]` with a `control`, the
-        tester's value replacing the FB's where the owner encodes the signal: io_control.v;
-        docs/diagnostics.md §3.1), nm,
+        0x78 while one runs: routine.v, pending.v; 0x2F on a live `[[did]]` with a `control`, the
+        tester's value replacing the FB's where the owner encodes the signal: io_control.v; a node
+        unlocks its levels by 0x27 or — `[uds] access = "authentication"` — by 0x29 ACR with Ed25519, auth.v, the same levels, count and lockout, every unlock granted or dropped through `Server.relock` / `end_levels` alike — a proof answered 0x78 and verified a slice per pass while its answer is owed (pending.v), never a whole verify in one pass; docs/diagnostics.md §3.1), udsauth (the per-level 0x29 public keys and bcrypto's stepped verify, `VerifyJob`, behind `uds.AuthOps`; `scripts/auth_target_check.sh` cross-builds such a ThreadX node), nm,
         fault (debounce + fault memory behind 0x19/0x14/0x85; snapshots, extended data, displacement
         and its persistence in the NvM journal — entry.v, persist.v), param (variant coding: read-only
         FB inputs coded with 0x2E on a bound DID, one NvM journal record each, docs/diagnostics.md §3.4),
@@ -277,7 +277,7 @@ holds its persisted fault memory and its `SteerLimit` parameter: `make flash` ne
 and coded parameters survive a reflash — clear DTCs with 0x14, recode a parameter with 0x2E
 (`test/param_zone_a.lua` leaves it at 360). sysnode's H735 has the same map (app sectors 1..5, its
 journal sectors 6 + 7, `boards/h735dk/bootmap.h`), its journal holding the 0x27 failed-key state —
-every node that performs 0x27 declares `[nvm]` (docs/diagnostics.md §3.1); a bench H735 whose boot
+every node that performs 0x27 (or 0x29, whose failed proofs it counts too) declares `[nvm]` (docs/diagnostics.md §3.1); a bench H735 whose boot
 predates that map needs `make flash` (boot included) and sectors 6 + 7 erased once.
 
 **CI pins the V compiler, and it is V3**: the commit in `.v-version` (today master `5f7d4d0`, the newest

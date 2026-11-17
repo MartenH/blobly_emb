@@ -105,7 +105,17 @@ fn z_gf(mut o Gf, a Gf, b Gf) {
 	}
 }
 
+// ed25519_mults: the field multiplications m_gf ran, counted in a test build only — what the test
+// holds each VerifyJob unit's charge against (declared only there: a tool importing bcrypto builds
+// without -enable-globals)
+$if test {
+	__global ed25519_mults u64
+}
+
 fn m_gf(mut o Gf, a Gf, b Gf) {
+	$if test {
+		ed25519_mults++
+	}
 	mut t := [31]i64{}
 	for i in 0 .. 16 {
 		for j in 0 .. 16 {
@@ -126,14 +136,29 @@ fn s_gf(mut o Gf, a Gf) {
 	m_gf(mut o, a, a)
 }
 
+// exp_bit: one bit of a fixed exponentiation by square-and-multiply — inv25519's (bits 253..0,
+// multiplying unless inv_mul says not) and pow2523's (bits 250..0, pow_mul); VerifyJob runs them a
+// bit at a time
+fn exp_bit(mut c Gf, base Gf, mul bool) {
+	s_gf(mut c, c)
+	if mul {
+		m_gf(mut c, c, base)
+	}
+}
+
+fn inv_mul(a int) bool {
+	return a != 2 && a != 4
+}
+
+fn pow_mul(a int) bool {
+	return a != 1
+}
+
 fn inv25519(mut o Gf, i Gf) {
 	mut c := Gf([16]i64{})
 	set25519(mut c, i)
 	for a := 253; a >= 0; a-- {
-		s_gf(mut c, c)
-		if a != 2 && a != 4 {
-			m_gf(mut c, c, i)
-		}
+		exp_bit(mut c, i, inv_mul(a))
 	}
 	set25519(mut o, c)
 }
@@ -142,10 +167,7 @@ fn pow2523(mut o Gf, i Gf) {
 	mut c := Gf([16]i64{})
 	set25519(mut c, i)
 	for a := 250; a >= 0; a-- {
-		s_gf(mut c, c)
-		if a != 1 {
-			m_gf(mut c, c, i)
-		}
+		exp_bit(mut c, i, pow_mul(a))
 	}
 	set25519(mut o, c)
 }
@@ -215,36 +237,57 @@ fn cswap_pt(mut p [4]Gf, mut q [4]Gf, b u8) {
 	}
 }
 
-fn scalarmult(mut p [4]Gf, mut q [4]Gf, s &u8) {
+// scalarmult_init: p = the neutral point, where a scalar multiplication starts
+fn scalarmult_init(mut p [4]Gf) {
 	zero, one := gf0, gf1
 	set25519(mut p[0], zero)
 	set25519(mut p[1], one)
 	set25519(mut p[2], one)
 	set25519(mut p[3], zero)
+}
+
+// scalarmult_bit: bit i of the ladder (bits 255..0 in turn) — two point additions
+fn scalarmult_bit(mut p [4]Gf, mut q [4]Gf, s &u8, i int) {
+	b := u8((unsafe { s[i / 8] } >> u8(i & 7)) & 1)
+	cswap_pt(mut p, mut q, b)
+	add_pt(mut q, p)
+	add_pt(mut p, p)
+	cswap_pt(mut p, mut q, b)
+}
+
+fn scalarmult(mut p [4]Gf, mut q [4]Gf, s &u8) {
+	scalarmult_init(mut p)
 	for i := 255; i >= 0; i-- {
-		b := u8((unsafe { s[i / 8] } >> u8(i & 7)) & 1)
-		cswap_pt(mut p, mut q, b)
-		add_pt(mut q, p)
-		add_pt(mut p, p)
-		cswap_pt(mut p, mut q, b)
+		scalarmult_bit(mut p, mut q, s, i)
 	}
 }
 
-fn scalarbase(mut p [4]Gf, s &u8) {
-	mut q := [4]Gf{}
+// base_point: q = B
+fn base_point(mut q [4]Gf) {
 	x, y, one := gfx, gfy, gf1
 	set25519(mut q[0], x)
 	set25519(mut q[1], y)
 	set25519(mut q[2], one)
 	m_gf(mut q[3], x, y)
+}
+
+fn scalarbase(mut p [4]Gf, s &u8) {
+	mut q := [4]Gf{}
+	base_point(mut q)
 	scalarmult(mut p, mut q, s)
 }
 
 fn unpackneg(mut r [4]Gf, pk &u8) int {
 	mut t := Gf([16]i64{})
-	mut chk := Gf([16]i64{})
 	mut num := Gf([16]i64{})
 	mut den := Gf([16]i64{})
+	unpack_pre(mut r, pk, mut num, mut den, mut t)
+	pow2523(mut t, t)
+	return unpack_post(mut r, pk, num, den, t)
+}
+
+// unpack_pre: unpackneg up to its exponentiation — r's Y and Z, num, den, and t, pow2523's base
+fn unpack_pre(mut r [4]Gf, pk &u8, mut num Gf, mut den Gf, mut t Gf) {
 	mut den2 := Gf([16]i64{})
 	mut den4 := Gf([16]i64{})
 	mut den6 := Gf([16]i64{})
@@ -261,7 +304,13 @@ fn unpackneg(mut r [4]Gf, pk &u8) int {
 	m_gf(mut den6, den4, den2)
 	m_gf(mut t, den6, num)
 	m_gf(mut t, t, den)
-	pow2523(mut t, t)
+}
+
+// unpack_post: unpackneg from pow2523's result `pw` on — 0, or -1 when pk is not a point
+fn unpack_post(mut r [4]Gf, pk &u8, num Gf, den Gf, pw Gf) int {
+	mut t := Gf([16]i64{})
+	mut chk := Gf([16]i64{})
+	set25519(mut t, pw)
 	m_gf(mut t, t, num)
 	m_gf(mut t, t, den)
 	m_gf(mut t, t, den)
@@ -283,6 +332,32 @@ fn unpackneg(mut r [4]Gf, pk &u8) int {
 	}
 	m_gf(mut r[3], r[0], r[1])
 	return 0
+}
+
+// is_point: `pubkey` decodes as a curve point — a key verify could ever accept. For the generator's
+// check of a configured public key (tools/loom2v); verify_start asks the same question.
+pub fn is_point(pubkey [32]u8) bool {
+	mut q := [4]Gf{}
+	return unpackneg(mut q, &pubkey[0]) == 0
+}
+
+// small_order: `pubkey` decodes to a point of small order — one the cofactor 8 takes to the neutral
+// point: the neutral point itself and the points of order 2, 4 and 8, in every encoding (a y at or
+// above p reduces like any other). Such a key verifies a forged proof — under the neutral point, R =
+// the neutral point and S = 0 verify for every message — so a configured public key must not be one.
+// Computed, not a list of encodings: decoded, doubled three times, compared with the neutral point. A
+// HOST check of a configured key (tools/loom2v); the verify itself never asks it (the keys are
+// constants the generator refused). A key that is no point is not small-order (is_point says so).
+pub fn small_order(pubkey [32]u8) bool {
+	mut p := [4]Gf{}
+	if unpackneg(mut p, &pubkey[0]) != 0 {
+		return false
+	}
+	for _ in 0 .. 3 {
+		add_pt(mut p, p)
+	}
+	zero := gf0
+	return neq25519(p[0], zero) == 0 && neq25519(p[1], p[2]) == 0
 }
 
 // modL reduces the 64-limb x mod L into the low 32 bytes of r. No-alloc: fixed
@@ -406,12 +481,199 @@ pub fn verify(pubkey [32]u8, msg []u8, sig [64]u8) bool {
 	return v.finish()
 }
 
+// VerifyJob is the same verify as Verifier.finish (verify_start's key unpacking included), run a
+// bounded number of FIELD MULTIPLICATIONS at a time (step), for a caller that must not stall: an
+// application's 0x29 proof is verified on the comm thread, whose pass also carries the bus
+// (comm/udsauth). The functions are Verifier's; only the driver differs. It holds every
+// intermediate itself (about 2.8 KB), so a caller keeps one in static storage, never on a stack:
+//   j.start(pubkey, sig)   // in place: the struct is too big to return
+//   j.update(msg, n) ...
+//   for !j.step(budget) {} // one call per pass in practice
+//   ok := j.verified()
+// A whole verify is about 10,300 multiplications (the key's exponentiation ~500, the two ladders
+// 2 x 256 x 18, the inversion ~500).
+pub struct VerifyJob {
+mut:
+	hc    Sha512
+	sig   [64]u8
+	pk    [32]u8
+	q     [4]Gf // -A, moved by the first ladder
+	bq    [4]Gf // B, moved by the second
+	p     [4]Gf // [h](-A), then [S]B - [h]A
+	sb    [4]Gf // [S]B
+	num   Gf
+	den   Gf
+	c     Gf // an exponentiation's accumulator
+	e     Gf // and its base
+	h     [32]u8
+	phase int
+	i     int // the exponent or scalar bit next
+	valid bool
+}
+
+// the phases of a VerifyJob, in order
+const vj_key = 0 // unpack_pre
+const vj_key_pow = 1 // pow2523, a bit at a time
+const vj_key_post = 2 // unpack_post, S canonical, h
+const vj_mul_h = 3 // [h](-A), a bit at a time
+const vj_mul_s = 4 // [S]B, a bit at a time
+const vj_inv = 5 // Z's inverse, a bit at a time, then the compare
+const vj_done = 6
+
+// A unit's cost is counted in field multiplications (m_gf: 271 64-bit multiply-accumulates and two
+// carry passes). The work that is not one is charged in its equivalent, rounded up from the operation
+// count and checked against a host measurement (the TweetNaCl field multiplication ~1.0 us, a SHA-512
+// compression ~1.9 us, the mod-L reduction ~3.9 us, unoptimised, x86-64):
+//   sha512_block_mults  a SHA-512 compression — 80 rounds and the 64-word schedule, ~2,800 64-bit
+//                       additions, rotations and logic operations, two to four instructions each on
+//                       a 32-bit core
+//   modl_mults          the reduction mod L (modl) — 704 64-bit multiply-accumulates, its carries
+//   unpack_post_mults   unpack_post's multiplications, the most it runs (its second square root
+//                       branch taken)
+//   pack_mults          pack25519 and the compare — three carry passes, two trial subtractions of
+//                       p and 32 byte compares, less than one multiplication's carries and adds
+const sha512_block_mults = 3
+const modl_mults = 4
+const unpack_post_mults = 10
+const pack_mults = 1
+
+// key_post_mults: vj_key_post's cost — unpack_post, then (the key a point, S canonical) the hash's
+// final compressions (`blocks`, Sha512.final_blocks) and h's reduction mod L
+fn key_post_mults(blocks int) int {
+	return unpack_post_mults + blocks * sha512_block_mults + modl_mults
+}
+
+// verify_step_max: the multiplications in the largest single unit of work — the last bit of the
+// second ladder with the point addition after it (27), above vj_key_post's at most key_post_mults(2)
+// (20) — so a step costs at most budget + this - 1
+pub const verify_step_max = 27
+
+// start begins verifying `sig` under `pubkey`; then update with the message
+pub fn (mut j VerifyJob) start(pubkey [32]u8, sig [64]u8) {
+	j.sig = sig
+	j.pk = pubkey
+	j.hc = new_sha512()
+	j.hc.update(&j.sig[0], 32) // R
+	j.hc.update(&j.pk[0], 32) // A
+	j.phase = vj_key
+	j.i = 0
+	j.valid = false
+}
+
+pub fn (mut j VerifyJob) update(data &u8, n int) {
+	j.hc.update(data, n)
+}
+
+// step advances by units of work until `budget` field multiplications are spent (at least one
+// unit; a unit is at most verify_step_max) — true once the verdict is in (verified)
+pub fn (mut j VerifyJob) step(budget int) bool {
+	mut spent := 0
+	for j.phase != vj_done {
+		spent += j.unit()
+		if spent >= budget {
+			break
+		}
+	}
+	return j.phase == vj_done
+}
+
+// decided: the verdict is in
+pub fn (j &VerifyJob) decided() bool {
+	return j.phase == vj_done
+}
+
+// verified: decided, and the signature is valid
+pub fn (j &VerifyJob) verified() bool {
+	return j.phase == vj_done && j.valid
+}
+
+// unit: one unit of work; the field multiplications it cost
+fn (mut j VerifyJob) unit() int {
+	match j.phase {
+		vj_key {
+			unpack_pre(mut j.q, unsafe { &j.pk[0] }, mut j.num, mut j.den, mut j.e)
+			set25519(mut j.c, j.e)
+			j.i = 250
+			j.phase = vj_key_pow
+			return 7
+		}
+		vj_key_pow {
+			exp_bit(mut j.c, j.e, pow_mul(j.i))
+			j.i--
+			if j.i < 0 {
+				j.phase = vj_key_post
+			}
+			return 2
+		}
+		vj_key_post {
+			// verify_start's key check, then finish's — S canonical (RFC 8032 §8.4), then h
+			if unpack_post(mut j.q, unsafe { &j.pk[0] }, j.num, j.den, j.c) != 0
+				|| !s_canonical(j.sig) {
+				j.phase = vj_done
+				return unpack_post_mults
+			}
+			blocks := j.hc.final_blocks()
+			digest := j.hc.final()
+			j.h = reduce_scalar(digest)
+			scalarmult_init(mut j.p)
+			j.i = 255
+			j.phase = vj_mul_h
+			return key_post_mults(blocks)
+		}
+		vj_mul_h {
+			scalarmult_bit(mut j.p, mut j.q, unsafe { &j.h[0] }, j.i) // p = [h](-A)
+			j.i--
+			if j.i < 0 {
+				base_point(mut j.bq) // one multiplication, q[3]
+				scalarmult_init(mut j.sb)
+				j.i = 255
+				j.phase = vj_mul_s
+				return 18 + 1
+			}
+			return 18
+		}
+		vj_mul_s {
+			scalarmult_bit(mut j.sb, mut j.bq, unsafe { &j.sig[32] }, j.i) // sb = [S]B
+			j.i--
+			if j.i >= 0 {
+				return 18
+			}
+			add_pt(mut j.p, j.sb) // p = [S]B - [h]A
+			set25519(mut j.e, j.p[2])
+			set25519(mut j.c, j.e)
+			j.i = 253
+			j.phase = vj_inv
+			return 18 + 9
+		}
+		vj_inv {
+			exp_bit(mut j.c, j.e, inv_mul(j.i))
+			j.i--
+			if j.i < 0 {
+				mut packed := [32]u8{}
+				pack_from_inv(mut packed, j.p, j.c) // encode, normalising by Z
+				j.valid = crypto_verify_32(&j.sig[0], &packed[0]) == 0
+				j.phase = vj_done
+				return 2 + 2 + pack_mults
+			}
+			return 2
+		}
+		else {
+			return 1
+		}
+	}
+}
+
 // pack_point encodes a point [4]Gf to its 32-byte form (y ‖ sign(x)).
 fn pack_point(mut r [32]u8, p [4]Gf) {
-	mut tx := Gf([16]i64{})
-	mut ty := Gf([16]i64{})
 	mut zi := Gf([16]i64{})
 	inv25519(mut zi, p[2])
+	pack_from_inv(mut r, p, zi)
+}
+
+// pack_from_inv: pack_point given zi, the inverse of p's Z
+fn pack_from_inv(mut r [32]u8, p [4]Gf, zi Gf) {
+	mut tx := Gf([16]i64{})
+	mut ty := Gf([16]i64{})
 	m_gf(mut tx, p[0], zi)
 	m_gf(mut ty, p[1], zi)
 	pack25519(mut r, ty)

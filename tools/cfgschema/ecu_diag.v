@@ -25,16 +25,18 @@ fn ecu_diag_tables() []Table {
 			k('max_message', .int).d('${isotp.default_message}').range(isotp.min_message, isotp.message_limit).doc('the longest diagnostic message either way, in bytes (the escape first frame above 4095 is not supported). It sizes the server\'s buffers and response capacity, the DoIP entity\'s message limit, a gateway\'s routed messages and the bootloader\'s TransferData block; generation refuses one smaller than the largest message the configuration determines'),
 			k('tx_dl', .int).d('8').one_of_ints(tx_dls()).doc('the frame length (TX_DL) the connection transmits with, in bytes: ${tx_dl_list()}. Above 8 only on a CAN-FD bus ([bus.*] fd = true): single frames of up to TX_DL - 2 bytes behind the escape, consecutive frames of TX_DL - 1. Frames of any length are received without it; the bootloader and a gateway\'s route to the node send with it too (REQ-CAN-TP-026)'),
 		]),
-		tbl('uds', '[uds]', "The node's one ISO 14229 diagnostic server: session and security timing, the 0x27 key, the service table.", [
+		tbl('uds', '[uds]', "The node's one ISO 14229 diagnostic server: session and security timing, how a security level is unlocked (0x27 or 0x29) and its keys, the service table.", [
 			k('s3_ms', .int).d('${uds.default_s3_us / 1000}').doc('the session timeout back to the default session (ms; 0 = the default)'),
-			k('security_attempts', .int).d('${uds.default_sa_attempts}').range(0, 255).doc('wrong 0x27 keys before the lockout (0 = the default)'),
-			k('security_delay_ms', .int).d('${uds.default_sa_delay_us / 1000}').doc('the 0x27 lockout delay after too many wrong keys (ms; 0 = the default)'),
-			k('security_key', .str).one_of(['reference']).doc('"reference" = blobly_net\'s PUBLIC bench key (a target); absent = the OEM\'s diag_sa_key_ok'),
+			k('access', .str).d('"seed_key"').one_of(['seed_key', 'authentication']).doc('how a security level is unlocked: "seed_key" = SecurityAccess (0x27), "authentication" = Authentication (0x29, ACR with Ed25519; 0x27 then not served). Both grant the same levels'),
+			k('security_attempts', .int).d('${uds.default_sa_attempts}').range(0, 255).doc('wrong 0x27 keys (or failed 0x29 proofs) before the lockout (0 = the default)'),
+			k('security_delay_ms', .int).d('${uds.default_sa_delay_us / 1000}').doc('the lockout delay after too many wrong keys or failed proofs (ms; 0 = the default)'),
+			k('security_key', .str).one_of(['reference']).doc('access = "seed_key" only: "reference" = blobly_net\'s PUBLIC bench key (a target); absent = the OEM\'s diag_sa_key_ok'),
+			sub('auth_keys', .str_map, '').doc('access = "authentication" only: level ("1".."8") -> the tester\'s Ed25519 PUBLIC key, 64 hex, or "reference" = blobly_net\'s dev tester key (the one examples/keys/tester.seed signs with); exactly the levels a gate names'),
 			sub('services', .namedmap, 'uds_service').doc('the service table, "0xSID" = { ... } ("0x10 02": the [boot] handoff); absent = every service the build performs'),
 		]),
-		tbl('uds_service', '[uds] services row', 'One served service: the sessions it is accepted in and the 0x27 level it needs.', [
+		tbl('uds_service', '[uds] services row', 'One served service: the sessions it is accepted in and the security level (unlocked by 0x27 or 0x29) it needs.', [
 			k('sessions', .str_arr).one_of(session_names()).doc("the sessions it is accepted in; absent = the service's default sessions"),
-			k('security', .int).d('0').range(0, uds.max_security_level).doc('the 0x27 level that must be unlocked first (0 = none)'),
+			k('security', .int).d('0').range(0, uds.max_security_level).doc('the security level (0x27 or 0x29) that must be unlocked first (0 = none)'),
 		]),
 		tbl('doip', '[doip]', "The diagnostic server over DoIP (ISO 13400) too — ThreadX target; one parser for this and a system node's `doip` (tools/doipcfg).", doip_ecu_keys()),
 		tbl('doip_route', '[[doip.route]]', 'A node behind this DoIP gateway that diagnostic messages to its logical address are routed to (REQ-NET-019) — sysgen lowers them from system.toml (a gateway\'s doip `routes`, each routed node\'s diag).', [
@@ -65,9 +67,9 @@ fn ecu_diag_tables() []Table {
 			k('session', .str_arr).d('["extended"]').one_of(['extended', 'safety']).doc('the sessions it is accepted in (never default or programming)'),
 			k('security', .int).d('0').range(0, uds.max_security_level).doc('the 0x27 level that must be unlocked; 0 = the [uds] services 0x2F row\'s level (none if the row names none). The control is returned when that level is relocked'),
 		]),
-		tbl('did_access', '[[did]] read/write', 'The sessions and the 0x27 level an access needs.', [
+		tbl('did_access', '[[did]] read/write', 'The sessions and the security level (unlocked by 0x27 or 0x29) an access needs.', [
 			k('session', .str_arr).one_of(session_names()).doc('the sessions it is allowed in; absent = every session'),
-			k('security', .int).d('0').range(0, uds.max_security_level).doc('the 0x27 level that must be unlocked (0 = none)'),
+			k('security', .int).d('0').range(0, uds.max_security_level).doc('the security level (unlocked by 0x27 or 0x29) that must be unlocked (0 = none)'),
 		]),
 		tbl('param', '[[param]]', 'A coded parameter (variant coding): a read-only FB input, coded with 0x2E on its [[did]] and kept in the NvM journal (docs/diagnostics.md §3.4).', [
 			req('name', .str).doc('PascalCase; the value type the FBs read'),
@@ -93,7 +95,7 @@ fn ecu_diag_tables() []Table {
 			k('results_out', .int).d('0').range(0, uds.max_routine_record).doc("the record bytes 03's answer carries (needs `results`)"),
 			k('timeout_ms', .int).d('${uds.default_routine_timeout_us / 1000}').range(100, 100000).doc('a start or stop its FB has not answered by then is answered 0x22 and the FB asked to stop'),
 			k('sessions', .str_arr).d('["extended"]').one_of(['default', 'extended', 'safety']).doc('the sessions it may be started, stopped and read in'),
-			k('security', .int).d('0').range(0, uds.max_security_level).doc('the 0x27 level that must be unlocked (0 = none)'),
+			k('security', .int).d('0').range(0, uds.max_security_level).doc('the security level (unlocked by 0x27 or 0x29) that must be unlocked (0 = none)'),
 		]),
 		tbl('fault', '[[fault]]', 'A diagnostic fault: a DTC, the test that sets it and how its results are debounced, confirmed and aged (docs/diagnostics.md §3.3).', [
 			req('name', .str).doc("PascalCase, unique; a field of the testing FB's Faults struct"),

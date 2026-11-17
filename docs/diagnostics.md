@@ -21,7 +21,7 @@ standard leaves the choice to the implementation, and what it does not do.
 
 A node has **one diagnostic server**, whichever transport a request arrives on. It serves the
 services of its **service table** (`[uds] services`, §3.1), each in the sessions and behind the
-0x27 level its row names, so "served" below means "can be served".
+security level its row names (unlocked by 0x27, or by 0x29 on an authenticating node), so "served" below means "can be served".
 
 ### Per service
 
@@ -32,24 +32,25 @@ services of its **service table** (`[uds] services`, §3.1), each in the session
 | 0x14 | **ClearDiagnosticInformation**<br>all DTCs (0xFFFFFF) or one DTC. On a target, stored before the answer (0x72 otherwise) | DTC groups other than "all"; the memorySelection byte |
 | 0x19 | **ReadDTCInformation**<br>01, 02, 03, 04, 06, 0A | every other sub-function (05, 07–09, 0B–19, 42, 55, …) |
 | 0x22 | **ReadDataByIdentifier**<br>several DIDs per request; up to 16 DIDs of up to 32 bytes: constants, live signals, parameters and their status, `tx_saturations`; 0xF186 (the active session) and, with `[boot]`, 0xF195 (the running image's version), served by the server itself. A live DID of a controlled signal reads the value published (the FB's held to its range as the encoder sends it; the initial value before the FB's first publish) | ISO identification DIDs not declared as constants |
-| 0x27 | **SecurityAccess**<br>levels 1–8, a 4-byte seed, attempt limit and lockout delay, the failed-key count kept across a reset | a power-up delay; a securityAccessDataRecord is accepted and ignored |
+| 0x27 | **SecurityAccess**<br>levels 1–8, a 4-byte seed, attempt limit and lockout delay, the failed-key count kept across a reset — on a node with `access = "seed_key"` (the default) | a power-up delay; a securityAccessDataRecord is accepted and ignored; on a node with `access = "authentication"` (answered 0x11) |
+| 0x29 | **Authentication**<br>on a node with `access = "authentication"`: 00 deAuthenticate, 05 requestChallengeForAuthentication, 06 verifyProofOfOwnershipUnidirectional — ISO's challenge-response with Ed25519, unlocking the same levels 0x27 would (§3.1). The bootloader has its own profile ([bootloader.md](bootloader.md)) | 01 verifyCertificateUnidirectional, 02 verifyCertificateBidirectional, 03 proofOfOwnership, 04 transmitCertificate (the certificate exchange, APCE); 07 verifyProofOfOwnershipBidirectional (bidirectional ACR); 08 authenticationConfiguration — all answered 0x12; on a `seed_key` node, 0x29 itself (answered 0x11) |
 | 0x28 | **CommunicationControl**<br>00–03 on normal messages, this network (or all networks on a node with one) | network-management message types; 04 / 05 (enhanced address information) |
 | 0x2E | **WriteDataByIdentifier**<br>writable RAM DIDs (a record of exactly the DID's size) and parameters (stored before the answer) | — |
 | 0x2F | **InputOutputControlByIdentifier**<br>00 return control, 01 reset to default, 02 freeze current state, 03 short-term adjustment, on a live `[[did]]` declared with a `control` (up to 4), applied where the node publishes the signal, never inside an FB (§3.1) | a controlEnableMask (signals of several fields); a signal whose DBC names values outside its range, whose scaling leaves a whole value between raw steps, or whose raw mapping f64 cannot hold exactly; a multiplexed signal or a multiplexor; functional requests (ignored) |
 | 0x31 | **RoutineControl**<br>01 start, 02 stop, 03 results, per `[[routine]]`, each run by an FB and answered responsePending (0x78) while it runs (§3.1 "Routines"); in the bootloader, its erase and check routines ([bootloader.md](bootloader.md)) | functional requests; identifiers outside 0x0200–0xDFFF and 0xF000–0xFEFF |
 | 0x3E | **TesterPresent**<br>00 | — |
 | 0x85 | **ControlDTCSetting**<br>01 on, 02 off; an option record is accepted and ignored | — |
-| 0x29, 0x34,<br>0x36, 0x37 | **Authentication, RequestDownload, TransferData, RequestTransferExit**<br>by the **bootloader** only: 0x29 authentication, the download ([bootloader.md](bootloader.md)) | in an application (answered 0x11) |
+| 0x34, 0x36,<br>0x37 | **RequestDownload, TransferData, RequestTransferExit**<br>by the **bootloader** only: the download ([bootloader.md](bootloader.md)) | in an application (answered 0x11) |
 | others | — | 0x23 / 0x3D memory access, 0x24, 0x2A, 0x2C, 0x35, 0x38, 0x83, 0x84, 0x86, 0x87, OBD services: answered serviceNotSupported (0x11) |
 
 ### Across services
 
 | Topic | What we do |
 |---|---|
-| Negative responses | 0x11 0x12 0x13 0x14 0x22 0x24 0x31 0x33 0x35 0x36 0x37 0x72 0x78 0x7E 0x7F, in ISO 14229-1's evaluation order (§3.1) |
-| Functional requests | single frames only; the ISO-suppressed negative responses (0x11, 0x12, 0x31, 0x7E, 0x7F) are withheld; a functional 0x27, 0x2F or 0x31 is ignored outright (no seed, no control, no routine, no answer) |
-| responsePending (0x78) | sent by an application **only while a routine's answer is owed**: at once, then every 4 s (P2\*server_max − 1 s), then the final answer (§3.1). A write never needs it: every write that must be stored is one synchronous journal append that never erases, well inside P2 |
-| busyRepeatRequest (0x21) | **not sent**. A request that arrives while an answer is in flight, or while a routine's answer is owed, is dropped; the tester retries (the bootloader answers 0x21 during its own routines) |
+| Negative responses | 0x11 0x12 0x13 0x14 0x22 0x24 0x31 0x33 0x35 0x36 0x37 0x58 0x59 0x72 0x78 0x7E 0x7F, in ISO 14229-1's evaluation order (§3.1) |
+| Functional requests | single frames only; the ISO-suppressed negative responses (0x11, 0x12, 0x31, 0x7E, 0x7F) are withheld; a functional 0x27, 0x29, 0x2F or 0x31 is ignored outright (no seed, challenge, control or routine, no answer) |
+| responsePending (0x78) | sent by an application **only while an answer is owed** — a routine's (§3.1 "Routines") or a 0x29 proof's while it is verified (§3.1 "Authentication"): at once, then every 4 s (P2\*server_max − 1 s), then the final answer (§3.1). A write never needs it: every write that must be stored is one synchronous journal append that never erases, well inside P2 |
+| busyRepeatRequest (0x21) | **not sent**. A request that arrives while an answer is in flight, or while an answer is owed, is dropped; the tester retries (the bootloader answers 0x21 during its own routines) |
 | P2 on silicon | P2server_max is announced as 50 ms; measuring it on the bench (REQ-DIAG-064) is still to do |
 
 ### Where it runs
@@ -59,8 +60,9 @@ services of its **service table** (`[uds] services`, §3.1), each in the session
 | The server: sessions, gating, constant DIDs, functional requests | yes | yes |
 | Live DIDs (an integer or bool value, never a float) | any such signal | only a signal this node transmits on CAN from an owner FB, or a value an FB on a generated satellite core writes; at most 32 bits |
 | 0x27 key | blobly_net's reference key | the board's `diag_sa_key_ok` (no default is linked), or the reference key by name for a bench (`security_key = "reference"`); seed from the board's TRNG |
+| 0x29 keys | `auth_keys`; the challenge from the reference generator | `auth_keys`; the challenge from the board's TRNG; a 16 KB comm stack for the verifier |
 | 0x11 | returns the diagnostic state to power-on | resets the MCU once the answer is on the wire |
-| 0x27 failed-key counts across a reset / power cycle | in RAM across its resets (it has no power cycle) | in the NvM journal, across every reset and a power cycle (`[nvm]` required) |
+| 0x27 failed-key (0x29 failed-proof) counts across a reset / power cycle | in RAM across its resets (it has no power cycle) | in the NvM journal, across every reset and a power cycle (`[nvm]` required) |
 | 0x10 02 handoff to the bootloader | — | with `[boot]` |
 | 0x2F | a signal the `[isotp]` bus's bridge sends; every request accepted (no application hook) | a signal the comm thread sends (an owner FB's, or a satellite's single-field signal), at most 32 bits; the board's weak `diag_io_ok` may refuse (0x22) |
 | 0x28 | gates the application's frames | gates the application's frames |
@@ -117,6 +119,8 @@ s3_ms             = 5000        # session timeout (default 5000)
 security_attempts = 3           # 0x27 wrong keys before the lockout (default 3)
 security_delay_ms = 10000       # 0x27 lockout delay (default 10000)
 security_key      = "reference" # a target only: blobly_net's bench key; absent = the OEM's diag_sa_key_ok
+# access          = "authentication"          # unlock with 0x29 instead of 0x27 (default "seed_key")
+# auth_keys       = { "1" = "reference" }     # with it: per level, the tester's Ed25519 public key
 
 [uds.services]                  # optional; absent = the default table
 "0x10" = {}
@@ -141,9 +145,9 @@ write = { session = ["extended"], security = 1 }
 
 #### The service table
 
-Which services the server answers, in which sessions and behind which 0x27 level. A row is keyed
+Which services the server answers, in which sessions and behind which security level. A row is keyed
 by its SID in hex and may carry `sessions` (`default` / `extended` / `safety`; absent = the
-service's default sessions) and `security` (a 0x27 level; absent = none). The same table configures
+service's default sessions) and `security` (a level 1..8, unlocked by 0x27 or 0x29; absent = none). The same table configures
 the server on the host bridge and the ThreadX comm thread, and a DoIP request reaches the same
 server.
 
@@ -216,12 +220,78 @@ refused with the move they need.
 | Seed | 4 bytes, from the board's TRNG on a target. All zeros when the level is already unlocked |
 | Key | one key per seed, checked through an injected seam (`SecurityOps`), so `comm/uds` holds no algorithm. A target links the OEM's `diag_sa_key_ok`; the bench and the host use blobly_net's public reference key (seed XOR 0xFF), so both sides unlock with one algorithm |
 | A key before its seed | 0x24 requestSequenceError |
-| Wrong keys | 0x35 invalidKey; the `security_attempts`-th wrong key (the 3rd by default) is answered 0x36 and starts that level's lockout, during which its seed request is answered 0x37 for `security_delay_ms` (10 s). The count and the delay are per level: a lockout of one level never delays another level's seed |
+| Wrong keys | 0x35 invalidKey; the `security_attempts`-th wrong key (the 3rd by default) is answered 0x36 and starts that level's lockout, during which its seed request is answered 0x37 for `security_delay_ms` (10 s) — and so is a key answering a seed drawn over the other transport before the lockout began (the key not judged, the seed spent), so no transport adds a guess to a lockout. The count and the delay are per level: a lockout of one level never delays another level's seed |
 | Across a reset | each level's wrong keys since its last correct key are kept, so a reset buys nothing: a start with a wrong key counted since that level's last correct key costs the full lockout delay from start-up — after a lockout that has ended too, and a reset during one restarts it. A count below the limit carries over; after the delay of a count at the limit the level has its attempts again, as after any lockout. So no reset or power cycle grants more than `security_attempts` keys per lockout delay while the journal takes the state (a full journal: below). A start after a correct key never waits |
-| Across a power cycle | kept on a target, in the node's NvM journal: one 10-byte record at a fixed block (0x044E) holding, per level, the wrong keys since its last correct key, counted up to `security_attempts` and no further (a count at the limit is the lockout: no clock is stored). Restored before the first request is served. **Written only when it changes**: a wrong key below the limit raises its level's count, and a correct key clears a non-zero count — one write each, in the pass that answered the key, before the CAN answer is pumped. Nothing else changes the record, so nothing else writes: not a correct key with nothing counted, a wrong key at the limit, the lockout beyond the key that reached the limit, its end, a start-up or an ECUReset — no budget, and no special flush before an ECUReset or the programming handoff (the journal is current after every write). So at most `security_attempts` writes per level between correct keys, plus one by a correct key that follows a wrong one: a tester without the key writes at most `security_attempts` records per level, ever, until an authorised unlock, and can neither fill the journal for the fault memory and the codings nor wear it past the wear check. The price: a count at the limit stays stored until that level's correct key, so every start-up meanwhile runs that level's full delay (0x37 to its seed; another level's seed is not delayed). A node that performs 0x27 must declare `[nvm]`; generation refuses it otherwise. The host bridge keeps the count in RAM |
+| Across a power cycle | kept on a target, in the node's NvM journal: one 10-byte record at a fixed block (0x044E) holding, per level, the wrong keys since its last correct key, counted up to `security_attempts` and no further (a count at the limit is the lockout: no clock is stored). Restored before the first request is served. **Written only when it changes**: a wrong key below the limit raises its level's count, and a correct key clears a non-zero count — one write each, in the pass that answered the key, before the CAN answer is pumped. Nothing else changes the record, so nothing else writes: not a correct key with nothing counted, a wrong key at the limit, the lockout beyond the key that reached the limit, its end, a start-up or an ECUReset — no budget, and no special flush before an ECUReset or the programming handoff (the journal is current after every write). So at most `security_attempts` writes per level between correct keys, plus one by a correct key that follows a wrong one: a tester without the key writes at most `security_attempts` records per level, ever, until an authorised unlock, and can neither fill the journal for the fault memory and the codings nor wear it past the wear check. The price: a count at the limit stays stored until that level's correct key, so every start-up meanwhile runs that level's full delay (0x37 to its seed; another level's seed is not delayed). A node that performs 0x27 (or 0x29, whose failed proofs are this count) must declare `[nvm]`; generation refuses it otherwise. The host bridge keeps the count in RAM |
 | A record it cannot read | another layout (format byte, level count, length — the earlier 11-byte layout included), or an unreadable journal, restores nothing: no delay, as a clean start. A count of a level the firmware no longer serves is not restored and arms nothing (its seed is refused 0x12, and its correct key, so nothing could clear it); the first pass writes the record without it. A count above the limit (an update that lowered `security_attempts`) reads as saturated |
 | A refused write | changes no answer: the key is judged and the count in RAM counts. Retried after `[nvm] min_write_ms`, and at once by every flush, until the journal holds the record; never erased for — the write is the pass's, before the CAN answer, so it is one append (REQ-DIAG-062). A journal another writer filled holds the changes in RAM until its next erase point: the flush after an ECUReset's answer erases and takes them across the reset (REQ-DIAG-033), and so does a sleep edge with NM. A power cut, or a reset the server did not perform, before then restores the record last accepted — the counts since the journal filled are lost, as they are for the fault memory and the codings; a node without NM then erases at boot, an NM node at its next sleep edge. A correct key's clear the journal refuses leaves a higher count stored: a power cut then costs a delay, never a key |
 | Two transports | an unlock belongs to the transport that earned it: a DoIP tester never inherits a CAN tester's unlock, nor the reverse; a seed asked over one never replaces the other's challenge |
+
+#### Authentication (0x29)
+
+A node unlocks its levels **one way**: `[uds] access = "seed_key"` (the default, 0x27 above) or
+`access = "authentication"`, ISO 14229-1's authentication with challenge-response (ACR),
+unidirectional, with Ed25519. With authentication 0x27 is answered serviceNotSupported (0x11), and a
+service table row naming it is refused at generation (and a 0x29 row on a seed-key node). Both ways
+grant the SAME levels: every gate — DID read and write gates, service rows, the `"0x10 02"` handoff
+row — names a level 1..8, and a verified proof unlocks that level exactly as a correct 0x27 key does.
+
+```toml
+[uds]
+access            = "authentication"
+auth_keys         = { "1" = "reference", "2" = "3b6a27bc...<64 hex>" }
+security_attempts = 3           # failed proofs before the lockout, as for 0x27 keys
+security_delay_ms = 10000
+```
+
+`auth_keys` maps each level a gate names to the tester's Ed25519 **public** key — 64 hex characters,
+or `"reference"`: blobly_net's dev tester key, the public half of `examples/keys/tester.seed`, which
+the bootloader's `session_key` already trusts. Generation refuses a gated level with no key, a key
+for a level nothing gates, a key that is not 64 hex, is all zeros, is not a curve point or is a
+point of small order (the neutral point and those of order 2, 4 and 8, in any encoding — under one a
+forged proof verifies for every challenge; `[boot]`'s two keys are refused the same way), a key
+equal to `[boot] image_key`, `auth_keys` on a seed-key node and `security_key` on an authenticating
+one. On a `[doip]` node a `"reference"` key — or the same key written as its 64 hex digits, in
+either case — needs `allow_bench_key = true`, as the 0x27 reference key does; 0x29 is open over the network like 0x27 (it is how a tester authenticates). On a target
+the node needs `[nvm]` (the failed-proof count, below), its `[isotp] max_message` must hold the
+88-byte proof request, and its comm thread gets a 16 KB stack (the verify's field arithmetic runs on
+it; its state, about 2.8 KB, is held beside the keys in static storage)
+([examples/uds_auth](../examples/uds_auth) is the host example; `scripts/auth_target_check.sh` cross-builds a ThreadX one).
+
+| Request | Bytes | Positive answer |
+|---|---|---|
+| 05 requestChallengeForAuthentication | `29 05 cc alg[16]` (19) — `cc` (communicationConfiguration, offset 2) the level; `alg` (algorithmIndicator, offset 3) the Ed25519 OID | `69 05 00 alg[16] 00 20 challenge[32] 00 00` (55): requestAccepted, the algorithm echoed, the challenge at offset 21, no additional parameter |
+| 06 verifyProofOfOwnershipUnidirectional | `29 06 alg[16] 00 40 proof[64] 00 00 00 00` (88): `alg` at 2, the proof length at 18, the proof at 20, the client challenge length at 84 and the additional parameter length at 86 (both 0) first `7F 29 78` (responsePending), then `69 06 12 alg[16] 00 00` (21): ownershipVerified, the algorithmIndicator (offset 3), lengthOfSessionKeyInfo 0 — no session key (ISO 14229-1:2020's layout) |
+| 00 deAuthenticate | `29 00` (2) | `69 00 10` (3): deAuthenticationSuccessful |
+
+| Choice ISO leaves open | What we do |
+|---|---|
+| Which level a proof unlocks | the level is the **communicationConfiguration** byte of 05 (1..8) — the one manufacturer-specific byte, unused since no secure communication is configured — and is bound to the challenge, so 06 carries none. A generic tool sending 0x00 there is refused 0x31 |
+| Algorithm | Ed25519; `algorithmIndicator` is its object identifier 1.3.101.112 in DER (`06 03 2B 65 70`), left-aligned and zero-padded to 16 bytes. Another is refused 0x31 |
+| What the proof signs | the 64-byte **application message**: the context `blobly uds 0x29 application v1` in ASCII with a terminating 0x00 (31 bytes, `uds.auth_context`), the level (1 byte), the challenge (32) — never the bare challenge, which is what the bootloader's 0x29 signs (REQ-BOOT-016, unchanged: deployed bootloaders verify it). A proof made for one is no proof for the other — a bootloader's challenge relayed to a tester doing an application unlock buys no programming access with its signature, nor the reverse — and a proof for one level is none for another level trusting the same key. Golden vector (dev tester seed `20..3F`, level 1, challenge `00..1F`): `9f70abb9…7c7f0d`, committed in `comm/uds/auth_test.v`, `comm/udsauth/udsauth_test.v` and blobly_net |
+| The challenge | 32 bytes from the source 0x27's seeds come from (`SecurityOps.seed`: the board's TRNG on a target, the reference generator on the host). A source that fails or draws all zeros: 0x59 challengeCalculationFailed. One proof per challenge, a failed one included; voided by a new 05, every session entry (the same session too), S3, a reset, 00 and the end of the transport connection that asked; per transport, like a seed |
+| A failed proof | 0x58 ownershipVerificationFailed, counted as a wrong key of its level: the same count, `security_attempts` (the last one 0x36, starting the lockout), `security_delay_ms` (05 answered 0x37 meanwhile, and after a start-up or reset with a count; so is a 06 answering a challenge drawn over the other transport before the lockout began — not verified, not counted, the challenge void) and the same persisted record — a power cycle buys no extra proofs |
+| 0x36 and 0x37 on 0x29 | **a choice**: ISO 14229-1 lists 0x12, 0x13, 0x22, 0x24, 0x31 and 0x50–0x5D for 0x29, not exceededNumberOfAttempts (0x36) or requiredTimeDelayNotExpired (0x37). The attempt limit and the lockout here are SecurityAccess's, shared per level with 0x27 (one count, one delay, one record), so they are answered in 0x27's words, which a tester already knows — rather than 0x58 for both, which would hide that the level is locked out and that waiting is the remedy |
+| Sessions | ISO 14229-1 allows 0x29 in the default session; this server does not (0x7F), like 0x27 — a **project choice** (REQ-DIAG-121): every session entry relocks, so a level unlocked in the default session would be gone by the extended session every gate needs. A service table row naming the default session for 0x29 is refused at generation, saying so |
+| Other sub-functions | 01–04 (APCE), 07 (bidirectional ACR) and 08 answered 0x12 |
+| Suppression | honoured on 00; 05 always answers (the challenge is the answer), and so does 06: its responsePending lifts the suppression (ISO 14229-1) |
+| Functional | ignored outright, like 0x27 |
+| 05 for an unlocked level | a fresh challenge |
+| deAuthenticate | relocks the requesting transport's unlock — its controls returned and its routines asked to stop, as any relock (REQ-DIAG-105, REQ-DIAG-085) — and voids its challenge; the other transport's unlock stands (REQ-NET-012) |
+| Verify time | an Ed25519 verify is about 10,300 field multiplications — estimated (not measured) at some 75–100 ms on a 400 MHz Cortex-M7 at `-Os`, from the instruction count of the TweetNaCl multiplication, and about 1 ms on an x86-64 host — so it never runs inside one pass: 06 is answered responsePending (0x78) at once, and the verify then runs **a slice of 144 multiplications per comm pass** (`bcrypto.VerifyJob`, `udsauth.verify_step_mults`; of the order of 1–2 ms on the CM7, also estimated), about 75 passes, advanced from the server's tick whether or not the transport owing the answer can take a response (a busy link delays the answer, never the verify), while the answer is owed (pending.v: every other request dropped, S3 held, 0x78 repeated within P2\*server_max). A failed proof is counted in the pass that reaches its verdict, a valid one clears its level's count there (as a correct 0x27 key clears it before its pass's persist step), and either is answered no earlier than the next pass, after the pass has persisted the change (REQ-DIAG-067); a valid one unlocks its level with its answer, so no level is unlocked without its ownershipVerified — an answer given up after a valid verdict unlocks nothing (its cleared count stands: the proof was correct). Given up before a verdict — its timeout (4 s, answered 0x22; a pass that comes after the timeout never completes the verify first, so a verdict reached late is never taken as timely) or its DoIP connection dropped — the proof counts as failed (the 0x22 waiting a pass for the count to be persisted); ended by a session entry, which only the other transport can cause meanwhile (its tester disconnecting while it owns the session, its answered ECU reset), it is answered 0x22 and not counted, since nothing judged it; an MCU restart mid-verify (power, watchdog) loses it with no verdict and no answer. A valid proof unlocks only where the transport owing the answer carries the 21-byte ownershipVerified (over DoIP the push slot, `driver/doipnet` `push_max`, 24 bytes); otherwise 0x14 and nothing unlocked (the count its verdict cleared stays cleared, as for an answer given up). The time on silicon is to be measured on the bench |
+
+Checked in this order (REQ-DIAG-125): shorter than 2 bytes 0x13; a sub-function other than 00, 05
+and 06 0x12; not its exact length, or 06 with a proof length other than 0x0040 or a client challenge
+or additional parameter, 0x13. Then 05: algorithm or level (0, above 8, not served, or without a key
+— `AuthOps.keyed`) 0x31, the level's delay 0x37, the response capacity 0x14 (nothing drawn, the
+challenge outstanding kept), the challenge source 0x59 (the challenge outstanding void). 06: no
+challenge 0x24, algorithm 0x31 (the challenge kept), the challenge's level under lockout 0x37 (the
+challenge void, the proof not verified or counted), the response capacity 0x14 (the challenge kept),
+then 0x78 and the verdict 0x58 / 0x36.
+
+The verify runs behind a seam (`uds.AuthOps`), so `comm/uds` holds no key and no algorithm:
+`comm/udsauth` holds the keys and runs `bcrypto`'s verify — the bootloader's functions, driven a
+slice at a time (`VerifyJob`) where the bootloader's `Verifier.finish` runs them in one go.
 
 #### ECUReset and the programming handoff
 
@@ -238,7 +308,10 @@ unanswered**.
   a DoIP connection dies with the reset and could never receive an answer the bootloader owed.
 - The handoff is gated on the application's own conditions (`boot_handoff_ok`, a weak seam that
   allows by default); failing answers 0x22.
-- 0x29 (authentication) stays the bootloader's.
+- The bootloader's 0x29 is its own profile (01 challenge, 02 proof, [bootloader.md](bootloader.md));
+  an application with `access = "authentication"` serves ISO's 05 / 06 (above). Both verify an
+  Ed25519 signature, the bootloader's over the bare challenge and the application's over its
+  domain-separated message (the context, the level, the challenge), so neither proof serves the other.
 
 #### DIDs (0x22, 0x2E)
 
@@ -248,7 +321,7 @@ unanswered**.
   (0x2F, below); it is still never writable.
 - **0x22 reads several DIDs per request**; an answer too long for the buffer is 0x14
   responseTooLong.
-- **Per-DID gates**: `read` and `write`, each a session list and a 0x27 level. A DID is writable
+- **Per-DID gates**: `read` and `write`, each a session list and a security level. A DID is writable
   when it has a `write` gate, or `writable = true` (a constant's RAM copy); with `writable = true`
   and no `write` gate, 0x2E accepts it in every session with no level, so protect such a DID with a
   `write` gate. Without either it is read-only.
@@ -282,7 +355,7 @@ start_out   = 2                    # record bytes a start's answer carries
 results_out = 0                    # record bytes 03's answer carries
 timeout_ms  = 10000                # a start or stop not answered by then: 0x22, the FB asked to stop
 sessions    = ["extended"]         # default
-security    = 0                    # the 0x27 level a request needs
+security    = 0                    # the security level a request needs
 
 [[fb]]
 name   = "RoutineRunner"
@@ -300,7 +373,7 @@ thread = "front_thread"
 | `name` | PascalCase, unique; `<name>Request` and `<name>Result` are the FB's input and output | not a signal's, parameter's or another routine's |
 | `mode` | `sync`: 01 answered when the routine completes; `async`: 01 answered once the FB has accepted it, 03 reads its progress | `"sync"` |
 | `stop`, `results` | 02 / 03 offered | `false`; `stop` only on an async routine |
-| `start_in`, `start_out`, `results_out` | fixed record sizes, raw bytes | 0–32; `results_out` needs `results`; on a `[doip]` node `start_out` ≤ 11 |
+| `start_in`, `start_out`, `results_out` | fixed record sizes, raw bytes | 0–32; `results_out` needs `results`; on a `[doip]` node `start_out` ≤ 19 |
 | `timeout_ms` | the most a start or stop may wait for its FB | 100–100000, `10000`; above the handler's period + 20 ms |
 | `sessions`, `security` | the routine's gate, like a DID's | `["extended"]`, no level; judged with the 0x31 row's (the sessions both admit, either's level): never the default session with no level, a level only with extended among them, and a session the table gives a way into (a "0x10" row) unless it is default |
 
@@ -400,8 +473,9 @@ the first `results_out`, 02's none.
   session ending with its connection) asks every running routine to stop; an answer still owed is
   answered 0x22 on the transport that asked. Only the DoIP connection that drops loses the answer
   owed to it. So a tester that re-sends 0x10 as a keep-alive stops its routines; use 0x3E.
-- **A relock without a session entry** — another level unlocked (0x27 holds one), or a DoIP tester's
-  unlock ending with its connection while the bus keeps the session — asks every running routine
+- **A relock without a session entry** — another level unlocked (by 0x27 or 0x29: the server holds
+  one), the level deauthenticated (0x29 00), or a DoIP tester's unlock ending with its connection
+  while the bus keeps the session — asks every running routine
   gated on the relocked level to stop, as it returns that level's controls (0x2F, below): what a
   level gated lasts while that level stays unlocked. A routine's level is its own, else its 0x31
   row's — a routine gated through its row is stopped too.
@@ -415,8 +489,8 @@ the first `results_out`, 02's none.
 - **A lost final answer is not sent again**, as any answer may be lost; an async routine can be read
   again with 03. A lost 0x78 on CAN goes again in the next pass.
 - **Over DoIP** the first response is the request's answer and every later one (each 0x78, the final
-  answer) is pushed through the mailbox's push slot (`driver/doipnet` `push_max`, 16 bytes) once the
-  one before it is acknowledged — hence `start_out` ≤ 11 on a `[doip]` node.
+  answer) is pushed through the mailbox's push slot (`driver/doipnet` `push_max`, 24 bytes) once the
+  one before it is acknowledged — hence `start_out` ≤ 19 on a `[doip]` node.
 - **Latency**: an FB sees a request at its next dispatch after the next comm pass, and the server its
   report at the comm pass after that — at most the handler's period plus two comm passes (on zone_a,
   50 ms plus up to 20 ms), so every start and stop costs a 0x78.
@@ -494,7 +568,7 @@ control = { parameters = ["reset_to_default", "freeze_current_state", "short_ter
 |---|---|
 | `parameters` | the control parameters served besides returnControlToECU (00, served for every control): `reset_to_default` (01), `freeze_current_state` (02), `short_term_adjustment` (03); at least one |
 | `session` | the sessions it is accepted in: `extended` (the default) and/or `safety` — never default (ISO runs 0x2F outside it) or programming (the bootloader's) |
-| `security` | the 0x27 level it needs; 0 (the default) = the `[uds] services` 0x2F row's level, none if the row names none. Either way that level is the control's: it is returned when the level is relocked |
+| `security` | the security level it needs (unlocked by 0x27 or 0x29); 0 (the default) = the `[uds] services` 0x2F row's level, none if the row names none. Either way that level is the control's: it is returned when the level is relocked |
 
 The gate the server enforces is the control's sessions within the 0x2F row's (the default table's
 row runs in extended only) and its level, else the row's. It may not be weaker than the DID's read
@@ -548,7 +622,7 @@ What ISO leaves open, as built:
 | Before the FB's first publish | an active control is published anyway: the frame carries the tester's value from the next send |
 | Reads | every live DID of the signal, and a fault snapshot that freezes one, reads the value published — under control the tester's; else the FB's, held to the range as the encoder saturates it (an FB writing 300 of a [0\|250] signal reads 250, which the frame carries); before the FB's first publish the initial value (an uncontrolled live DID reads 0 then on a target, whose comm thread reads the signal's cell; on the host bridge, which writes the DID only once the FB has published, its record carries no value bytes until then). One rule (`uds.io_published`) gives the reads, the 0x6F answer and what 02 freezes |
 | On-change frames | setting or returning a control changes the payload, so an on-change or mixed frame sends at once; E2E and SecOC stamp after the substitution |
-| When control returns | on a return to the default session (0x10 01, S3); at any other session entry for a control that needs a level (the entry relocks) or whose sessions leave out the new one; on an ECUReset and any reset of the diagnostic state; when another level is unlocked (0x27 holds one); and when a DoIP tester's level goes with its connection |
+| When control returns | on a return to the default session (0x10 01, S3); at any other session entry for a control that needs a level (the entry relocks) or whose sessions leave out the new one; on an ECUReset and any reset of the diagnostic state; when another level is unlocked (0x27 or 0x29: the server holds one); when the level is deauthenticated (0x29 00); and when a DoIP tester's level goes with its connection |
 | A functional 0x2F | ignored: no answer, nothing changed (an override is one ECU's) |
 | The application's conditions | a target's board seam `diag_io_ok(did, parameter)`, weak and accepting (`boards/common/diag_io_ok.h`, which `diag_board.c` includes, so a host test runs the default a target links); a node states its conditions (the vehicle moving, say) by defining it in its glue: 0 answers 0x22 with nothing changed. Never asked for 00. The host bridge has no such hook and accepts every request |
 
@@ -559,13 +633,13 @@ unlock stays with its transport. Because a network reaches further than a bus, a
 held to more at generation (REQ-NET-012, [net.md](net.md)):
 
 - a service table is required (the default one serves 0x11 to anyone);
-- every row changing ECU state (anything but 0x10, 0x19, 0x22, 0x27, 0x2E, 0x3E) needs a level —
+- every row changing ECU state (anything but 0x10, 0x19, 0x22, 0x27, 0x29, 0x2E, 0x3E) needs a level —
   0x2F included: every control inherits the row's level, so a network tester's controls end with its
   unlock (its connection), and every session entry returns them — and its routines (0x31 rows need a
   level too) are asked to stop then likewise;
 - a writable DID needs a level on its write gate or on the 0x2E row;
 - a `[boot]` node's `"0x10 02"` row needs a level;
-- `security_key = "reference"` needs `[doip] allow_bench_key = true`.
+- `security_key = "reference"`, or an `auth_keys` entry `"reference"`, needs `[doip] allow_bench_key = true`.
 
 A reset a DoIP tester asks for waits until its answer is acknowledged.
 
@@ -702,7 +776,7 @@ period never taken as less than 50 ms (an interrupt-driven handler has none), so
   kept until the DTC is cleared, ages out, heals before confirming, or is displaced.
 - **Fixed shape**: each DID at its declared size, zero-filled while nothing has published it.
 - **No side door**: a `freeze` DID must be readable in every session 0x19 is served in, behind no
-  0x27 level but 0x19's own — judged on the gate 0x22 enforces, the DID's own `read` within the
+  security level but 0x19's own — judged on the gate 0x22 enforces, the DID's own `read` within the
   `[uds] services` 0x22 row. Also refused: a DID that is not the node's, one named twice, more than 4.
 - **Fits the transport**: generation refuses an `[isotp] max_message` (520 by default) that cannot
   hold the 0x19 02 / 0A list, a fault's 0x19 04 snapshot or its 0x19 06 extended data
@@ -827,6 +901,7 @@ param_status = true                         # one byte per parameter: 0 default,
 | D7 | How a routine runs | in an FB, through a request cell and a result cell; the server answers 0x78 meanwhile | the server stays one comm-thread service with no application code in it, and an FB is where vehicle work runs |
 | D8 | Requests while an answer is owed | dropped, unanswered and unperformed (the bootloader keeps 0x21) — a 0x2F 00 included, so a control outlasts the wait | one request at a time already drops (REQ-DIAG-037); S3 is held, so the session survives the wait, and the wait is bounded (`timeout_ms` + 5 s) |
 | D9 | Input/output control (0x2F) | overrides an output at publication, on a live `[[did]]` with a `control`; returned by events (a session entry, a reset, a relock — which also stops the routines its level gated) | no FB sees it and one thread holds and applies it; the DID 0x22 reads is the control's, as ISO practice has it; a control lasts exactly while its gate would still grant it, and may not read through a stricter read gate |
+| D10 | 0x29 in an application | one access method per node; ACR with Ed25519, the level in communicationConfiguration, the bootloader's verifier and signed message, failed proofs counted as wrong keys | the same levels and lockout whichever way a node unlocks; no second crypto implementation |
 
 ## 5. Not supported
 
@@ -853,7 +928,7 @@ param_status = true                         # one byte per parameter: 0 default,
 - a host-side DoIP transport;
 - an incremental flash path: stored writes are synchronous (bounded, no erase at run time);
 - a routine run by an FB on a satellite core, a hand-written satellite or in a multi-thread
-  partition (REQ-PLACE-013); a routine record over 32 bytes; a start record over 11 bytes on a
+  partition (REQ-PLACE-013); a routine record over 32 bytes; a start record over 19 bytes on a
   `[doip]` node (the push slot);
 - **routines in blobly_net's simulated ECUs**: its system-model reader (`blobly/sysview`) skips
   `[[routine]]`, so a node it simulates from its ecu.toml answers every 0x31 with 0x11, with no
@@ -879,7 +954,7 @@ param_status = true                         # one byte per parameter: 0 default,
 | A non-default session, a CAN exchange in flight or a routine's owed answer holds NM awake | generation (`g_nm.hold`); `comm/diag/routine_test.v` (`active()`) |
 | A routine's FB sees each request exactly once, and a stale result is ignored | `comm/uds/routine_test.v`; `tools/loom2v/routine_gen_test.v` (the glue) |
 | While a routine's answer is owed, every other request is dropped (a 0x2F 00 included), the answer stays with its transport, S3 is held and a 0x78 comes within P2\* — the final answer even under the suppress bit; a timeout, a session change and a dropped connection end it | `comm/uds/routine_test.v`, `comm/diag/routine_test.v`; bench `test/routine_zone_a.lua` |
-| A relock without a session entry (another level unlocked, a DoIP tester's unlock ending with its connection) asks the routines its level gated to stop, as it returns that level's controls | `comm/uds/routine_test.v` `test_a_relock_asks_the_routines_it_gated_to_stop`; `comm/diag/io_control_test.v` `test_a_network_testers_routine_ends_with_its_unlock` |
+| A relock without a session entry (another level unlocked by 0x27 or 0x29, a 0x29 00 deAuthenticate, a DoIP tester's unlock ending with its connection) asks the routines its level gated to stop, as it returns that level's controls | `comm/uds/routine_test.v` `test_a_relock_asks_the_routines_it_gated_to_stop`; `comm/diag/io_control_test.v` `test_a_network_testers_routine_ends_with_its_unlock` |
 | A gateway forwards every 0x78 of a routed node and keeps the exchange open through them | `comm/diagroute/diagroute_test.v` `test_several_responses_pending_keep_a_long_exchange_open`; bench `test/routine_zone_a.lua` (through sysnode) |
 | A routine is generated only where it can run | `tools/loom2v/routine_gen_test.v` (REQ-DIAG-087) |
 | A sender absent from boot reaches `timeout`; NM sleep suspends the deadlines | `comm/com/rxmon_test.v` |
@@ -897,6 +972,7 @@ param_status = true                         # one byte per parameter: 0 default,
 | A parameter's record is restored only under its exact header, and revalidated against the current range | `comm/param/param_test.v`; `tools/loom2v/param_target_test.v` |
 | Physical ids are unique per bus; a functional id is never another node's physical id | syscheck tests |
 | 0x2F overrides an output only where the node encodes it, on the thread serving the server: served per control with its gate and NRC order, the four parameters, a value under control always in range and on the DBC grid, one rule for the value published (read, answered and frozen alike), control returned on a session entry, S3, a reset and a relock (a DoIP tester's included), the target's conditions seam, a functional 0x2F ignored; a control the server cannot apply refused at generation | `comm/uds/io_control_test.v`; `comm/diag/io_control_test.v`; `tools/loom2v/io_control_test.v` (the substitution on the target's local producer, a satellite's lanes and the host bridge, each with the encode reading it; an uncontrolled node's glue unchanged; every refusal); CI's cross build of domain (both target paths) and host build of overspeed. On the bus: `test/ioctl_domain.lua` (bench) and overspeed's `test/ioctl.lua` (vcan) |
+| 0x29 Authentication in an application (one access method per node; every challenge fresh and bound to its level, the proof over the application message (context, level, challenge) under that level's key — a bootloader's bare-challenge proof and another level's refused, answered 0x78 and verified a slice per pass, its verdict counted before its answer, single use and every voiding event, failed and abandoned proofs counted (one voided by the other transport's session entry not), persisted and locked out with 0x27's rules, deAuthenticate, the NRC order, per transport and the unlock the owing transport's, the keys refused at generation, the dev key over DoIP only by name) | `bcrypto/ed25519_test.v` `test_verify_job_agrees_with_verify` (the stepped verify against the one-shot one, at every budget); `comm/uds/auth_test.v` (a fake stepped verify: the golden 0x29 05/06 bytes, a varying source and a replayed proof refused, the slice per pass, the abandoned verify counted, the NRC order including the lockout and capacity cases, a power cycle over a store); `comm/udsauth/udsauth_test.v` (the golden Ed25519 vector, committed in blobly_net too, verified at its level and refused under another key, tampered or non-canonical; whole exchanges with fresh challenges and a replayed proof refused); `comm/diag/auth_test.v` (0x78 then the answer on the bus and pushed over DoIP, the unlock the owing transport's, per transport, a dropped connection counting its proof, the other transport's session entry voiding one uncounted); `tools/loom2v/diag_target_test.v` (wiring on both owners, every refusal); `tools/loom2v/doip_target_test.v` and `tools/sysmodel/auth_bench_key_test.v` (the dev key over DoIP, the push wiring); `scripts/auth_target_check.sh` (a ThreadX authentication image cross-built, `lint_vinit` and `check_no_heap` clean). On the bus: `examples/uds_auth/test/auth.lua` (vcan, not CI); not yet run on silicon — the verify's time there is unmeasured |
 | The 0x27 failed-key counts survive a power cycle on a target: restored as after a reset (a count at the limit as a lockout from start-up), written only when they change — a wrong key below the limit, a correct key clearing a count — and before the CAN answer, so at most `security_attempts` writes per level between correct keys plus one per correct key, whatever a tester sends, resets or power-cycles, and a wrong-key stream never fills the journal for the other writers; a refused or unconfirmed write changing no answer and retried until the journal holds the record; a full journal never erased at run time, an ECUReset's flush or an NM sleep edge freeing it; a node that performs 0x27 without `[nvm]` is refused | `comm/uds/sa_store_test.v` (a randomised bound over keys, resets, ECUResets, power cycles, refused and unconfirmed writes, at the default limit and at 5 and 1); `comm/uds/uds_test.v` (a reset after an ended lockout, the attempts after it); `comm/diag/sa_persist_test.v` (power cuts anywhere, the boot's own work included; three hours of wrong keys; a filled journal holding the counts in RAM until a reset's flush or a sleep edge; a refused clear); `tools/loom2v/diag_target_test.v`; `tools/loom2v/wear_test.v`. On the bench: `uds-on-target-journal` (REQ-DIAG-033, on the build before the rework; a re-run on this rule is recommended) — no real power removal yet |
 
 Bench suites on `examples/system_full` (blobly_net over the CANsub), their runs recorded in

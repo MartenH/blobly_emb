@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 329 | 236 | 30 | 63 | 0 |
+| 337 | 244 | 30 | 63 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -31,7 +31,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BOOT-014 | QM | test | verified | prog_test.v (pass) |
 | REQ-BOOT-015 | QM | analysis | uncovered | — |
 | REQ-BOOT-016 | QM | test | verified | prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass) |
-| REQ-BOOT-017 | QM | test | verified | ed25519_interop_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), sha512_test.v (pass) |
+| REQ-BOOT-017 | QM | test | verified | ed25519_interop_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), sha512_test.v (pass) |
 | REQ-BOOT-018 | QM | analysis | uncovered | — |
 | REQ-BOOT-019 | QM | test | verified | doip_mb_test.v (pass), prog_test.v (pass) |
 | REQ-BOOT-020 | QM | test | verified | bufs_test.v (pass), diag_target_test.v (pass), isotp-max-message-silicon (approved), prog_test.v (pass), step_test.v (pass) |
@@ -69,7 +69,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-CAN-TP-019 | QM | test | verified | diag_test.v (pass), diag_test.v (pass), diag_test.v (pass) |
 | REQ-CAN-TP-020 | QM | test | verified | diag_target_test.v (pass) |
 | REQ-CAN-TP-021 | QM | test | verified | diag_target_test.v (pass) |
-| REQ-CAN-TP-022 | QM | test | verified | diag_target_test.v (pass), diag_target_test.v (pass), fault_target_test.v (pass), fault_target_test.v (pass), records_test.v (pass), uds_test.v (pass) |
+| REQ-CAN-TP-022 | QM | test | verified | diag_target_test.v (pass), diag_target_test.v (pass), diag_target_test.v (pass), fault_target_test.v (pass), fault_target_test.v (pass), records_test.v (pass), uds_test.v (pass) |
 | REQ-CAN-TP-023 | QM | test | verified | diag_target_test.v (pass), diag_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), doip_target_test.v (pass), doip_target_test.v (pass), doip_test.v (pass), doip_test.v (pass), doip_test.v (pass), doipnet_test.v (pass), doipnet_test.v (pass), doipnet_test.v (pass), route_size_test.v (pass), route_test.v (pass), someip_test.v (pass) |
 | REQ-CAN-TP-024 | QM | test | verified | isotp_test.v (pass), module_test.v (pass), shell_test.v (pass) |
 | REQ-CAN-TP-025 | QM | test | verified | diagroute_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass) |
@@ -122,15 +122,15 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-102 | QM | test | verified | io-control-silicon (approved), io_control_test.v (pass) |
 | REQ-DIAG-103 | QM | test | verified | io-control-silicon (approved), io_control_test.v (pass), io_control_test.v (pass) |
 | REQ-DIAG-104 | QM | test | verified | io_control_test.v (pass) |
-| REQ-DIAG-105 | QM | test | verified | io-control-silicon (approved), io_control_test.v (pass), io_control_test.v (pass) |
+| REQ-DIAG-105 | QM | test | verified | auth_test.v (pass), io-control-silicon (approved), io_control_test.v (pass), io_control_test.v (pass) |
 | REQ-DIAG-106 | QM | test | verified | io_control_test.v (pass), io_control_test.v (pass) |
 | REQ-DIAG-107 | QM | test | verified | io_control_test.v (pass) |
 | REQ-DIAG-008 | QM | test | verified | uds-on-target-reset (approved), uds_test.v (pass) |
-| REQ-DIAG-032 | QM | test | verified | uds_test.v (pass) |
+| REQ-DIAG-032 | QM | test | verified | diag_test.v (pass), uds_test.v (pass) |
 | REQ-DIAG-033 | QM | test | verified | sa_persist_test.v (pass), uds-on-target-journal (approved), uds_test.v (pass) |
 | REQ-DIAG-065 | QM | test | verified | sa_persist_test.v (pass), sa_store_test.v (pass) |
-| REQ-DIAG-066 | QM | test | verified | diag_target_test.v (pass), io_control_test.v (pass) |
-| REQ-DIAG-067 | QM | test | verified | diag_target_test.v (pass), sa_persist_test.v (pass), sa_store_test.v (pass) |
+| REQ-DIAG-066 | QM | test | verified | diag_target_test.v (pass), diag_target_test.v (pass), io_control_test.v (pass) |
+| REQ-DIAG-067 | QM | test | verified | auth_test.v (pass), auth_test.v (pass), diag_target_test.v (pass), sa_persist_test.v (pass), sa_store_test.v (pass) |
 | REQ-DIAG-068 | QM | test | verified | diag_target_test.v (pass), sa_persist_test.v (pass), sa_store_test.v (pass) |
 | REQ-DIAG-034 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-035 | QM | test | verified | uds_test.v (pass) |
@@ -173,9 +173,17 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-082 | QM | test | verified | routine-control-silicon (approved), routine_gen_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
 | REQ-DIAG-083 | QM | test | verified | routine-control-silicon (approved), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
 | REQ-DIAG-084 | QM | test | verified | routine-control-silicon (approved), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
-| REQ-DIAG-085 | QM | test | verified | io_control_test.v (pass), routine-control-silicon (approved), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
+| REQ-DIAG-085 | QM | test | verified | auth_test.v (pass), io_control_test.v (pass), routine-control-silicon (approved), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
 | REQ-DIAG-086 | QM | test | verified | diagroute_test.v (pass) |
 | REQ-DIAG-087 | QM | test | verified | model_test.v (pass), routine_gen_test.v (pass) |
+| REQ-DIAG-120 | QM | test | verified | auth_test.v (pass), diag_target_test.v (pass), diag_target_test.v (pass) |
+| REQ-DIAG-121 | QM | test | verified | auth_test.v (pass), diag_target_test.v (pass), udsauth_test.v (pass) |
+| REQ-DIAG-122 | QM | test | verified | auth_test.v (pass), auth_test.v (pass), auth_test.v (pass), doip_target_test.v (pass), udsauth_test.v (pass) |
+| REQ-DIAG-123 | QM | test | verified | auth_test.v (pass), auth_test.v (pass), auth_test.v (pass), auth_test.v (pass) |
+| REQ-DIAG-124 | QM | test | verified | auth_test.v (pass), auth_test.v (pass), auth_test.v (pass) |
+| REQ-DIAG-125 | QM | test | verified | auth_test.v (pass), auth_test.v (pass) |
+| REQ-DIAG-126 | QM | test | verified | auth_bench_key_test.v (pass), diag_target_test.v (pass), diag_target_test.v (pass), diag_target_test.v (pass), doip_target_test.v (pass), doipcfg_test.v (pass), doipcfg_test.v (pass), udsauth_test.v (pass) |
+| REQ-DIAG-127 | QM | test | verified | auth_test.v (pass), auth_test.v (pass), auth_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), udsauth_test.v (pass) |
 | REQ-E2E-001 | B | test | verified | e2e_test.v (pass) |
 | REQ-E2E-002 | B | test | verified | e2e_test.v (pass), rx_target_test.v (pass), rxmon_test.v (pass) |
 | REQ-E2E-003 | B | test | verified | e2e_test.v (pass) |
@@ -234,7 +242,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NET-009 | QM | test | uncovered | — |
 | REQ-NET-010 | QM | test | uncovered | — |
 | REQ-NET-011 | QM | test | uncovered | — |
-| REQ-NET-012 | QM | test | verified | diag_test.v (pass), doip_target_test.v (pass), sysnode-doip-hardware (approved) |
+| REQ-NET-012 | QM | test | verified | auth_bench_key_test.v (pass), auth_test.v (pass), auth_test.v (pass), diag_test.v (pass), doip_target_test.v (pass), doip_target_test.v (pass), doipcfg_test.v (pass), doipcfg_test.v (pass), doipcfg_test.v (pass), sysnode-doip-hardware (approved) |
 | REQ-NET-013 | QM | test | verified | e2e_test.v (pass) |
 | REQ-NET-014 | QM | test | uncovered | — |
 | REQ-NET-015 | QM | test | verified | e2e_test.v (pass) |
@@ -510,6 +518,14 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-085 | ✓ | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-086 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-087 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-120 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-121 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-122 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-123 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-124 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-125 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-126 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-127 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-E2E-001 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-E2E-002 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-E2E-003 | | | | | | | | | | | | | | | | | | | ✓ | | | |

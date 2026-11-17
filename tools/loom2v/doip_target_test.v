@@ -297,6 +297,35 @@ fn test_the_public_bench_key_over_ip_is_allowed_only_by_name() {
 	assert c4 != 0 && o4.contains('must be true or false'), o4
 }
 
+// REQ-NET-012 / REQ-DIAG-126: a [doip] node that unlocks by 0x29 — the dev tester key ("reference")
+// is a PUBLIC bench key over the network like 0x27's reference key, allowed only by name, and the
+// name means nothing beside a tester's own key; the generated comm thread pushes the 0x29 proof's
+// owed answer (its 0x78, then the verdict) to the DoIP tester, with no routine on the node.
+// @verifies REQ-NET-012 REQ-DIAG-126 REQ-DIAG-122
+fn test_an_authenticating_doip_node_takes_the_dev_key_only_by_name() {
+	auth := '\n[uds]\naccess = "authentication"\nauth_keys = { "1" = "reference" }\n' +
+		doip_conn.replace('"0x27" = {}', '"0x29" = {}')
+	code, out, _ := generate('doip_auth_ref', auth)
+	assert code != 0 && out.contains('auth_keys names "reference"') && out.contains('PUBLIC dev tester key'), out
+	c2, o2, g2 := generate('doip_auth_ref_ok', auth + 'allow_bench_key = true\n')
+	assert c2 == 0, o2
+	for want in ['g_diag_push [doipnet.push_max]u8', 'g_diag.push_step(&g_diag_push[0], doipnet.push_max)',
+		'g_diag.pushed(doipnet.push_resp(&g_diag_push[0], push_n))', 'g_diag.push_sent()'] {
+		assert g2.contains(want), 'missing: ${want}'
+	}
+	other := '03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8'
+	own := auth.replace('"1" = "reference"', '"1" = "${other}"')
+	c3, o3, g3 := generate('doip_auth_own', own)
+	assert c3 == 0, o3
+	assert g3.contains('g_diag_push [doipnet.push_max]u8')
+	c4, o4, _ := generate('doip_auth_own_bench', own + 'allow_bench_key = true\n')
+	assert c4 != 0 && o4.contains('it would mean nothing'), o4
+	// a seed-key [doip] node with no routine owes no answer: nothing to push
+	c5, o5, g5 := generate('doip_no_push', doip_conn)
+	assert c5 == 0, o5
+	assert !g5.contains('g_diag_push'), 'a node that can owe no answer pushes'
+}
+
 // the [doip] address is a host of its subnet (tools/netcfg): on the default /24 not .0, .1 or .255
 // (driver/eth/netx_up.c's network, broadcast and gateway addresses), on a configured one its own
 fn test_the_doip_address_is_a_host_of_its_subnet() {

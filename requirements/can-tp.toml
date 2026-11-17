@@ -215,7 +215,7 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-CAN-TP-022"
 title = "The maximum holds what the node exchanges"
-text = "Generation shall refuse a maximum message length smaller than the largest message the node's diagnostic server must send or receive whole that its configuration determines — a data identifier's read answer or write request, a DTC list (0x19 02 / 0A), a DTC's snapshot or extended data (0x19 04 / 06), and on a node with a bootloader its authentication proof request — naming that message. A read of several data identifiers is not determined by the configuration and is answered responseTooLong when it does not fit."
+text = "Generation shall refuse a maximum message length smaller than the largest message the node's diagnostic server must send or receive whole that its configuration determines — a data identifier's read answer or write request, a DTC list (0x19 02 / 0A), a DTC's snapshot or extended data (0x19 04 / 06), on a node with a bootloader its authentication proof request, and on a node that unlocks by Authentication (0x29) its 88-byte proof request (0x29 06), the longest of its authentication messages — naming that message. A read of several data identifiers is not determined by the configuration and is answered responseTooLong when it does not fit."
 status = "agreed"
 method = "test"
 asil = "QM"

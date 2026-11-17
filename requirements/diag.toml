@@ -7,7 +7,8 @@
 # per-service statement of the same:
 #   * services not served by an application: 0x23/0x3D memory access, 0x24, 0x2A, 0x2C dynamic
 #     DIDs, 0x34..0x38 transfers (the bootloader keeps its own
-#     0x31/0x34/0x36/0x37), 0x29 Authentication (the bootloader's only), 0x86 ResponseOnEvent,
+#     0x31/0x34/0x36/0x37), 0x29 sub-functions other than 00, 05 and 06 (no APCE, no
+#     authenticationConfiguration, no bidirectional ACR), 0x86 ResponseOnEvent,
 #     0x87 LinkControl, OBD / WWH-OBD services;
 #   * 0x2F with a controlEnableMask (a signal of more than one field), a control of a signal whose
 #     database names values outside its range or whose scaling leaves a whole value between raw
@@ -311,7 +312,7 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-DIAG-105"
 title = "Control returned to the ECU"
-text = "The server shall return every control to the ECU on a return to the default session (DiagnosticSessionControl or S3) and on an ECU reset; on any other session entry, re-entry included, it shall return each control that needs a security level (the entry relocks, REQ-DIAG-023) or whose sessions leave out the new session; and when the level a control needs is relocked without a session entry (another level unlocked, or the network tester that held the level disconnected), it shall return that control. From then on the node publishes the signal as it does with no control: the function block's value, and while the function block has not published it, what the node sends then — on a target the frame at its initial payload, on the host bridge the frame only once another of its signals is published (with this one at its initial value)."
+text = "The server shall return every control to the ECU on a return to the default session (DiagnosticSessionControl or S3) and on an ECU reset; on any other session entry, re-entry included, it shall return each control that needs a security level (the entry relocks, REQ-DIAG-023) or whose sessions leave out the new session; and when the level a control needs is relocked without a session entry (another level unlocked by 0x27 or 0x29, the level deauthenticated by 0x29 00, or the network tester that held the level disconnected), it shall return that control. From then on the node publishes the signal as it does with no control: the function block's value, and while the function block has not published it, what the node sends then — on a target the frame at its initial payload, on the host bridge the frame only once another of its signals is published (with this one at its initial value)."
 status = "agreed"
 method = "test"
 asil = "QM"
@@ -349,7 +350,7 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-DIAG-032"
 title = "Wrong keys and lockout"
-text = "A wrong key shall be refused with invalidKey (0x35); the configured number of wrong keys for a level shall be refused with exceededNumberOfAttempts (0x36) and start that level's lockout delay, during which a seed request of that level is refused with requiredTimeDelayNotExpired (0x37); wrong keys and the delay shall be per level, so a level's lockout delays no other level's seed."
+text = "A wrong key shall be refused with invalidKey (0x35); the configured number of wrong keys for a level shall be refused with exceededNumberOfAttempts (0x36) and start that level's lockout delay, during which a seed request of that level, and a key answering a seed of that level issued before the lockout began (over another transport), is refused with requiredTimeDelayNotExpired (0x37) — the key not judged, nothing counted and the seed spent; wrong keys and the delay shall be per level, so a level's lockout delays no other level's seed."
 status = "agreed"
 method = "test"
 asil = "QM"
@@ -375,8 +376,8 @@ derives = "SYS-REQ-DIAG-001"
 
 [[req]]
 id = "REQ-DIAG-066"
-title = "SecurityAccess on a target declares its storage"
-text = "Generation shall refuse a target node that performs SecurityAccess — a security level named by a data identifier's gate or control, by a service table row or by the programming handoff row — without a persistence journal, naming the reason; the host bridge, which has no power cycle, keeps the count in RAM."
+title = "SecurityAccess or Authentication on a target declares its storage"
+text = "Generation shall refuse a target node that performs SecurityAccess or Authentication — a security level named by a data identifier's gate or control, by a service table row or by the programming handoff row — without a persistence journal, naming the reason; the host bridge, which has no power cycle, keeps the count in RAM."
 status = "agreed"
 method = "test"
 asil = "QM"
@@ -780,7 +781,7 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-DIAG-085"
 title = "A routine does not outlive its session or its security level"
-text = "Every session entry — a DiagnosticSessionControl (re-entering the active session included), S3, a reset, or a network tester's session ending with its connection — shall ask every running routine's FB to stop; an answer then still owed shall be answered conditionsNotCorrect (0x22) on the transport that asked; and when the security level a routine needs is relocked without a session entry — another level unlocked, or the network tester that held the level disconnected — the server shall ask that routine's FB to stop, as it returns that level's controls (REQ-DIAG-105); the server shall not wait for a stop to be acknowledged before serving the next start."
+text = "Every session entry — a DiagnosticSessionControl (re-entering the active session included), S3, a reset, or a network tester's session ending with its connection — shall ask every running routine's FB to stop; an answer then still owed shall be answered conditionsNotCorrect (0x22) on the transport that asked; and when the security level a routine needs is relocked without a session entry — another level unlocked by 0x27 or 0x29, the level deauthenticated by 0x29 00, or the network tester that held the level disconnected — the server shall ask that routine's FB to stop, as it returns that level's controls (REQ-DIAG-105); the server shall not wait for a stop to be acknowledged before serving the next start."
 status = "agreed"
 method = "test"
 asil = "QM"
@@ -798,7 +799,81 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-DIAG-087"
 title = "A routine is generated only where it can run"
-text = "Generation shall refuse a routine its node cannot serve, naming the reason: no diagnostic server or a bare-metal target; a duplicate routineIdentifier, one outside 0x0200-0xDFFF and 0xF000-0xFEFF, or the bootloader's own on a node behind a bootloader; a stop on a synchronous routine; a results record without results; a record longer than 32 bytes, a request or answer longer than the node's maximum message length, or on a DoIP node a start record over 11 bytes; a gate sharing no session, or another level, with the 0x31 service row, or a table leaving 0x31 out; judged by the sessions the routine and that row both admit and either's level, a routine startable from the default session with no 0x27 level, a level whose sessions leave out extended, or sessions only a DiagnosticSessionControl the service table does not serve from the default session could enter; a timeout not above the serving handler's period plus 20 ms; a request not read by exactly one FB handler or written by any, a result not written by that same handler, written by another or read by any; an FB on a satellite core, a hand-written satellite or in a multi-thread partition; a request or result name colliding, once snake-cased as its port, with a signal, parameter or routine; more routines than the server holds, or more byte cells than the image has."
+text = "Generation shall refuse a routine its node cannot serve, naming the reason: no diagnostic server or a bare-metal target; a duplicate routineIdentifier, one outside 0x0200-0xDFFF and 0xF000-0xFEFF, or the bootloader's own on a node behind a bootloader; a stop on a synchronous routine; a results record without results; a record longer than 32 bytes, a request or answer longer than the node's maximum message length, or on a DoIP node a start record over 19 bytes; a gate sharing no session, or another level, with the 0x31 service row, or a table leaving 0x31 out; judged by the sessions the routine and that row both admit and either's level, a routine startable from the default session with no 0x27 level, a level whose sessions leave out extended, or sessions only a DiagnosticSessionControl the service table does not serve from the default session could enter; a timeout not above the serving handler's period plus 20 ms; a request not read by exactly one FB handler or written by any, a result not written by that same handler, written by another or read by any; an FB on a satellite core, a hand-written satellite or in a multi-thread partition; a request or result name colliding, once snake-cased as its port, with a signal, parameter or routine; more routines than the server holds, or more byte cells than the image has."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+# ---- Authentication (0x29) in an application -------------------------------------------------
+
+[[req]]
+id = "REQ-DIAG-120"
+title = "One way to unlock per node"
+text = "A server shall unlock its security levels by exactly one configured access method, SecurityAccess (0x27, the default) or Authentication (0x29), and shall answer the other service serviceNotSupported (0x11). Both methods shall unlock the same levels — the ones the data identifier gates, the service table rows and the programming handoff row name — and an unlock earned by either shall be relocked by the same events. Generation shall refuse a service table row naming the other method's service, the other method's settings, and Authentication on a node whose gates name no security level."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-121"
+title = "Authentication challenge"
+text = "A requestChallengeForAuthentication (0x29 05) naming a served level in communicationConfiguration and the Ed25519 algorithmIndicator shall be answered with a fresh 32-byte challenge from the injected seed source: requestAccepted, the algorithmIndicator echoed, length 0x0020, no additional parameter. The challenge shall be bound to that level and replace any challenge outstanding on that transport. A challenge for a level under lockout, or while a start-up or reset delay is armed, shall be refused 0x37; a seed source that fails or draws all zeros shall be refused challengeCalculationFailed (0x59). A functionally addressed Authentication request shall be ignored. Authentication shall not be served in the default session — a project choice, since ISO 14229-1 allows it there: every session entry relocks — and generation shall refuse a service table row opening it there, naming that choice."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-122"
+title = "Proof of ownership"
+text = "A verifyProofOfOwnershipUnidirectional (0x29 06) shall unlock the level bound to the outstanding challenge only for an Ed25519 signature that verifies under that level's public key over the application message — the fixed context \"blobly uds 0x29 application v1\" with a terminating zero byte, the level (one byte), then that challenge — never over the bare challenge the bootloader's proof signs, so neither a bootloader's proof nor one made for another level unlocks it; answered — after its responsePending (REQ-DIAG-127), whatever the suppress bit — ownershipVerified (0x12) with the Ed25519 algorithmIndicator and a zero lengthOfSessionKeyInfo, ISO 14229-1:2020's layout. The unlock shall belong to the transport the proof came over (REQ-NET-012). Each challenge shall serve one proof and be consumed by a failed one. A proof with no challenge outstanding shall be refused 0x24. A session entry (re-entering the same session included), S3, an ECU reset, deAuthenticate and the end of the transport connection that asked shall void the challenge, and a challenge asked over one transport shall not be answerable over another."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-123"
+title = "Failed proofs count as wrong keys"
+text = "A failed proof shall be refused ownershipVerificationFailed (0x58), and the one that reaches the attempt limit 0x36, starting that level's lockout. Failed proofs shall be counted in the same per-level count as wrong 0x27 keys, so REQ-DIAG-032, REQ-DIAG-033, REQ-DIAG-065, REQ-DIAG-067 and REQ-DIAG-068 hold for proofs unchanged, and a correct proof shall clear the count."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-124"
+title = "DeAuthenticate"
+text = "A deAuthenticate (0x29 00) shall relock the level the requesting transport holds — returning the controls and stopping the routines gated on it (REQ-DIAG-105, REQ-DIAG-085) —, void its challenge, and be answered deAuthenticationSuccessful (0x10) unless suppressed. An unlock held over the other transport shall be unaffected (REQ-NET-012)."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-125"
+title = "Authentication request checks in order"
+text = "An Authentication request shall be checked in this order: shorter than 2 bytes 0x13; a sub-function other than 00, 05 and 06 0x12; not that sub-function's exact length, or — for a proof — a lengthOfProofOfOwnershipClient other than 0x0040, a client challenge or an additional parameter, 0x13. A challenge request: an algorithm other than Ed25519, or a level that is 0, above 8, not served or without a key in the injected key interface, 0x31; then the lockout 0x37, then the response capacity 0x14 (drawing nothing and keeping an outstanding challenge), then the seed source 0x59 (voiding an outstanding challenge). A proof: a missing challenge 0x24, then an algorithm other than Ed25519 0x31 (keeping the challenge), then the lockout of the challenge's level 0x37 (one drawn before the lockout began, over another transport: the challenge voided, the proof neither verified nor counted), then the response capacity 0x14 (keeping the challenge), then responsePending and the verification 0x58 or 0x36."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-126"
+title = "Authentication keys per level"
+text = "Each served level shall be verified against exactly one configured 32-byte Ed25519 public key, through an injected interface. Generation shall refuse a served level with no key, a key for an ungated level, a key that is not 64 hex characters, is all zeros, is not a curve point or is a point of small order (under which a forged proof verifies for every challenge), and a key equal to the bootloader's image key. \"reference\" names blobly_net's published dev tester key — and so does that key written out as its hex digits, in either case — which a network-reachable node shall accept only where the bench key is allowed by name (REQ-NET-012)."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-127"
+title = "A proof is verified without stalling the pass"
+text = "A proof that passes the request checks shall be answered responsePending (0x78) in the pass that receives it, and its verification shall then run a bounded slice per pass while its answer is owed — every other request dropped and S3 held meanwhile, a responsePending repeated within P2*server_max — so no pass spends a whole verification; the slices shall advance whether or not the transport owing the answer can take a response, so a busy transport delays only the answer. A failed proof shall be counted, and a verified proof shall clear its level's count, in the pass that reaches its verdict, and a proof whose verdict changed the count shall be answered in a later pass, so the count is persisted before the answer reporting it leaves (REQ-DIAG-067); a verified proof's cleared count shall stand whatever becomes of its answer, and it shall unlock its level only with its answer, so no level is unlocked whose ownershipVerified was not given. A verification given up before its verdict — its timeout, answered conditionsNotCorrect (0x22) in a later pass than the one counting it, or its transport connection ended — shall count as a failed proof; a session entry during verification — which only the other transport can cause, its tester's connection ending while it owns the session or its answered ECU reset — shall end it answered conditionsNotCorrect (0x22) and not counted, its tester having been judged nothing; a restart of the ECU during verification ends it with no verdict and no answer. A verified proof shall unlock its level only where the transport owing the answer can carry ownershipVerified; where it cannot, the answer shall be responseTooLong (0x14), with nothing unlocked."
 status = "agreed"
 method = "test"
 asil = "QM"

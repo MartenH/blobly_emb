@@ -147,6 +147,6 @@ fn doip_policy_keys() []Key {
 		k('announce_count', .int).d('${doip.announce_count}').range(0, doip.announce_count_max).doc('A_DoIP_Announce_Num: vehicle announcements at start-up'),
 		k('announce_interval_ms', .int).d('${doip.announce_interval_ms}').range(doip.announce_interval_min_ms, doip.announce_interval_max_ms).doc('A_DoIP_Announce_Interval (ms); count x interval at most ${doip.announce_total_max_ms} ms'),
 		k('route_level', .int).d('${doip.route_level}').range(1, uds.max_security_level).doc('a gateway\'s: the security level of its own server a tester must have unlocked over the network before it routes to the nodes behind it (REQ-NET-020); one its [uds] serves'),
-		k('allow_bench_key', .boolean).d('false').doc('answer 0x27 with blobly_net\'s PUBLIC reference key over the network — a bench posture, opted into by name; required (true) when [uds] security_key = "reference"'),
+		k('allow_bench_key', .boolean).d('false').doc('unlock with one of blobly_net\'s PUBLIC bench keys over the network — the 0x27 reference key or the 0x29 dev tester key — a bench posture, opted into by name; required (true) when [uds] security_key = "reference" or an auth_keys entry is "reference"'),
 	]
 }

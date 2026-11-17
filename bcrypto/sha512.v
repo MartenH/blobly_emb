@@ -133,6 +133,12 @@ pub fn (mut c Sha512) update(data &u8, n int) {
 	}
 }
 
+// final_blocks: the compressions final() will run — one, or two when the padding (0x80 and the
+// 16-byte length) does not fit beside the bytes buffered
+pub fn (c &Sha512) final_blocks() int {
+	return if c.buflen + 1 > 112 { 2 } else { 1 }
+}
+
 // final pads per FIPS 180-4 and returns the 64-byte digest. The context is
 // consumed (do not update after final).
 pub fn (mut c Sha512) final() [64]u8 {

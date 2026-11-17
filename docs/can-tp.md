@@ -99,7 +99,9 @@ the allocation's, format and functional id included (REQ-TOPO-014); a `diag` giv
 `rsp` without the other is refused (REQ-TOPO-013), never lowered. Generation also refuses a `max_message` smaller than the longest
 message the configuration says the server must exchange whole — a DID's 0x22 answer and 0x2E
 request, the DTC list (0x19 02 / 0A), a DTC's snapshot (0x19 04) or extended data (0x19 06), and on a
-`[boot]` node the bootloader's 66-byte 0x29 proof — naming that message (REQ-CAN-TP-022). A read of
+`[boot]` node the bootloader's 66-byte 0x29 proof, and on a node with `[uds] access =
+"authentication"` the application's 88-byte 0x29 06 proof request, the longest of its 0x29
+messages ([diagnostics.md](diagnostics.md) §3.1) — naming that message (REQ-CAN-TP-022). A read of
 several DIDs is not fixed by the configuration: one whose answer does not fit is answered
 responseTooLong (0x14). N_Bs, N_Cr, N_Ar and WFTmax are not configurable: every owner of a `Link`
 calls `init_defaults()`. The full key list is in [config-reference.md](config-reference.md).

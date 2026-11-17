@@ -191,7 +191,7 @@ fn test_a_routine_is_generated_only_where_it_can_run() {
 		'collides_snake':    [rt_ok() + '\n[[signal]]\nname   = "TESTRequest"\nfields = { v = "u32" }\nfrom   = "app"\nto     = "app"\n', 'both are the port `test_request`']
 		'collides_param':    [rt_ok() + '\n[[param]]\nname    = "TestRequest"\nfields  = { v = "u16" }\ndefault = { v = 1 }\n', 'already a signal, a parameter or another routine']
 		'too_long':          [rt_conn.replace('functional_id = 0x7DF', 'functional_id = 0x7DF\nmax_message   = 8') + rt_runner() + rt_routine.replace('start_out = 2', 'start_out = 32'), 'longer than [isotp] max_message = 8 (REQ-DIAG-087)']
-		'doip_start_out':    [rt_conn + rt_doip + rt_runner() + rt_routine.replace('start_out = 2', 'start_out = 12'), 'push_max']
+		'doip_start_out':    [rt_conn + rt_doip + rt_runner() + rt_routine.replace('start_out = 2', 'start_out = 20'), 'push_max']
 	}
 	for name, c in cases {
 		g := rt_target('refuse_${name}', c[0])

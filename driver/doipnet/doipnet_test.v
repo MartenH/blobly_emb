@@ -1,6 +1,7 @@
 module doipnet
 
 import comm.doip
+import comm.uds as udsc
 import os
 
 // The DoIP network loop against a scripted stream: what a pass sends, when it drops the
@@ -411,4 +412,13 @@ fn test_the_push_slot_is_one_size() {
 		panic(err)
 	}
 	assert v.contains('mut pushed := [push_max]u8{}')
+}
+
+// What is pushed fits the slot: a 0x29 06's ownershipVerified (21 bytes — a valid proof is granted
+// only where its answer fits, so a smaller slot would make authentication over DoIP fail for ever),
+// and comm/diag's authentication test pushes at this same size (it cannot import this module).
+fn test_the_push_slot_holds_an_authentication_answer() {
+	assert push_max >= udsc.auth_proof_answer_len
+	t := os.read_file(os.join_path(@VMODROOT, 'comm', 'diag', 'auth_test.v')) or { panic(err) }
+	assert t.contains('const doip_push_max = ${push_max}\n')
 }

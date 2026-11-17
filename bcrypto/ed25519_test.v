@@ -202,3 +202,178 @@ fn test_ed25519_rejects_noncanonical_s() {
 	// same underlying point, non-canonical S -> MUST be rejected
 	assert !verify(pkey, msg, mal)
 }
+
+// job_verify runs a VerifyJob at `budget` multiplications a step: its verdict, how many steps it
+// took, and the most one step spent (counted by driving unit() as step does)
+fn job_verify(pkey [32]u8, msg []u8, sig [64]u8, budget int) (bool, int, int) {
+	mut j := &VerifyJob{}
+	j.start(pkey, sig)
+	if msg.len > 0 {
+		j.update(&msg[0], msg.len)
+	}
+	mut steps := 0
+	mut most := 0
+	for !j.decided() {
+		mut spent := 0
+		for !j.decided() {
+			spent += j.unit()
+			if spent >= budget {
+				break
+			}
+		}
+		steps++
+		if spent > most {
+			most = spent
+		}
+	}
+	return j.verified(), steps, most
+}
+
+// @verifies REQ-BOOT-017 REQ-DIAG-127
+// The stepped verify (VerifyJob, comm/udsauth's) reaches the same verdict as verify at every budget
+// — the RFC 8032 vectors, a tampered signature, a non-canonical S, another key (a point) and a key
+// that is not a point — and a step never spends more than its budget plus one unit.
+fn test_verify_job_agrees_with_verify() {
+	for v in rfc8032 {
+		pkey := fix32(unhex(v.pub))
+		msg := unhex(v.msg)
+		sig := fix64(unhex(v.sig))
+		mut bad := fix64(unhex(v.sig))
+		bad[5] ^= 0x40
+		mut mal := fix64(unhex(v.sig))
+		mal[63] |= 0xF0 // S >= L
+		mut other := fix32(unhex(v.pub))
+		other[0] ^= 0x01
+		assert is_point(other) // decodes: refused by the equation, not the key check
+		mut nokey := [32]u8{}
+		nokey[0] = 2 // y = 2 is not on the curve: refused by the key check (vj_key_post)
+		assert !is_point(nokey)
+		for budget in [1, 18, 144, 1_000_000] {
+			for case in [[0], [1], [2], [3], [4]] {
+				k, s := match case[0] {
+					0 { pkey, sig }
+					1 { pkey, bad }
+					2 { pkey, mal }
+					3 { other, sig }
+					else { nokey, sig }
+				}
+				ok, _, most := job_verify(k, msg, s, budget)
+				assert ok == verify(k, msg, s), 'case ${case[0]} at budget ${budget}'
+				assert most < budget + verify_step_max, 'a step overran its budget'
+			}
+		}
+	}
+	// the whole verify is about 10,300 multiplications: at 144 a step, 70-80 steps
+	v := rfc8032[1]
+	ok, steps, _ := job_verify(fix32(unhex(v.pub)), unhex(v.msg), fix64(unhex(v.sig)), 144)
+	assert ok
+	assert steps >= 65 && steps <= 80, '${steps} steps'
+}
+
+// @verifies REQ-DIAG-127
+// vj_key_post is charged its real work: unpack_post's multiplications, the hash's final compressions
+// — counted here from FIPS 180-4's padding over the bytes hashed, not from Sha512 — and the reduction
+// mod L, for every message length up to three blocks (one and two final compressions); every unit is
+// charged at least the field multiplications it runs, and none more than verify_step_max, the bound
+// the budget test's overrun rests on
+fn tampered(msg []u8, flip bool) []u8 {
+	mut m := msg.clone()
+	if flip {
+		m[0] ^= 1
+	}
+	return m
+}
+
+fn test_the_key_post_unit_is_charged_its_hash_and_reduction() {
+	v := rfc8032[1]
+	pkey := fix32(unhex(v.pub))
+	sig := fix64(unhex(v.sig))
+	mut twos := 0
+	for n in 0 .. 3 * 128 {
+		msg := []u8{len: n, init: u8(index)}
+		mut j := &VerifyJob{}
+		j.start(pkey, sig)
+		if n > 0 {
+			j.update(&msg[0], n)
+		}
+		for j.phase != vj_key_post {
+			j.unit()
+		}
+		hashed := 64 + n // R and A, then the message
+		blocks := (hashed % 128 + 1 + 16 + 127) / 128 // the 0x80, the 16-byte length, the last block
+		if blocks == 2 {
+			twos++
+		}
+		assert j.unit() == unpack_post_mults + blocks * sha512_block_mults + modl_mults, 'n ${n}'
+		assert key_post_mults(blocks) <= verify_step_max
+	}
+	assert twos > 0
+	// every unit of a whole verify, a passing one and a failing one, charged at least the field
+	// multiplications it ran (counted in m_gf) and at most verify_step_max
+	msg := unhex(v.msg)
+	for tamper in [false, true] {
+		m := tampered(msg, tamper)
+		mut j := &VerifyJob{}
+		j.start(pkey, sig)
+		j.update(&m[0], m.len)
+		for !j.decided() {
+			phase, i := j.phase, j.i
+			before := ed25519_mults
+			charged := j.unit()
+			ran := int(ed25519_mults - before)
+			assert charged >= ran, 'phase ${phase} bit ${i}: charged ${charged}, ran ${ran}'
+			assert charged <= verify_step_max
+		}
+		assert j.verified() == !tamper
+	}
+}
+
+// small_order_encodings: every encoding of a small-order point — the eight canonical ones (the
+// neutral point, the point of order 2, the two of order 4, the four of order 8), the sign bit set on
+// an x of zero, and y at or above p (p, p+1: the order-4 and neutral y's again)
+const small_order_encodings = [
+	'0100000000000000000000000000000000000000000000000000000000000000', // neutral (0, 1)
+	'ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f', // order 2 (0, -1)
+	'0000000000000000000000000000000000000000000000000000000000000000', // order 4, y = 0
+	'0000000000000000000000000000000000000000000000000000000000000080', // order 4, the other x
+	'26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05', // order 8
+	'26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85',
+	'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a',
+	'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa',
+	'0100000000000000000000000000000000000000000000000000000000000080', // neutral, x = -0
+	'ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', // order 2, x = -0
+	'edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f', // y = p: order 4
+	'edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+	'eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f', // y = p + 1: neutral
+	'eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+]
+
+// small_order refuses every small-order encoding (each one a point, so is_point alone accepts it),
+// and none of a real key or its non-canonical twins of large order; the neutral key verifies a forged
+// signature for any message, which is why a configured key must not be one
+fn test_small_order_keys_are_recognised() {
+	for h in small_order_encodings {
+		k := fix32(unhex(h))
+		assert small_order(k), '${h} not recognised as small-order'
+	}
+	// the forgery the check exists for: R = neutral, S = 0 under the neutral key
+	neutral := fix32(unhex(small_order_encodings[0]))
+	mut forged := [64]u8{}
+	forged[0] = 1
+	assert verify(neutral, 'any challenge'.bytes(), forged)
+	// keys of large order are not small-order: derived keys, and RFC 8032's
+	for v in rfc8032 {
+		assert !small_order(fix32(unhex(v.pub)))
+	}
+	for i in 0 .. 64 {
+		mut seed := [32]u8{}
+		seed[0] = u8(i)
+		seed[31] = u8(0x5A ^ i)
+		pk := public_key(seed)
+		assert is_point(pk) && !small_order(pk)
+	}
+	// y = p + 2 (the neutral's y + 2 reduced: 2) is a large-order point or none, never small
+	mut y2 := fix32(unhex(small_order_encodings[12]))
+	y2[0] = 0xef
+	assert !small_order(y2)
+}

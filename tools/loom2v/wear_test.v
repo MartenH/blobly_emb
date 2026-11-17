@@ -146,6 +146,11 @@ fn test_fault_and_parameter_traffic_past_the_budget_is_refused() {
 	assert c3 == 0, o3
 	assert share(wear_report(o3), 'the 0x27 state (10 B = 1 record)').starts_with('40 records/h'), o3
 	assert o3.contains('240 0x27 unlocks/day'), o3
+	// an authenticating node: its failed proofs are the same record, the assumption named for 0x29
+	c5, o5 := wt_generate('auth', wt_cfg + '\n[uds]\naccess = "authentication"\nauth_keys = { "1" = "reference" }\n')
+	assert c5 == 0, o5
+	assert share(wear_report(o5), 'the 0x27 state (10 B = 1 record)').starts_with('4 records/h'), o5
+	assert o5.contains('24 0x29 unlocks/day (default)') && !o5.contains('0x27 unlocks/day'), o5
 	// the configured attempt limit, not the default: 50 attempts write up to 51 records an unlock
 	c4, o4 := wt_generate('attempts', wt_cfg + '\n[uds]\nsecurity_attempts = 50\n')
 	assert c4 == 0, o4

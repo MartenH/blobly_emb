@@ -109,7 +109,7 @@ programming/diag path is exposed over IP, not after:
 - **State-changing diagnostics need authentication (REQ-NET-012).** Over CAN an
   unauthenticated 0x2E or 0x11 is a physically-present adversary; over IP, reachability
   alone would grant it. Closed for DoIP (the sysnode section below): a `[doip]` node's
-  every state-changing service carries a 0x27 level, and the unlock that level asks for
+  every state-changing service carries a security level (0x27's or 0x29's), and the unlock that level asks for
   is the network tester's own. A routing-activation tester list (`[doip] testers`, below)
   does not close this: it filters claimed source addresses, which are not authenticated.
 
@@ -397,8 +397,8 @@ closes the requirement is two rules that already existed, joined by one at gener
   the `[uds] services` `"0x2E"` row (comm/uds checks the row before the DID, so a gated row gates
   every write behind it), and every other service needs a row with `security = N` — or is left
   out of the table. The rule lists what is EXEMPT (`open_services`), not what is gated: 0x10 and
-  0x3E (reaching and keeping a session), 0x27 (authenticating, which no 0x27 gate can itself
-  require), 0x22 and 0x19 (reads), and 0x2E (gated as above). Everything else — 0x11 ECUReset,
+  0x3E (reaching and keeping a session), 0x27 and 0x29 (authenticating — 0x29 on a node with
+  `[uds] access = "authentication"` — which no security gate can itself require), 0x22 and 0x19 (reads), and 0x2E (gated as above). Everything else — 0x11 ECUReset,
   0x14 clearing the fault memory, 0x85 freezing it, 0x28 silencing the bus — must be gated. It is
   fail-closed: the default table (no `services`) serves whatever the build performs with no
   security, so a `[doip]` node with no table is refused outright, and a service comm/uds learns

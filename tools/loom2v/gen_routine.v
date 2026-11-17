@@ -555,26 +555,33 @@ fn routine_bridge_lines(m Model, conn string) []string {
 	return g
 }
 
+// owed_target_on: the server of a ThreadX image can owe an answer (comm/uds pending.v) — a routine
+// runs in its FB, or a 0x29 proof is verified a slice per pass (comm/uds auth.v)
+fn owed_target_on(m Model) bool {
+	return routine_target_on(m) || (m.target.threadx && auth_on(m))
+}
+
 // routine_push_globals: a [doip] node's buffer for the responses an owed answer pushes (bss: its
 // address reaches C)
 fn routine_push_globals(m Model) []string {
-	if !m.doip.on || !routine_target_on(m) {
+	if !m.doip.on || !owed_target_on(m) {
 		return []string{}
 	}
-	return ['\tg_diag_push [doipnet.push_max]u8 // a routine\'s responses pushed over DoIP (comm/diag push_step)']
+	return ['\tg_diag_push [doipnet.push_max]u8 // an owed answer\'s responses pushed over DoIP (comm/diag push_step)']
 }
 
 // routine_push_lines: a [doip] node's comm thread, after the mailbox: an answer owed to the DoIP
-// tester (a responsePending, the final answer) pushed once the response before it was acknowledged
+// tester (a routine's or a 0x29 proof's: a responsePending, the final answer) pushed once the
+// response before it was acknowledged
 fn routine_push_lines(m Model) []string {
-	if !m.doip.on || !routine_target_on(m) {
+	if !m.doip.on || !owed_target_on(m) {
 		return []string{}
 	}
 	return [
 		'\t\tif doipnet.take_push_sent() {',
 		'\t\t\tg_diag.push_sent() // the response pushed last was acknowledged',
 		'\t\t}',
-		'\t\tpush_n := g_diag.push_step(&g_diag_push[0], doipnet.push_max) // a routine\'s next response owed over DoIP',
+		'\t\tpush_n := g_diag.push_step(&g_diag_push[0], doipnet.push_max) // the next response of an answer owed over DoIP',
 		'\t\tif push_n > 0 {',
 		'\t\t\tg_diag.pushed(doipnet.push_resp(&g_diag_push[0], push_n))',
 		'\t\t}',
