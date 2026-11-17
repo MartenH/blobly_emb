@@ -228,9 +228,8 @@ fn test_the_host_bridge_substitutes_before_its_encode() {
 	r := io_host('host', io_same, '', io_same)
 	assert r.code == 0, r.output
 	g := r.glue
-	io_in_order(g, ['warn_lamp_io_on, warn_lamp_io_v := st.conn_diag.server.io_held(0)',
-		'if osal.ioc_acquire2(warn_lamp_ch, &warn_lamp, u8(sizeof(warn_lamp))) || warn_lamp_io_on {',
-		'warn_lamp.on = warn_lamp_io_v != 0',
+	io_in_order(g, ['if osal.ioc_acquire2(warn_lamp_ch, &warn_lamp, u8(sizeof(warn_lamp))) || st.conn_diag.server.io_on(0) { // 0x2F',
+		'if st.conn_diag.server.io_on(0) {', 'warn_lamp.on = st.conn_diag.server.io_published(0) != 0',
 		'lamp_frame_warn_lamp_set(mut tx_lamp_frame.data, if warn_lamp.on {', 'tx_lamp_frame_any = true'])
 	assert g.contains('srv.io_note(0, if v_6.on { i64(1) } else { i64(0) }, v_6_have)')
 	assert g.contains('srv.dids[6].data[0] = if v_6_pub != 0 { u8(1) } else { u8(0) }')
@@ -238,7 +237,7 @@ fn test_the_host_bridge_substitutes_before_its_encode() {
 	assert !g.contains('io_ok'), 'the host bridge has no conditions seam'
 	// the committed glue is this one (CI's freshness gate holds it there)
 	committed := os.read_file(os.join_path(io_example('overspeed'), 'gen', 'loom_gen.v')) or { '' }
-	assert committed.contains('warn_lamp_io_on, warn_lamp_io_v := st.conn_diag.server.io_held(0)')
+	assert committed.contains('warn_lamp.on = st.conn_diag.server.io_published(0) != 0')
 }
 
 // a negative factor turns the range over: its bounds are ordered after the conversion
@@ -349,6 +348,33 @@ fn test_a_control_the_server_cannot_apply_is_refused() {
 	io_refused(io_host('init_half', io_same, io_did('0xF1B1', 'BrakeLost', io_params), half), 'has the initial value 1.5')
 }
 
+// REQ-DIAG-104: a multiplexed signal, or a multiplexor, cannot carry a controlled value — the
+// encoder writes the signal's bits and sets no multiplexor — so its control is refused, while the
+// same frame without a control generates
+fn test_a_control_of_a_multiplexed_signal_is_refused() {
+	paged := fn (d string) string {
+		return io_replace(d, ' SG_ WarnLamp : 0|1@1+ (1,0) [0|1] "" Tester', ' SG_ WarnLamp m0 : 0|1@1+ (1,0) [0|1] "" Tester\n SG_ LampPage M : 7|1@1+ (1,0) [0|1] "" Tester')
+	}
+	switch := fn (d string) string {
+		return io_replace(d, ' SG_ WarnLamp : 0|1@1+ (1,0) [0|1] "" Tester', ' SG_ WarnLamp M : 0|1@1+ (1,0) [0|1] "" Tester\n SG_ LampExtra m1 : 3|1@1+ (1,0) [0|1] "" Tester')
+	}
+	// examples/overspeed controls WarnLamp; without that [[did]] the frames generate
+	uncontrolled := fn (s string) string {
+		return io_replace(s, '[[did]]\nid      = 0xF1B0\nsignal  = "WarnLamp"\ncontrol = { parameters = ["reset_to_default", "freeze_current_state", "short_term_adjustment"] }\n',
+			'')
+	}
+	for name, dbc in {
+		'mux_paged':  paged
+		'mux_switch': switch
+	} {
+		plain := io_host('${name}_plain', uncontrolled, '', dbc)
+		assert plain.code == 0, plain.output
+	}
+	io_refused(io_host('mux_paged', io_same, '', paged), '"WarnLamp" is multiplexed in the DBC (m0)')
+	io_refused(io_host('mux_switch', io_same, '', switch), '"WarnLamp" is a multiplexor in the DBC (M)')
+	assert io_mux_refusal(candb.Signal{ name: 'S', length: 8 }) == ''
+}
+
 // REQ-DIAG-066: a target whose only security level is a control's keeps its 0x27 state in the
 // journal like any other, so it needs [nvm]
 fn test_a_target_whose_only_level_is_a_controls_needs_storage() {
@@ -402,13 +428,12 @@ fn test_a_signed_control_on_the_target() {
 		'(f64(i32(xcore_m4_temp_pub))'])
 }
 
-// io_overspeed: examples/overspeed with BrakeLost made a signed i16 under a control, a second live
-// DID on it and on VehicleSpeed, generated and BUILT in a scratch directory (the host bridge's
-// integer and signed paths, and a refresh reading one signal into two DIDs, compiled) — its glue
-fn io_overspeed_signed() string {
+// io_overspeed_build: examples/overspeed with its ecu.toml, bus.dbc and app sources edited (an app
+// edit takes the file's name), generated and BUILT in a scratch directory — its glue
+fn io_overspeed_build(name string, edit fn (string) string, edit_dbc fn (string) string, edit_app fn (string, string) string) string {
 	repo := @VMODROOT
 	ex := io_example('overspeed')
-	tmp := os.join_path(os.vtmp_dir(), 'io_control_build_${os.getpid()}')
+	tmp := os.join_path(os.vtmp_dir(), 'io_control_build_${name}_${os.getpid()}')
 	os.rmdir_all(tmp) or {}
 	defer {
 		os.rmdir_all(tmp) or {}
@@ -418,21 +443,17 @@ fn io_overspeed_signed() string {
 	}
 	os.cp(os.join_path(ex, 'main.v'), os.join_path(tmp, 'main.v')) or { panic(err) }
 	for f in os.ls(os.join_path(ex, 'app')) or { panic(err) } {
-		mut src := os.read_file(os.join_path(ex, 'app', f)) or { panic(err) }
-		if f == 'brake_monitor.v' {
-			src = io_replace(src, 'count: inp.brake_pressure.lost', 'count: i16(inp.brake_pressure.lost)')
-		}
-		os.write_file(os.join_path(tmp, 'app', f), src) or { panic(err) }
+		src := os.read_file(os.join_path(ex, 'app', f)) or { panic(err) }
+		os.write_file(os.join_path(tmp, 'app', f), edit_app(f, src)) or { panic(err) }
 	}
-	cfg := io_replace(os.read_file(os.join_path(ex, 'ecu.toml')) or { panic(err) }, 'name = "BrakeLost"\nfields = { count = "u16" }',
-		'name = "BrakeLost"\nfields = { count = "i16" }') + io_did('0xF1B1', 'BrakeLost', io_params) +
-		io_did('0xF1B2', 'BrakeLost', '') + io_did('0xF1A1', 'VehicleSpeed', '')
 	ecu := os.join_path(tmp, 'ecu.toml')
-	os.write_file(ecu, cfg) or { panic(err) }
-	dbc_src := io_replace(os.read_file(os.join_path(ex, 'bus.dbc')) or { panic(err) }, 'SG_ BrakeLost : 8|16@1+ (1,0) [0|65535] "" Tester',
-		'SG_ BrakeLost : 8|16@1- (1,0) [-100|100] "" Tester')
+	os.write_file(ecu, edit(os.read_file(os.join_path(ex, 'ecu.toml')) or { panic(err) })) or {
+		panic(err)
+	}
 	dbc := os.join_path(tmp, 'bus.dbc')
-	os.write_file(dbc, dbc_src) or { panic(err) }
+	os.write_file(dbc, edit_dbc(os.read_file(os.join_path(ex, 'bus.dbc')) or { panic(err) })) or {
+		panic(err)
+	}
 	glue := os.join_path(tmp, 'gen', 'loom_gen.v')
 	tool := fn (name string) string {
 		return sysmodel.tool_binary(name) or { panic(err) }
@@ -452,6 +473,27 @@ fn io_overspeed_signed() string {
 	return os.read_file(glue) or { '' }
 }
 
+// io_overspeed_signed: BrakeLost made a signed i16 under a control, a second live DID on it and on
+// VehicleSpeed, built (the host bridge's integer and signed paths, and a refresh reading one signal
+// into two DIDs, compiled)
+fn io_overspeed_signed() string {
+	cfg := fn (s string) string {
+		return io_replace(s, 'name = "BrakeLost"\nfields = { count = "u16" }', 'name = "BrakeLost"\nfields = { count = "i16" }') +
+			io_did('0xF1B1', 'BrakeLost', io_params) + io_did('0xF1B2', 'BrakeLost', '') +
+			io_did('0xF1A1', 'VehicleSpeed', '')
+	}
+	dbc := fn (d string) string {
+		return io_replace(d, 'SG_ BrakeLost : 8|16@1+ (1,0) [0|65535] "" Tester', 'SG_ BrakeLost : 8|16@1- (1,0) [-100|100] "" Tester')
+	}
+	app := fn (f string, src string) string {
+		if f == 'brake_monitor.v' {
+			return io_replace(src, 'count: inp.brake_pressure.lost', 'count: i16(inp.brake_pressure.lost)')
+		}
+		return src
+	}
+	return io_overspeed_build('signed', cfg, dbc, app)
+}
+
 // a signed integer field on the host bridge: the table's sign, the refresh noting the typed field,
 // the field written back as its own type before the encode — and the whole node compiles, with two
 // live DIDs on the controlled signal, each reading the published value (REQ-DIAG-103), and two on
@@ -466,9 +508,31 @@ fn test_a_signed_control_on_the_host_bridge_builds() {
 		'hi:       i64(100)', 'srv.io_note(1, i64(v_7.count), v_7_have)'] {
 		assert g.contains(want), 'missing: ${want}'
 	}
-	io_in_order(g, ['brake_lost_io_on, brake_lost_io_v := st.conn_diag.server.io_held(1)',
-		'|| brake_lost_io_on {', 'brake_lost.count = i16(brake_lost_io_v)',
+	io_in_order(g, ['|| st.conn_diag.server.io_on(1) { // 0x2F', 'if st.conn_diag.server.io_on(1) {',
+		'brake_lost.count = i16(st.conn_diag.server.io_published(1))',
 		'_brake_lost_set(mut tx_brake_report.data, f64(brake_lost.count))'])
+}
+
+// the host bridge declares no local of its own for a control: its locals there are the signals'
+// snake names, and a DBC signal may be named like any identifier — a transmitted WarnLampIoOn
+// beside the controlled WarnLamp builds (the control's temporaries were once warn_lamp_io_on)
+fn test_a_signal_named_like_a_controls_temporary_builds() {
+	cfg := fn (s string) string {
+		t := io_replace(s, '  writes    = ["WarnLamp", "SecureStatus"]', '  writes    = ["WarnLamp", "SecureStatus", "WarnLampIoOn", "WarnLampIoV"]')
+		return t +
+			'\n[[signal]]\nname = "WarnLampIoOn"\nfields = { on = "bool" }\nfrom = "ctrl"\nto   = "can0"\ntransport = "double"\n' +
+			'\n[[signal]]\nname = "WarnLampIoV"\nfields = { on = "bool" }\nfrom = "ctrl"\nto   = "can0"\ntransport = "double"\n'
+	}
+	dbc := fn (d string) string {
+		return io_replace(d, ' SG_ WarnLamp : 0|1@1+ (1,0) [0|1] "" Tester', ' SG_ WarnLamp : 0|1@1+ (1,0) [0|1] "" Tester\n SG_ WarnLampIoOn : 1|1@1+ (1,0) [0|1] "" Tester\n SG_ WarnLampIoV : 2|1@1+ (1,0) [0|1] "" Tester')
+	}
+	app := fn (f string, src string) string {
+		return src
+	}
+	g := io_overspeed_build('names', cfg, dbc, app)
+	io_in_order(g, ['mut warn_lamp := sig.WarnLamp{}', '|| st.conn_diag.server.io_on(0) { // 0x2F',
+		'mut warn_lamp_io_on := sig.WarnLampIoOn{}', 'mut warn_lamp_io_v := sig.WarnLampIoV{}'])
+	assert !g.contains('io_held('), 'the host bridge declared the control\'s value as a local'
 }
 
 // io_sig: a single-field signal sent on can0 with DBC signal `sg`, its field of type `typ`
@@ -534,6 +598,60 @@ fn test_the_bounds_are_exact_on_the_dbc_grid() {
 	} else {
 		assert err.msg().contains('0, a value of its field in its range, falls between two raw steps'), err.msg()
 	}
+	// a wide raw field with a large offset: 1 maps to raw 1000000000001.25 — a quarter of a step,
+	// decided exactly on the DBC's decimals, never within a tolerance
+	if _ := io_bounds(io_sig('u32', candb.Signal{ name: 'S', length: 48, factor: 0.8, offset: -800000000000 })) {
+		assert false, 'a value a quarter step off the grid was accepted'
+	} else {
+		assert err.msg().contains('1, a value of its field in its range, falls between two raw steps'), err.msg()
+	}
+	// the same at 1e15 raw steps, where any error bound over the operands' magnitudes exceeds the
+	// quarter step: 1 maps to raw 1000000000000001.25
+	if _ := io_bounds(io_sig('u32', candb.Signal{ name: 'S', length: 50, factor: 0.8, offset: -800000000000000 })) {
+		assert false, 'a value a quarter step off the grid at 1e15 raw steps was accepted'
+	} else {
+		assert err.msg().contains('1, a value of its field in its range, falls between two raw steps'), err.msg()
+	}
+	// 1 / factor a thousandth off whole: the fraction accumulates over the range (255 would go out
+	// as 254.745), so it is refused however small it is per step
+	f := 1.0 / 1.001
+	if _ := io_bounds(io_sig('u8', candb.Signal{ name: 'S', length: 48, factor: f, offset: -1e12 * f })) {
+		assert false, 'an off-integral 1 / factor was accepted'
+	} else {
+		assert err.msg().contains('falls between two raw steps'), err.msg()
+	}
+	// raw steps past what f64 converts exactly: 1e18 and 1e18 + 1 are one f64
+	if _ := io_bounds(io_sig('bool', candb.Signal{
+		name:    'S'
+		length:  64
+		offset:  -1e18
+		maximum: 1
+	}))
+	{
+		assert false, 'a mapping f64 cannot hold was accepted'
+	} else {
+		assert err.msg().contains('within 2^50'), err.msg()
+	}
+	// an exact grid whose field values sit at raw steps 2^51..2^51 + 255: in f64 the conversion
+	// could round a value to a neighbour step
+	if _ := io_bounds(io_sig('u8', candb.Signal{ name: 'S', length: 53, offset: -2251799813685248 })) {
+		assert false, 'raw steps near 2^51 were accepted'
+	} else {
+		assert err.msg().contains('within 2^50'), err.msg()
+	}
+	// a narrow field on a wide signal whose width is its range: only the steps the field reaches are
+	// judged, which f64 holds exactly — 53 and 64 bits are controlled as 52 are
+	for n in [52, 53, 64] {
+		narrow := io_bounds(io_sig('u32', candb.Signal{ name: 'S', length: n })) or {
+			panic('${n} bits: ${err}')
+		}
+		assert narrow.lo == 0 && narrow.hi == 4294967295 && narrow.dflt == 0
+	}
+	// a wide raw field f64 holds exactly is still controlled: 40 bits, factor 1, offset -2^39
+	wide := io_bounds(io_sig('i32', candb.Signal{ name: 'S', length: 40, offset: -549755813888 })) or {
+		panic(err)
+	}
+	assert wide.lo == -2147483648 && wide.hi == 2147483647
 	// an end inside the field's values that is not one: the encoder would saturate to it
 	if _ := io_bounds(io_sig('u16', candb.Signal{ name: 'S', length: 16, factor: 0.5, maximum: 250.5 })) {
 		assert false, 'a range ending at 250.5 was accepted'

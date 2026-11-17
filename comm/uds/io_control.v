@@ -2,9 +2,9 @@ module uds
 
 // InputOutputControlByIdentifier (0x2F, ISO 14229-1) on a live signal's DID (docs/diagnostics.md
 // §3.1 "Input/output control"). The server holds what a tester asked for; the owner applies it
-// WHERE IT ENCODES the signal into its frame (io_held), on the thread that serves this server, so
-// no FB ever sees it. The DID is the one 0x22 reads, and the value is the signal's value field at
-// its width, big-endian, as a live DID reads it.
+// WHERE IT ENCODES the signal into its frame (io_held, or io_on and io_published), on the thread
+// that serves this server, so no FB ever sees it. The DID is the one 0x22 reads, and the value is
+// the signal's value field at its width, big-endian, as a live DID reads it.
 //
 // Parameters: 00 returnControlToECU (served for every control; dropped like any request while an
 // answer is owed, pending.v), 01 resetToDefault, 02 freezeCurrentState,
@@ -152,10 +152,17 @@ fn io_clamp(v i64, lo i64, hi i64) i64 {
 // io_held: whether control `i` is in force, and the value the owner publishes in place of the
 // function block's while it is. The owner asks it where it encodes the signal.
 pub fn (s &Server) io_held(i int) (bool, i64) {
-	if i < 0 || i >= max_ios || i >= s.nio || s.ios[i].held == 0 {
+	if !s.io_on(i) {
 		return false, 0
 	}
 	return true, s.ios[i].value
+}
+
+// io_on: whether control `i` is in force — io_held's first answer, for an owner that encodes where
+// it can declare no name of its own (the host bridge, whose locals are its signals' names): it asks
+// this, and io_published for the value, which under control is the control's.
+pub fn (s &Server) io_on(i int) bool {
+	return i >= 0 && i < max_ios && i < s.nio && s.ios[i].held != 0
 }
 
 // io_published: the value control `i`'s signal is published with — THE one rule, which 02 freezes,

@@ -1,8 +1,9 @@
 module main
 
-import math
+import math.big
 import toml
 import comm.uds
+import tools.candb
 
 // Input/output control (0x2F, docs/diagnostics.md §3.1 "Input/output control"): a `control` on a
 // live `signal` [[did]]. The server (comm/uds io_control.v) holds what a tester asked for; the
@@ -125,77 +126,111 @@ fn field_range(typ string) ?(i64, i64) {
 	}
 }
 
-// io_eps: the tolerance a value computed through f64 (factor * raw + offset, or its inverse) is
-// compared with — that computation's rounding error and never a step of the value: relative 1e-12,
-// and at most 0.25 absolute however large the value, so a bound is never moved past a whole value
-fn io_eps(x f64) f64 {
-	return math.min(1e-12 * math.max(1.0, math.abs(x)), 0.25)
-}
-
-// io_whole: whether x is a whole number, within the f64 conversion's error
-fn io_whole(x f64) bool {
-	return math.abs(x - math.round(x)) <= io_eps(x)
-}
+// io_f64_room: 2^50 — the encoder computes x = (value - offset) / factor in f64 and rounds it to a
+// raw step k (comm/com round_steps). With the offset and the factor each the f64 nearest the DBC's
+// decimal, and three roundings in the computation, |x - k| <= (3 |k| + |offset / factor|) * 2^-53
+// to first order; 2 |k| + |offset / factor| <= 2^50 holds it to at most a quarter of a step, so the
+// rounding always lands on k
+const io_f64_room = big.integer_from_u64(u64(1) << 50)
 
 // io_bounds: signal si's range — its DBC raw range converted to physical values, ordered (a
 // negative factor turns it over), as the whole values of its field inside it — and its default,
-// the initial value (REQ-COM-011) converted the same way, which must be one of them. Two more rules
-// make what the server says is published (comm/uds io_published) the value the frame carries,
-// whoever chose it:
+// the initial value (REQ-COM-011) converted the same way, which must be one of them. Three more
+// rules make what the server says is published (comm/uds io_published) the value the frame
+// carries, whoever chose it:
 //   - every whole value in [lo, hi] is a raw step of the DBC's grid (the encoder rounds a value to
 //     its nearest step, so one between two would go out as another);
 //   - an end of the DBC range inside the field's values is itself a whole value (the encoder holds
-//     an FB's value past it to that end, which the server's clamp to [lo, hi] then states exactly).
+//     an FB's value past it to that end, which the server's clamp to [lo, hi] then states exactly);
+//   - the encoder's f64 conversion of every value in [lo, hi] lands on that value's raw step
+//     (io_f64_room, judged at the raw steps of lo and hi, which bound every value's between them).
 // So a value in [lo, hi] is never saturated nor rounded, and an FB's value is published clamped.
+// The first two are decided EXACTLY, on the decimals the DBC wrote (candb raw_steps / phys_steps,
+// the rule raw_range converts its range by) — no tolerance, which on a wide raw field or a large
+// offset cannot tell a fraction of a step from rounding.
 fn io_bounds(si SigInfo) !IoBounds {
 	sg := si.dbc_lanes[0] or { return error('has no DBC signal') }
 	if sg.name == '' {
 		return error('has no DBC signal')
 	}
 	rr := sg.raw_range() or { return error('${err}') }
+	if rr.note != '' {
+		return error('has ${rr.note}')
+	}
 	tlo, thi := field_range(si.val_type) or { return error('is a ${si.val_type}') }
-	pa := rr.lo * sg.factor + sg.offset
-	pb := rr.hi * sg.factor + sg.offset
-	pmin := math.min(pa, pb)
-	pmax := math.max(pa, pb)
-	flo := math.ceil(pmin - io_eps(pmin))
-	fhi := math.floor(pmax + io_eps(pmax))
-	lo := if flo > f64(tlo) { i64(flo) } else { tlo }
-	hi := if fhi < f64(thi) { i64(fhi) } else { thi }
-	if lo > hi {
+	tlo_b := big.integer_from_i64(tlo)
+	thi_b := big.integer_from_i64(thi)
+	n := sg.length
+	pa := candb.phys_steps(candb.steps_of(rr.lo_raw, sg.is_signed, n), sg.offset, sg.factor)
+	pb := candb.phys_steps(candb.steps_of(rr.hi_raw, sg.is_signed, n), sg.offset, sg.factor)
+	pmin, pmax := if sg.factor < 0 { pb, pa } else { pa, pb }
+	mut lo_b := pmin.ceil()
+	mut hi_b := pmax.floor()
+	if lo_b < tlo_b {
+		lo_b = tlo_b
+	}
+	if thi_b < hi_b {
+		hi_b = thi_b
+	}
+	if hi_b < lo_b {
 		return error('has a DBC range [${sg.minimum}|${sg.maximum}] holding no value of its ${si.val_type} field')
 	}
+	lo := lo_b.str().i64() // inside the field's range, so an i64
+	hi := hi_b.str().i64()
 	for end in [pmin, pmax] {
-		if end > f64(tlo) && end < f64(thi) && !io_whole(end) {
-			return error('has a DBC range [${sg.minimum}|${sg.maximum}] ending at ${end}, which is not a value of its ${si.val_type} field — the encoder holds a function block\'s value past the end to it, so the value published could not be stated; a control needs whole ends')
+		if end.above(tlo_b) && end.below(thi_b) && !end.whole() {
+			return error('has a DBC range [${sg.minimum}|${sg.maximum}] ending at ${io_ratio_text(end)}, which is not a value of its ${si.val_type} field — the encoder holds a function block\'s value past the end to it, so the value published could not be stated; a control needs whole ends')
 		}
 	}
-	x0 := (f64(lo) - sg.offset) / sg.factor
-	x1 := (f64(lo) + 1.0 - sg.offset) / sg.factor
-	if !io_whole(x0) || (hi > lo && !io_whole(x1)) {
-		off := if io_whole(x0) { lo + 1 } else { lo }
+	k0 := candb.raw_steps(f64(lo), sg.offset, sg.factor)
+	k1 := candb.raw_steps(f64(lo) + 1.0, sg.offset, sg.factor)
+	if !k0.whole() || (hi > lo && !k1.whole()) {
+		off := if k0.whole() { lo + 1 } else { lo }
 		return error('has factor ${sg.factor} and offset ${sg.offset}: ${off}, a value of its field in its range, falls between two raw steps and would be sent rounded to another — a control needs a DBC grid holding every whole value (1 / factor and offset / factor whole)')
 	}
-	raw := sg.init_raw() or { return error('${err}') }
-	n := sg.length
-	mask := if n >= 64 { ~u64(0) } else { (u64(1) << n) - 1 }
-	steps := if sg.is_signed && n < 64 && raw & (u64(1) << (n - 1)) != 0 {
-		f64(i64(raw | ~mask))
-	} else if sg.is_signed {
-		f64(i64(raw))
-	} else {
-		f64(raw)
+	// lo and every step after it are raw steps (k0 and 1 / factor whole), so hi's is whole too
+	klo := k0.floor()
+	khi := candb.raw_steps(f64(hi), sg.offset, sg.factor).floor()
+	oof := candb.raw_steps(0.0, 0.0 - sg.offset, sg.factor) // offset / factor
+	for k in [klo, khi] {
+		// 2 |k| + |offset / factor| <= 2^50, over offset / factor's denominator
+		lhs := big.integer_from_int(2) * k.abs() * oof.den + oof.num.abs()
+		if io_f64_room * oof.den < lhs {
+			return error('has factor ${sg.factor} and offset ${sg.offset}, which put its field\'s values ${lo}..${hi} at raw steps ${klo}..${khi} with offset / factor ${io_ratio_text(oof)} — the encoder converts a value to its raw step in f64, which at that magnitude can round it to a neighbour; a control needs 2 |raw step| + |offset / factor| within 2^50')
+		}
 	}
-	d := steps * sg.factor + sg.offset
-	r := math.round(d)
-	if !io_whole(d) || r < f64(lo) || r > f64(hi) {
-		return error('has the initial value ${d}, which is not a value of its ${si.val_type} field in ${lo}..${hi} — resetToDefault, a freeze before the first publish and every read until then publish it')
+	raw := sg.init_raw() or { return error('${err}') }
+	d := candb.phys_steps(candb.steps_of(raw, sg.is_signed, n), sg.offset, sg.factor)
+	if !d.whole() || d.below(lo_b) || d.above(hi_b) {
+		return error('has the initial value ${io_ratio_text(d)}, which is not a value of its ${si.val_type} field in ${lo}..${hi} — resetToDefault, a freeze before the first publish and every read until then publish it')
 	}
 	return IoBounds{
 		lo:   lo
 		hi:   hi
-		dflt: i64(r)
+		dflt: (d.num / d.den).str().i64()
 	}
+}
+
+// io_ratio_text: an exact physical value as a number to read (the nearest f64; a whole one exactly)
+fn io_ratio_text(r candb.Ratio) string {
+	if r.whole() {
+		return (r.num / r.den).str()
+	}
+	return '${r.num.str().f64() / r.den.str().f64()}'
+}
+
+// io_mux_refusal: why DBC signal sg cannot carry a controlled value ('' = it can) — the encoder
+// writes the signal's bits and sets no multiplexor, so a multiplexed signal would go out under
+// whatever page the multiplexor selects, and a multiplexor under control would select another page
+// for the signals beside it
+fn io_mux_refusal(sg candb.Signal) string {
+	if sg.is_multiplexed {
+		return 'is multiplexed in the DBC (m${sg.multiplexor_value}) — the encoder writes its bits and sets no multiplexor, so the frame would carry the controlled bits under whatever page its multiplexor holds, not the value acknowledged; a control of a multiplexed signal is not supported'
+	}
+	if sg.is_multiplexor {
+		return 'is a multiplexor in the DBC (M) — a value under control would select another page for the signals it multiplexes, which the encoder fills as they are; a control of a multiplexor is not supported'
+	}
+	return ''
 }
 
 // io_signal_refusal: why signal si cannot be controlled on this node ('' = it can) — it must be a
@@ -268,6 +303,10 @@ fn validate_io_controls(m Model) {
 		rr := sg.raw_range() or { panic('loom2v: ${h}: "${d.signal}": ${err}') }
 		if rr.named.len > 0 {
 			panic('loom2v: ${h}: "${d.signal}" names a value outside its range in the DBC (VAL_ ${rr.named[0].raw} "${rr.named[0].label}"), which is sent as itself — a value under control is held to [${sg.minimum}|${sg.maximum}], so such a signal is not supported')
+		}
+		mux := io_mux_refusal(sg)
+		if mux != '' {
+			panic('loom2v: ${h}: "${d.signal}" ${mux}')
 		}
 		io_bounds(si) or { panic('loom2v: ${h}: "${d.signal}" ${err}') }
 		// the 0x6F answer carries the value, and 00 is always accepted: a control gate weaker than

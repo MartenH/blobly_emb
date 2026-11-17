@@ -35,7 +35,7 @@ services of its **service table** (`[uds] services`, §3.1), each in the session
 | 0x27 | **SecurityAccess**<br>levels 1–8, a 4-byte seed, attempt limit and lockout delay, the failed-key count kept across a reset | a power-up delay; a securityAccessDataRecord is accepted and ignored |
 | 0x28 | **CommunicationControl**<br>00–03 on normal messages, this network (or all networks on a node with one) | network-management message types; 04 / 05 (enhanced address information) |
 | 0x2E | **WriteDataByIdentifier**<br>writable RAM DIDs (a record of exactly the DID's size) and parameters (stored before the answer) | — |
-| 0x2F | **InputOutputControlByIdentifier**<br>00 return control, 01 reset to default, 02 freeze current state, 03 short-term adjustment, on a live `[[did]]` declared with a `control` (up to 4), applied where the node publishes the signal, never inside an FB (§3.1) | a controlEnableMask (signals of several fields); a signal whose DBC names values outside its range, or whose scaling leaves a whole value between raw steps; functional requests (ignored) |
+| 0x2F | **InputOutputControlByIdentifier**<br>00 return control, 01 reset to default, 02 freeze current state, 03 short-term adjustment, on a live `[[did]]` declared with a `control` (up to 4), applied where the node publishes the signal, never inside an FB (§3.1) | a controlEnableMask (signals of several fields); a signal whose DBC names values outside its range, whose scaling leaves a whole value between raw steps, or whose raw mapping f64 cannot hold exactly; a multiplexed signal or a multiplexor; functional requests (ignored) |
 | 0x31 | **RoutineControl**<br>01 start, 02 stop, 03 results, per `[[routine]]`, each run by an FB and answered responsePending (0x78) while it runs (§3.1 "Routines"); in the bootloader, its erase and check routines ([bootloader.md](bootloader.md)) | functional requests; identifiers outside 0x0200–0xDFFF and 0xF000–0xFEFF |
 | 0x3E | **TesterPresent**<br>00 | — |
 | 0x85 | **ControlDTCSetting**<br>01 on, 02 off; an option record is accepted and ignored | — |
@@ -514,11 +514,19 @@ included), keeps inside the node, or — on the host — sends on another bus th
 (another bridge thread); one it writes to an I/O point (the io thread applies it) or sends on an
 Ethernet bus (the eth thread) — whose live DID the single-reader rule refuses first, and the
 control's own rule behind it; a signal of more than one field (no controlEnableMask) or wider than
-32 bits; one whose DBC names a value outside its range; one whose DBC scaling leaves a whole value
+32 bits; one whose DBC names a value outside its range; one the DBC multiplexes, or that is a
+multiplexor (the encoder writes the signal's bits and sets no multiplexor, so the frame would carry
+the value under whatever page its multiplexor holds — or, controlling the multiplexor, another
+page for the signals beside it); one whose DBC scaling leaves a whole value
 of its field between two raw steps (factor 2, or offset 0.5: the encoder would round it to
 another — every whole value must be a step, so 1 / factor and offset / factor are whole), or whose
 range ends, inside its field's values, at a value that is not one (250.5 of a u16: an FB value past
-it would go out as 250.5, which no published value states); one whose initial value is not a value
+it would go out as 250.5, which no published value states) — both decided exactly on the decimals
+the DBC wrote, never within a tolerance (factor 0.8 and offset -8e11 put 1 a quarter of a step off
+the grid, which is refused however wide the field); one whose field's values the encoder's f64
+conversion could round to a neighbouring raw step: 2 |raw step| + |offset / factor| past 2^50 at
+either end of the field's range (a 64-bit signal with offset -1e18 — a u32 field on a 64-bit
+signal whose width is its range reaches raw steps below 2^32 only, and is controlled); one whose initial value is not a value
 of its field; a second control of one signal; more than 4 (`uds.max_ios`); and the gate rules above.
 
 **The order of its checks** (REQ-DIAG-101), after the service row (0x11, 0x7F, the row's 0x33):
@@ -829,8 +837,9 @@ param_status = true                         # one byte per parameter: 0 default,
 - 0x23 / 0x3D memory access;
 - 0x2F with a controlEnableMask (a control of a signal of several fields), a control of a signal
   whose DBC names a value outside its range or whose scaling leaves a whole value of its field
-  between two raw steps (or ends its range, inside its field, off one), and a functionally
-  addressed 0x2F (ignored);
+  between two raw steps (or ends its range, inside its field, off one), of a signal whose
+  field's values sit at raw steps the encoder's f64 conversion cannot hold (past 2^50), of a multiplexed signal or a
+  multiplexor, and a functionally addressed 0x2F (ignored);
 - busyRepeatRequest (0x21) in an application;
 - responsePending (0x78) for anything but a routine.
 

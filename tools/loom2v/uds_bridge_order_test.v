@@ -42,8 +42,8 @@ fn test_the_generated_diagnostic_pass_runs_in_order() {
 		'if st.rxg.sample(st.conn_diag.server.rx_enabled(), true)',
 		'if st.rxg.settle()',
 		'diag_tx_ok :=',
-		'warn_lamp_io_on, warn_lamp_io_v := st.conn_diag.server.io_held(0)', // 0x2F (gen_ioctl.v)
-		'warn_lamp.on = warn_lamp_io_v != 0',
+		'|| st.conn_diag.server.io_on(0) { // 0x2F', // (gen_ioctl.v)
+		'warn_lamp.on = st.conn_diag.server.io_published(0) != 0',
 		'lamp_frame_warn_lamp_set(mut tx_lamp_frame.data, if warn_lamp.on {',
 		'if tx_lamp_frame_any && diag_tx_ok',
 	]

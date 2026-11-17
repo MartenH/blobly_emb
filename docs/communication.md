@@ -176,7 +176,9 @@ the comm thread, or the `[isotp]` bus's bridge — which also holds the control,
 thread; the FB keeps writing its cell or channel and never sees the override. While a control is
 active the frame goes out with its value even before the FB's first publish. The value is inside
 the DBC range and on its grid (generation takes the control's bounds from it and refuses a scaling
-that leaves a whole value between two raw steps), so `encode_raw` never saturates nor rounds it and
+that leaves a whole value between two raw steps, field values at raw steps its f64 conversion could round to a neighbour, and a
+multiplexed signal or a multiplexor, whose page the encoder does not set), so `encode_raw` never
+saturates nor rounds it and
 `tx_saturations` never counts it; E2E and SecOC stamp the frame after the substitution, and a
 control set or returned is a payload change, so an on-change or mixed frame goes out at once.
 

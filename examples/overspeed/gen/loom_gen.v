@@ -404,10 +404,9 @@ fn io_can0_10ms(ctx voidptr) {
 	mut tx_lamp_frame_any := false
 	mut tx_lamp_frame_sat := u32(0) // values com.encode_raw saturated
 	mut warn_lamp := sig.WarnLamp{}
-	warn_lamp_io_on, warn_lamp_io_v := st.conn_diag.server.io_held(0) // 0x2F
-	if osal.ioc_acquire2(warn_lamp_ch, &warn_lamp, u8(sizeof(warn_lamp))) || warn_lamp_io_on {
-		if warn_lamp_io_on {
-			warn_lamp.on = warn_lamp_io_v != 0
+	if osal.ioc_acquire2(warn_lamp_ch, &warn_lamp, u8(sizeof(warn_lamp))) || st.conn_diag.server.io_on(0) { // 0x2F
+		if st.conn_diag.server.io_on(0) {
+			warn_lamp.on = st.conn_diag.server.io_published(0) != 0
 		}
 		if lamp_frame_warn_lamp_set(mut tx_lamp_frame.data, if warn_lamp.on { f64(1) } else { f64(0) }) {
 			tx_lamp_frame_sat++

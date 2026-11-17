@@ -945,11 +945,13 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\tmut ${fld} := sig.${sname}{}'
 				if k := io_index(m, sname) {
 					// a 0x2F control (gen_ioctl.v): the tester's value in place of the FB's, written
-					// over what was acquired before the encode — the FB never sees it
-					glue << '\t${fld}_io_on, ${fld}_io_v := st.conn_${snake(conns[0].name)}.server.io_held(${k}) // 0x2F'
-					glue << '\tif osal.${acquire_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld}))) || ${fld}_io_on {'
-					glue << '\t\tif ${fld}_io_on {'
-					glue << '\t\t\t${fld}.${si.val_field} = ${io_field_of(si.val_type, '${fld}_io_v')}'
+					// over what was acquired before the encode — the FB never sees it. Asked of the
+					// server in place, with no local of its own: this scope's locals are the signals'
+					// snake names, and a DBC signal may be named like any identifier
+					srv := 'st.conn_${snake(conns[0].name)}.server'
+					glue << '\tif osal.${acquire_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld}))) || ${srv}.io_on(${k}) { // 0x2F'
+					glue << '\t\tif ${srv}.io_on(${k}) {'
+					glue << '\t\t\t${fld}.${si.val_field} = ${io_field_of(si.val_type, '${srv}.io_published(${k})')}'
 					glue << '\t\t}'
 				} else {
 					glue << '\tif osal.${acquire_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld}))) {'

@@ -273,9 +273,13 @@ fn test_reset_to_default_and_return_control() {
 	assert io_call(mut s, [u8(0x2F), 0x02, 0x00, 0x01])[7] == 7
 	held, v := s.io_held(0)
 	assert held && v == 7
+	// io_on is io_held's first answer, and io_published its value under control (the host bridge's
+	// pair); never in force past the table
+	assert s.io_on(0) && s.io_published(0) == 7
+	assert !s.io_on(-1) && !s.io_on(s.nio) && !s.io_on(max_ios)
 	assert io_call(mut s, [u8(0x2F), 0x02, 0x00, 0x00]) == [u8(0x6F), 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 100]
 	h1, _ := s.io_held(0)
-	assert !h1
+	assert !h1 && !s.io_on(0)
 	assert s.io_published(0) == 100
 	// returnControlToECU is never refused by the application
 	s.io_ok = fn (did u16, param u8) bool {
