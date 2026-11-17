@@ -494,6 +494,12 @@ pub mut:
 	authored_signals bool     // a [[signal]] with a BUS endpoint (forbidden)
 	local_signals    []string // node-local signal names (io / cross-partition) — allowed
 	params           []string // [[param]] names: node-local INPUTS an FB reads (docs/diagnostics.md §3.4)
+	// each [[routine]]'s `<Name>Request` (an FB only reads it) and `<Name>Result` (its FB only
+	// writes it) — the node's own (docs/diagnostics.md §3.1) — and why its FB wiring cannot be
+	// generated (ecumodel.routine_use_refusal, the rule loom2v refuses by)
+	routine_requests []string
+	routine_results  []string
+	routine_errors   []string
 	authored_frames  bool
 	authored_routes  bool
 }
@@ -1149,6 +1155,11 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 			v.params << nm.string()
 		}
 	}
+	for name in ecumodel.routine_names(doc) {
+		v.routine_requests << ecumodel.routine_request(name)
+		v.routine_results << ecumodel.routine_result(name)
+	}
+	v.routine_errors = ecumodel.routine_use_refusals(doc)
 	if fv := doc.value_opt('frame') {
 		v.authored_frames = true
 		if fv is []toml.Any {

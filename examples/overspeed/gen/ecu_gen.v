@@ -20,10 +20,12 @@ pub const brake_lost_ch = 7
 pub const secure_status_ch = 8
 pub const fault_rep_engine_monitor_ch = 9
 pub const fault_ctl_engine_monitor_ch = 10
-pub const ioc_channel_count = 11
+pub const routine_req_self_check_ch = 11
+pub const routine_res_self_check_ch = 12
+pub const ioc_channel_count = 13
 
 // Per-channel transport (index = channel id)
-pub const ioc_transport = [Transport.double, Transport.double, Transport.double, Transport.double, Transport.double, Transport.double, Transport.double, Transport.double, Transport.double, Transport.triple, Transport.triple]!
+pub const ioc_transport = [Transport.double, Transport.double, Transport.double, Transport.double, Transport.double, Transport.double, Transport.double, Transport.double, Transport.double, Transport.triple, Transport.triple, Transport.triple, Transport.triple]!
 
 // Partitions — index = partition id
 pub const partition_count = 2

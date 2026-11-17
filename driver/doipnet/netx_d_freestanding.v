@@ -96,7 +96,7 @@ pub fn run_gateway(mut s doip.Server, count int, interval_ms int, inb &u8, out &
 		}
 	}
 	mut st := Netx{}
-	mut pushed := [16]u8{}
+	mut pushed := [push_max]u8{}
 	mut fast_since := u32(0)
 	mut fast_ticket := s.ticket
 	for {

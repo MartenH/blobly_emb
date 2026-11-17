@@ -790,11 +790,14 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			// Housekeeping FIRST (comm/diag), so the receive gate below and the functional path in
 			// the drain see this instant's state. On the host there is no platform reset, so an
 			// answered ECUReset returns the DIAGNOSTIC state to power-on (docs/diagnostics.md §3.1).
+			// the routines' results first: a result in its cell when the tick judges a deadline
+			glue << routine_bridge_results(m, 'st.conn_${snake(conns[0].name)}')
 			for c in conns {
 				glue << '\tst.conn_${snake(c.name)}.housekeep(now)'
 			}
 			glue << rx_gate_lines(m, rx_msgs, bname, owner, '\t')
 			glue << fault_pass_lines(m, owner)
+			glue << routine_bridge_lines(m, 'st.conn_${snake(conns[0].name)}')
 			if m.faults.len > 0 {
 				// the FB faults' snapshots at once, before the drain decodes newer values
 				glue << fault_capture_lines(m, 'st.fmem', 'st.conn_${snake(conns[0].name)}', '\t')

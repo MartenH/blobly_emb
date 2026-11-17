@@ -32,6 +32,7 @@ fn ecu_schema() Schema {
 				sub('did', .arr, 'did').doc("the server's data identifiers"),
 				sub('fault', .arr, 'fault').doc('diagnostic faults and their DTCs (docs/diagnostics.md §3.3)'),
 				sub('param', .arr, 'param').doc('coded parameters (docs/diagnostics.md §3.4)'),
+				sub('routine', .arr, 'routine').doc('RoutineControl (0x31) routines, each run by an FB (docs/diagnostics.md §3.1)'),
 				sub('fault_memory', .tbl, 'fault_memory').doc("the fault memory's operation cycle and snapshot entries"),
 				sub('route', .arr, 'route').doc('gateway routes: raw frames or decoded signals between buses'),
 				sub('io', .tbl, 'io').doc('physical IO points (docs/io.md)'),

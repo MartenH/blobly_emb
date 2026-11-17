@@ -55,6 +55,7 @@ The sections of an ecu.toml. Only what the node declares is generated; every sec
 | `did` | array of tables → [`[[did]]`](#ecu-did) |  | — |  | the server's data identifiers |
 | `fault` | array of tables → [`[[fault]]`](#ecu-fault) |  | — |  | diagnostic faults and their DTCs (docs/diagnostics.md §3.3) |
 | `param` | array of tables → [`[[param]]`](#ecu-param) |  | — |  | coded parameters (docs/diagnostics.md §3.4) |
+| `routine` | array of tables → [`[[routine]]`](#ecu-routine) |  | — |  | RoutineControl (0x31) routines, each run by an FB (docs/diagnostics.md §3.1) |
 | `fault_memory` | table → [`[fault_memory]`](#ecu-fault-memory) |  | — |  | the fault memory's operation cycle and snapshot entries |
 | `route` | array of tables → [`[[route]]`](#ecu-route) |  | — |  | gateway routes: raw frames or decoded signals between buses |
 | `io` | table → [`[io]`](#ecu-io) |  | — |  | physical IO points (docs/io.md) |
@@ -583,6 +584,26 @@ The coded values one field may take (0x2E answers 0x31 outside it).
 |---|---|---|---|---|---|
 | `min` | integer |  | — |  | the lowest value (default: the type's minimum) |
 | `max` | integer |  | — |  | the highest value (default: the type's maximum) |
+
+<a id="ecu-routine"></a>
+
+### `[[routine]]`
+
+A RoutineControl (0x31) routine, run by the FB handler that reads its `<Name>Request` and writes its `<Name>Result`; answered responsePending (0x78) while it runs (docs/diagnostics.md §3.1).
+
+| key | type | required | default | allowed | description |
+|---|---|---|---|---|---|
+| `id` | integer | yes | — | 0x0..0xFFFF | the 16-bit routineIdentifier: 0x0200..0xDFFF or 0xF000..0xFEFF, unique; not the bootloader's 0xFF00 / 0xFF01 on a [boot] node |
+| `name` | string | yes | — |  | PascalCase, unique; the FB names `<name>Request` in its handler's reads and `<name>Result` in its writes |
+| `mode` | string |  | `"sync"` | `"sync"`, `"async"` | sync: 0x31 01 is answered when the routine completes; async: once the FB has accepted it (running), 03 reads its progress |
+| `stop` | boolean |  | `false` |  | 0x31 02 stopRoutine is offered (async only) |
+| `results` | boolean |  | `false` |  | 0x31 03 requestRoutineResults is offered |
+| `start_in` | integer |  | `0` | 0..32 | the option record bytes a start carries (exactly; another length is 0x13) |
+| `start_out` | integer |  | `0` | 0..32 | the record bytes the start's answer carries |
+| `results_out` | integer |  | `0` | 0..32 | the record bytes 03's answer carries (needs `results`) |
+| `timeout_ms` | integer |  | `10000` | 100..100000 | a start or stop its FB has not answered by then is answered 0x22 and the FB asked to stop |
+| `sessions` | array of strings |  | `["extended"]` | `"default"`, `"extended"`, `"safety"` | the sessions it may be started, stopped and read in |
+| `security` | integer |  | `0` | 0..8 | the 0x27 level that must be unlocked (0 = none) |
 
 <a id="ecu-fault-memory"></a>
 

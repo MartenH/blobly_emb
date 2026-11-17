@@ -1,6 +1,7 @@
 module doipnet
 
 import comm.doip
+import os
 
 // The DoIP network loop against a scripted stream: what a pass sends, when it drops the
 // connection, and what it reports about routing activation — the same loop the application's
@@ -397,3 +398,17 @@ fn test_the_buffer_sizes_are_the_entitys() {
 	assert max_resp == doip.resp_len(max_uds)
 }
 
+
+// The push slot is one size in both halves: doip_netx.c's MB_PUSH_MAX (what doip_mb_push_resp takes)
+// and push_max, which sizes the doip thread's buffer (a larger push_max with a smaller buffer would
+// leave a push the buffer cannot take for ever).
+fn test_the_push_slot_is_one_size() {
+	c := os.read_file(os.join_path(@VMODROOT, 'driver', 'eth', 'doip_netx.c')) or { panic(err) }
+	line := c.split_into_lines().filter(it.starts_with('#define MB_PUSH_MAX '))
+	assert line.len == 1
+	assert line[0].all_after('#define MB_PUSH_MAX ').trim_space().int() == push_max
+	v := os.read_file(os.join_path(@VMODROOT, 'driver', 'doipnet', 'netx_d_freestanding.v')) or {
+		panic(err)
+	}
+	assert v.contains('mut pushed := [push_max]u8{}')
+}

@@ -74,6 +74,13 @@ mut:
 	sa_level [2]u8
 	sa_seed  [2][uds.seed_len]u8
 	sa_epoch [2]u32
+	// the transport an owed answer (uds pending.v) goes back on: the other one (true) or the bus —
+	// set only when a request MAKES the server owe one, so a request dropped meanwhile over the other
+	// transport cannot move it — and a response of it pushed over the other transport and not yet
+	// acknowledged (push_sent; forgotten when its connection drops or the server gives the answer
+	// up, no_longer_owes)
+	pend_remote bool
+	push_out    bool
 }
 
 // Rx is what on_frame did with a received frame, for the owner's drain.
@@ -106,14 +113,17 @@ pub fn (mut c Connection) init(rx_id u32, tx_id u32, functional_id u32, bs u8, s
 // housekeep is the top of a pass, before the owner samples its gates: ISO-TP timeouts expire (a
 // stale transfer does not make the link look busy), a reset whose answer has left is applied, and
 // S3 is held while the link is busy (ISO 14229-2 starts it once the exchange is over) and only then
-// checked — so an expired session is back in default before any frame is judged.
+// checked — so an expired session is back in default before any frame is judged. (The server holds
+// it itself while an answer is owed.)
 pub fn (mut c Connection) housekeep(now u64) {
 	c.link.tick(now)
 	c.apply_answered_reset()
-	if in_flight(&c.link) || c.remote.inflight {
+	if in_flight(&c.link) || c.remote.inflight || c.push_out {
 		c.server.hold_s3(now) // an exchange still in flight on either transport
 	}
+	was := c.server.pending()
 	c.server.tick(now)
+	c.no_longer_owes(was)
 }
 
 // on_frame takes one received frame. A physical frame feeds the link; a functional request is
@@ -145,7 +155,9 @@ fn (mut c Connection) functional(f &can.Frame) Rx {
 	}
 	c.refresh_dids()
 	before, held := c.enter(false)
+	was := c.server.pending()
 	rlen := c.server.handle_functional(&f.data[at], n, c.resp)
+	c.owes(was, false)
 	c.leave(before, held, false)
 	c.remote.asked(false) // a reset asked here is the bus's (none was pending, or this was not served)
 	if rlen > 0 && !c.link.send(c.resp, rlen) {
@@ -169,12 +181,38 @@ pub fn (mut c Connection) serve() {
 	if n > 0 {
 		c.refresh_dids()
 		before, held := c.enter(false)
+		was := c.server.pending()
 		rlen := c.server.handle(c.req, n, c.resp)
+		c.owes(was, false)
 		c.leave(before, held, false)
 		c.remote.asked(false)
 		if rlen > 0 && !c.link.send(c.resp, rlen) {
 			c.cancel_reset() // the answer could not be queued: never reset unanswered
+			c.lost_on_bus()
 		}
+	}
+}
+
+// owes: a request just served made the server owe an answer (it was not owing one before): the
+// answer goes back over the transport that request came over. A request served — dropped — while
+// one is already owed decides nothing.
+fn (mut c Connection) owes(was bool, remote bool) {
+	if !was && c.server.pending() {
+		c.pend_remote = remote
+	}
+}
+
+// no_longer_owes: the server stopped owing an answer without giving it (its timeout's 0x22, or the
+// answer ready at the timeout, given up because the transport never took it: uds pending_tick) —
+// so a response of it pushed over the other transport is no longer waited for: its acknowledgement
+// may never come (a tester gone without closing), and waiting would hold S3 and every later push
+// for ever. The other edge of owes(); an answer given ends by push_step / pending_bus instead.
+fn (mut c Connection) no_longer_owes(was bool) {
+	if was && !c.server.pending() {
+		if c.pend_remote {
+			c.push_out = false
+		}
+		c.pend_remote = false
 	}
 }
 
@@ -194,17 +232,49 @@ pub fn (mut c Connection) serve_remote(req &u8, n int, functional bool, resp &u8
 	c.refresh_dids()
 	before, held := c.enter(true)
 	c.server.handoff_elsewhere = !c.handoff_remote
+	was := c.server.pending()
 	rlen := if functional {
 		c.server.handle_functional(req, n, resp)
 	} else {
 		c.server.handle(req, n, resp)
 	}
 	c.server.handoff_elsewhere = false
+	c.owes(was, true)
 	c.leave(before, held, true)
 	if c.server.reset_req != 0 {
 		c.remote.asked(true)
 	}
 	return rlen
+}
+
+// push_step: the next response of an answer owed over the other transport (uds pending.v — a
+// responsePending, or the final answer) into out (cap bytes), for the owner to push to that
+// transport's tester (driver/doipnet push_resp), or 0. Only once the response before it has been
+// acknowledged: the request's own answer (remote_sent), then each push (push_sent). The owner then
+// reports whether the push was taken (pushed).
+pub fn (mut c Connection) push_step(out &u8, cap int) int {
+	if !c.pend_remote || !c.server.pending() || c.push_out || c.remote.inflight {
+		return 0
+	}
+	n := c.server.pending_step(out, cap)
+	if n > 0 {
+		c.push_out = true
+	}
+	return n
+}
+
+// pushed: whether the response push_step gave was taken by the transport; one it refused goes
+// again (a responsePending at once; a final answer is lost, as any answer may be)
+pub fn (mut c Connection) pushed(ok bool) {
+	if !ok {
+		c.push_out = false
+		c.server.pending_lost()
+	}
+}
+
+// push_sent: the response pushed last has been acknowledged by the tester
+pub fn (mut c Connection) push_sent() {
+	c.push_out = false
 }
 
 // remote_sent: the other transport has sent the answer serve_remote gave.
@@ -220,6 +290,13 @@ pub fn (mut c Connection) remote_sent() {
 // tester that opened it. A bus tester that entered the session since keeps it; requests that
 // changed nothing decide nothing.
 pub fn (mut c Connection) remote_dropped() {
+	// an answer owed to it is no one's now (the work it waited for is asked to stop); one owed to
+	// the bus stands, and is answered 0x22 if the session below ends (uds stop_routines)
+	if c.pend_remote && c.server.pending() {
+		c.server.pending_abandon()
+	}
+	c.pend_remote = false
+	c.push_out = false
 	if c.remote.dropped() {
 		c.cancel_reset() // its own reset, whose answer was never acknowledged
 	}
@@ -298,11 +375,35 @@ pub fn (mut c Connection) produce(now u64, mut f can.Frame) bool {
 	return next_frame(mut c.link, c.tx_id, c.ext, now, mut f)
 }
 
-// pump sends the answer in flight on `ch` while it is ready (step.v pump): a frame the channel
-// refuses aborts the transfer, and the answer is lost — a reset it announced does not happen.
-pub fn (mut c Connection) pump(now u64, mut ch can.Channel) {
+// pump sends the answer in flight on `ch` while it is ready (step.v pump; a can.Channel on every
+// owner): a frame the channel refuses aborts the transfer, and the answer is lost — a reset it
+// announced does not happen. First, a response of an answer the bus owes (uds pending.v: a
+// responsePending, or the final answer once the work is done) is queued while the link is free to
+// send it: the one place an owed answer leaves on the bus, so an owner that does not pump sends none.
+pub fn (mut c Connection) pump[H](now u64, mut ch H) {
+	c.pending_bus()
 	if !pump(mut c.link, c.tx_id, c.ext, now, mut ch) {
 		c.answer_lost()
+	}
+}
+
+// pending_bus: the next response of an answer owed on the bus, onto the link once it is free (a
+// responsePending is a single frame; the final answer may be segmented)
+fn (mut c Connection) pending_bus() {
+	if c.pend_remote || !c.server.pending() || c.link.busy() || c.server.reset_req != 0 {
+		return
+	}
+	n := c.server.pending_step(c.resp, c.link.tx_cap)
+	if n > 0 && !c.link.send(c.resp, n) {
+		c.server.pending_lost()
+	}
+}
+
+// lost_on_bus: a response of an answer the bus owes did not leave: the next responsePending goes
+// in the next pass
+fn (mut c Connection) lost_on_bus() {
+	if !c.pend_remote {
+		c.server.pending_lost()
 	}
 }
 
@@ -320,21 +421,26 @@ fn (mut c Connection) answer_lost() {
 	if !c.remote.reset {
 		c.cancel_reset()
 	}
+	c.lost_on_bus()
 }
 
-// active: an exchange is in flight or a non-default session is open — while it is, the owner keeps
-// its network awake (a session must not sleep under the tester, nor an answer be stranded).
+// active: an exchange is in flight, an answer is owed (uds pending.v) or a non-default session is
+// open — while it is, the owner keeps its network awake (a session must not sleep under the tester,
+// nor an answer be stranded).
 pub fn (c &Connection) active() bool {
-	return !c.link.idle() || c.server.session != uds.session_default
+	return !c.link.idle() || c.server.pending() || c.server.session != uds.session_default
 }
 
 // reset_due is the ECUReset kind — or uds.reset_into_boot, the programming handoff, which the owner
 // performs as a reset with the boot request cell written first — whose answer has left the link,
 // or the other transport that carried it (remote_sent), (0 = none) — for an owner that performs the reset itself
 // (`owner_resets`). The link being done is not the wire being done: the
-// owner still waits for its controller to transmit the answer (REQ-BOOT-012).
+// owner still waits for its controller to transmit the answer (REQ-BOOT-012). Nor does a reset
+// overtake a response pushed over the other transport and not yet acknowledged (push_out — an owed
+// answer's final one included, which the server no longer tracks once it gave it): it waits until
+// the push is acknowledged or dropped with its connection, the bound remote.inflight has too.
 pub fn (c &Connection) reset_due() u8 {
-	if c.server.reset_req != 0 && !c.link.busy() && !c.remote.inflight {
+	if c.server.reset_req != 0 && !c.link.busy() && !c.remote.inflight && !c.push_out {
 		return c.server.reset_req
 	}
 	return 0

@@ -56,11 +56,7 @@ fn test_every_default_is_a_legal_value() {
 				if key.def == '' {
 					continue
 				}
-				doc := toml.parse_text('v = ${key.def}') or {
-					assert false, '${t.ctx}.${key.name}: default `${key.def}` is not TOML'
-					continue
-				}
-				v := doc.value('v')
+				v := key.default_value() // the value a reader taking its default from the schema gets
 				assert type_ok(v, key.typ), '${t.ctx}.${key.name}: default `${key.def}` is not ${type_name(key.typ)}'
 				if key.choices.len > 0 && v is string {
 					assert v in key.choices, '${t.ctx}.${key.name}: default ${key.def} is not one of its choices'

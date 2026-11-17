@@ -72,3 +72,14 @@ pub mut:
 	// signal "SecureStatus" — ch, transport double, ctrl -> can0
 	secure_status sig.SecureStatus
 }
+
+pub struct SelfCheckerIn {
+pub mut:
+	// routine "SelfCheck" (0x31 0x0201): the request the diagnostic server writes, one op per dispatch
+	self_check_request sig.SelfCheckRequest
+}
+pub struct SelfCheckerOut {
+pub mut:
+	// routine "SelfCheck": its state and record, to the diagnostic server
+	self_check_result sig.SelfCheckResult
+}

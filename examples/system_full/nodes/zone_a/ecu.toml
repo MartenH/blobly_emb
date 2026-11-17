@@ -108,6 +108,45 @@ thread = "front_thread"
   reads     = ["SafetyCmd"]
   writes    = ["SafetyView"] # trailing comment terminates nested block (vlang/v#27684)
 
+# RoutineRunner runs the two routines below (RoutineControl 0x31, docs/diagnostics.md §3.1): it reads
+# each routine's request — what the diagnostic server on the comm thread asks — and writes its result.
+# It touches no signal, so zone_a's bus behaviour is the same with or without it.
+[[fb]]
+name   = "RoutineRunner"
+thread = "front_thread"
+
+  [[fb.handler]]
+  name      = "on_50ms"
+  period_ms = 50
+  reads     = ["ActuatorSelfTestRequest", "SensorCalibrationRequest"]
+  writes    = ["ActuatorSelfTestResult", "SensorCalibrationResult"] # trailing comment terminates nested block (vlang/v#27684)
+
+# --- Routines (docs/diagnostics.md §3.1): RoutineControl 0x31, run by RoutineRunner ----------------
+# ActuatorSelfTest is SYNCHRONOUS: a start carries one option byte, the steps of 100 ms to run (two
+# dispatches each), and is answered when the test completes — after responsePending (0x78), at once
+# and every 4 s while it runs — with the dispatches counted (u16 big-endian). Option 0 is refused by
+# the FB (0x31); one that runs past timeout_ms is answered 0x22. The extended session, no level.
+# (blobly_net's simulated zone_a, read from this file, does not serve these yet: it answers every
+# 0x31 with 0x11 — docs/diagnostics.md §5.)
+[[routine]]
+id         = 0x0201
+name       = "ActuatorSelfTest"
+start_in   = 1
+start_out  = 2
+timeout_ms = 10000
+
+# SensorCalibration is ASYNCHRONOUS: a start is answered once the FB has accepted it (routineInfo 1,
+# running); 0x31 03 reads its progress (the dispatches counted, u16 big-endian), done at 100 (5 s);
+# 0x31 02 stops it. The extended session, behind 0x27 level 1 (test/routine_zone_a.lua).
+[[routine]]
+id          = 0x0202
+name        = "SensorCalibration"
+mode        = "async"
+stop        = true
+results     = true
+results_out = 2
+security    = 1
+
 # --- A parameter (docs/diagnostics.md §3.4): variant coding ------------------------------------
 # The most SteerLimiter ever puts on the wire, coded per vehicle: an In field the limiter reads like
 # any input (it cannot write it), kept in the NvM journal below, coded with 0x2E on DID 0x0110 (the

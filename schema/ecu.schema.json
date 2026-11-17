@@ -26,6 +26,7 @@
     "did": {"type": "array", "items": {"$ref": "#/definitions/did"}, "description": "the server's data identifiers"},
     "fault": {"type": "array", "items": {"$ref": "#/definitions/fault"}, "description": "diagnostic faults and their DTCs (docs/diagnostics.md §3.3)"},
     "param": {"type": "array", "items": {"$ref": "#/definitions/param"}, "description": "coded parameters (docs/diagnostics.md §3.4)"},
+    "routine": {"type": "array", "items": {"$ref": "#/definitions/routine"}, "description": "RoutineControl (0x31) routines, each run by an FB (docs/diagnostics.md §3.1)"},
     "fault_memory": {"allOf": [{"$ref": "#/definitions/fault_memory"}], "description": "the fault memory's operation cycle and snapshot entries"},
     "route": {"type": "array", "items": {"$ref": "#/definitions/route"}, "description": "gateway routes: raw frames or decoded signals between buses"},
     "io": {"allOf": [{"$ref": "#/definitions/io"}], "description": "physical IO points (docs/io.md)"},
@@ -536,6 +537,26 @@
         "min": {"type": "integer", "description": "the lowest value (default: the type's minimum)"},
         "max": {"type": "integer", "description": "the highest value (default: the type's maximum)"}
       },
+      "additionalProperties": false
+    },
+    "routine": {
+      "title": "[[routine]]",
+      "description": "A RoutineControl (0x31) routine, run by the FB handler that reads its `<Name>Request` and writes its `<Name>Result`; answered responsePending (0x78) while it runs (docs/diagnostics.md §3.1).",
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer", "minimum": 0, "maximum": 65535, "description": "the 16-bit routineIdentifier: 0x0200..0xDFFF or 0xF000..0xFEFF, unique; not the bootloader's 0xFF00 / 0xFF01 on a [boot] node"},
+        "name": {"type": "string", "description": "PascalCase, unique; the FB names `<name>Request` in its handler's reads and `<name>Result` in its writes"},
+        "mode": {"type": "string", "enum": ["sync", "async"], "default": "sync", "description": "sync: 0x31 01 is answered when the routine completes; async: once the FB has accepted it (running), 03 reads its progress Default: \"sync\"."},
+        "stop": {"type": "boolean", "default": false, "description": "0x31 02 stopRoutine is offered (async only) Default: false."},
+        "results": {"type": "boolean", "default": false, "description": "0x31 03 requestRoutineResults is offered Default: false."},
+        "start_in": {"type": "integer", "minimum": 0, "maximum": 32, "default": 0, "description": "the option record bytes a start carries (exactly; another length is 0x13) Default: 0."},
+        "start_out": {"type": "integer", "minimum": 0, "maximum": 32, "default": 0, "description": "the record bytes the start's answer carries Default: 0."},
+        "results_out": {"type": "integer", "minimum": 0, "maximum": 32, "default": 0, "description": "the record bytes 03's answer carries (needs `results`) Default: 0."},
+        "timeout_ms": {"type": "integer", "minimum": 100, "maximum": 100000, "default": 10000, "description": "a start or stop its FB has not answered by then is answered 0x22 and the FB asked to stop Default: 10000."},
+        "sessions": {"type": "array", "items": {"type": "string", "enum": ["default", "extended", "safety"]}, "description": "the sessions it may be started, stopped and read in Default: [\"extended\"]."},
+        "security": {"type": "integer", "minimum": 0, "maximum": 8, "default": 0, "description": "the 0x27 level that must be unlocked (0 = none) Default: 0."}
+      },
+      "required": ["id", "name"],
       "additionalProperties": false
     },
     "fault_memory": {

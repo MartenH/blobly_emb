@@ -1512,6 +1512,8 @@ mut:
 	dids         []DidCfg
 	params       []ParamCfg // [[param]] in declaration order (gen_param.v)
 	faults       []FaultCfg // [[fault]] in declaration order = the fault memory's slot order
+	routines     []RoutineCfg // [[routine]] in declaration order = the server's table order (gen_routine.v)
+	routine_fbs  map[string]string // routine -> the FB that serves it (validate_routines)
 	fault_cycle  string     // [fault_memory] cycle = "Signal.field" (bool) or "power" — the operation cycle ('' = NM's, D3)
 	fault_entries int       // [fault_memory] entries: the snapshot entries (default: one per fault with `freeze`, at most fault.max_entries)
 	part         PartMap
@@ -1803,6 +1805,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		dids:         parse_dids(doc)
 		params:       parse_params(doc)
 		faults:       parse_faults(doc)
+		routines:     parse_routines(doc)
 		fault_cycle:  parse_fault_cycle(doc)
 		fault_entries: parse_fault_entries(doc)
 		part:         part
@@ -1840,6 +1843,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	validate_uds(m)
 	validate_live_dids(m)
 	validate_faults(m, doc)
+	m.routine_fbs = validate_routines(m, doc)
 	validate_max_message(m) // after the DIDs and faults it measures are known good
 	validate_e2e_timeouts(m)
 	for sname in m.sig_names {
@@ -2681,6 +2685,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << trace_module_globals(m)
 			glue << shell_module_globals(m)
 			glue << diag_target_globals(m)
+			glue << routine_push_globals(m)
 			glue << fault_target_globals(m)
 			glue << rx_target_global(m)
 			glue << doip_target_globals(m)
@@ -3170,6 +3175,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\t// pass: ${step}'
 					match step {
 						.housekeep {
+							glue << routine_target_results(m)
 							glue << diag_target_housekeep(m)
 						}
 						.open {
@@ -3177,6 +3183,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 						}
 						.reports {
 							glue << fault_target_pass(m)
+							glue << routine_target_pass(m)
 						}
 						.remote {
 							glue << doip_target_serve(m)
@@ -3485,6 +3492,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			}
 			glue << rx_target_boot(m)
 			glue << fault_target_boot(m)
+			glue << routine_target_boot(m)
 			if has_satellite(m) {
 				// release the satellite once every restored value is published — a parameter
 				// down its channel among them — so its FBs' first dispatch reads it, as the
@@ -3654,6 +3662,10 @@ fn fb_port_lines(m Model, cname string, hname string, reads []toml.Any, writes [
 			ports << '\t${snake(p.name)} sig.${p.name}'
 			continue
 		}
+		if rt := routine_req_of(m, r.string()) {
+			ports << routine_port_read(rt)
+			continue
+		}
 		ports << provenance(r.string(), m.sig_of)
 		// an input point's declared default becomes the port field's
 		// initial value — the FB sees it until the first real sample
@@ -3682,6 +3694,10 @@ fn fb_port_lines(m Model, cname string, hname string, reads []toml.Any, writes [
 	ports << 'pub struct ${cname}Out {'
 	ports << 'pub mut:'
 	for w in writes {
+		if rt := routine_res_of(m, w.string()) {
+			ports << routine_port_write(rt)
+			continue
+		}
 		ports << provenance(w.string(), m.sig_of)
 		ports << '\t${snake(w.string())} sig.${w.string()}'
 	}
@@ -3797,6 +3813,7 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 						glue << '\tfxr_${snake(cname)} [${fault_ctl_lanes(m, cname) + 2}]u32 // its control down channel: owner nonce, seq, lanes (xcore_down_read)'
 					}
 				}
+				glue << routine_state_fields(m, cname)
 			}
 			for sname in m.sig_names {
 				si := m.sig_of[sname] or { continue }
@@ -3849,6 +3866,10 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 				for r in reads {
 					rn := r.string()
 					si := m.sig_of[rn] or { SigInfo{} }
+					if rt := routine_req_of(m, rn) {
+						glue << routine_read_lines(m, rt) // a routine's request (gen_routine.v)
+						continue
+					}
 					if image_part != '' && xdown_fb_input(m, rn) {
 						// SATELLITE FB reads a signal produced on the owner image (owner -> satellite),
 						// whatever the owner side holds it in (a local cell, an IOC cell, a byte IOC),
@@ -3942,6 +3963,10 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 				for w in writes {
 					wn := w.string()
 					si := m.sig_of[wn] or { SigInfo{} }
+					if rt := routine_res_of(m, wn) {
+						glue << routine_write_lines(m, rt) // a routine's result (gen_routine.v)
+						continue
+					}
 					if si.local {
 						glue << '\tst.cell_${snake(wn)} = outp.${snake(wn)} // local'
 						if si.persist != '' && image_part == '' && wn in ioc_idx {
@@ -4209,10 +4234,10 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 	}
 	if m.isotp_conns.len > 0 {
 		glue << 'import comm.diag' // the diagnostic server on its ISO-TP connection
-		// the glue names uds only for [[did]]s — their tables, the live refresh, 0x27 — and for a
-		// [uds] service table
-		// a [uds] service table, and the programming handoff (uds.reset_into_boot)
-		if m.dids.len > 0 || m.uds.table || m.boot.on {
+		// the glue names uds only for [[did]]s (their tables, the live refresh, 0x27), a [uds]
+		// service table, the programming handoff (uds.reset_into_boot) and [[routine]]s (their
+		// uds.Routine table on the server, routine_config_lines)
+		if m.dids.len > 0 || m.uds.table || m.boot.on || m.routines.len > 0 {
 			glue << 'import comm.uds' // UDS diagnostic services
 		}
 	}
@@ -4355,6 +4380,8 @@ fn main() {
 	// [[signal]] -> the model, then emit the `sig` module.
 	mut signals := emit_signals(m.sig_of, m.sig_names, ecu)
 	signals << param_sig_structs(m)
+	routine_sig_header(m, mut signals)
+	signals << routine_sig_structs(m)
 
 	// Per-PDU COM behaviour ([[frame]]), rebound to the existing locals.
 	// m.frames is CAN-only — parse_frames skips eth frames, whose E2E trailer
@@ -5919,9 +5946,10 @@ fn fault_target_on(m Model) bool {
 	return m.target.threadx && m.faults.len > 0
 }
 
-// iocb_on: the image uses the byte IOC pool — its eth signals, its fault cells, or both.
+// iocb_on: the image uses the byte IOC pool — its eth signals, checked received signals, fault or
+// routine cells.
 fn iocb_on(m Model) bool {
-	return eth_thread_on(m) || fault_target_on(m) || rx_iocb_idx(m).len > 0
+	return eth_thread_on(m) || fault_target_on(m) || routine_target_on(m) || rx_iocb_idx(m).len > 0
 }
 
 // fault_target_globals: the fault memory and each fault-owning FB's two cells, comm-thread side,
@@ -6171,15 +6199,15 @@ fn glue_build_lines(glue []string, doip bool) string {
 	return 'LOOM_GLUE_SRCS = ${srcs.join(' ')}\n'
 }
 
-// fault_build_lines: what the image links for its fault cells, for gen/loom_build.mk — the byte
-// IOC, unless the eth thread already links it (LOOM_NET_SRCS). Defined on every ThreadX image,
-// empty when unused, and every ThreadX Makefile lists it beside its BSP (pinned by
-// threadx_makefiles_test.v), so adding a [[fault]] to a node needs no Makefile edit.
+// fault_build_lines: what the image links for its fault and routine cells, for gen/loom_build.mk —
+// the byte IOC, unless the eth thread already links it (LOOM_NET_SRCS). Defined on every ThreadX
+// image, empty when unused, and every ThreadX Makefile lists it beside its BSP (pinned by
+// threadx_makefiles_test.v), so adding a [[fault]] or a [[routine]] to a node needs no Makefile edit.
 fn fault_build_lines(m Model) string {
 	if !m.target.threadx {
 		return ''
 	}
-	if !fault_target_on(m) || eth_thread_on(m) {
+	if !(fault_target_on(m) || routine_target_on(m)) || eth_thread_on(m) {
 		return 'LOOM_FAULT_SRCS :=\n' // always defined: a Makefile lists it whatever the node carries
 	}
 	return 'LOOM_FAULT_SRCS = ' + r'$(REPO)/boards/common/iocb.c' + '\n'

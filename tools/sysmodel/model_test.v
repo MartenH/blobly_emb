@@ -3831,6 +3831,60 @@ fn test_dissolved_local_io_signal_accepted() {
 	assert !issue_msgs(validate_system_gen(s)).any(it.contains('LedGreen'))
 }
 
+// routine_node: node a's view parsed from an ecu.toml whose [[routine]] "SelfTest" is served by
+// handlers reading and writing the given names
+fn routine_node(handlers string) NodeView {
+	doc := toml.parse_text('[[routine]]\nid = 0x0201\nname = "SelfTest"\n\n[[fb]]\nname = "Checker"\nthread = "t0"\nhandler = [${handlers}]\n') or {
+		panic(err)
+	}
+	mut v := parse_node_view(doc)
+	v.fb_reads << 'Rpm'
+	v.fb_writes << 'Speed'
+	v.is_threadx = true
+	v.has_telemetry = true
+	v.telem_bus = 'can0'
+	v.telem_id = 0x7e0
+	return v
+}
+
+// REQ-TOPO-001: a [[routine]]'s request and result (docs/diagnostics.md §3.1) are the node's own —
+// its FB reads one and writes the other — while a name that is no routine's still fails.
+fn test_dissolved_routine_ports_accepted() {
+	mut s := clean_dissolved()
+	s.nodes[0].view = routine_node('{ name = "run", period_ms = 10, reads = ["SelfTestRequest"], writes = ["SelfTestResult"] }')
+	assert !issue_msgs(validate_system_gen(s)).any(it.contains('SelfTest')), issue_msgs(validate_system_gen(s)).str()
+	assert !issue_msgs(validate_system(s)).any(it.contains('SelfTest'))
+	s.nodes[0].view.fb_reads << 'OtherRequest'
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('reads "OtherRequest"'))
+}
+
+// @verifies REQ-DIAG-087
+// A routine's request is only READ by its FB and its result only WRITTEN by it: an FB writing the
+// request (the server's cell) or reading the result, a second writer of the result, or no reader of
+// the request is refused by a dissolved system in the words loom2v refuses the node by.
+fn test_routine_request_and_result_directions_are_refused() {
+	for c in [
+		['{ name = "run", reads = ["SelfTestRequest"], writes = ["SelfTestResult", "SelfTestRequest"] }',
+			'`SelfTestRequest` is written by [\'Checker.run\'] — the diagnostic server alone writes a routine\'s request'],
+		['{ name = "run", reads = ["SelfTestRequest", "SelfTestResult"], writes = ["SelfTestResult"] }',
+			'`SelfTestResult` is read by [\'Checker.run\'] — the diagnostic server alone reads a routine\'s result'],
+		['{ name = "run", reads = ["SelfTestRequest"], writes = ["SelfTestResult"] }, { name = "aux", writes = ["SelfTestResult"] }',
+			'`SelfTestResult` must be written by the handler that reads `SelfTestRequest` (Checker.run) and by no other'],
+		['{ name = "run", writes = ["SelfTestResult"] }',
+			'`SelfTestRequest` must be read by exactly one FB handler (the one that runs it), not 0'],
+	] {
+		mut s := clean_dissolved()
+		s.nodes[0].view = routine_node(c[0])
+		msgs := issue_msgs(validate_system_gen(s))
+		want := 'node "a": [[routine]] "SelfTest": ${c[1]}'
+		assert msgs.any(it.starts_with(want)), '${c[0]}: ${msgs}'
+		assert !msgs.any(it.contains('neither a system signal')), '${c[0]}: ${msgs}'
+		// a composed system says it once, through loom2v (check_node_generatable, which needs the
+		// node's file), and nothing of its own
+		assert !issue_msgs(validate_system(s)).any(it.contains('[[routine]]')), '${c[0]}'
+	}
+}
+
 // REQ-TOPO-001: a signal no other node reads is a warning, not an error.
 fn test_dissolved_unread_signal_is_warning() {
 	mut s := clean_dissolved()

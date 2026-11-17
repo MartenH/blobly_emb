@@ -621,7 +621,9 @@ fn doip_target_serve(m Model) []string {
 	if !m.doip.on {
 		return []string{}
 	}
-	return ['\t\tdoipnet.serve_mailbox(mut g_diag, &g_doip_req[0], &g_doip_resp[0])']
+	mut g := ['\t\tdoipnet.serve_mailbox(mut g_diag, &g_doip_req[0], &g_doip_resp[0])']
+	g << routine_push_lines(m) // an answer a routine owes the DoIP tester, pushed (gen_routine.v)
+	return g
 }
 
 // doip_reset_wait: before the MCU resets, the DoIP answers already handed to TCP leave it — bounded,

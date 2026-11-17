@@ -238,6 +238,44 @@ fn test_response_pending_keeps_the_exchange_open_and_both_answers_come_back_in_o
 	assert !r.busy()
 }
 
+// @verifies REQ-DIAG-086
+// A routine answered responsePending several times — 0/4/8 s, as an application server repeats it
+// (uds.pending_repeat_us), the final answer at 11 s, longer than one answer wait — reaches the
+// tester whole: each 0x78 forwarded in order and renewing the wait, the exchange ended by the final
+// answer alone.
+fn test_several_responses_pending_keep_a_long_exchange_open() {
+	assert uds.pending_repeat_us < answer_wait_us
+	assert answer_wait_us == uds.p2_star_server_us + 1_000_000
+	mut r := new_router()
+	mut n := new_node()
+	mut ch := Chan{}
+	mut now := u64(0)
+	req := [u8(0x31), 0x01, 0x02, 0x01, 0x5A]
+	assert r.accept(0, &req[0], req.len, 1, 9, 1, now) == .accepted
+	run(mut r, mut n, mut ch, mut &now, 2)
+	assert n.requests == [req]
+	t_req := now
+	for k in 0 .. 3 {
+		for now < t_req + u64(k) * uds.pending_repeat_us {
+			run(mut r, mut n, mut ch, mut &now, 1)
+		}
+		answer(mut n, [u8(0x7F), 0x31, 0x78])
+		run(mut r, mut n, mut ch, mut &now, 2)
+		assert r.live_ticket() == 9, 'the exchange ended at responsePending ${k + 1}'
+		assert take(mut r) == [u8(0x7F), 0x31, 0x78]
+	}
+	for now < t_req + 11_000_000 {
+		run(mut r, mut n, mut ch, mut &now, 1)
+		assert r.live_ticket() == 9, 'the wait ran out at ${now - t_req} us'
+	}
+	answer(mut n, [u8(0x71), 0x01, 0x02, 0x01, 0x02, 0x00, 0xB4])
+	run(mut r, mut n, mut ch, mut &now, 2)
+	assert take(mut r) == [u8(0x71), 0x01, 0x02, 0x01, 0x02, 0x00, 0xB4]
+	assert r.waiting() == 0
+	assert r.timeouts == 0
+	assert r.live_ticket() == 0, 'the final answer ends the exchange'
+}
+
 fn test_an_unanswered_exchange_ends_after_the_answer_wait() {
 	mut r := new_router()
 	mut n := new_node()

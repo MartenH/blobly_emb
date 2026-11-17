@@ -324,16 +324,25 @@ fn diag_unbuilt(m Model, sid u8) string {
 				''
 			}
 		}
+		0x31 {
+			if m.target.on && !m.target.threadx {
+				'a bare-metal target runs no FB beside the server that could serve a routine'
+			} else if m.routines.len == 0 {
+				'the node has no [[routine]]'
+			} else {
+				'' // the host bridge and the ThreadX comm thread, each routine run by its FB
+			}
+		}
 		else {
 			'comm/uds does not implement it'
 		}
 	}
 }
 
-// sa_levels: the 0x27 levels the server serves — every level a [[did]] gate or a service row
-// names (bit L-1 for level L). A level nothing is gated on is not offered: unlocking it opens nothing.
+// sa_levels: the 0x27 levels the server serves — every level a [[did]] gate, a [[routine]] or a
+// service row names (bit L-1 for level L). A level nothing is gated on is not offered: unlocking it opens nothing.
 fn sa_levels(m Model) u8 {
-	mut mask := security_levels(m.dids)
+	mut mask := security_levels(m.dids) | routine_levels(m.routines)
 	for r in m.uds.services {
 		if r.security != 0 {
 			mask |= u8(1) << (r.security - 1)
@@ -611,6 +620,7 @@ fn conn_init_lines(m Model, c IsotpConn, conn string) []string {
 		}
 	}
 	g << '\t${srv}.ndid = ${m.dids.len}'
+	g << routine_config_lines(m, srv)
 	return g
 }
 
