@@ -3342,7 +3342,7 @@ fn check_diag_lowered(s System) []Issue {
 			if c.ext_stated && c.ext_authored != n.diag.ext {
 				errs << 'its [isotp] ext = ${c.ext_authored}, but its diag allocation is ${fmt} — an ext beside the allocation it takes must agree with it'
 			}
-			if c.functional_stated {
+			if c.functional_stated && c.functional_id != 0 { // 0 = no functional reception
 				f := c.functional_id
 				widest := if n.diag.ext { isotp.ext_id_max } else { isotp.std_id_max }
 				if f > widest {

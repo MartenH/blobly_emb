@@ -908,6 +908,8 @@ fn test_a_dissolved_nodes_isotp_keeps_its_functional_id_beside_the_allocation() 
 	// a 29-bit functional id in the allocation's 29-bit format, ext left to the allocation
 	assert topo14(partial(dir, '{ req = 0x18DA10F1, rsp = 0x18DAF110, ext = true }',
 		'functional_id = 0x18DB33F1')) == []
+	// functional_id = 0 is no functional reception: it collides with nothing, a req of 0 included
+	assert topo14(partial(dir, '{ req = 0, rsp = 8 }', 'functional_id = 0')) == []
 	// refused: an ext the allocation contradicts, a functional id wider than its format or one of
 	// its physical ids, and either beside a normal fixed allocation
 	for pair in [
