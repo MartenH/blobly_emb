@@ -341,6 +341,25 @@ pub fn is_point(pubkey [32]u8) bool {
 	return unpackneg(mut q, &pubkey[0]) == 0
 }
 
+// small_order: `pubkey` decodes to a point of small order — one the cofactor 8 takes to the neutral
+// point: the neutral point itself and the points of order 2, 4 and 8, in every encoding (a y at or
+// above p reduces like any other). Such a key verifies a forged proof — under the neutral point, R =
+// the neutral point and S = 0 verify for every message — so a configured public key must not be one.
+// Computed, not a list of encodings: decoded, doubled three times, compared with the neutral point. A
+// HOST check of a configured key (tools/loom2v); the verify itself never asks it (the keys are
+// constants the generator refused). A key that is no point is not small-order (is_point says so).
+pub fn small_order(pubkey [32]u8) bool {
+	mut p := [4]Gf{}
+	if unpackneg(mut p, &pubkey[0]) != 0 {
+		return false
+	}
+	for _ in 0 .. 3 {
+		add_pt(mut p, p)
+	}
+	zero := gf0
+	return neq25519(p[0], zero) == 0 && neq25519(p[1], p[2]) == 0
+}
+
 // modL reduces the 64-limb x mod L into the low 32 bytes of r. No-alloc: fixed
 // arrays throughout — the on-target verify path must not touch a heap the boot
 // does not have.

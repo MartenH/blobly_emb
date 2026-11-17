@@ -6,8 +6,10 @@
 module doipcfg
 
 import toml
+import bcrypto
 import comm.doip
 import comm.uds
+import comm.udsauth
 
 // the policy's keys: the same names in ecu.toml's [doip] and a node's `doip`
 pub const list_keys = ['testers', 'activation_types']
@@ -229,9 +231,49 @@ pub fn handoff_refusal(boot bool, security i64) string {
 // reference key, and an [uds] auth_keys entry's dev tester key
 pub const bench_key_name = 'reference'
 
-// names_bench_key: one [uds] auth_keys entry (its value as written) names the dev tester key
+// names_bench_key: one [uds] auth_keys entry (its value as written) names the dev tester key — by
+// name ("reference"), or as its 64 hex digits in either case (key_bytes): the key is what is
+// compared, never its spelling, so the bench key written out still needs allow_bench_key
 pub fn names_bench_key(entry toml.Any) bool {
-	return entry is string && entry.string() == bench_key_name
+	if entry !is string {
+		return false
+	}
+	text := entry.string()
+	if text == bench_key_name {
+		return true
+	}
+	key := key_bytes(text) or { return false }
+	return key == udsauth.reference_key
+}
+
+// key_bytes: an Ed25519 public key as ecu.toml writes one — 64 hex digits, either case, surrounding
+// space ignored — decoded; none for any other text. The one decoding of a configured public key
+// ([uds] auth_keys, [boot] image_key / session_key: tools/loom2v), so the bench-key comparison and
+// the key the generator writes cannot read one text two ways.
+pub fn key_bytes(text string) ?[32]u8 {
+	h := text.trim_space().to_lower()
+	if h.len != 64 || !h.bytes().all(it.is_hex_digit()) {
+		return none
+	}
+	mut out := [32]u8{}
+	for i in 0 .. 32 {
+		out[i] = u8(h[i * 2..i * 2 + 2].parse_uint(16, 8) or { return none })
+	}
+	return out
+}
+
+// key_refusal: '' unless a configured Ed25519 public key can be no tester's or signer's: not a
+// curve point (it verifies nothing), or a point of small order (bcrypto.small_order — under one, a
+// forged proof verifies for every challenge, and a forged image for every image). The one rule for
+// every key the generator bakes in; the verify on the target asks nothing (the keys are constants).
+pub fn key_refusal(key [32]u8) string {
+	if !bcrypto.is_point(key) {
+		return 'is not an Ed25519 public key (not a curve point) — it would verify nothing'
+	}
+	if bcrypto.small_order(key) {
+		return 'is a point of small order — any forged signature of the right shape verifies under it; name a real public key'
+	}
+	return ''
 }
 
 // auth_reference: [uds] auth_keys (as written) names the dev tester key at some level — the 0x29
@@ -246,14 +288,14 @@ pub fn auth_reference(auth_keys toml.Any) bool {
 
 // bench_key_refusal: '' unless the bench keys a server reachable over the network unlocks with and
 // `allow_bench_key` disagree — the 0x27 key (`security_key`, [uds]) and, for a node that unlocks by
-// 0x29, an `auth_keys` entry naming "reference" (`auth_reference`). Both are blobly_net's PUBLIC
+// 0x29, an `auth_keys` entry naming the dev tester key (`auth_reference`). Both are blobly_net's PUBLIC
 // keys, so over a routed network they authenticate nobody: allowed only by name, as a bench posture.
 pub fn bench_key_refusal(security_key string, auth_reference bool, allow bool) string {
 	if security_key == bench_key_name && !allow {
 		return '[uds] security_key = "reference" is blobly_net\'s PUBLIC bench key, and the network reaches this server — over IP it authenticates nobody (REQ-NET-012). Set `${bench_key} = true` for a closed bench, or give the node the OEM\'s key (drop security_key)'
 	}
 	if auth_reference && !allow {
-		return '[uds] auth_keys names "reference", blobly_net\'s PUBLIC dev tester key, and the network reaches this server — over IP it authenticates nobody (REQ-NET-012). Set `${bench_key} = true` for a closed bench, or give the level the tester\'s own public key'
+		return '[uds] auth_keys names "reference" (by name or as its hex), blobly_net\'s PUBLIC dev tester key, and the network reaches this server — over IP it authenticates nobody (REQ-NET-012). Set `${bench_key} = true` for a closed bench, or give the level the tester\'s own public key'
 	}
 	if allow && security_key != bench_key_name && !auth_reference {
 		return '`${bench_key}` is set, but [uds] uses no bench key — it would mean nothing'

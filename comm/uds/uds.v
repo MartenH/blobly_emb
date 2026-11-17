@@ -909,14 +909,24 @@ fn (mut s Server) sa_wrong(level u8, wrong u8) u8 {
 	return wrong
 }
 
-// sa_granted: a correct key or proof of `level` — unlocked, its count cleared, and the level unlocked
-// before relocked: its controls are returned, its routines asked to stop (end_levels) — one rule for
-// 0x27 and 0x29
+// sa_granted: a correct key or proof of `level` — unlocked, its count cleared (sa_cleared), and the
+// level unlocked before relocked: its controls are returned, its routines asked to stop (end_levels)
+// — one rule for 0x27 and 0x29. 0x27 clears and grants in the request's pass, before its persist
+// step; 0x29 clears at its verdict (auth_advance) and grants with its answer, so the clear is in the
+// journal before either answer leaves.
 fn (mut s Server) sa_granted(level u8) {
-	s.sa_failed[level - 1] = 0
-	s.sa_since[level - 1] = 0
+	s.sa_cleared(level)
 	s.unlocked = level
 	s.end_levels(level, true)
+}
+
+// sa_cleared: a correct key or proof of `level` clears its counts; true when the persisted count
+// (sa_since, the record sa_store.v writes) changed
+fn (mut s Server) sa_cleared(level u8) bool {
+	was := s.sa_since[level - 1]
+	s.sa_failed[level - 1] = 0
+	s.sa_since[level - 1] = 0
+	return was != 0
 }
 
 // ReferenceSecurity is the SIM / BENCH key, NOT a secret: key[i] = seed[i] XOR 0xFF, the reference

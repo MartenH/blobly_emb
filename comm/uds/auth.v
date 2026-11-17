@@ -26,9 +26,9 @@ module uds
 // pass carries the bus too), so 06 answers responsePending (0x78) and the verify runs a slice per
 // pass behind AuthOps.step, from the server's tick (auth_advance) — whether or not the transport
 // owing the answer can take a response, so a busy link delays only the ANSWER, never the verify. A
-// failed proof is counted in the tick that reaches the verdict and answered no earlier than the next
-// pass (pend_hold), after the owner has persisted the count (REQ-DIAG-067); a valid one unlocks its
-// level with its answer (auth_owed), as the owing transport sees the server, so an answer given up
+// failed proof is counted in the tick that reaches the verdict, a valid one clears its level's count
+// there, and either is answered no earlier than the next pass (pend_hold), after the owner has
+// persisted the change (REQ-DIAG-067); a valid one unlocks its level with its answer (auth_owed), as the owing transport sees the server, so an answer given up
 // unlocks nothing (once handed to the transport it may still be lost, as any answer may). A verify the owed answer gives up before its verdict (its
 // timeout, its transport gone) counts as a failed proof: a proof is spent when it is received, so
 // abandoning one buys no attempt. A session entry mid-verify — only the other transport can cause
@@ -253,9 +253,12 @@ fn (mut s Server) auth_verify(req &u8, resp &u8) int {
 
 // auth_advance: the server's tick while a 06 is owed — the verify advanced by one slice until its
 // verdict is in, whether or not the transport owing the answer can take a response (a stalled link
-// must not run a valid proof into the verify's timeout). A failed proof is counted here, and its
-// answer held to the next pass (pend_hold), so the owner persists the count before the answer
-// reporting it leaves (REQ-DIAG-067); a valid one is granted with its answer (auth_owed).
+// must not run a valid proof into the verify's timeout). Either verdict changes the count here: a
+// failed proof is counted, a valid one clears its level's count (sa_cleared) — and a change holds
+// the answer to the next pass (pend_hold), so the owner persists it before the answer reporting it
+// leaves (REQ-DIAG-067), as 0x27's key is judged before its pass's persist step. The UNLOCK of a
+// valid proof waits for its answer (auth_owed): clearing a count after a correct proof stands even
+// if the answer is then lost, an unlock without its answer would not.
 fn (mut s Server) auth_advance() {
 	if s.auth_level == 0 || s.auth_decided {
 		return
@@ -266,6 +269,9 @@ fn (mut s Server) auth_advance() {
 		}
 		.valid {
 			s.auth_nrc = 0
+			if s.sa_cleared(s.auth_level) {
+				s.pend_hold = true
+			}
 		}
 		.invalid {
 			s.auth_nrc = s.sa_wrong(s.auth_level, nrc_ownership_failed)
@@ -278,8 +284,9 @@ fn (mut s Server) auth_advance() {
 // auth_owed: the owed 06's final answer once its verdict is in (0 = not yet), computed as the
 // transport owing it sees the server (comm/diag owed_step). A valid proof unlocks its level HERE,
 // with its answer — and only where `cap`, what that transport carries, holds ownershipVerified;
-// otherwise 0x14, nothing unlocked and nothing counted — so a level is never left unlocked without
-// its answer (one given up, auth_abandon) nor a tester told its proof failed while it unlocked.
+// otherwise 0x14 and nothing unlocked (the count its verdict cleared stays cleared: the proof was
+// correct) — so a level is never left unlocked without its answer (one given up, auth_abandon) nor a
+// tester told its proof failed while it unlocked.
 fn (mut s Server) auth_owed(resp &u8, cap int) int {
 	if s.auth_level == 0 {
 		return negative(resp, 0x29, nrc_conditions_not_correct) // nothing being verified
@@ -325,8 +332,8 @@ fn (mut s Server) auth_abandon() {
 // auth_void: the owed 06 ended by a session entry (stop_routines) — never its own tester's doing,
 // since every request is dropped while the answer is owed — so a verify without its verdict is
 // dropped uncounted, as a restart drops it: nothing about the proof is judged or answered but 0x22.
-// A verdict already reached stays as it was applied: a failed proof counted, a valid one never granted
-// (it unlocks only with its answer).
+// A verdict already reached stays as it was applied: a failed proof counted, a valid one's count
+// cleared but never granted (it unlocks only with its answer).
 fn (mut s Server) auth_void() {
 	s.auth_clear()
 }

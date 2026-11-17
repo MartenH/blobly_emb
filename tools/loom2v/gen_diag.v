@@ -1,7 +1,6 @@
 module main
 
 import toml
-import bcrypto
 import boot
 import boot.bufs
 import comm.fault
@@ -103,25 +102,33 @@ fn boot_key(bm map[string]toml.Any, key string) []u8 {
 	if out.all(it == 0) {
 		panic('loom2v: [boot] ${key} is all zeros — the bootloader would take that as "no check" (boot.Prog); name the real public key')
 	}
+	why := doipcfg.key_refusal(fix_key(out))
+	if why != '' {
+		panic('loom2v: [boot] ${key} ${why}')
+	}
 	return out
 }
 
 // hex_key: an Ed25519 public key written as 64 hex characters — the one rule [boot]'s keys and
-// [uds] auth_keys share
+// [uds] auth_keys share (doipcfg.key_bytes, the bench-key comparison's decoding too)
 fn hex_key(text string) ![]u8 {
-	h := text.trim_space().to_lower()
-	if h.len != 64 || !h.bytes().all(it.is_hex_digit()) {
-		return error('must be 64 hex characters (a 32-byte Ed25519 public key), got "${h}"')
+	k := doipcfg.key_bytes(text) or {
+		return error('must be 64 hex characters (a 32-byte Ed25519 public key), got "${text.trim_space().to_lower()}"')
 	}
-	mut out := []u8{}
-	for i := 0; i < 64; i += 2 {
-		out << u8(h[i..i + 2].parse_uint(16, 8) or { 0 })
-	}
-	return out
+	return k[..].clone()
 }
 
-// parse_auth_keys: [uds] auth_keys — level ("1".."8") -> "reference" or 64 hex; a key all zeros or
-// not a curve point is refused (it could verify nothing). Which levels need one is validate_uds's.
+fn fix_key(key []u8) [32]u8 {
+	mut fixed := [32]u8{}
+	for i in 0 .. 32 {
+		fixed[i] = key[i]
+	}
+	return fixed
+}
+
+// parse_auth_keys: [uds] auth_keys — level ("1".."8") -> "reference" or 64 hex (the dev tester key's
+// own hex is the bench key too: doipcfg.names_bench_key); a key all zeros, not a curve point or of
+// small order is refused (doipcfg.key_refusal). Which levels need one is validate_uds's.
 fn parse_auth_keys(v toml.Any) (map[int][]u8, map[int]bool) {
 	if v !is map[string]toml.Any {
 		panic('loom2v: [uds] auth_keys must be a table, level = "<key>" (e.g. auth_keys = { "1" = "reference" })')
@@ -150,12 +157,9 @@ fn parse_auth_keys(v toml.Any) (map[int][]u8, map[int]bool) {
 		if key.all(it == 0) {
 			panic('loom2v: [uds] auth_keys "${lk}" is all zeros — it verifies nothing; name the tester\'s public key')
 		}
-		mut fixed := [32]u8{}
-		for i in 0 .. 32 {
-			fixed[i] = key[i]
-		}
-		if !bcrypto.is_point(fixed) {
-			panic('loom2v: [uds] auth_keys "${lk}" is not an Ed25519 public key (not a curve point) — it would verify nothing')
+		why := doipcfg.key_refusal(fix_key(key))
+		if why != '' {
+			panic('loom2v: [uds] auth_keys "${lk}" ${why}')
 		}
 		keys[level] = key
 		refs[level] = false

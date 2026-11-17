@@ -345,3 +345,115 @@ fn test_a_bus_proof_voided_by_the_other_transport_is_not_counted() {
 	assert ans[0] == 0x69, 'the voided proofs locked the level out: ${ans}'
 	assert bus(mut a.c, mut t, mut &now, proof_req(ans)) == [pending, verified()]
 }
+
+// DStore is a RAM journal block (uds sa_store.v's seam)
+struct DStore {
+mut:
+	cell [16]u8
+	len  int
+}
+
+fn d_put(ctx voidptr, _ u16, data &u8, len u16) bool {
+	mut f := unsafe { &DStore(ctx) }
+	for i in 0 .. int(len) {
+		f.cell[i] = unsafe { data[i] }
+	}
+	f.len = int(len)
+	return true
+}
+
+fn d_get(ctx voidptr, _ u16, out &u8, cap u16) u16 {
+	f := unsafe { &DStore(ctx) }
+	n := if f.len < int(cap) { f.len } else { int(cap) }
+	for i in 0 .. n {
+		unsafe {
+			out[i] = f.cell[i]
+		}
+	}
+	return u16(n)
+}
+
+// JWire is a bus that notes, for each frame put on it, level 1's count the journal held then
+struct JWire {
+mut:
+	st &DStore = unsafe { nil }
+	tx []can.Frame
+	at []u8
+}
+
+fn (mut w JWire) tx_ready() bool {
+	return true
+}
+
+fn (mut w JWire) send(f can.Frame) bool {
+	w.tx << f
+	w.at << w.st.cell[2]
+	return true
+}
+
+// @verifies REQ-DIAG-067 REQ-DIAG-123 — on a CAN link, whose owed answer leaves inside the pass's
+// pump (after its persist step), a correct proof's cleared count is in the journal before the first
+// frame of ownershipVerified is on the bus — the owner's pass as generated: housekeep, serve,
+// persist_security, pump
+fn test_a_correct_proofs_cleared_count_is_persisted_before_its_answer_on_can() {
+	mut a := auth_conn()
+	mut st := &DStore{}
+	a.c.server.sa_store = uds.SecurityStore{
+		ctx:      unsafe { voidptr(st) }
+		put:      d_put
+		get:      d_get
+		id:       0x044E
+		retry_us: 1_000_000
+	}
+	a.c.server.restore_persisted_security()
+	mut t := a_tester()
+	mut now := u64(0)
+	bus(mut a.c, mut t, mut &now, [u8(0x10), 0x03])
+	mut wrong := proof_req(bus(mut a.c, mut t, mut &now, ch_req())[0])
+	wrong[uds.auth_proof_at] ^= 1
+	assert bus(mut a.c, mut t, mut &now, wrong) == [pending, [u8(0x7F), 0x29, 0x58]]
+	a.c.server.persist_security(false)
+	assert st.cell[2] == 1
+	r := proof_req(bus(mut a.c, mut t, mut &now, ch_req())[0])
+	assert t.send(&r[0], r.len)
+	mut answer_count := -1
+	for _ in 0 .. 500 {
+		now += 1000
+		a.c.housekeep(now)
+		mut p := isotp.Pdu{}
+		for t.poll(now, mut p) {
+			mut f := &can.Frame{
+				id:  a_rx
+				len: 8
+			}
+			for i in 0 .. 8 {
+				f.data[i] = p.data[i]
+			}
+			if a.c.on_frame(now, f) == .request {
+				break
+			}
+		}
+		a.c.serve()
+		a.c.server.persist_security(false)
+		mut w := JWire{
+			st: st
+		}
+		a.c.pump(now, mut w)
+		for i, f in w.tx {
+			// the first frame of ownershipVerified: a First Frame carrying 69 06 12
+			if f.data[0] & 0xF0 == 0x10 && f.data[2] == 0x69 && f.data[3] == 0x06 {
+				answer_count = w.at[i]
+			}
+			mut q := isotp.Pdu{}
+			for k in 0 .. 8 {
+				q.data[k] = f.data[k]
+			}
+			t.on_frame(now, q)
+		}
+		if answer_count >= 0 {
+			break
+		}
+	}
+	assert answer_count == 0, 'ownershipVerified went on the bus while the journal held the failed proof (${answer_count})'
+	assert a.c.server.unlocked == 1
+}

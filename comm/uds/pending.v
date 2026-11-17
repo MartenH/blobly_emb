@@ -109,16 +109,17 @@ pub fn (mut s Server) pending_abandon() {
 }
 
 // pending_tick: tick()'s share — S3 held while an answer is owed, the owed work advanced (a 0x29
-// verify's slice: owed_advance), and at its timeout the owed request is failed (fail_owed) unless its
-// answer is ready by then, and either is abandoned if the transport could not take it within
-// P2*server_max after
+// verify's slice: owed_advance) only BEFORE its timeout, and at its timeout the owed request is
+// failed (fail_owed) unless its answer was ready by then, and either is abandoned if the transport
+// could not take it within P2*server_max after. A pass that comes late (a scheduling pause) never
+// completes the work first: a verdict reached in it would be judged timely and answered.
 fn (mut s Server) pending_tick(now u64) {
 	if s.pend_sid == 0 {
 		return
 	}
 	s.last_rx_us = now // the session does not time out under an owed answer
-	s.owed_advance()
 	if now < s.pend_until {
+		s.owed_advance()
 		return
 	}
 	if s.pend_fail || s.pend_late {

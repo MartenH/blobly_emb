@@ -327,3 +327,53 @@ fn test_the_key_post_unit_is_charged_its_hash_and_reduction() {
 		assert j.verified() == !tamper
 	}
 }
+
+// small_order_encodings: every encoding of a small-order point — the eight canonical ones (the
+// neutral point, the point of order 2, the two of order 4, the four of order 8), the sign bit set on
+// an x of zero, and y at or above p (p, p+1: the order-4 and neutral y's again)
+const small_order_encodings = [
+	'0100000000000000000000000000000000000000000000000000000000000000', // neutral (0, 1)
+	'ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f', // order 2 (0, -1)
+	'0000000000000000000000000000000000000000000000000000000000000000', // order 4, y = 0
+	'0000000000000000000000000000000000000000000000000000000000000080', // order 4, the other x
+	'26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05', // order 8
+	'26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85',
+	'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a',
+	'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa',
+	'0100000000000000000000000000000000000000000000000000000000000080', // neutral, x = -0
+	'ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', // order 2, x = -0
+	'edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f', // y = p: order 4
+	'edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+	'eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f', // y = p + 1: neutral
+	'eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+]
+
+// small_order refuses every small-order encoding (each one a point, so is_point alone accepts it),
+// and none of a real key or its non-canonical twins of large order; the neutral key verifies a forged
+// signature for any message, which is why a configured key must not be one
+fn test_small_order_keys_are_recognised() {
+	for h in small_order_encodings {
+		k := fix32(unhex(h))
+		assert small_order(k), '${h} not recognised as small-order'
+	}
+	// the forgery the check exists for: R = neutral, S = 0 under the neutral key
+	neutral := fix32(unhex(small_order_encodings[0]))
+	mut forged := [64]u8{}
+	forged[0] = 1
+	assert verify(neutral, 'any challenge'.bytes(), forged)
+	// keys of large order are not small-order: derived keys, and RFC 8032's
+	for v in rfc8032 {
+		assert !small_order(fix32(unhex(v.pub)))
+	}
+	for i in 0 .. 64 {
+		mut seed := [32]u8{}
+		seed[0] = u8(i)
+		seed[31] = u8(0x5A ^ i)
+		pk := public_key(seed)
+		assert is_point(pk) && !small_order(pk)
+	}
+	// y = p + 2 (the neutral's y + 2 reduced: 2) is a large-order point or none, never small
+	mut y2 := fix32(unhex(small_order_encodings[12]))
+	y2[0] = 0xef
+	assert !small_order(y2)
+}

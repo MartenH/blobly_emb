@@ -1,6 +1,7 @@
 module doipcfg
 
 import toml
+import comm.udsauth
 
 // allow_bench_key: a boolean, written back under its own name, and refused as anything else
 fn test_allow_bench_key_is_read_written_and_checked() {
@@ -122,4 +123,59 @@ fn test_auth_keys_name_the_bench_key_by_one_reading() {
 		assert auth_reference(doc.to_any().as_map()['auth_keys'] or { panic('no auth_keys') }) == want, text
 	}
 	assert names_bench_key(toml.Any('reference')) && !names_bench_key(toml.Any(1))
+}
+
+// the dev tester key's own hex digits, either case
+const reference_hex = '29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7'
+
+// @verifies REQ-NET-012 REQ-DIAG-126 — the dev tester key written out as its 64 hex digits, in
+// either case, IS the bench key (the key is compared, not its spelling): a network-reachable node
+// naming it so is refused without allow_bench_key, as "reference" is
+fn test_the_bench_key_written_as_hex_is_the_bench_key() {
+	for spelling in [reference_hex, reference_hex.to_upper(), ' ${reference_hex} '] {
+		assert names_bench_key(toml.Any(spelling)), spelling
+		doc := toml.parse_text('auth_keys = { "2" = "${spelling}" }') or { panic(err) }
+		ak := doc.to_any().as_map()['auth_keys'] or { panic('no auth_keys') }
+		assert auth_reference(ak), spelling
+		assert bench_key_refusal('', auth_reference(ak), false).contains('PUBLIC dev tester key')
+	}
+	// one digit off is another key
+	assert !names_bench_key(toml.Any(reference_hex[..63] + '6'))
+	assert key_bytes(reference_hex) or { panic('not decoded') } == udsauth.reference_key
+	assert key_bytes('zz' + reference_hex[2..]) == none && key_bytes(reference_hex[2..]) == none
+}
+
+// small_order_hex: every encoding of a small-order point (bcrypto's test has their derivation)
+const small_order_hex = [
+	'0100000000000000000000000000000000000000000000000000000000000000',
+	'ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f',
+	'0000000000000000000000000000000000000000000000000000000000000000',
+	'0000000000000000000000000000000000000000000000000000000000000080',
+	'26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05',
+	'26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85',
+	'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a',
+	'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa',
+	'0100000000000000000000000000000000000000000000000000000000000080',
+	'ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+	'edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f',
+	'edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+	'eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f',
+	'eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+]
+
+// @verifies REQ-DIAG-126 — a configured public key of small order is refused, in every encoding
+// (canonical or not), by the one rule every configured key goes through; real keys pass, and a
+// non-point is refused as such
+fn test_a_small_order_key_is_refused() {
+	for h in small_order_hex {
+		k := key_bytes(h) or { panic('not decoded: ${h}') }
+		assert key_refusal(k).contains('small order'), h
+	}
+	assert key_refusal(udsauth.reference_key) == ''
+	image := key_bytes('03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8') or {
+		panic('image key')
+	}
+	assert key_refusal(image) == ''
+	not_point := key_bytes('02' + '00'.repeat(31)) or { panic('decode') }
+	assert key_refusal(not_point).contains('not a curve point')
 }

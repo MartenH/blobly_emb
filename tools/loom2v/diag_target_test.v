@@ -754,6 +754,9 @@ fn test_a_handoff_that_cannot_be_performed_or_reached_is_refused() {
 		'bad_key':      [boot_conn.replace('"29acbae1', '"zz'), 'must be 64 hex characters']
 		'same_keys':    [boot_conn.replace('29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7', '03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8'), 'are the same key']
 		'zero_key':     [boot_conn.replace('29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7', '0'.repeat(64)), 'all zeros']
+		// the neutral point as the image key: a forged signature (R neutral, S 0) verifies any image
+		'small_image':  [boot_conn.replace('03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8', '01' + '00'.repeat(31)), '[boot] image_key is a point of small order']
+		'small_session': [boot_conn.replace('29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7', 'ec' + 'ff'.repeat(30) + '7f'), '[boot] session_key is a point of small order']
 		'bus_index':    [boot_conn.replace('bus           = "can0"', 'bus           = "can10"'), 'names no single FDCAN index']
 	} {
 		code, out, _ := generate('boot_${name}', c[0])
@@ -1310,6 +1313,9 @@ fn test_an_authentication_config_that_cannot_work_is_refused() {
 		'short_key':    [diag_conn + auth_gate + auth_uds('"1" = "abcd"'), 'must be 64 hex characters']
 		'zero_key':     [diag_conn + auth_gate + auth_uds('"1" = "${zero}"'), 'is all zeros']
 		'not_point':    [diag_conn + auth_gate + auth_uds('"1" = "${not_point}"'), 'not a curve point']
+		// the neutral point: under it a forged proof (R neutral, S 0) verifies for every challenge
+		'small_order':  [diag_conn + auth_gate + auth_uds('"1" = "01${'00'.repeat(31)}"'), 'is a point of small order']
+		'small_noncanon': [diag_conn + auth_gate + auth_uds('"1" = "EE${'FF'.repeat(30)}7F"'), 'is a point of small order']
 		'bad_level':    [diag_conn + auth_gate + auth_uds('"9" = "reference"'), 'is not a security level']
 		'bad_access':   [diag_conn + auth_gate + '\n[uds]\naccess = "password"\n', '[uds] access "password"']
 		'keys_on_27':   [diag_conn + auth_gate + '\n[uds]\nauth_keys = { "1" = "reference" }\n', 'but access is "seed_key"']

@@ -845,18 +845,101 @@ fn auth_store_server(mut st AStore, mut f FakeAuth, now u64) Server {
 }
 
 // REQ-DIAG-127: a valid proof is granted only where the transport owing its answer carries the
-// 21-byte ownershipVerified — otherwise 0x14, nothing unlocked and nothing counted (a DoIP push slot
-// too small would tell the tester its proof failed while the ECU unlocked)
+// 21-byte ownershipVerified — otherwise 0x14 and nothing unlocked (a DoIP push slot too small would
+// tell the tester its proof failed while the ECU unlocked); its level's count is cleared at the
+// verdict all the same, since the proof was correct, and the 0x14 waits a pass for that to persist
 fn test_a_valid_proof_unlocks_only_where_its_answer_fits() {
 	mut f := FakeAuth{}
+	mut s := authed(mut f)
+	mut resp := [256]u8{}
+	// a failed proof first, so there is a count to clear
+	ac(mut s, gv_req05)
+	ac(mut s, req06_with(bad_sig()))
+	s.tick(s.now_us + 1000)
+	s.tick(s.now_us + 1000)
+	assert s.pending_step(&resp[0], 256) == 3 && s.sa_since[0] == 1
+	ac(mut s, gv_req05)
+	assert ac(mut s, gv_req06()) == [u8(0x7F), 0x29, 0x78]
+	cap := auth_proof_answer_len - 1
+	s.tick(s.now_us + 1000) // the verdict
+	assert s.unlocked == 0, 'granted before its answer'
+	assert s.sa_since[0] == 0, 'a correct proof left its count standing'
+	assert s.pending_step(&resp[0], cap) == 0, 'the 0x14 left in the pass that cleared the count'
+	s.tick(s.now_us + 1000)
+	n := s.pending_step(&resp[0], cap)
+	assert resp[..n] == [u8(0x7F), 0x29, 0x14] && !s.pending()
+	assert s.unlocked == 0 && s.sa_since[0] == 0 && s.sa_failed[0] == 0
+}
+
+// @verifies REQ-DIAG-127 — a verify still undecided at its timeout is given up there, counted and
+// answered 0x22, even when the pass that reaches the timeout would have finished it: a late pass (a
+// scheduling pause) never turns a verdict reached after the deadline into a timely one
+fn test_a_verify_undecided_at_its_timeout_is_not_finished_late() {
+	mut f := FakeAuth{
+		steps: 3
+	}
 	mut s := authed(mut f)
 	ac(mut s, gv_req05)
 	assert ac(mut s, gv_req06()) == [u8(0x7F), 0x29, 0x78]
 	mut resp := [256]u8{}
-	cap := auth_proof_answer_len - 1
+	for _ in 0 .. 2 {
+		s.tick(s.now_us + 1000)
+		assert s.pending_step(&resp[0], 256) == 0
+	}
+	assert f.stepped == 2 && !s.auth_decided
+	s.tick(s.now_us + auth_verify_timeout_us) // the pause: the final slice would land past the deadline
+	assert f.stepped == 2, 'the verify advanced past its deadline'
+	assert s.sa_since[0] == 1 && s.unlocked == 0, 'a verdict reached late was taken as timely'
+	assert s.pending_step(&resp[0], 256) == 0, 'the 0x22 left in the pass that counted it'
+	s.tick(s.now_us + 1000)
+	n := s.pending_step(&resp[0], 256)
+	assert resp[..n] == [u8(0x7F), 0x29, 0x22] && !s.pending() && s.unlocked == 0
+	// a verdict reached BEFORE the deadline, with only the transport late, is still the answer
+	ac(mut s, [u8(0x10), 0x03])
+	ac(mut s, gv_req05)
+	ac(mut s, gv_req06())
+	for _ in 0 .. 3 {
+		s.tick(s.now_us + 1000)
+	}
+	assert s.auth_decided
+	s.tick(s.now_us + auth_verify_timeout_us)
+	assert s.pending() && s.pending_step(&resp[0], 256) == auth_proof_answer_len
+	assert s.unlocked == 1
+}
+
+// @verifies REQ-DIAG-067 REQ-DIAG-123 — a correct proof clears its level's count in the pass that
+// reaches the verdict and holds its answer to the next one, so the owner's persist step writes the
+// cleared count before ownershipVerified leaves; the unlock still comes with the answer
+fn test_a_valid_proof_clears_the_persisted_count_before_its_answer() {
+	mut st := AStore{}
+	mut f := FakeAuth{}
+	f.good = gv_sig.clone()
+	mut s := auth_store_server(mut st, mut f, 1_000_000)
+	ac(mut s, gv_req05)
+	ac(mut s, req06_with(bad_sig()))
+	s.tick(s.now_us + 1000)
+	s.persist_security(false)
+	s.tick(s.now_us + 1000)
+	mut resp := [256]u8{}
+	assert s.pending_step(&resp[0], 256) == 3 && st.cell[..st.len] == a_record(1)
+	// the correct proof
+	ac(mut s, gv_req05)
+	ac(mut s, gv_req06())
 	s.tick(s.now_us + 1000) // the verdict
 	assert s.unlocked == 0, 'granted before its answer'
-	n := s.pending_step(&resp[0], cap)
-	assert resp[..n] == [u8(0x7F), 0x29, 0x14] && !s.pending()
-	assert s.unlocked == 0 && s.sa_since[0] == 0 && s.sa_failed[0] == 0
+	assert s.pending_step(&resp[0], 256) == 0, 'ownershipVerified left before its cleared count was persisted'
+	s.persist_security(false)
+	assert st.cell[..st.len] == a_record(0), 'the cleared count was not written at the verdict'
+	s.tick(s.now_us + 1000)
+	n := s.pending_step(&resp[0], 256)
+	assert resp[..n] == gv_ans06() && s.unlocked == 1
+	// a correct proof with nothing counted writes nothing and waits for nothing
+	puts := st.puts
+	ac(mut s, [u8(0x10), 0x03])
+	ac(mut s, gv_req05)
+	ac(mut s, gv_req06())
+	s.tick(s.now_us + 1000)
+	assert s.pending_step(&resp[0], 256) == auth_proof_answer_len
+	s.persist_security(false)
+	assert st.puts == puts
 }
