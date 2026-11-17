@@ -46,18 +46,37 @@ grep -q 'g_diag.server.auth = g_auth_keys.ops()' "$glue" || { echo "auth_target_
 grep -q 'g_comm_stack \[16384\]u8' "$glue" || { echo "auth_target_check: the comm stack is not 16 KB" >&2; exit 1; }
 elf=$(ls "$node"/build/*.elf | head -1)
 "$repo/scripts/check_no_heap.sh" "$elf"
-# the proof is verified a slice per pass: the seam's step callback (udsauth, over bcrypto.VerifyJob,
-# which -Os may inline into it) is in the image, and no whole-verify callback is
+# the proof is verified a slice per pass: the seam's step callback (udsauth, over bcrypto.VerifyJob)
+# is in the image, and no whole verify is — neither bcrypto's one-shot entries (verify_start and
+# Verifier.finish, the bootloader's streaming verify; verify) nor the whole-scalar routines only they
+# run (scalarmult, pow2523, inv25519; VerifyJob runs those a bit at a time). Every name but verify is
+# required in the bootloader image built beside the application, and verify in bcrypto's source, so
+# a rename or a change of V's mangling fails here rather than leaving the check asking after
+# symbols that exist nowhere.
 syms="$(arm-none-eabi-nm "$elf")"
 grep -q ' udsauth__keys_step$' <<<"$syms" \
 	|| { echo "auth_target_check: udsauth's step is not in the image — the stepped verify is not what runs" >&2; exit 1; }
-if grep -q ' udsauth__keys_verify$' <<<"$syms"; then
-	echo "auth_target_check: a whole-verify callback is in the image" >&2; exit 1
-fi
+boot_elf="$node/build/boot/boot.elf"
+[ -f "$boot_elf" ] || { echo "auth_target_check: no bootloader image ($boot_elf) to hold the whole-verify names to" >&2; exit 1; }
+boot_syms="$(arm-none-eabi-nm "$boot_elf")"
+grep -q '^pub fn verify(' "$repo/bcrypto/ed25519.v" \
+	|| { echo "auth_target_check: bcrypto has no one-shot verify() — update the names here" >&2; exit 1; }
+for sym in bcrypto__verify_start bcrypto__Verifier__finish bcrypto__scalarmult bcrypto__pow2523 bcrypto__inv25519 bcrypto__verify; do
+	if [ "$sym" != bcrypto__verify ] && ! grep -q " $sym\$" <<<"$boot_syms"; then
+		echo "auth_target_check: $sym is not in the bootloader image either — its name changed; update it here" >&2
+		exit 1
+	fi
+	if grep -q " $sym\$" <<<"$syms"; then
+		echo "auth_target_check: a whole verify ($sym) is in the application image" >&2
+		exit 1
+	fi
+done
 # the verifier's frames, for review: the deepest stack users in the image
 mapfile -t sus < <(find "$node" -name '*.su')
 if [ ${#sus[@]} -gt 0 ]; then
 	echo "auth_target_check: the deepest frames (-fstack-usage):"
-	cat "${sus[@]}" | sort -t$'\t' -k2 -n -r | head -12 | sed 's/^/  /'
+	# sorted whole first: `head` closing the pipe early would SIGPIPE sort, and pipefail fail the check
+	frames="$(cat "${sus[@]}" | sort -t$'\t' -k2 -n -r)"
+	head -12 <<<"$frames" | sed 's/^/  /'
 fi
 echo "auth_target_check: a ThreadX node authenticating with 0x29 builds, lint_vinit and no-heap clean"

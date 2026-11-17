@@ -5,18 +5,27 @@ import comm.uds
 
 // @verifies REQ-DIAG-121 REQ-DIAG-122 REQ-DIAG-126 REQ-DIAG-127
 // (the keys per level and the real Ed25519 verify behind uds.AuthOps, stepped: the reference key is
-//  the dev tester seed's public half; the GOLDEN signature of the challenge 00..1F under the dev
-//  seed — committed byte for byte here, in comm/uds/auth_test.v and in blobly_net — verifies at its
-//  level and fails under another level's key, with a tampered challenge or signature, a non-canonical
-//  S, a level with no key and a level outside 1..8; whole 0x29 exchanges through a server — the
-//  golden 06 answered 0x78 and then ISO's 21-byte answer, every challenge fresh and a proof of an
-//  earlier one refused.)
+//  the dev tester seed's public half; the GOLDEN signature of the application message for level 1
+//  and the challenge 00..1F under the dev seed — committed byte for byte here, in
+//  comm/uds/auth_test.v and in blobly_net — verifies at its level and fails under another level's
+//  key, at another level sharing its key, as the bootloader's bare-challenge signature, with a
+//  tampered challenge or signature, a non-canonical S, a level with no key and a level outside 1..8;
+//  whole 0x29 exchanges through a server — the golden 06 answered 0x78 and then ISO's 21-byte
+//  answer, every challenge fresh and a proof of an earlier one refused.)
 
 const gv_seed = [u8(0x20), 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c,
 	0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c,
 	0x3d, 0x3e, 0x3f]!
 
-const gv_sig = [u8(0xea), 0x92, 0xd2, 0x4e, 0xda, 0x4c, 0x09, 0x9e, 0xa3, 0xc1, 0xaa, 0xa1, 0x0c,
+const gv_sig = [u8(0x9f), 0x70, 0xab, 0xb9, 0x8d, 0x37, 0x4d, 0x2c, 0x24, 0xa6, 0xfa, 0xd6, 0x17,
+	0x91, 0xbb, 0x94, 0xec, 0xb5, 0xbc, 0xab, 0xac, 0xcc, 0x23, 0x60, 0x7d, 0x4a, 0xc1, 0x45, 0x08,
+	0xef, 0xdc, 0x93, 0xb1, 0xe8, 0xa0, 0x80, 0x64, 0x5f, 0xb9, 0xe0, 0x05, 0xf4, 0x71, 0x8c, 0x5f,
+	0x91, 0x88, 0x61, 0xce, 0xf2, 0x5a, 0x6e, 0x28, 0x6b, 0xb8, 0x8d, 0xd3, 0xa0, 0xb1, 0x8c, 0x22,
+	0x7c, 0x7f, 0x0d]!
+
+// gv_boot_sig: the bootloader profile's signature of the same challenge — the BARE challenge under
+// the dev seed (boot/prog.v's message), which an application must refuse
+const gv_boot_sig = [u8(0xea), 0x92, 0xd2, 0x4e, 0xda, 0x4c, 0x09, 0x9e, 0xa3, 0xc1, 0xaa, 0xa1, 0x0c,
 	0x86, 0xcd, 0x63, 0xe2, 0xa0, 0x43, 0x0a, 0xaf, 0x86, 0x5d, 0xb6, 0xed, 0x60, 0xf8, 0x12, 0x9d,
 	0xe7, 0xa3, 0x63, 0xa6, 0x1c, 0xdc, 0x52, 0x51, 0xb5, 0xc7, 0x4f, 0x07, 0x75, 0x56, 0x39, 0xb3,
 	0x3d, 0xda, 0xd8, 0x69, 0x9e, 0xf8, 0x5b, 0xe6, 0x1c, 0xbe, 0x8d, 0x60, 0x3e, 0x8e, 0x80, 0xaa,
@@ -58,11 +67,45 @@ fn verify_with(mut k Keys, level u8, c [32]u8, sig [64]u8) bool {
 	return false
 }
 
+// app_message: what an application proof for `level` signs — the context, the level, the challenge
+fn app_message(level u8, c [32]u8) []u8 {
+	mut m := uds.auth_context[..].clone()
+	m << level
+	m << c[..]
+	assert m.len == uds.auth_message_len
+	return m
+}
+
+// app_sig: the dev tester's application proof for `level` and challenge `c`
+fn app_sig(level u8, c []u8) [64]u8 {
+	mut cc := [32]u8{}
+	for i in 0 .. 32 {
+		cc[i] = c[i]
+	}
+	return bcrypto.sign(gv_seed, app_message(level, cc))
+}
+
 fn test_the_reference_key_is_the_dev_seed_s_public_half() {
 	assert bcrypto.public_key(gv_seed) == reference_key
-	// the golden signature is bcrypto's own deterministic signature (RFC 8032)
+	// the golden signatures are bcrypto's own deterministic signatures (RFC 8032): the application
+	// message's, and the bootloader profile's of the bare challenge
 	c := challenge()
-	assert bcrypto.sign(gv_seed, c[..]) == gv_sig
+	assert bcrypto.sign(gv_seed, app_message(1, c)) == gv_sig
+	assert bcrypto.sign(gv_seed, c[..]) == gv_boot_sig
+}
+
+// the application proof is domain-separated: the bootloader's bare-challenge signature of the very
+// challenge is refused (a relayed bootloader challenge buys no application unlock, nor the reverse),
+// and a level-1 proof does not unlock level 3 though level 3 trusts the same key
+fn test_a_proof_for_another_use_is_refused() {
+	mut k := Keys{}
+	k.set(1, &reference_key[0])
+	k.set(3, &reference_key[0])
+	c := challenge()
+	assert !verify_with(mut k, 1, c, gv_boot_sig), "the bootloader's proof unlocked the application"
+	assert verify_with(mut k, 1, c, gv_sig)
+	assert !verify_with(mut k, 3, c, gv_sig), 'a level-1 proof unlocked level 3'
+	assert verify_with(mut k, 3, c, app_sig(3, c[..]))
 }
 
 fn test_the_golden_vector_verifies_at_its_level_only() {
@@ -155,7 +198,7 @@ fn req06(sig []u8) []u8 {
 }
 
 // prove: send the 06 for `sig` — answered 0x78 at once — and drive the owed answer a pass at a time
-// (pending_step, as an owner's pump does) until the final answer, returned
+// (tick, then pending_step as an owner's pump does) until the final answer, returned
 fn prove(mut s uds.Server, sig []u8) []u8 {
 	mut resp := [256]u8{}
 	r06 := req06(sig)
@@ -163,6 +206,7 @@ fn prove(mut s uds.Server, sig []u8) []u8 {
 	n := s.handle(unsafe { &r06[0] }, r06.len, &resp[0])
 	assert resp[..n] == [u8(0x7F), 0x29, 0x78], 'the 06 was not answered responsePending'
 	for _ in 0 .. 1000 {
+		s.tick(s.now_us + 1000)
 		m := s.pending_step(&resp[0], 256)
 		if m > 0 {
 			assert s.pending() == (m == 3 && resp[2] == 0x78)
@@ -213,7 +257,7 @@ fn test_every_challenge_is_fresh_and_an_old_proof_is_refused() {
 		seed: lcg
 	})
 	c1 := ask(mut s)
-	sig1 := bcrypto.sign(gv_seed, c1)
+	sig1 := app_sig(1, c1)
 	assert prove(mut s, sig1[..])[0] == 0x69
 	assert s.unlocked == 1
 	c2 := ask(mut s)
@@ -222,6 +266,6 @@ fn test_every_challenge_is_fresh_and_an_old_proof_is_refused() {
 	// and the fresh one's own proof still works after a refused one
 	c3 := ask(mut s)
 	assert c3 != c2 && c3 != c1
-	sig3 := bcrypto.sign(gv_seed, c3)
+	sig3 := app_sig(1, c3)
 	assert prove(mut s, sig3[..])[0] == 0x69
 }

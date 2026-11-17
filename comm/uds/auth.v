@@ -13,23 +13,30 @@ module uds
 //   05 requestChallengeForAuthentication    29 05 cc alg[16]       -> 69 05 00 alg[16] 0020 challenge[32] 0000
 //   06 verifyProofOfOwnershipUnidirectional 29 06 alg[16] 0040 proof[64] 0000 0000 -> 7F 29 78 ..., 69 06 12 alg[16] 0000
 // cc (communicationConfiguration, the one manufacturer-specific byte) names the LEVEL the proof
-// will unlock; alg is the Ed25519 object identifier. The proof is an Ed25519 signature over
-// exactly the 32-byte challenge — the bootloader's message (boot/prog.v), so a tester signs once
-// for both. The level is bound to the challenge at 05, so 06 carries no level. The 06 answer is
-// ISO 14229-1:2020's: returnValue, the algorithmIndicator, lengthOfSessionKeyInfo (0, none).
+// will unlock; alg is the Ed25519 object identifier. The proof is an Ed25519 signature over the
+// APPLICATION message (auth_message_len bytes): the context auth_context, the level (one byte) and
+// the 32-byte challenge. Never the bare challenge, which is what the bootloader's own 0x29 signs
+// (boot/prog.v): a proof made for one could otherwise be relayed as the other — a bootloader's
+// challenge handed to a tester doing an application unlock, its signature then programming access —
+// or reused at another level sharing a key. The level is bound to the challenge at 05, so 06 carries
+// no level. The 06 answer is ISO 14229-1:2020's: returnValue, the algorithmIndicator,
+// lengthOfSessionKeyInfo (0, none).
 //
 // A verify costs about 10,300 field multiplications, far more than one comm pass may take (that
 // pass carries the bus too), so 06 answers responsePending (0x78) and the verify runs a slice per
-// pass behind AuthOps.step while the answer is owed (pending.v). The verdict is counted in the pass
-// that reaches it and answered in the next one, after the owner has persisted the count (REQ-DIAG-
-// 067: a count is in the journal before the answer reporting it leaves). A verify the owed answer
-// gives up (its timeout, its transport gone) counts as a failed proof: a proof is spent when it is
-// received, so abandoning one buys no attempt. A session entry mid-verify — only the other
-// transport can cause one, every request being dropped meanwhile: its tester disconnecting while it
-// owns the session, its answered reset — voids the proof uncounted and answers it 0x22 (auth_void),
-// as an MCU restart mid-verify loses it uncounted: nothing about it was judged or answered. A level is granted only where the
-// transport owing the answer can carry ownershipVerified (auth_owed); over DoIP that is the push
-// slot (driver/doipnet push_max).
+// pass behind AuthOps.step, from the server's tick (auth_advance) — whether or not the transport
+// owing the answer can take a response, so a busy link delays only the ANSWER, never the verify. A
+// failed proof is counted in the tick that reaches the verdict and answered no earlier than the next
+// pass (pend_hold), after the owner has persisted the count (REQ-DIAG-067); a valid one unlocks its
+// level with its answer (auth_owed), as the owing transport sees the server, so an answer given up
+// unlocks nothing (once handed to the transport it may still be lost, as any answer may). A verify the owed answer gives up before its verdict (its
+// timeout, its transport gone) counts as a failed proof: a proof is spent when it is received, so
+// abandoning one buys no attempt. A session entry mid-verify — only the other transport can cause
+// one, every request being dropped meanwhile: its tester disconnecting while it owns the session, its
+// answered reset — voids the proof uncounted and answers it 0x22 (auth_void), as an MCU restart
+// mid-verify loses it uncounted: nothing about it was judged or answered. A level is granted only
+// where the transport owing the answer can carry ownershipVerified (auth_owed); over DoIP that is the
+// push slot (driver/doipnet push_max).
 
 pub const auth_challenge_len = 32
 pub const auth_proof_len = 64
@@ -53,6 +60,16 @@ pub const auth_cc_len_at = 84 // 06: lengthOfChallengeClient (2) = 0
 pub const auth_ap_len_at = 86 // 06: lengthOfAdditionalParameter (2) = 0
 pub const auth_answer_challenge_at = 21 // 05 answer: the challenge (after alg[16] and its length)
 pub const auth_answer_alg_at = 3 // 05 and 06 answers: algorithmIndicator (16), after returnValue
+
+// auth_context: the application proof's context, the ASCII text "blobly uds 0x29 application v1"
+// and a terminating zero — the first part of the message an application proof signs, before the
+// level and the challenge. A new version of the message gets a new text.
+pub const auth_context = [u8(0x62), 0x6c, 0x6f, 0x62, 0x6c, 0x79, 0x20, 0x75, 0x64, 0x73, 0x20,
+	0x30, 0x78, 0x32, 0x39, 0x20, 0x61, 0x70, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x69, 0x6f, 0x6e,
+	0x20, 0x76, 0x31, 0x00]!
+
+// auth_message_len: the signed message — the context, the level, the challenge
+pub const auth_message_len = auth_context.len + 1 + auth_challenge_len
 
 // auth_verify_timeout_us: how long a 06's owed answer waits for its verify — a slice per pass, about
 // 75 passes (udsauth.verify_step_mults): inside one responsePending's P2*server_max
@@ -84,10 +101,10 @@ pub enum AuthVerdict {
 }
 
 // AuthOps is the 0x29 seam. `keyed` answers whether LEVEL has a key (a level without one is refused
-// 0x31 at 05); `start` begins verifying `proof` (auth_proof_len bytes) as a signature over the
-// challenge (`n` bytes, copied — the server's may change after) under LEVEL's key; `step` advances
-// that verify by a bounded slice and says where it stands — called once per pass while the answer
-// is owed. comm/uds holds no key and no algorithm — comm/udsauth holds the keys and runs bcrypto's
+// 0x31 at 05); `start` begins verifying `proof` (auth_proof_len bytes) under LEVEL's key as a
+// signature over the application message — auth_context, LEVEL, then the challenge (`n` bytes,
+// copied: the server's may change after); `step` advances that verify by a bounded slice and says
+// where it stands — called once per pass (the server's tick) until the verdict. comm/uds holds no key and no algorithm — comm/udsauth holds the keys and runs bcrypto's
 // stepped verify. All three nil = 0x29 is not served (and 0x27 may be). The challenge comes from
 // SecurityOps.seed, the source 0x27's seeds do.
 pub struct AuthOps {
@@ -110,9 +127,11 @@ pub fn (s &Server) authenticates() bool {
 // (0x14) and the challenge source (0x59); for 06 a challenge outstanding (0x24), the algorithm
 // (0x31, the challenge kept), the level's delay (0x37: the challenge void, the proof neither verified
 // nor counted — a challenge drawn before a lockout buys no proof during it), the response capacity
-// (0x14, the challenge kept), then 0x78 and the verdict (0x58, or 0x36 on the last allowed attempt). 05 always answers (the challenge is the
-// answer) and so does 06 (its 0x78 lifts the suppression, as ISO 14229-1 has it); 00 honours the
-// suppress bit.
+// (0x14, the challenge kept), then 0x78 and the verdict (0x58, or 0x36 on the last allowed attempt).
+// 0x36 and 0x37 are 0x27's NRCs, not in ISO 14229-1's list for 0x29: the attempt limit and the
+// lockout are SecurityAccess's, shared (docs/diagnostics.md §3.1). 05 always answers (the challenge
+// is the answer) and so does 06 (its 0x78 lifts the suppression, as ISO 14229-1 has it); 00 honours
+// the suppress bit.
 fn (mut s Server) authentication(req &u8, req_len int, resp &u8) int {
 	if req_len < 2 {
 		return negative(resp, 0x29, nrc_incorrect_length)
@@ -232,46 +251,52 @@ fn (mut s Server) auth_verify(req &u8, resp &u8) int {
 	return s.go_pending(0x29, 0, auth_verify_proof, auth_verify_timeout_us, resp)
 }
 
-// auth_owed: the owed 06 — the verify advanced by one slice until its verdict is in, which is
-// counted (or granted) in that pass and answered in the next (0 = not yet). `cap` is what the
-// transport owing the answer carries: a valid proof unlocks only where ownershipVerified fits it —
-// otherwise 0x14, nothing unlocked and nothing counted — so no tester is told a proof failed that
-// unlocked the ECU.
+// auth_advance: the server's tick while a 06 is owed — the verify advanced by one slice until its
+// verdict is in, whether or not the transport owing the answer can take a response (a stalled link
+// must not run a valid proof into the verify's timeout). A failed proof is counted here, and its
+// answer held to the next pass (pend_hold), so the owner persists the count before the answer
+// reporting it leaves (REQ-DIAG-067); a valid one is granted with its answer (auth_owed).
+fn (mut s Server) auth_advance() {
+	if s.auth_level == 0 || s.auth_decided {
+		return
+	}
+	match s.auth.step(s.auth.ctx) {
+		.verifying {
+			return
+		}
+		.valid {
+			s.auth_nrc = 0
+		}
+		.invalid {
+			s.auth_nrc = s.sa_wrong(s.auth_level, nrc_ownership_failed)
+			s.pend_hold = true
+		}
+	}
+	s.auth_decided = true
+}
+
+// auth_owed: the owed 06's final answer once its verdict is in (0 = not yet), computed as the
+// transport owing it sees the server (comm/diag owed_step). A valid proof unlocks its level HERE,
+// with its answer — and only where `cap`, what that transport carries, holds ownershipVerified;
+// otherwise 0x14, nothing unlocked and nothing counted — so a level is never left unlocked without
+// its answer (one given up, auth_abandon) nor a tester told its proof failed while it unlocked.
 fn (mut s Server) auth_owed(resp &u8, cap int) int {
 	if s.auth_level == 0 {
 		return negative(resp, 0x29, nrc_conditions_not_correct) // nothing being verified
 	}
 	if !s.auth_decided {
-		match s.auth.step(s.auth.ctx) {
-			.verifying {
-				return 0
-			}
-			.valid {
-				if cap < auth_proof_answer_len {
-					s.auth_nrc = nrc_response_too_long
-				} else {
-					s.sa_granted(s.auth_level)
-					s.auth_nrc = 0
-				}
-			}
-			.invalid {
-				s.auth_nrc = s.sa_wrong(s.auth_level, nrc_ownership_failed)
-			}
-		}
-		s.auth_decided = true
-		return 0 // answered in the next pass, once the owner has persisted the count
+		return 0
 	}
+	level := s.auth_level
 	nrc := s.auth_nrc
 	s.auth_clear()
 	if nrc != 0 {
 		return negative(resp, 0x29, nrc)
 	}
 	if cap < auth_proof_answer_len {
-		// granted for a larger answer than this transport carries: never left unlocked, and relocked
-		// as a dropped unlock is, so nothing it gated outlives it
-		s.relock(s.unlocked)
 		return negative(resp, 0x29, nrc_response_too_long)
 	}
+	s.sa_granted(level)
 	unsafe {
 		resp[0] = 0x69
 		resp[1] = auth_verify_proof
@@ -286,10 +311,13 @@ fn (mut s Server) auth_owed(resp &u8, cap int) int {
 }
 
 // auth_abandon: the owed 06 given up (pending.v owed_stop: its timeout, its transport gone) — a
-// verify without its verdict counts as a failed proof, so abandoning one buys nothing
+// verify without its verdict counts as a failed proof, so abandoning one buys nothing; the count's
+// answer, if one is still to go (the timeout's 0x22), waits a pass for it to be persisted. A valid
+// verdict given up unlocks nothing: its level is granted only with its answer (auth_owed).
 fn (mut s Server) auth_abandon() {
 	if s.auth_level != 0 && !s.auth_decided {
 		s.sa_wrong(s.auth_level, nrc_ownership_failed)
+		s.pend_hold = true
 	}
 	s.auth_clear()
 }
@@ -297,7 +325,8 @@ fn (mut s Server) auth_abandon() {
 // auth_void: the owed 06 ended by a session entry (stop_routines) — never its own tester's doing,
 // since every request is dropped while the answer is owed — so a verify without its verdict is
 // dropped uncounted, as a restart drops it: nothing about the proof is judged or answered but 0x22.
-// A verdict already reached stays as it was applied (counted, or granted and relocked by the entry).
+// A verdict already reached stays as it was applied: a failed proof counted, a valid one never granted
+// (it unlocks only with its answer).
 fn (mut s Server) auth_void() {
 	s.auth_clear()
 }

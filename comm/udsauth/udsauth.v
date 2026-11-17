@@ -72,8 +72,10 @@ fn keys_keyed(ctx voidptr, level u8) bool {
 	return k.keyed(level)
 }
 
-// keys_start: begin verifying `proof` (64 bytes) as an Ed25519 signature over the challenge under
-// LEVEL's key
+// keys_start: begin verifying `proof` (64 bytes) under LEVEL's key as an Ed25519 signature over the
+// application message — uds.auth_context, LEVEL, the challenge — never the bare challenge the
+// bootloader's 0x29 signs (boot/prog.v), so neither a bootloader's proof nor another level's is
+// accepted here
 fn keys_start(ctx voidptr, level u8, challenge &u8, n int, proof &u8) {
 	mut k := unsafe { &Keys(ctx) }
 	k.failed = !k.keyed(level) // a level with no key verifies nothing
@@ -89,6 +91,9 @@ fn keys_start(ctx voidptr, level u8, challenge &u8, n int, proof &u8) {
 		sig[i] = unsafe { proof[i] }
 	}
 	k.job.start(key, sig)
+	k.job.update(&uds.auth_context[0], uds.auth_context.len)
+	lv := [level]!
+	k.job.update(&lv[0], 1)
 	k.job.update(challenge, n)
 }
 

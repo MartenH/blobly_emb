@@ -269,3 +269,61 @@ fn test_verify_job_agrees_with_verify() {
 	assert ok
 	assert steps >= 65 && steps <= 80, '${steps} steps'
 }
+
+// @verifies REQ-DIAG-127
+// vj_key_post is charged its real work: unpack_post's multiplications, the hash's final compressions
+// — counted here from FIPS 180-4's padding over the bytes hashed, not from Sha512 — and the reduction
+// mod L, for every message length up to three blocks (one and two final compressions); every unit is
+// charged at least the field multiplications it runs, and none more than verify_step_max, the bound
+// the budget test's overrun rests on
+fn tampered(msg []u8, flip bool) []u8 {
+	mut m := msg.clone()
+	if flip {
+		m[0] ^= 1
+	}
+	return m
+}
+
+fn test_the_key_post_unit_is_charged_its_hash_and_reduction() {
+	v := rfc8032[1]
+	pkey := fix32(unhex(v.pub))
+	sig := fix64(unhex(v.sig))
+	mut twos := 0
+	for n in 0 .. 3 * 128 {
+		msg := []u8{len: n, init: u8(index)}
+		mut j := &VerifyJob{}
+		j.start(pkey, sig)
+		if n > 0 {
+			j.update(&msg[0], n)
+		}
+		for j.phase != vj_key_post {
+			j.unit()
+		}
+		hashed := 64 + n // R and A, then the message
+		blocks := (hashed % 128 + 1 + 16 + 127) / 128 // the 0x80, the 16-byte length, the last block
+		if blocks == 2 {
+			twos++
+		}
+		assert j.unit() == unpack_post_mults + blocks * sha512_block_mults + modl_mults, 'n ${n}'
+		assert key_post_mults(blocks) <= verify_step_max
+	}
+	assert twos > 0
+	// every unit of a whole verify, a passing one and a failing one, charged at least the field
+	// multiplications it ran (counted in m_gf) and at most verify_step_max
+	msg := unhex(v.msg)
+	for tamper in [false, true] {
+		m := tampered(msg, tamper)
+		mut j := &VerifyJob{}
+		j.start(pkey, sig)
+		j.update(&m[0], m.len)
+		for !j.decided() {
+			phase, i := j.phase, j.i
+			before := ed25519_mults
+			charged := j.unit()
+			ran := int(ed25519_mults - before)
+			assert charged >= ran, 'phase ${phase} bit ${i}: charged ${charged}, ran ${ran}'
+			assert charged <= verify_step_max
+		}
+		assert j.verified() == !tamper
+	}
+}

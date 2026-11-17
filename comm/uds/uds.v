@@ -303,6 +303,10 @@ pub mut:
 	pend_until u64
 	pend_fail  bool
 	pend_late  bool
+	// a failed-attempt count this pass made (a 0x29 verdict or abandoned verify, in tick): no owed
+	// response leaves until the next pass, so the owner's persist step writes the count first
+	// (REQ-DIAG-067). Cleared by the next tick.
+	pend_hold bool
 	// Input/output control (0x2F, io_control.v): the controlled DIDs, nio == 0 = 0x2F not served.
 	ios [max_ios]IoControl
 	nio int
@@ -377,6 +381,7 @@ pub fn (mut s Server) reset_state() {
 // instead (pending_tick). Call once per owner pass, before handling requests.
 pub fn (mut s Server) tick(now_us u64) {
 	s.now_us = now_us
+	s.pend_hold = false // the pass before persisted what it counted
 	if s.sa_arm != 0 {
 		for i in 0 .. max_security_level {
 			if s.sa_arm & (u8(1) << i) != 0 {

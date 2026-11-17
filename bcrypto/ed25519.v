@@ -105,7 +105,17 @@ fn z_gf(mut o Gf, a Gf, b Gf) {
 	}
 }
 
+// ed25519_mults: the field multiplications m_gf ran, counted in a test build only — what the test
+// holds each VerifyJob unit's charge against (declared only there: a tool importing bcrypto builds
+// without -enable-globals)
+$if test {
+	__global ed25519_mults u64
+}
+
 fn m_gf(mut o Gf, a Gf, b Gf) {
+	$if test {
+		ed25519_mults++
+	}
 	mut t := [31]i64{}
 	for i in 0 .. 16 {
 		for j in 0 .. 16 {
@@ -491,8 +501,32 @@ const vj_mul_s = 4 // [S]B, a bit at a time
 const vj_inv = 5 // Z's inverse, a bit at a time, then the compare
 const vj_done = 6
 
-// verify_step_max: the multiplications in the largest single unit of work (the last bit of the
-// second ladder with the point addition after it), so a step costs at most budget + this - 1
+// A unit's cost is counted in field multiplications (m_gf: 271 64-bit multiply-accumulates and two
+// carry passes). The work that is not one is charged in its equivalent, rounded up from the operation
+// count and checked against a host measurement (the TweetNaCl field multiplication ~1.0 us, a SHA-512
+// compression ~1.9 us, the mod-L reduction ~3.9 us, unoptimised, x86-64):
+//   sha512_block_mults  a SHA-512 compression — 80 rounds and the 64-word schedule, ~2,800 64-bit
+//                       additions, rotations and logic operations, two to four instructions each on
+//                       a 32-bit core
+//   modl_mults          the reduction mod L (modl) — 704 64-bit multiply-accumulates, its carries
+//   unpack_post_mults   unpack_post's multiplications, the most it runs (its second square root
+//                       branch taken)
+//   pack_mults          pack25519 and the compare — three carry passes, two trial subtractions of
+//                       p and 32 byte compares, less than one multiplication's carries and adds
+const sha512_block_mults = 3
+const modl_mults = 4
+const unpack_post_mults = 10
+const pack_mults = 1
+
+// key_post_mults: vj_key_post's cost — unpack_post, then (the key a point, S canonical) the hash's
+// final compressions (`blocks`, Sha512.final_blocks) and h's reduction mod L
+fn key_post_mults(blocks int) int {
+	return unpack_post_mults + blocks * sha512_block_mults + modl_mults
+}
+
+// verify_step_max: the multiplications in the largest single unit of work — the last bit of the
+// second ladder with the point addition after it (27), above vj_key_post's at most key_post_mults(2)
+// (20) — so a step costs at most budget + this - 1
 pub const verify_step_max = 27
 
 // start begins verifying `sig` under `pubkey`; then update with the message
@@ -557,23 +591,25 @@ fn (mut j VerifyJob) unit() int {
 			if unpack_post(mut j.q, unsafe { &j.pk[0] }, j.num, j.den, j.c) != 0
 				|| !s_canonical(j.sig) {
 				j.phase = vj_done
-				return 14
+				return unpack_post_mults
 			}
+			blocks := j.hc.final_blocks()
 			digest := j.hc.final()
 			j.h = reduce_scalar(digest)
 			scalarmult_init(mut j.p)
 			j.i = 255
 			j.phase = vj_mul_h
-			return 14
+			return key_post_mults(blocks)
 		}
 		vj_mul_h {
 			scalarmult_bit(mut j.p, mut j.q, unsafe { &j.h[0] }, j.i) // p = [h](-A)
 			j.i--
 			if j.i < 0 {
-				base_point(mut j.bq)
+				base_point(mut j.bq) // one multiplication, q[3]
 				scalarmult_init(mut j.sb)
 				j.i = 255
 				j.phase = vj_mul_s
+				return 18 + 1
 			}
 			return 18
 		}
@@ -598,6 +634,7 @@ fn (mut j VerifyJob) unit() int {
 				pack_from_inv(mut packed, j.p, j.c) // encode, normalising by Z
 				j.valid = crypto_verify_32(&j.sig[0], &packed[0]) == 0
 				j.phase = vj_done
+				return 2 + 2 + pack_mults
 			}
 			return 2
 		}

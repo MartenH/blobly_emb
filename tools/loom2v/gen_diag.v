@@ -7,6 +7,7 @@ import boot.bufs
 import comm.fault
 import comm.uds
 import comm.udsauth
+import tools.doipcfg
 
 // The diagnostic server's wiring (comm/diag.Connection). What the server does in a pass is the
 // module's; what is emitted here is only how an owner configures it and where it calls it — the
@@ -31,6 +32,8 @@ mut:
 	// the file named it "reference" (the dev tester key — a bench key, REQ-NET-012)
 	auth_keys map[int][]u8
 	auth_ref  map[int]bool
+	// some auth_keys entry names the dev tester key (doipcfg.auth_reference, syscheck's reading too)
+	auth_bench bool
 	// `services` declared: the server answers exactly `services`. Absent = the default table —
 	// every service this build performs (diag_unbuilt), in its default sessions.
 	table    bool
@@ -49,7 +52,7 @@ fn (u UdsCfg) auth() bool {
 
 // auth_reference: an auth key names the dev tester key (a bench key over the network, REQ-NET-012)
 fn (u UdsCfg) auth_reference() bool {
-	return u.auth_ref.values().any(it)
+	return u.auth_bench
 }
 
 // BootCfg is [boot]: the node runs behind the bootloader (docs/bootloader.md), so its server's
@@ -138,7 +141,7 @@ fn parse_auth_keys(v toml.Any) (map[int][]u8, map[int]bool) {
 			panic('loom2v: [uds] auth_keys "${lk}" must be a string: "reference" or 64 hex characters')
 		}
 		text := kv.string()
-		if text == 'reference' {
+		if doipcfg.names_bench_key(kv) {
 			keys[level] = udsauth.reference_key[..].clone()
 			refs[level] = true
 			continue
@@ -271,6 +274,7 @@ fn parse_uds(doc toml.Doc) UdsCfg {
 			panic('loom2v: [uds] auth_keys are the keys 0x29 Authentication verifies with, but access is "${c.access}" — set access = "authentication", or drop auth_keys')
 		}
 		c.auth_keys, c.auth_ref = parse_auth_keys(akv)
+		c.auth_bench = doipcfg.auth_reference(akv)
 	}
 	if c.auth() && c.security_key != '' {
 		panic('loom2v: [uds] security_key is the 0x27 key, but access = "authentication" unlocks with 0x29 — drop security_key (the keys are auth_keys)')

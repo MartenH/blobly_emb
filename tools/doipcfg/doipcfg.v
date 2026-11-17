@@ -225,18 +225,37 @@ pub fn handoff_refusal(boot bool, security i64) string {
 	return '[boot]: the programming handoff (0x10 02) restarts the ECU into its bootloader, and the network reaches this server — over IP it would act for an unauthenticated tester; gate it: [uds] services "0x10 02" = { security = N } (REQ-NET-012)'
 }
 
+// bench_key_name: what ecu.toml calls blobly_net's PUBLIC bench keys — [uds] security_key's 0x27
+// reference key, and an [uds] auth_keys entry's dev tester key
+pub const bench_key_name = 'reference'
+
+// names_bench_key: one [uds] auth_keys entry (its value as written) names the dev tester key
+pub fn names_bench_key(entry toml.Any) bool {
+	return entry is string && entry.string() == bench_key_name
+}
+
+// auth_reference: [uds] auth_keys (as written) names the dev tester key at some level — the 0x29
+// bench key bench_key_refusal asks about. The one reading of the table for that question: loom2v's
+// node gate and sysmodel's syscheck both ask it.
+pub fn auth_reference(auth_keys toml.Any) bool {
+	if auth_keys is map[string]toml.Any {
+		return auth_keys.values().any(names_bench_key(it))
+	}
+	return false
+}
+
 // bench_key_refusal: '' unless the bench keys a server reachable over the network unlocks with and
 // `allow_bench_key` disagree — the 0x27 key (`security_key`, [uds]) and, for a node that unlocks by
 // 0x29, an `auth_keys` entry naming "reference" (`auth_reference`). Both are blobly_net's PUBLIC
 // keys, so over a routed network they authenticate nobody: allowed only by name, as a bench posture.
 pub fn bench_key_refusal(security_key string, auth_reference bool, allow bool) string {
-	if security_key == 'reference' && !allow {
+	if security_key == bench_key_name && !allow {
 		return '[uds] security_key = "reference" is blobly_net\'s PUBLIC bench key, and the network reaches this server — over IP it authenticates nobody (REQ-NET-012). Set `${bench_key} = true` for a closed bench, or give the node the OEM\'s key (drop security_key)'
 	}
 	if auth_reference && !allow {
 		return '[uds] auth_keys names "reference", blobly_net\'s PUBLIC dev tester key, and the network reaches this server — over IP it authenticates nobody (REQ-NET-012). Set `${bench_key} = true` for a closed bench, or give the level the tester\'s own public key'
 	}
-	if allow && security_key != 'reference' && !auth_reference {
+	if allow && security_key != bench_key_name && !auth_reference {
 		return '`${bench_key}` is set, but [uds] uses no bench key — it would mean nothing'
 	}
 	return ''

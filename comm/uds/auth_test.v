@@ -11,12 +11,13 @@ module uds
 
 // The golden vectors, committed byte for byte in blobly_emb (here and comm/udsauth) and blobly_net
 // (blobly/uds/auth_vectors_test.v): the dev tester seed 20..3F, its public key, the fixed challenge
-// 00..1F and the deterministic Ed25519 signature of that challenge under the seed (RFC 8032).
-const gv_sig = [u8(0xea), 0x92, 0xd2, 0x4e, 0xda, 0x4c, 0x09, 0x9e, 0xa3, 0xc1, 0xaa, 0xa1, 0x0c,
-	0x86, 0xcd, 0x63, 0xe2, 0xa0, 0x43, 0x0a, 0xaf, 0x86, 0x5d, 0xb6, 0xed, 0x60, 0xf8, 0x12, 0x9d,
-	0xe7, 0xa3, 0x63, 0xa6, 0x1c, 0xdc, 0x52, 0x51, 0xb5, 0xc7, 0x4f, 0x07, 0x75, 0x56, 0x39, 0xb3,
-	0x3d, 0xda, 0xd8, 0x69, 0x9e, 0xf8, 0x5b, 0xe6, 0x1c, 0xbe, 0x8d, 0x60, 0x3e, 0x8e, 0x80, 0xaa,
-	0x7c, 0x1b, 0x09]
+// 00..1F and the deterministic Ed25519 signature (RFC 8032) under the seed of the application message
+// for level 1 — auth_context, 01, the challenge.
+const gv_sig = [u8(0x9f), 0x70, 0xab, 0xb9, 0x8d, 0x37, 0x4d, 0x2c, 0x24, 0xa6, 0xfa, 0xd6, 0x17,
+	0x91, 0xbb, 0x94, 0xec, 0xb5, 0xbc, 0xab, 0xac, 0xcc, 0x23, 0x60, 0x7d, 0x4a, 0xc1, 0x45, 0x08,
+	0xef, 0xdc, 0x93, 0xb1, 0xe8, 0xa0, 0x80, 0x64, 0x5f, 0xb9, 0xe0, 0x05, 0xf4, 0x71, 0x8c, 0x5f,
+	0x91, 0x88, 0x61, 0xce, 0xf2, 0x5a, 0x6e, 0x28, 0x6b, 0xb8, 0x8d, 0xd3, 0xa0, 0xb1, 0x8c, 0x22,
+	0x7c, 0x7f, 0x0d]
 
 // gv_req05: 0x29 05 for level 1 with the Ed25519 algorithmIndicator (19 bytes)
 const gv_req05 = [u8(0x29), 0x05, 0x01, 0x06, 0x03, 0x2B, 0x65, 0x70, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -261,11 +262,13 @@ fn gv_ans06() []u8 {
 	return a
 }
 
-// owed: the passes after a 06 answered 0x78 — pending_step as an owner's pump calls it, a pass at a
-// time — until the final answer, returned; `passes` the passes it took, the last one included
+// owed: the passes after a 06 answered 0x78 — tick, then pending_step as an owner's pump calls it,
+// a pass at a time — until the final answer, returned; `passes` the passes it took, the last one
+// included
 fn owed(mut s Server) ([]u8, int) {
 	mut resp := [256]u8{}
 	for pass in 1 .. 1000 {
+		s.tick(s.now_us + 1000)
 		n := s.pending_step(&resp[0], 256)
 		if n > 0 && !s.pending() {
 			return resp[..n].clone(), pass
@@ -286,6 +289,8 @@ fn pr(mut s Server, req []u8) []u8 {
 // signature over it is parsed at auth_proof_at and answered 0x78, the verify asked about level 1 and
 // the challenge, and ISO's 21-byte answer once it is valid; the level is unlocked.
 fn test_the_golden_exchange_unlocks_the_level() {
+	assert auth_context[..] == 'blobly uds 0x29 application v1\0'.bytes()
+	assert auth_message_len == 64
 	mut f := FakeAuth{}
 	mut s := authed(mut f)
 	assert ac(mut s, gv_req05) == gv_ans05()
@@ -303,10 +308,10 @@ fn test_the_golden_exchange_unlocks_the_level() {
 	assert ac(mut s, [u8(0x22), 0xF1, 0x90])[0] == 0x62
 }
 
-// REQ-DIAG-122: the verify runs a slice per pass while the answer is owed — every other request is
-// dropped meanwhile — and its verdict, reached in one pass, is answered in the next: the unlock (or
-// the count) is in place before the answer leaves, so an owner persisting between the two writes the
-// count before the 0x58 reporting it (REQ-DIAG-067).
+// REQ-DIAG-122: the verify runs a slice per pass (the server's tick) while the answer is owed —
+// every other request is dropped meanwhile; a valid verdict unlocks with its answer, and a failed
+// one is counted in the pass that reaches it and answered in the next, so an owner persisting
+// between the two writes the count before the 0x58 reporting it (REQ-DIAG-067).
 fn test_the_verify_runs_a_slice_per_pass() {
 	mut f := FakeAuth{
 		steps: 5
@@ -318,23 +323,90 @@ fn test_the_verify_runs_a_slice_per_pass() {
 	assert ac(mut s, [u8(0x3E), 0x00]).len == 0, 'a request was served while the proof is verified'
 	mut resp := [256]u8{}
 	for pass in 1 .. 5 {
-		assert s.pending_step(&resp[0], 256) == 0
+		s.tick(s.now_us + 1000)
 		assert f.stepped == pass && s.unlocked == 0
+		assert s.pending_step(&resp[0], 256) == 0
+		assert f.stepped == pass, 'the answer stepped the verify'
 	}
-	assert s.pending_step(&resp[0], 256) == 0, 'the verdict was answered in the pass that reached it'
-	assert f.stepped == 5 && s.unlocked == 1
+	s.tick(s.now_us + 1000)
+	assert f.stepped == 5 && s.auth_decided && s.unlocked == 0, 'unlocked before its answer'
 	n := s.pending_step(&resp[0], 256)
-	assert resp[..n] == gv_ans06() && !s.pending()
+	assert resp[..n] == gv_ans06() && !s.pending() && s.unlocked == 1
+	s.tick(s.now_us + 1000)
 	assert f.stepped == 5, 'the verify was stepped past its verdict'
 	// a wrong proof: counted in the pass that decides it, answered in the next
 	ac(mut s, req05(2))
 	assert ac(mut s, req06_with(bad_sig())) == [u8(0x7F), 0x29, 0x78]
 	for _ in 0 .. 5 {
+		s.tick(s.now_us + 1000)
 		assert s.pending_step(&resp[0], 256) == 0
 	}
 	assert s.sa_since[1] == 1, 'the count was not in place before the answer'
+	s.tick(s.now_us + 1000)
 	m := s.pending_step(&resp[0], 256)
 	assert resp[..m] == [u8(0x7F), 0x29, 0x58]
+}
+
+// REQ-DIAG-122: the verify advances in the server's tick whether or not the transport owing the
+// answer can take a response — a link busy for passes (DoIP waiting for the 0x78's acknowledgement,
+// a CAN link sending) delays the answer, never the verify, so it cannot run a valid proof into the
+// verify's timeout; one decided before the timeout and answered after it is still ownershipVerified,
+// and not counted.
+fn test_the_verify_advances_while_the_transport_is_busy() {
+	mut f := FakeAuth{
+		steps: 5
+	}
+	mut s := authed(mut f)
+	ac(mut s, gv_req05)
+	ac(mut s, gv_req06())
+	for _ in 0 .. 10 {
+		s.tick(s.now_us + 1000) // no pending_step: the transport cannot take a response
+	}
+	assert f.stepped == 5 && s.auth_decided, 'the verify waited for the transport'
+	s.tick(s.now_us + auth_verify_timeout_us) // and stays busy past the verify's timeout
+	assert s.pending() && s.sa_since[0] == 0, 'a valid proof was failed for a busy transport'
+	mut resp := [256]u8{}
+	n := s.pending_step(&resp[0], 256)
+	assert resp[..n] == gv_ans06() && s.unlocked == 1 && s.sa_since[0] == 0
+}
+
+// REQ-DIAG-122 / 127: no level is unlocked without its ownershipVerified — whichever pass the
+// transport owing the answer stops taking responses in (before the verdict, in its pass, after it),
+// an answer given up at its timeout leaves the level locked, and a valid proof uncounted
+fn test_no_unlock_stays_without_its_answer() {
+	for free in [3, 4, 5, 6] {
+		mut f := FakeAuth{
+			steps: 5
+		}
+		mut s := authed(mut f)
+		ac(mut s, gv_req05)
+		ac(mut s, gv_req06())
+		mut answered := []u8{}
+		mut resp := [256]u8{}
+		for pass in 1 .. 20 {
+			s.tick(s.now_us + 1000)
+			if pass < free {
+				n := s.pending_step(&resp[0], 256) // the transport takes responses until `free`
+				if n > 0 && !s.pending() {
+					answered = resp[..n].clone()
+				}
+			}
+		}
+		mut unlocked := s.unlocked
+		for _ in 0 .. 3 {
+			s.tick(s.now_us + auth_verify_timeout_us) // given up: the timeout, then P2*server_max
+			if s.pending() {
+				unlocked = s.unlocked // S3 runs again only once the answer is no longer owed
+			}
+		}
+		assert !s.pending(), 'free ${free}: never given up'
+		if answered == gv_ans06() {
+			assert unlocked == 1
+		} else {
+			assert answered.len == 0 && unlocked == 0, 'free ${free}: unlocked without its answer'
+			assert s.sa_since[0] == 0, 'free ${free}: a valid proof was counted'
+		}
+	}
 }
 
 // REQ-DIAG-123: a proof whose verify is given up counts as a failed one — at its timeout (answered
@@ -349,6 +421,8 @@ fn test_an_abandoned_verify_counts_as_a_failed_proof() {
 	s.tick(s.now_us + auth_verify_timeout_us)
 	assert s.sa_since[0] == 1, 'a timed-out verify was not counted'
 	mut resp := [256]u8{}
+	assert s.pending_step(&resp[0], 256) == 0, 'the 0x22 left in the pass that counted it'
+	s.tick(s.now_us + 1000)
 	n := s.pending_step(&resp[0], 256)
 	assert resp[..n] == [u8(0x7F), 0x29, 0x22] && !s.pending()
 	assert s.unlocked == 0
@@ -362,6 +436,7 @@ fn test_an_abandoned_verify_counts_as_a_failed_proof() {
 	ac(mut s, [u8(0x10), 0x03])
 	ac(mut s, req05(2))
 	ac(mut s, req06_with(bad_sig()))
+	s.tick(s.now_us + 1000)
 	assert s.pending_step(&resp[0], 256) == 0
 	assert s.sa_since[1] == 1
 	s.pending_abandon()
@@ -381,6 +456,7 @@ fn test_a_session_entry_voids_a_verify_uncounted() {
 		ac(mut s, [u8(0x10), 0x03])
 		ac(mut s, gv_req05)
 		ac(mut s, gv_req06())
+		s.tick(s.now_us + 1000)
 		assert s.pending_step(&resp[0], 256) == 0
 		if void == 'end_session' {
 			s.end_session()
@@ -396,7 +472,7 @@ fn test_a_session_entry_voids_a_verify_uncounted() {
 	ac(mut s, [u8(0x10), 0x03])
 	ac(mut s, gv_req05)
 	ac(mut s, req06_with(bad_sig()))
-	assert s.pending_step(&resp[0], 256) == 0
+	s.tick(s.now_us + 1000)
 	s.end_session()
 	assert s.sa_since[0] == 1, 'a decided proof lost its count to the session entry'
 }
@@ -503,13 +579,17 @@ fn test_failed_proofs_count_as_wrong_keys() {
 		ac(mut s, gv_req05)
 		assert pr(mut s, req06_with(bad_sig())) == [u8(0x7F), 0x29, want]
 	}
+	// the third verdict's pass: its answer is held one pass (owed's 1 ms) for the count to persist
+	verdict := s.now_us - 1000
 	assert s.sa_since[0] == 3
 	assert ac(mut s, gv_req05) == [u8(0x7F), 0x29, 0x37], 'no lockout'
 	// the lockout is level 1's: level 2 still gets a challenge
 	assert ac(mut s, req05(2))[0] == 0x69
-	s.tick(1_000_000 + 999_999)
+	until := s.sa_delay_until[0]
+	assert until == verdict + 1_000_000, 'the lockout is not security_delay_ms from the verdict'
+	s.tick(until - 1)
 	assert ac(mut s, gv_req05) == [u8(0x7F), 0x29, 0x37]
-	s.tick(2_000_000 + 1)
+	s.tick(until + 1)
 	ac(mut s, [u8(0x10), 0x03])
 	ac(mut s, gv_req05)
 	assert pr(mut s, req06_with(bad_sig())) == [u8(0x7F), 0x29, 0x58]
@@ -702,9 +782,11 @@ fn test_failed_proofs_survive_a_power_cycle() {
 	for i, want in [u8(0x58), 0x58] {
 		ac(mut s, gv_req05)
 		assert ac(mut s, req06_with(bad_sig())) == [u8(0x7F), 0x29, 0x78]
-		assert s.pending_step(&resp[0], 256) == 0 // the verdict, counted
+		s.tick(s.now_us + 1000) // the verdict, counted
+		assert s.pending_step(&resp[0], 256) == 0, 'answered in the pass that counted it'
 		s.persist_security(false) // the owner's pass: persisted before the answer
 		assert st.puts == i + 1, 'the count was not written before its answer'
+		s.tick(s.now_us + 1000)
 		n := s.pending_step(&resp[0], 256)
 		assert resp[..n] == [u8(0x7F), 0x29, want]
 	}
@@ -716,6 +798,28 @@ fn test_failed_proofs_survive_a_power_cycle() {
 	ac(mut n, [u8(0x10), 0x03])
 	ac(mut n, gv_req05)
 	assert pr(mut n, req06_with(bad_sig())) == [u8(0x7F), 0x29, 0x36], 'the count did not carry over'
+}
+
+// REQ-DIAG-123 / 067: a verify given up at its timeout is counted in that pass's tick, and its 0x22
+// waits for the next pass — the owner's persist step writes the count before the answer reporting
+// it leaves, on DoIP (whose push runs before the persist step in a pass) as on CAN
+fn test_a_timed_out_proof_is_persisted_before_its_answer() {
+	mut st := AStore{}
+	mut f := FakeAuth{
+		steps: 1_000_000
+	}
+	mut s := auth_store_server(mut st, mut f, 1_000_000)
+	ac(mut s, gv_req05)
+	ac(mut s, gv_req06())
+	s.tick(s.now_us + auth_verify_timeout_us)
+	assert s.sa_since[0] == 1 && st.puts == 0
+	mut resp := [256]u8{}
+	assert s.pending_step(&resp[0], 256) == 0, 'the 0x22 left before the count was persisted'
+	s.persist_security(false)
+	assert st.puts == 1 && st.cell[..st.len] == a_record(1)
+	s.tick(s.now_us + 1000)
+	n := s.pending_step(&resp[0], 256)
+	assert resp[..n] == [u8(0x7F), 0x29, 0x22]
 }
 
 fn auth_store_server(mut st AStore, mut f FakeAuth, now u64) Server {
@@ -750,8 +854,8 @@ fn test_a_valid_proof_unlocks_only_where_its_answer_fits() {
 	assert ac(mut s, gv_req06()) == [u8(0x7F), 0x29, 0x78]
 	mut resp := [256]u8{}
 	cap := auth_proof_answer_len - 1
-	assert s.pending_step(&resp[0], cap) == 0 // the verdict
-	assert s.unlocked == 0, 'granted for an answer the transport cannot carry'
+	s.tick(s.now_us + 1000) // the verdict
+	assert s.unlocked == 0, 'granted before its answer'
 	n := s.pending_step(&resp[0], cap)
 	assert resp[..n] == [u8(0x7F), 0x29, 0x14] && !s.pending()
 	assert s.unlocked == 0 && s.sa_since[0] == 0 && s.sa_failed[0] == 0

@@ -105,3 +105,21 @@ fn test_the_handoff_needs_a_level_over_the_network() {
 	assert handoff_refusal(true, 1) == ''
 	assert handoff_refusal(true, 9).contains('is not a 0x27 level')
 }
+
+// @verifies REQ-NET-012 — whether [uds] auth_keys names the dev tester key is ONE reading (loom2v's
+// node gate and sysmodel's syscheck both ask it): any level's entry "reference", and nothing else —
+// not a hex key, not a near spelling, not a table that is not one
+fn test_auth_keys_name_the_bench_key_by_one_reading() {
+	for text, want in {
+		'auth_keys = { "1" = "reference" }':                                    true
+		'auth_keys = { "1" = "${'ab'.repeat(32)}", "3" = "reference" }':       true
+		'auth_keys = { "1" = "${'ab'.repeat(32)}" }':                           false
+		'auth_keys = { "1" = "Reference" }':                                    false
+		'auth_keys = "reference"':                                              false
+		'auth_keys = {}':                                                       false
+	} {
+		doc := toml.parse_text(text) or { panic(err) }
+		assert auth_reference(doc.to_any().as_map()['auth_keys'] or { panic('no auth_keys') }) == want, text
+	}
+	assert names_bench_key(toml.Any('reference')) && !names_bench_key(toml.Any(1))
+}

@@ -21,7 +21,8 @@ module uds
 //     within the same bound: an owed answer is given up at most timeout + P2*server_max after its
 //     request.
 // The server does not know which transport owes the answer: its owner (comm/diag Connection) does,
-// and calls pending_step only when that transport can take a response.
+// and calls pending_step only when that transport can take a response. The work itself never waits
+// for the transport: a routine's runs in its FB, a 0x29 verify advances in tick (pending_tick).
 //
 // The bootloader keeps its own responsePending (boot.Prog work_*, docs/bootloader.md) and does not
 // share this one, because it differs in each part that matters there: its work (a flash erase, the
@@ -67,8 +68,8 @@ fn (mut s Server) go_pending(sid u8, idx int, sub u8, timeout_us u64, resp &u8) 
 // the work has completed (pending() is then false), else a responsePending when one is due, else 0.
 // Call it only when the transport that owes the answer can take a response.
 pub fn (mut s Server) pending_step(resp &u8, cap int) int {
-	if s.pend_sid == 0 || s.resp_cap < 0 || cap < 3 {
-		return 0
+	if s.pend_sid == 0 || s.resp_cap < 0 || cap < 3 || s.pend_hold {
+		return 0 // nothing owed, or a count made this pass is persisted first (pend_hold)
 	}
 	sid := s.pend_sid
 	if s.pend_fail {
@@ -107,14 +108,16 @@ pub fn (mut s Server) pending_abandon() {
 	s.pend_clear()
 }
 
-// pending_tick: tick()'s share — S3 held while an answer is owed; at its timeout the owed request is
-// failed (fail_owed) unless its answer is ready by then, and either is abandoned if the transport
-// could not take it within P2*server_max after
+// pending_tick: tick()'s share — S3 held while an answer is owed, the owed work advanced (a 0x29
+// verify's slice: owed_advance), and at its timeout the owed request is failed (fail_owed) unless its
+// answer is ready by then, and either is abandoned if the transport could not take it within
+// P2*server_max after
 fn (mut s Server) pending_tick(now u64) {
 	if s.pend_sid == 0 {
 		return
 	}
 	s.last_rx_us = now // the session does not time out under an owed answer
+	s.owed_advance()
 	if now < s.pend_until {
 		return
 	}
@@ -164,6 +167,14 @@ fn (mut s Server) owed_answer(resp &u8, cap int) int {
 		0x31 { s.routine_owed(resp, cap) }
 		0x29 { s.auth_owed(resp, cap) }
 		else { 0 }
+	}
+}
+
+// owed_advance: the owed work's share of a pass that runs whatever the transport (pending_tick) —
+// a 0x29 verify's next slice; a routine runs in its FB
+fn (mut s Server) owed_advance() {
+	if s.pend_sid == 0x29 {
+		s.auth_advance()
 	}
 }
 

@@ -140,7 +140,7 @@ fn net(mut c Connection, req []u8) [][]u8 {
 	return net_cap(mut c, req, doip_push_max)
 }
 
-// net_cap: net, its responses pushed into `cap` bytes
+// net_cap: net, its responses pushed into `cap` bytes, a pass (housekeep) before each push
 fn net_cap(mut c Connection, req []u8, cap int) [][]u8 {
 	mut resp := []u8{len: 520}
 	n := c.serve_remote(&req[0], req.len, false, unsafe { &resp[0] })
@@ -148,6 +148,7 @@ fn net_cap(mut c Connection, req []u8, cap int) [][]u8 {
 	c.remote_sent()
 	for _ in 0 .. 500 {
 		if got.last().len == 3 && got.last()[0] == 0x7F && got.last()[2] == 0x78 {
+			c.housekeep(c.server.now_us + 1000) // a pass: the verify advances in its tick
 			m := c.push_step(unsafe { &resp[0] }, cap)
 			if m > 0 {
 				c.pushed(true)
@@ -171,8 +172,10 @@ fn ch_req() []u8 {
 // proof_req: 0x29 06 signing the challenge in a 05 answer with the dev seed
 fn proof_req(ans05 []u8) []u8 {
 	assert ans05.len == uds.auth_challenge_answer_len && ans05[0] == 0x69, 'no challenge: ${ans05}'
-	ch := ans05[uds.auth_answer_challenge_at..uds.auth_answer_challenge_at + uds.auth_challenge_len]
-	sig := bcrypto.sign(dev_seed, ch)
+	mut msg := uds.auth_context[..].clone() // the application message: the context, level 1, the challenge
+	msg << u8(1)
+	msg << ans05[uds.auth_answer_challenge_at..uds.auth_answer_challenge_at + uds.auth_challenge_len]
+	sig := bcrypto.sign(dev_seed, msg)
 	mut r := [u8(0x29), 0x06]
 	r << uds.ed25519_algorithm[..]
 	r << [u8(0x00), 0x40]

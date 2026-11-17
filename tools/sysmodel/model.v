@@ -1373,9 +1373,7 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 		um := uv.as_map()
 		v.uds_security_key = m_str(um, 'security_key')
 		if ak := um['auth_keys'] {
-			if ak is map[string]toml.Any {
-				v.uds_auth_reference = ak.values().any(it is string && it.string() == 'reference')
-			}
+			v.uds_auth_reference = doipcfg.auth_reference(ak)
 		}
 		if sv := um['services'] {
 			v.uds_table = true

@@ -183,7 +183,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-124 | QM | test | verified | auth_test.v (pass), auth_test.v (pass), auth_test.v (pass) |
 | REQ-DIAG-125 | QM | test | verified | auth_test.v (pass), auth_test.v (pass) |
 | REQ-DIAG-126 | QM | test | verified | auth_bench_key_test.v (pass), diag_target_test.v (pass), diag_target_test.v (pass), diag_target_test.v (pass), doip_target_test.v (pass), udsauth_test.v (pass) |
-| REQ-DIAG-127 | QM | test | verified | auth_test.v (pass), auth_test.v (pass), ed25519_test.v (pass), udsauth_test.v (pass) |
+| REQ-DIAG-127 | QM | test | verified | auth_test.v (pass), auth_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), udsauth_test.v (pass) |
 | REQ-E2E-001 | B | test | verified | e2e_test.v (pass) |
 | REQ-E2E-002 | B | test | verified | e2e_test.v (pass), rx_target_test.v (pass), rxmon_test.v (pass) |
 | REQ-E2E-003 | B | test | verified | e2e_test.v (pass) |
@@ -242,7 +242,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NET-009 | QM | test | uncovered | — |
 | REQ-NET-010 | QM | test | uncovered | — |
 | REQ-NET-011 | QM | test | uncovered | — |
-| REQ-NET-012 | QM | test | verified | auth_bench_key_test.v (pass), auth_test.v (pass), auth_test.v (pass), diag_test.v (pass), doip_target_test.v (pass), doip_target_test.v (pass), doipcfg_test.v (pass), sysnode-doip-hardware (approved) |
+| REQ-NET-012 | QM | test | verified | auth_bench_key_test.v (pass), auth_test.v (pass), auth_test.v (pass), diag_test.v (pass), doip_target_test.v (pass), doip_target_test.v (pass), doipcfg_test.v (pass), doipcfg_test.v (pass), sysnode-doip-hardware (approved) |
 | REQ-NET-013 | QM | test | verified | e2e_test.v (pass) |
 | REQ-NET-014 | QM | test | uncovered | — |
 | REQ-NET-015 | QM | test | verified | e2e_test.v (pass) |
