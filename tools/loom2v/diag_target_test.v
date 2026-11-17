@@ -13,7 +13,7 @@ import comm.doip as doippolicy
 // the ThreadX node config these tests generate from (test input, never built)
 const fixture_dir = os.join_path(@DIR, 'testdata', 'threadx_node')
 
-const diag_conn = '
+const diag_conn = tt_nvm + '
 [isotp]
 bus           = "can0"
 rx_id         = 0x7B0
@@ -23,6 +23,14 @@ functional_id = 0x7DF
 [[did]]
 id    = 0xF190
 ascii = "BLOBLY-TEST"
+'
+
+// [nvm]: a ThreadX node that performs 0x27 keeps its failed-key state in the journal, so a gated
+// config declares it (REQ-DIAG-066); with no journal writer it generates nothing
+const tt_nvm = '
+[nvm]
+min_write_ms   = 1000
+sector_records = 4096
 '
 
 fn loom2v_bin() string {
@@ -131,7 +139,13 @@ signal = "Workload"
 
 // 0x27 on the target: the levels a DID gate names, the [uds] limits, the board's TRNG seed
 // set up once before the loop — and the OEM's key check, with no default linked, unless the
-// server opts into blobly_net's reference key by name
+// server opts into blobly_net's reference key by name. The failed-key state is wired to the NvM
+// journal at its fixed block, restored before the loop, kept through the boot's prune, and written
+// in the pass's persist step — before the pass pumps the CAN answer (REQ-DIAG-067), with no erase
+// between the request and its answer (REQ-DIAG-062); no write budget is wired, the server's rule
+// bounding its writes by itself; the RAM keep cell it replaces is gone.
+// @verifies REQ-DIAG-067 (the build half: the write before the CAN answer and never an erase there;
+// comm/uds sa_store_test.v and comm/diag sa_persist_test.v show the rules)
 fn test_a_security_gate_is_served_through_the_board_seam() {
 	gated := '
 [[did]]
@@ -148,12 +162,30 @@ write = { session = ["extended"], security = 1 }
 		'g_diag.server.security = uds.SecurityOps{', 'seed:   diag_sa_seed_v', 'key_ok: diag_sa_key_v',
 		'g_diag.server.security_levels = u8(0x01)', 'g_diag.server.sa_attempts = u8(2)',
 		'g_diag.server.sa_delay_us = u64(3000) * 1000',
-		// the failed-key counts kept across the node's own reset, saved before it
-		'if C.diag_keep_load(&diag_kept[0], uds.kept_len) != 0 {',
-		'g_diag.server.restore_security(diag_kept)', 'diag_keep_now := g_diag.server.kept_security()',
-		'C.diag_keep_save(&diag_keep_now[0], uds.kept_len)'] {
+		// the failed-key state in the journal, at its fixed block, restored before the loop
+		'g_diag.server.sa_store = uds.SecurityStore{', 'put:      nvm_store_put',
+		'get:      nvm_store_get', 'id:       u16(0x44e)',
+		'retry_us: u64(1000) * 1000',
+		'g_diag.server.restore_persisted_security()',
+		'u16(0x44e) /* the 0x27 failed-key state */'] {
 		assert glue.contains(want), 'missing: ${want}'
 	}
+	assert !glue.contains('diag_keep'), 'the RAM keep cell is still wired'
+	store := glue.all_after('g_diag.server.sa_store = uds.SecurityStore{').all_before('}')
+	assert !store.contains('token_us'), 'a write budget is wired:\n${store}'
+	// restored after the server is configured, before the loop
+	in_order(glue, ['g_diag.server.security_levels = u8(0x01)', 'g_diag.server.restore_persisted_security()',
+		'for {'])
+	// written in the persist step, before the CAN answer is pumped
+	pass_at := glue.index('// pass: persist') or { -1 }
+	put_at := glue.index('g_diag.server.persist_security(false)') or { -1 }
+	pump_at := glue.index('g_diag.pump') or { -1 }
+	assert pass_at >= 0 && put_at > pass_at && pump_at > put_at, 'persist ${pass_at}, write ${put_at}, pump ${pump_at}'
+	assert glue[pass_at..put_at].count('// pass: ') == 1, 'the write is outside the persist step'
+	// no erase between a request and its answer (REQ-DIAG-062): nothing from the persist step to
+	// the pump erases, and nothing is wired for the store to erase with
+	assert !glue[pass_at..pump_at].contains('erase_pending'), 'an erase before the answer:\n${glue[pass_at..pump_at]}'
+	assert !glue.contains('reclaim'), 'a 0x27 write erases'
 	// the bench key, by name: V's own, and no C key declared at all
 	c2, o2, g2 := generate('sec_ref', diag_conn + gated + limits + '\nsecurity_key = "reference"\n')
 	assert c2 == 0, o2
@@ -162,6 +194,86 @@ write = { session = ["extended"], security = 1 }
 	c3, o3, _ := generate('sec_bad', diag_conn + gated + limits + '\nsecurity_key = "oem"\n')
 	assert c3 != 0, 'loom2v accepted an unknown security_key'
 	assert o3.contains('the one named key is "reference"'), o3
+}
+
+// REQ-DIAG-066: a target node that performs 0x27 — a DID gate, a services row, the handoff row
+// alone — without [nvm] is refused, naming the reason; the host bridge keeps the count in RAM and
+// needs none.
+// @verifies REQ-DIAG-066
+fn test_a_target_security_gate_needs_nvm() {
+	bare := diag_conn.replace(tt_nvm, '')
+	for name, extra in {
+		'did_gate': '\n[[did]]\nid = 0xF1AC\nbytes = "00"\nwrite = { session = ["extended"], security = 1 }\n'
+		'row':      '\n[uds.services]\n"0x10" = {}\n"0x22" = {}\n"0x27" = {}\n"0x2E" = { sessions = ["extended"], security = 1 }\n"0x3E" = {}\n'
+	} {
+		code, out, _ := generate('sa_nonvm_${name}', bare + extra)
+		assert code != 0, '${name}: loom2v accepted 0x27 on the target without [nvm]'
+		assert out.contains('needs [nvm] — the 0x27 failed-key counts and a running lockout are kept in the NvM journal'), '${name}: ${out}'
+	}
+	handoff := '\n[uds]\nsecurity_key = "reference"\n\n[uds.services]\n"0x10" = {}\n"0x10 02" = { security = 1 }\n"0x22" = {}\n"0x27" = {}\n"0x3E" = {}\n'
+	code, out, _ := generate('sa_nonvm_handoff', handoff + boot_conn.replace(tt_nvm, ''))
+	assert code != 0 && out.contains('needs [nvm]'), out
+	c2, o2, g2 := generate('sa_nvm_handoff', handoff + boot_conn)
+	assert c2 == 0, o2
+	assert g2.contains('g_diag.server.restore_persisted_security()')
+	// the host bridge (overspeed gates a DID on level 1, and has no [nvm])
+	ch, oh, gh := generate_host('sa_host', same, '')
+	assert ch == 0, oh
+	assert gh.contains('security_levels') && !gh.contains('sa_store'), 'the host bridge wired a store'
+}
+
+// The 0x27 state's block is FIXED (docs/nvm.md): nvm_hash16("uds:security") = 0x044E, never a
+// schema hash, so no firmware update moves it. A parameter on that DID is refused naming its own
+// pin (the fixed block cannot move), and so is a signal pinned onto it.
+fn test_the_security_block_is_fixed_and_kept() {
+	assert nvm_hash16(sa_block_ident) == 0x044e
+	gated := '\n[[did]]\nid = 0xF1AC\nbytes = "00"\nwrite = { session = ["extended"], security = 1 }\n'
+	param := '\n[[did]]\nid = 0x044E\nparam = "Cap"\nwrite = { session = ["extended"], security = 1 }\n' +
+		'\n[[param]]\nname = "Cap"\nfields = { v = "u8" }\ndefault = { v = 1 }\nrange = { v = { min = 0, max = 9 } }\n'
+	code, out, _ := generate_edited('sa_param_clash', fn (src string) string {
+		return src.replace('  reads     = ["LoadCmd"]\n  writes    = ["Workload"]', '  reads     = ["LoadCmd", "Cap"]\n  writes    = ["Workload"]')
+	}, diag_conn + gated + param)
+	assert code != 0, 'loom2v accepted a parameter on the 0x27 block'
+	assert out.contains('collides with the 0x27 failed-key state — pin the parameter with `nvm_id'), out
+	sig := diag_conn + gated
+	cs, os_, _ := generate_edited('sa_sig_clash', fn (src string) string {
+		return src.replace('name = "LoadCmd"\nfields = { iters = "u32" }', 'name = "LoadCmd"\nfields = { iters = "u32" }\npersist = "now"\nnvm_id = 0x044E')
+	}, sig)
+	assert cs != 0, 'loom2v accepted a signal pinned onto the 0x27 block'
+	assert os_.contains('collides with the 0x27 failed-key state') && os_.contains('pin the signal with `nvm_id'), os_
+}
+
+// On an NM node every journal writer of the pass shares ONE in-sleep choreography: with the 0x27
+// state its condition is the state's write alone, and with a parameter beside it one condition
+// covers both — one choreography a pass, never one per writer.
+fn test_one_sleep_choreography_per_pass() {
+	gated := '\n[[did]]\nid = 0xF1AC\nbytes = "00"\nwrite = { session = ["extended"], security = 1 }\n'
+	code, out, glue := generate('sa_sleep', diag_conn + gated)
+	assert code == 0, out
+	persist := glue.all_after('// pass: persist').all_before('nm_up := ')
+	assert persist.contains('sa_wrote := g_diag.server.take_sa_wrote()')
+	assert persist.contains('if sa_wrote && g_nm.state() == .bus_sleep {')
+	assert persist.count('nvm_flush_ok = g_nvm.mark_clean()') == 1, persist
+	param := '\n[[did]]\nid = 0x0130\nparam = "Cap"\nwrite = { session = ["extended"], security = 1 }\n' +
+		'\n[[param]]\nname = "Cap"\nfields = { v = "u8" }\ndefault = { v = 1 }\nrange = { v = { min = 0, max = 9 } }\n'
+	c2, o2, g2 := generate_edited('sa_sleep_param', fn (src string) string {
+		// LoadSlow reads the parameter, so the coding reaches an FB
+		return src.replace('  reads     = ["LoadCmd"]\n  writes    = ["Workload"]', '  reads     = ["LoadCmd", "Cap"]\n  writes    = ["Workload"]')
+	}, diag_conn + gated + param)
+	assert c2 == 0, o2
+	p2 := g2.all_after('// pass: persist').all_before('nm_up := ')
+	assert p2.contains('if (param_wrote || sa_wrote) && g_nm.state() == .bus_sleep {'), p2
+	assert p2.count('nvm_flush_ok = g_nvm.mark_clean()') == 1, p2
+	// the choreography flushes the 0x27 state too, and an ECUReset's does before it resets — inside
+	// its erase-recovery pass, so a full journal still takes the state across a tester's reset
+	// (REQ-DIAG-033: the answer is on the wire by then, so that erase delays no answer)
+	assert g2.contains('if !g_diag.server.persist_security(true) { // the 0x27 failed-key state')
+	reset := g2.all_after('if g_diag.reset_due() != 0 {').all_before('C.diag_sys_reset()')
+	in_order(reset, ['for nvm_pass := 0; nvm_pass < 2; nvm_pass++ {', 'if !g_diag.server.persist_security(true) {',
+		'g_nvm.erase_pending()', 'nvm_flush_ok = g_nvm.mark_clean()'])
+	// and the NM node's boot erases nothing: its quiet points are the sleep edges and that flush
+	b2 := boot_fn(g2)
+	assert b2.contains('g_nvm.prune(&keep[0]') && !b2.contains('erase_pending'), 'an NM node erases at boot:\n${b2}'
 }
 
 fn test_a_connection_off_the_comm_threads_bus_is_refused() {
@@ -318,7 +430,7 @@ fn test_the_reset_flushes_the_journal_first() {
 	// the satellite partition's `image = "../h755_m4_app"` resolves into the scratch layout
 	code, out, g := run_in_scratch(tmp, example_dir('h755_threadx'), fn (s string) string {
 		return s
-	}, diag_conn)
+	}, diag_conn.replace(tt_nvm, ''))
 	assert code == 0, out
 	assert os.exists(os.join_path(tmp, 'h755_m4_app', 'gen')), 'the satellite image was not generated into the scratch layout'
 	steps := ['if g_diag.reset_due() != 0 {', 'diag.wire_drain(mut ch', 'nvm_flush_ok = g_nvm.mark_clean()',
@@ -491,7 +603,7 @@ security_key  = "reference"
 // @verifies REQ-BOOT-003 (the build half: comm/uds and comm/diag's tests show the answer and its
 // ordering, boot/prog_test.v the bootloader opening the promised session)
 
-const boot_conn = '
+const boot_conn = tt_nvm + '
 [isotp]
 bus           = "can0"
 rx_id         = 0x7B0
@@ -506,6 +618,13 @@ ascii = "BLOBLY-TEST"
 image_key   = "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8"
 session_key = "29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7"
 '
+
+// boot_fn: the generated boot() — mount, prune, restore, up to the kernel start — as one string
+// (fault_target_test.v has its own: each test file is its own program).
+fn boot_fn(glue string) string {
+	at := glue.index('pub fn boot() {') or { return '' }
+	return glue[at..].all_before('\n}\n')
+}
 
 fn in_order(glue string, steps []string) {
 	mut at := -1

@@ -9,6 +9,11 @@
 -- uds-on-target-security, uds-on-target-reset), not
 -- tagged here: a bench
 -- script never runs in trace-check, so a tag would only ever read pending.
+-- The 0x27 failed-key count outlives a reset AND a power cycle (the NvM journal, docs/diagnostics.md
+-- §3.1, written before the answer reporting it): each wrong-key test ends with the right key
+-- after its delay, so a completed run leaves nothing counted. A run aborted mid-test leaves its
+-- count stored, and the next start (an ECUReset, a flash, a power cycle) answers the first seed
+-- 0x37 for security_delay_ms (3 s) — wait it out before re-running.
 
 local function diag()
   return uds.open("compute", { tx = 0x7B0, rx = 0x7B8 })
@@ -161,8 +166,8 @@ test("domain: ECUReset is answered, then the node restarts", function()
   check.nrc(0x31, function() d:write_did(0x0101, "\x01") end) -- the default session again
 end)
 
--- the failed-key count survives the node's own reset (the keep cell, boards/common/diag_board.c):
--- a reset between guesses buys nothing
+-- the failed-key count survives the node's own reset (kept in the NvM journal, comm/uds
+-- sa_store.v — written before each 0x35 leaves): a reset between guesses buys nothing
 test("domain: wrong keys are still counted after a reset", function()
   local d = diag()
   d:session(0x03)
@@ -182,7 +187,7 @@ test("domain: wrong keys are still counted after a reset", function()
   d:session(0x01)
 end)
 
--- nor does a reset DURING a lockout: the lockout is kept (its count already zeroed), and runs on
+-- nor does a reset DURING a lockout: the count at the limit is the lockout, and it runs on
 test("domain: a lockout runs on through a reset", function()
   local d = diag()
   d:session(0x03)

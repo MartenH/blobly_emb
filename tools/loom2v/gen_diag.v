@@ -726,9 +726,43 @@ fn diag_target_sa_fns(m Model) []string {
 	return g
 }
 
+// sa_target_on: a ThreadX node that performs 0x27 — a security level named by a [[did]] gate, a
+// [uds] services row or the "0x10 02" handoff row (sa_levels), served on its comm thread's
+// diagnostic connection. Its failed-key state is kept in the NvM journal (validate_sa_target).
+fn sa_target_on(m Model) bool {
+	return m.target.threadx && m.isotp_conns.len > 0 && sa_levels(m) != 0
+}
+
+// sa_persist_on: the image keeps its 0x27 failed-key state in the journal (comm/uds sa_store.v).
+fn sa_persist_on(m Model) bool {
+	return sa_target_on(m) && m.nvm.on
+}
+
+// validate_sa_target refuses a target node that performs 0x27 without [nvm] (REQ-DIAG-066): its
+// failed-key counts and a running lockout must survive a power cycle, or one between guesses buys
+// fresh attempts. The host bridge has no power cycle and keeps them in RAM.
+fn validate_sa_target(m Model) {
+	if sa_target_on(m) && !m.nvm.on {
+		panic('loom2v: a security level on the target (a [[did]] gate, a [uds] services row or the "0x10 02" handoff) needs [nvm] — the 0x27 failed-key counts and a running lockout are kept in the NvM journal across resets and power loss, so a power cycle between guesses buys nothing (docs/diagnostics.md §3.1); declare the storage')
+	}
+}
+
+// sa_target_persist: the 0x27 state this pass changed, written — after every request of the pass
+// was served (DoIP's in .remote, CAN's in the drain), and before the pass pumps the CAN answer, so a
+// count is in the journal before the 0x35 / 0x36 reporting it leaves (REQ-DIAG-067). One append,
+// never an erase (REQ-DIAG-062): a write a full journal refuses changes no answer and waits in RAM,
+// retried, until the flush before an ECUReset (with NM also a sleep edge) erases and takes it; a
+// power cut or a reset the server did not perform meanwhile restores the record last accepted.
+fn sa_target_persist(m Model) []string {
+	if !sa_persist_on(m) {
+		return []string{}
+	}
+	return ['\t\tg_diag.server.persist_security(false) // the 0x27 state this pass changed, before its answer is pumped']
+}
+
 // diag_target_reset: an answered ECUReset, performed — once the answer is not only out of the link
 // but on the wire (the controller's Tx FIFO empty, bounded so a dead bus cannot hold the reset
-// off: REQ-BOOT-012), with the 0x27 failed-key counts kept across it.
+// off: REQ-BOOT-012), the journal flushed first (the 0x27 failed-key state with it).
 fn diag_target_reset(m Model, ioc_idx map[string]int) []string {
 	if m.isotp_conns.len == 0 {
 		return []string{}
@@ -762,10 +796,6 @@ fn diag_target_reset(m Model, ioc_idx map[string]int) []string {
 		g << '\t\t\t\tcontinue'
 		g << '\t\t\t}'
 	}
-	if sa_levels(m) != 0 {
-		g << '\t\t\tdiag_keep_now := g_diag.server.kept_security()'
-		g << '\t\t\tC.diag_keep_save(&diag_keep_now[0], uds.kept_len)'
-	}
 	if m.boot.on {
 		// the handoff: the request cell makes the bootloader stay and serve the programming session,
 		// held by the transport the handoff was asked over (a DoIP tester reconnects to it)
@@ -778,7 +808,7 @@ fn diag_target_reset(m Model, ioc_idx map[string]int) []string {
 	return g
 }
 
-// diag_target_c_decls: the board's reset and keep cell (boards/common/diag_board.c).
+// diag_target_c_decls: the board's reset (boards/common/diag_board.c).
 fn diag_target_c_decls(m Model) []string {
 	if m.isotp_conns.len == 0 {
 		return []string{}
@@ -790,10 +820,6 @@ fn diag_target_c_decls(m Model) []string {
 		g << 'fn C.boot_handoff_request(int)'
 		g << 'fn C.boot_handoff_ok() int'
 		g << 'fn C.boot_image_version() u32'
-	}
-	if sa_levels(m) != 0 {
-		g << 'fn C.diag_keep_save(&u8, int)'
-		g << 'fn C.diag_keep_load(&u8, int) int'
 	}
 	return g
 }
@@ -830,9 +856,10 @@ fn did_xup_sigs(m Model) []string {
 
 // diag_target_init: configured before the loop. ECUReset is served and performed by the comm
 // thread (diag_target_reset); CommunicationControl stays unserved (diag_unbuilt): nothing on the
-// target gates its frames on it yet. The 0x27 failed-key counts a previous ECUReset kept are
-// restored, and a non-zero count arms the lockout delay from boot — a reset between guesses buys
-// nothing.
+// target gates its frames on it yet. The 0x27 failed-key state is wired to the NvM journal (which
+// boot() mounted before the kernel) and restored from it before the first request: a non-zero count
+// since a level's last correct key arms the delay from boot — neither a reset nor a power cycle
+// between guesses buys anything (REQ-DIAG-033, REQ-DIAG-065).
 fn diag_target_init(m Model) []string {
 	if m.isotp_conns.len == 0 {
 		return []string{}
@@ -853,10 +880,15 @@ fn diag_target_init(m Model) []string {
 		// the RNG's clock is set up here, once, before the loop — never inside a request
 		g << '\tC.diag_sa_init() // 0 = no RNG: every seed request is then refused'
 		g << security_init_lines(m, 'g_diag.server', 'uds.SecurityOps{\n\t\tseed:   diag_sa_seed_v\n\t\tkey_ok: ${key}\n\t}')
-		g << '\tmut diag_kept := [uds.kept_len]u8{}'
-		g << '\tif C.diag_keep_load(&diag_kept[0], uds.kept_len) != 0 {'
-		g << '\t\tg_diag.server.restore_security(diag_kept) // a lockout or a count runs on from boot'
-		g << '\t}'
+		if sa_persist_on(m) {
+			g << '\tg_diag.server.sa_store = uds.SecurityStore{'
+			g << '\t\tput:      nvm_store_put'
+			g << '\t\tget:      nvm_store_get'
+			g << '\t\tid:       u16(0x${m.sa_block_id.hex()}) // the 0x27 state\'s fixed block'
+			g << '\t\tretry_us: u64(${m.nvm.min_write_ms}) * 1000 // a refused write waits the system floor'
+			g << '\t}'
+			g << '\tg_diag.server.restore_persisted_security() // a count runs on from boot'
+		}
 	}
 	return g
 }

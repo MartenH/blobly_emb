@@ -85,6 +85,17 @@ make -C examples/system_full/nodes/domain_m4 flash SERIAL=<sn>   # H755 bank 2: 
 The boot manager owns only the CM7 app slot — **CAN field updates do not refresh the
 CM4 image**; it rides bank 2 and is reflashed over SWD when its config changes.
 
+**Single-bank boards (H723 zone_a, H735 sysnode):** the app slot is sectors 1..5 (640 KB) and the
+NvM journal sectors 6 + 7 (0x080C0000 + 0x080E0000, `bootmap.h` NVM_*). A boot manager built for an
+older map (the H735's app slot was sectors 1..7 before its journal existed) erases the journal on its
+next download and accepts images over 640 KB: reflash the boot (`make flash`, which is `boot-flash`)
+and erase the pair once, with OpenOCD as above:
+
+```sh
+openocd -f interface/stlink.cfg -c "adapter serial <sn>" -f target/stm32h7x.cfg \
+  -c 'init; halt; flash erase_address 0x080C0000 0x40000; reset run; shutdown'
+```
+
 **Every time after (field, over CAN):** the application's diagnostic server hands over
 itself — `0x10 03`, then `0x10 02` (behind 0x27 where its `"0x10 02"` row asks): it answers
 `50 02`, writes the boot request cell and resets, and the boot opens the programming session

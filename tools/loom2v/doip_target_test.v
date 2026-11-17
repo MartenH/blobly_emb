@@ -14,7 +14,7 @@ const fixture_dir = os.join_path(@DIR, 'testdata', 'threadx_node')
 
 // a service table gating the one state-changing service that config performs (0x11; no fault
 // memory, so no 0x14/0x85), as every [doip] node must (REQ-NET-012)
-const doip_uds = '
+const doip_uds = tt_nvm + '
 [uds.services]
 "0x10" = {}
 "0x11" = { sessions = ["extended"], security = 1 }
@@ -42,6 +42,14 @@ ascii = "BLOBLYH735THREADX"
 [doip]
 address         = "192.168.0.50"
 logical_address = 0x07B0
+'
+
+// [nvm]: a ThreadX node that performs 0x27 keeps its failed-key state in the journal, so a gated
+// config declares it (REQ-DIAG-066); with no journal writer it generates nothing
+const tt_nvm = '
+[nvm]
+min_write_ms   = 1000
+sector_records = 4096
 '
 
 fn doip_loom2v() string {

@@ -270,7 +270,10 @@ the two variants of the serve loop. zone_a's NvM journal (its persisted fault me
 flash sectors 6 + 7 (`boards/h723/bootmap.h` NVM_*, outside the app region, which is sectors 1..5) and
 holds its persisted fault memory and its `SteerLimit` parameter: `make flash` never erases it, so DTCs
 and coded parameters survive a reflash — clear DTCs with 0x14, recode a parameter with 0x2E
-(`test/param_zone_a.lua` leaves it at 360).
+(`test/param_zone_a.lua` leaves it at 360). sysnode's H735 has the same map (app sectors 1..5, its
+journal sectors 6 + 7, `boards/h735dk/bootmap.h`), its journal holding the 0x27 failed-key state —
+every node that performs 0x27 declares `[nvm]` (docs/diagnostics.md §3.1); a bench H735 whose boot
+predates that map needs `make flash` (boot included) and sectors 6 + 7 erased once.
 
 **CI pins the V compiler, and it is V3**: the commit in `.v-version` (today master `5f7d4d0`, the newest
 commit with a vc bootstrap generated from it once vlang/v#30964 and #30972 had merged; vlang/v#30552,

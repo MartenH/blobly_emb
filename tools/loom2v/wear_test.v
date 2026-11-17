@@ -5,8 +5,8 @@ import os
 import tools.sysmodel
 
 // The journal's wear check (gen_wear.v): every writer — persisted signals, clean markers, the fault
-// memory, the parameters — in one computation, refused at generation below `min_years` with each
-// contributor's share named, printed otherwise. Runs the real generator: on testdata/threadx_node
+// memory, the parameters, the 0x27 failed-key state — in one computation, refused at generation
+// below `min_years` with each contributor's share named, printed otherwise. Runs the real generator: on testdata/threadx_node
 // with a connection, a fault, parameters and [nvm] appended, and on system_full's lowered nodes.
 const fixture_dir = os.join_path(@DIR, 'testdata', 'threadx_node')
 
@@ -130,13 +130,27 @@ fn test_fault_and_parameter_traffic_past_the_budget_is_refused() {
 	// every line carries the generator's prefix: syscheck keeps only those, and must keep the shares
 	assert report.len > 4 && report.all(it.contains('loom2v:')), out
 	for what in ['clean markers', 'fault memory status image', 'fault memory snapshots',
-		'parameters (2)'] {
+		'parameters (2)', 'the 0x27 state'] {
 		s := share(report, what)
 		assert s.contains('records/h (') && s.contains('%)'), '${what} has no share in:\n${out}'
 	}
 	assert out.contains('2400 operation cycles/day, 24 ECUResets/day (default), 240 0x14 clears/day, 24 0x85 changes/day (default), 24000 0x2E codings/day'), out
 	// the parameters' share is theirs: one record per coding, 24000 a day
 	assert share(report, 'parameters (2)').starts_with('1000 records/h'), out
+	// the 0x27 state's (the parameters' gates perform 0x27): the attempts plus one clear per
+	// correct-key unlock, 24 unlocks a day by default — whatever a tester without the key sends,
+	// beyond the attempts per level once
+	assert share(report, 'the 0x27 state (10 B = 1 record)').starts_with('4 records/h'), out
+	assert out.contains('24 0x27 unlocks/day (default)'), out
+	c3, o3 := wt_generate('unlocks', wt_cfg + '\n[nvm.assume]\nunlocks_per_day = 240\n')
+	assert c3 == 0, o3
+	assert share(wear_report(o3), 'the 0x27 state (10 B = 1 record)').starts_with('40 records/h'), o3
+	assert o3.contains('240 0x27 unlocks/day'), o3
+	// the configured attempt limit, not the default: 50 attempts write up to 51 records an unlock
+	c4, o4 := wt_generate('attempts', wt_cfg + '\n[uds]\nsecurity_attempts = 50\n')
+	assert c4 == 0, o4
+	s4 := share(wear_report(o4), 'the 0x27 state (10 B = 1 record)')
+	assert s4.starts_with('51 records/h') && o4.contains('at most 50 per served level'), o4
 	// the same node at the default (conservative) rates and a full sector lasts: printed, not refused
 	c2, o2 := wt_generate('kept', wt_cfg)
 	assert c2 == 0, o2
@@ -156,6 +170,30 @@ fn test_assumptions_are_checked() {
 	assert c1 != 0 && o1.contains('[nvm.assume] unknown key "cycle_per_day"'), o1
 	c2, o2 := wt_generate('zero', wt_cfg + '\n[nvm.assume]\ncycles_per_day = 0\n')
 	assert c2 != 0 && o2.contains('cycles_per_day') && o2.contains('out of range'), o2
+	// the 0x27 unlocks: 0..1_000_000 a day — 0 leaves only the attempts per level once
+	for bad in ['-1', '1000001'] {
+		cb, ob := wt_generate('unlocks_range', wt_cfg + '\n[nvm.assume]\nunlocks_per_day = ${bad}\n')
+		assert cb != 0 && ob.contains('unlocks_per_day') && ob.contains('out of range'), ob
+	}
+	cu, ou := wt_generate('unlocks_zero', wt_cfg + '\n[nvm.assume]\nunlocks_per_day = 0\n')
+	assert cu == 0, ou
+	assert share(wear_report(ou), 'the 0x27 state (10 B = 1 record)').starts_with('0 records/h'), ou
+	// with no unlocks, what remains is the attempts per served level, once over min_years: visible
+	// at 255 attempts over one year — 2 levels x 255 / 8760 h = 0.06 records/h, 1 level half that
+	lifetime := 'min_years = 1\n\n[nvm.assume]\nunlocks_per_day = 0\n\n[uds]\nsecurity_attempts = 255\n'
+	two := wt_cfg.replace('id    = 0x0111\nparam = "Trim"\nwrite = { session = ["extended"], security = 1 }',
+		'id    = 0x0111\nparam = "Trim"\nwrite = { session = ["extended"], security = 2 }')
+	assert two != wt_cfg
+	cl2, ol2 := wt_generate('levels_two', two + lifetime)
+	assert cl2 == 0, ol2
+	l2 := wear_report(ol2).filter(it.contains('the 0x27 state'))
+	assert l2.len == 1 && share(l2, 'the 0x27 state (10 B = 1 record)').starts_with('0.1 records/h')
+		&& l2[0].contains('at most 255 per served level until its correct key (2 levels, once over min_years)'), ol2
+	cl1, ol1 := wt_generate('levels_one', wt_cfg + lifetime)
+	assert cl1 == 0, ol1
+	l1 := wear_report(ol1).filter(it.contains('the 0x27 state'))
+	assert l1.len == 1 && share(l1, 'the 0x27 state (10 B = 1 record)').starts_with('0 records/h')
+		&& l1[0].contains('(1 levels, once over min_years)'), ol1
 	// the rates alone declare no storage: the fault memory still asks for [nvm]
 	c3, o3 := wt_generate('alone', wt_cfg.replace('[nvm]\nmin_write_ms = 1000\n', '') +
 		'\n[nvm.assume]\ncycles_per_day = 10\n')
@@ -174,9 +212,15 @@ fn system_full_reports() map[string][]string {
 	lower := os.exec([wt_sysgen, sys, '--out', tmp])
 	assert lower.exit_code == 0, lower.output
 	mut out := map[string][]string{}
+	// the gateway reads both buses: one merged DBC, as its Makefile builds it
+	merged := os.join_path(tmp, 'merged.dbc')
+	m := os.exec([sysmodel.tool_binary('dbcmerge') or { panic(err) }, merged,
+		os.join_path(tmp, 'compute.dbc'), os.join_path(tmp, 'edge.dbc')])
+	assert m.exit_code == 0, m.output
 	for node, dbc in {
-		'domain': 'compute'
-		'zone_a': 'edge'
+		'domain':  'compute'
+		'zone_a':  'edge'
+		'sysnode': 'merged'
 	} {
 		toml_path := os.join_path(tmp, 'gen-' + node + '.toml')
 		dbc_path := os.join_path(tmp, dbc + '.dbc')
@@ -188,11 +232,11 @@ fn system_full_reports() map[string][]string {
 	return out
 }
 
-// system_full's two journals pass at the default assumptions, and their numbers are printed here
+// system_full's three journals pass at the default assumptions, and their numbers are printed here
 // and pinned: a change to the model, or to a node's traffic, moves them visibly.
 fn test_system_full_lasts_and_its_numbers_are_printed() {
 	reports := system_full_reports()
-	for node in ['domain', 'zone_a'] {
+	for node in ['domain', 'zone_a', 'sysnode'] {
 		r := reports[node] or { []string{} }
 		println('${node}:')
 		for l in r {
@@ -204,18 +248,26 @@ fn test_system_full_lasts_and_its_numbers_are_printed() {
 	// fault-memory write that can land in bus sleep lays a clean marker and flushes the signals; its
 	// parameter's codings are such puts too (one choreography run each)
 	d := reports['domain'] or { []string{} }
-	assert d.len > 0 && d[0].contains('825 records/h') && d[0].contains('11.3 years'), d.join('\n')
-	assert share(d, 'signal "DriveMode" (persist = "now")').starts_with('240 records/h'), d.join('\n')
-	assert share(d, 'signal "DynKept" (persist = "now")').starts_with('240 records/h'), d.join('\n')
-	assert share(d, 'clean markers').starts_with('240 records/h'), d.join('\n')
+	assert d.len > 0 && d[0].contains('841 records/h') && d[0].contains('11.1 years'), d.join('\n')
+	assert share(d, 'signal "DriveMode" (persist = "now")').starts_with('244 records/h'), d.join('\n')
+	assert share(d, 'signal "DynKept" (persist = "now")').starts_with('244 records/h'), d.join('\n')
+	assert share(d, 'clean markers').starts_with('244 records/h'), d.join('\n')
+	assert share(d, 'the 0x27 state (10 B = 1 record)').starts_with('4 records/h'), d.join('\n')
 	assert share(d, 'fault memory status image (12 B = 1 records)').starts_with('88 records/h'), d.join('\n')
 	assert share(d, 'fault memory snapshots').starts_with('16 records/h'), d.join('\n')
 	assert share(d, 'parameters (1)').starts_with('1 records/h'), d.join('\n')
 	// zone_a: a power-cycle node — its persisted fault memory, its parameter, its resets' markers
 	z := reports['zone_a'] or { []string{} }
-	assert z.len > 0 && z[0].contains('285 records/h') && z[0].contains('16.4 years'), z.join('\n')
+	assert z.len > 0 && z[0].contains('289 records/h') && z[0].contains('16.1 years'), z.join('\n')
 	assert share(z, 'fault memory status image (42 B = 3 records)').starts_with('267 records/h'), z.join('\n')
 	assert share(z, 'fault memory snapshots').starts_with('16 records/h'), z.join('\n')
 	assert share(z, 'parameters (1)').starts_with('1 records/h'), z.join('\n')
 	assert share(z, 'clean markers').starts_with('1 records/h'), z.join('\n')
+	assert share(z, 'the 0x27 state (10 B = 1 record)').starts_with('4 records/h'), z.join('\n')
+	// sysnode: the 0x27 state its gates bring is its journal's one writer, on an NM node — each
+	// state write may land in bus sleep and lay a clean marker
+	g := reports['sysnode'] or { []string{} }
+	assert g.len > 0 && g[0].contains('23 records/h') && g[0].contains('live set 2'), g.join('\n')
+	assert share(g, 'the 0x27 state (10 B = 1 record)').starts_with('4 records/h'), g.join('\n')
+	assert share(g, 'clean markers').starts_with('19 records/h'), g.join('\n')
 }

@@ -320,19 +320,7 @@ fn derive_param_nvm(mut m Model) {
 	if m.params.len == 0 {
 		return
 	}
-	mut used := map[u16]string{}
-	for sname, id in m.nvm_ids {
-		used[id] = 'persistent signal "${sname}"'
-	}
-	if fault_persist_on(m) {
-		used[m.fault_status_id] = 'the fault memory status'
-		for k, id in m.fault_snap_ids {
-			if id != 0 {
-				used[id] = 'a snapshot block of [[fault]] "${m.faults[k].name}"'
-				used[m.fault_snap_ids_b[k]] = 'a snapshot block of [[fault]] "${m.faults[k].name}"'
-			}
-		}
-	}
+	mut used := journal_ids_used(m)
 	for i, p in m.params {
 		// ASSIGNED, never derived: the parameter's DID (unique, 1..0xFFFF, checked where it is read),
 		// or a pin. A derived id — a hash of the name — let a retired parameter's record be inherited
@@ -342,9 +330,14 @@ fn derive_param_nvm(mut m Model) {
 		}
 		id := if p.nvm_id != 0 { p.nvm_id } else { u16(p.did) }
 		if prev := used[id] {
-			panic('loom2v: [[param]] "${p.name}": its journal block 0x${id.hex()} (its DID, unless pinned) collides with ${prev} — pin one side (`nvm_id = <1..65534>` on the parameter or the signal) and keep the pin')
+			fix := if prev.pin != '' {
+				'pin one side (`nvm_id = <1..65534>` on the parameter, or ${prev.pin})'
+			} else {
+				'pin the parameter with `nvm_id = <1..65534>` (${prev.what} is a fixed block)'
+			}
+			panic('loom2v: [[param]] "${p.name}": its journal block 0x${id.hex()} (its DID, unless pinned) collides with ${prev.what} — ${fix} and keep the pin')
 		}
-		used[id] = '[[param]] "${p.name}"'
+		used[id] = JournalOwner{'[[param]] "${p.name}"', 'pin [[param]] "${p.name}" with `nvm_id = <1..65534>`'}
 		m.params[i].id = id
 	}
 }
@@ -399,20 +392,12 @@ fn param_globals(m Model) []string {
 	return ['\tg_param param.Params // the parameters: the comm thread is their one writer (restored pre-kernel)']
 }
 
-// param_fns: the journal seam and the publish into each parameter's FB cell.
+// param_fns: the publish into each parameter's FB cell (the journal seam is nvm_store_fns').
 fn param_fns(m Model, ioc_idx map[string]int) []string {
 	if m.params.len == 0 {
 		return []string{}
 	}
 	mut g := [
-		'',
-		'fn param_put(ctx voidptr, id u16, data &u8, len u16) bool {',
-		'\treturn g_nvm.put(id, data, len)',
-		'}',
-		'',
-		'fn param_get(ctx voidptr, id u16, out &u8, cap u16) u16 {',
-		'\treturn g_nvm.get(id, out, cap)',
-		'}',
 		'',
 		'fn param_pub(ctx voidptr, i int, a u32, b u32) {',
 		'\tmatch i {',
@@ -469,8 +454,8 @@ fn param_config_lines(m Model) []string {
 	}
 	g << '\tg_param.n = ${m.params.len}'
 	g << '\tg_param.store = param.Store{'
-	g << '\t\tput: param_put'
-	g << '\t\tget: param_get'
+	g << '\t\tput: nvm_store_put'
+	g << '\t\tget: nvm_store_get'
 	g << '\t}'
 	g << '\tg_param.publish = param_pub'
 	return g
@@ -497,18 +482,6 @@ fn param_bind_lines(m Model) []string {
 	st := m.dids.filter(it.param_status)
 	sid := if st.len > 0 { st[0].id } else { 0 }
 	return ['\tg_param.bind(mut g_diag.server, u16(0x${sid.hex()})) // the parameter DIDs: 0x2E codes, 0x22 reads back']
-}
-
-// param_sleep_lines: a parameter coded while the bus sleeps re-runs the flush choreography, so the
-// clean marker never sits below a record it does not cover (REQ-NVM-014) — an NM node's.
-fn param_sleep_lines(m Model, ioc_idx map[string]int) []string {
-	if m.params.len == 0 || !m.nm.on || fault_persist_on(m) {
-		return []string{} // a persisted fault memory's in-sleep choreography covers it (fault_target_persist)
-	}
-	mut g := ['\t\tif g_param.take_wrote() && g_nm.state() == .bus_sleep {']
-	g << nvm_flush_choreo(m, ioc_idx, '\t\t\t', false)
-	g << '\t\t}'
-	return g
 }
 
 // param_did_len: the record length of a parameter DID or the status DID (0 = neither).

@@ -153,7 +153,7 @@ fn test_parameters_are_restored_before_the_kernel_and_bound_on_the_comm_thread()
 	// boot: the journal mounted, the parameter blocks kept by the prune, the table configured and
 	// restored — publishing into the cells — all before the kernel starts
 	in_order(o.glue, ['pub fn boot() {', 'C.ioc_pool_init()', 'g_nvm.mount()', 'if g_nvm.mounted {',
-		'/* [[param]] LoadCap */', '/* [[param]] Trim */', 'g_nvm.prune(&keep[0], 2)',
+		'/* [[param]] LoadCap */', '/* [[param]] Trim */', '/* the 0x27 failed-key state */', 'g_nvm.prune(&keep[0], 3)',
 		'g_param.p[0].did = u16(0x110) // LoadCap', 'g_param.p[0].fields[0] = param.Field{ // iters u16',
 		'min:    i64(10)', 'max:    i64(1000)', 'def:    i64(500)',
 		'g_param.p[0].fields[1] = param.Field{ // strict bool', 'max:    i64(1)', 'def:    i64(0)',
@@ -166,14 +166,18 @@ fn test_parameters_are_restored_before_the_kernel_and_bound_on_the_comm_thread()
 	// the comm thread binds them once every DID is in the server, before the loop
 	in_order(o.glue, ['fn comm_thread_entry(', 'g_diag.server.ndid = 3',
 		'g_param.bind(mut g_diag.server, u16(0x112))', 'for {'])
-	// the fixture runs NM: a parameter coded in bus sleep re-runs the flush choreography
-	in_order(o.glue, ['g_diag.serve()', 'if g_param.take_wrote() && g_nm.state() == .bus_sleep {',
-		'g_nvm.mark_clean()'])
+	// the fixture runs NM: a parameter coded in bus sleep re-runs the flush choreography (one for
+	// the pass, shared with the 0x27 state its gates bring)
+	cond := 'if (param_wrote || sa_wrote) && g_nm.state() == .bus_sleep {'
+	in_order(o.glue, ['g_diag.serve()', 'param_wrote := g_param.take_wrote()', cond, 'g_nvm.mark_clean()'])
 	// ... and never erases there (REQ-NVM-015)
-	sleep_flush := o.glue.all_after('if g_param.take_wrote() && g_nm.state() == .bus_sleep {').all_before('\n\t\t}\n')
+	sleep_flush := o.glue.all_after(cond).all_before('\n\t\t}\n')
 	assert sleep_flush.contains('g_nvm.mark_clean()'), sleep_flush
 	assert !sleep_flush.contains('erase_pending'), 'an erase in bus sleep:\n${sleep_flush}'
 	assert o.glue.contains('import comm.param')
+	// the one store seam over the journal, shared with the fault memory and the 0x27 state
+	assert o.glue.contains('put: nvm_store_put') && o.glue.contains('get: nvm_store_get')
+	assert o.glue.count('fn nvm_store_put(') == 1 && !o.glue.contains('param_put')
 	assert o.manifest.contains('LoadCap,0x110,'), o.manifest
 	assert o.manifest.contains(',reset,x:i8:-128..127=-3'), o.manifest
 }
@@ -358,14 +362,18 @@ fn test_the_service_row_can_be_the_gate() {
 	assert o.code == 0, o.out
 }
 
-// with a persisted fault memory on an NM node, ONE in-sleep choreography covers both writers
+// with a persisted fault memory on an NM node, ONE in-sleep choreography covers every writer — the
+// fault memory, the parameters, and the 0x27 state their gates bring
 fn test_one_sleep_choreography_for_the_fault_memory_and_the_parameters() {
 	fault := '\n[[fault]]\nname     = "LoadImplausible"\ndtc      = 0xC40100\nfrom     = "LoadSlow.on_100ms"\ndebounce = { kind = "counter", fail = 3, pass = 3 }\n'
 	o := pt_generate('with_faults', reads_params, pt_conn + pt_param + fault)
 	assert o.code == 0, o.out
-	in_order(o.glue, ['g_fmem.persist(t1, false)', 'param_wrote := g_param.take_wrote()',
-		'if (g_fmem.wrote > 0 || param_wrote) && g_nm.state() == .bus_sleep {', 'g_nvm.mark_clean()'])
-	both := o.glue.all_after('if (g_fmem.wrote > 0 || param_wrote) && g_nm.state() == .bus_sleep {').all_before('\n\t\t}\n')
+	cond := 'if (g_fmem.wrote > 0 || param_wrote || sa_wrote) && g_nm.state() == .bus_sleep {'
+	in_order(o.glue, ['g_fmem.persist(t1, false)', 'g_diag.server.persist_security(false)',
+		'param_wrote := g_param.take_wrote()', 'sa_wrote := g_diag.server.take_sa_wrote()', cond,
+		'g_nvm.mark_clean()'])
+	assert o.glue.count(cond) == 1
+	both := o.glue.all_after(cond).all_before('\n\t\t}\n')
 	assert !both.contains('erase_pending'), 'an erase in bus sleep:\n${both}' // REQ-NVM-015
 	assert o.glue.count('g_param.take_wrote()') == 1
 	assert !o.glue.contains('if g_param.take_wrote() && g_nm.state()')

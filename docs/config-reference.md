@@ -203,6 +203,7 @@ Vehicle usage rates the wear check assumes, per day.
 | `clears_per_day` | integer |  | `24` | 0..1000000 | ClearDiagnosticInformation (0x14) |
 | `setting_changes_per_day` | integer |  | `24` | 0..1000000 | ControlDTCSetting (0x85) changes |
 | `codings_per_day` | integer |  | `24` | 0..1000000 | accepted 0x2E codings of a [[param]] |
+| `unlocks_per_day` | integer |  | `24` | 0..1000000 | correct-key SecurityAccess (0x27) unlocks a day, all levels: the 0x27 failed-key state is written at most security_attempts times per level until a correct key, and once more by it; only where the node performs 0x27 |
 
 <a id="ecu-target"></a>
 

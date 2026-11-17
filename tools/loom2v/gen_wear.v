@@ -1,22 +1,26 @@
 // The journal's WEAR CHECK (REQ-NVM-010, docs/nvm.md "Wear, proven per configuration"): every
 // writer of the NvM journal in ONE computation — the persisted signals, the clean markers the
-// flush choreography lays, the fault memory (status image, snapshot blocks, tombstones) and the
-// parameters — against the sector pair's erase budget, at generation. A configuration that cannot
-// last `[nvm] min_years` is refused, naming each contributor's share; one that can prints the
+// flush choreography lays, the fault memory (status image, snapshot blocks, tombstones), the
+// parameters and the 0x27 failed-key state — against the sector pair's erase budget, at
+// generation. A configuration that cannot last `[nvm] min_years` is refused, naming each contributor's share; one that can prints the
 // same numbers, so the review sees them either way.
 //
 // Each rate is what the generated code does, bounded per event: a "now" signal's floored put, a
 // choreography at each NM sleep edge, after each write made in bus sleep and before each
 // ECUReset, the fault memory's per-cycle bound (comm/fault cycle_images, held to it by
-// persist_test.v), one record per accepted 0x2E. What only the VEHICLE knows — how often it
-// begins an operation cycle, how often a tester resets, clears, toggles 0x85 or codes — is a
-// declared assumption ([nvm.assume], per day, conservative defaults) printed beside the result.
+// persist_test.v), one record per accepted 0x2E, and for the 0x27 failed-key state at most
+// security_attempts records per served level until that level's correct key and attempts + 1 per
+// correct-key unlock (held by comm/uds sa_store_test.v). What only the VEHICLE knows — how often
+// it begins an operation cycle, how often a tester resets, clears, toggles 0x85, codes or unlocks
+// 0x27 — is a declared assumption ([nvm.assume], per day, conservative defaults) printed beside the
+// result.
 module main
 
 import toml
 import tools.cfgschema
 import comm.fault
 import comm.param
+import comm.uds
 
 // WearAssume: the vehicle's rates, per day — what the code cannot know ([nvm.assume]).
 struct WearAssume {
@@ -26,6 +30,7 @@ mut:
 	clears   u32 = 24 // 0x14 ClearDiagnosticInformation
 	settings u32 = 24 // 0x85 ControlDTCSetting changes
 	codings  u32 = 24 // accepted 0x2E codings of a [[param]]
+	unlocks  u32 = 24 // correct-key SecurityAccess (0x27) unlocks, all levels
 	declared []string // the keys the configuration states (the rest are the defaults)
 }
 
@@ -51,6 +56,7 @@ fn parse_wear_assume(nm map[string]toml.Any) WearAssume {
 	a.clears = u32(schema_int(am, 'nvm_assume', 'clears_per_day', a.clears, '[nvm.assume]'))
 	a.settings = u32(schema_int(am, 'nvm_assume', 'setting_changes_per_day', a.settings, '[nvm.assume]'))
 	a.codings = u32(schema_int(am, 'nvm_assume', 'codings_per_day', a.codings, '[nvm.assume]'))
+	a.unlocks = u32(schema_int(am, 'nvm_assume', 'unlocks_per_day', a.unlocks, '[nvm.assume]'))
 	return a
 }
 
@@ -89,6 +95,25 @@ fn journal_wear(m Model, doc toml.Doc) Wear {
 	clears := if fp { f64(a.clears) / 24.0 } else { 0.0 }
 	settings := if fp { f64(a.settings) / 24.0 } else { 0.0 }
 	codings := if params { f64(a.codings) / 24.0 } else { 0.0 }
+	sa := sa_persist_on(m)
+	// the 0x27 state: per served level at most `attempts` rises between two correct keys (one per
+	// wrong key below the limit) and one clear by the correct key that follows them, however many
+	// wrong keys a tester sends — so attempts + 1 per unlock, plus the `attempts` per level a tester
+	// may leave counted after the last one (once over the lifetime: nothing but a correct key clears
+	// them, and they saturate)
+	sa_attempts := if m.uds.security_attempts > 0 { m.uds.security_attempts } else { int(uds.default_sa_attempts) }
+	mut sa_nlevels := 0
+	for i in 0 .. uds.max_security_level {
+		if sa_levels(m) & (u8(1) << i) != 0 {
+			sa_nlevels++
+		}
+	}
+	life_hours := if m.nvm.min_years > 0 { f64(m.nvm.min_years) * hours_per_year } else { hours_per_year }
+	sa_writes := if sa {
+		f64(a.unlocks) / 24.0 * f64(sa_attempts + 1) + f64(sa_nlevels * sa_attempts) / life_hours
+	} else {
+		0.0
+	}
 	mut assumed := ['${a.cycles} operation cycles/day${wear_default(a, 'cycles_per_day')}']
 	if served {
 		assumed << '${a.resets} ECUResets/day${wear_default(a, 'resets_per_day')}'
@@ -99,6 +124,9 @@ fn journal_wear(m Model, doc toml.Doc) Wear {
 	}
 	if params {
 		assumed << '${a.codings} 0x2E codings/day${wear_default(a, 'codings_per_day')}'
+	}
+	if sa {
+		assumed << '${a.unlocks} 0x27 unlocks/day${wear_default(a, 'unlocks_per_day')}'
 	}
 	floor := f64(m.nvm.min_write_ms)
 	// the "now" signals' own floored puts, and how many land inside the cycle-end barrier's grace
@@ -145,10 +173,10 @@ fn journal_wear(m Model, doc toml.Doc) Wear {
 	tombs := snaps // every snapshot block is tombstoned at most once
 	// the flush choreography's runs (each lays one clean marker): every ECUReset, and with NM both
 	// sleep edges of every cycle and every write that can land in bus sleep — a "now" put, a coding,
-	// any of the fault memory's writes (its cycle end lands there by design)
+	// a 0x27 state write, any of the fault memory's writes (its cycle end lands there by design)
 	mut choreo := resets
 	if nm {
-		choreo += cycles * 2 + own_puts + codings
+		choreo += cycles * 2 + own_puts + codings + sa_writes
 		if fp {
 			choreo += images + snaps + tombs
 		}
@@ -212,6 +240,13 @@ fn journal_wear(m Model, doc toml.Doc) Wear {
 			what: 'parameters (${m.params.len})'
 			how: 'one ${recs}-record write per accepted 0x2E coding'
 			per_hour: codings * f64(recs)
+		}
+	}
+	if sa {
+		shares << WearShare{
+			what: 'the 0x27 state (${uds.sa_record_len} B = ${chain_records(uds.sa_record_len)} record)'
+			how: 'at most ${sa_attempts} per served level until its correct key (${sa_nlevels} levels, once over min_years) and ${sa_attempts + 1} per correct-key unlock (${a.unlocks}/day)'
+			per_hour: sa_writes * f64(chain_records(uds.sa_record_len))
 		}
 	}
 	mut total := 0.0

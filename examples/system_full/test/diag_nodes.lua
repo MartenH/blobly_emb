@@ -3,7 +3,10 @@
 -- the compute bus, and zone_a (H723) on the EDGE bus — CAN-FD, carrying classic-sized ISO-TP — each
 -- serving ISO 14229 from its ThreadX comm thread while it keeps routing and transmitting. The same
 -- checks run on both; diag_domain.lua is the full set, this proves the server and the board seam
--- (TRNG seed, reset, keep cell) on two more chips. Bench only (the flashed boards on the CANsub).
+-- (TRNG seed, reset, the 0x27 state kept in the NvM journal) on two more chips. Bench only (the
+-- flashed boards on the CANsub). The failed-key count outlives a power cycle too: a completed run
+-- leaves nothing counted, but a run aborted mid-test leaves its count stored, and the next start
+-- answers the first seed 0x37 for 3 s.
 --   BLOBLY_NET=/path/to/blobly_net; v -enable-globals \
 --     run $BLOBLY_NET/cmd/script/run.v examples/system_full/test/diag_nodes.lua
 -- After flashing with `st-flash --connect-under-reset`, the core-reset vector catch (DEMCR
@@ -79,7 +82,7 @@ for _, n in ipairs(nodes) do
   end)
 
   -- security_attempts = 3, security_delay_ms = 3000; the lockout is kept across the node's own
-  -- restart (the keep cell in D3 SRAM4), and 0x11 is answered before the reset
+  -- restart (the NvM journal, written before the 0x36 leaves), and 0x11 is answered before the reset
   test(n.name .. ": wrong keys lock 0x27 out, and the lockout runs on through ECUReset", function()
     local d = diag(n)
     d:session(0x03)

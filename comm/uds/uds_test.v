@@ -608,6 +608,76 @@ fn test_only_a_reset_after_wrong_keys_imposes_the_lockout() {
 	assert send_key(mut s, [u8(0), 0, 0, 1]) == [u8(0x7F), 0x27, 0x36]
 }
 
+// REQ-DIAG-033: the count a reset keeps is the wrong keys since the level's last correct key, so a
+// reset after a lockout that has ENDED still costs the full delay (no reset buys more than the
+// attempts per delay), after which the level has its attempts again; a reset during a lockout
+// restarts it; a correct key clears the count, and the next reset does not wait. (The file's header
+// tags REQ-DIAG-033.)
+fn test_a_reset_after_an_ended_lockout_costs_the_delay() {
+	mut s := secured()
+	for attempt in 1 .. 4 {
+		r := call(mut s, [u8(0x27), 0x01])
+		want := if attempt < 3 { nrc_invalid_key } else { nrc_exceeded_attempts }
+		assert send_key(mut s, key_for(r[2..]).map(it ^ 0x01)) == [u8(0x7F), 0x27, want]
+	}
+	s.tick(2_000_000) // the lockout has ended
+	assert call(mut s, [u8(0x27), 0x01])[0] == 0x67
+	s.reset_state()
+	s.tick(2_100_000)
+	call(mut s, [u8(0x10), 0x03])
+	assert call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x37], 'a reset after an ended lockout was free'
+	// a reset during that delay restarts it
+	s.tick(2_600_000)
+	s.reset_state()
+	s.tick(2_700_000)
+	call(mut s, [u8(0x10), 0x03])
+	assert call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x37]
+	s.tick(3_699_999)
+	assert call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x37], 'the reset did not restart the delay'
+	s.tick(3_700_000)
+	// the delay over: the attempts again, the limit's own answering 0x36
+	for attempt in 1 .. 3 {
+		r := call(mut s, [u8(0x27), 0x01])
+		assert r[0] == 0x67, 'attempt ${attempt}: ${r}'
+		assert send_key(mut s, key_for(r[2..]).map(it ^ 0x01)) == [u8(0x7F), 0x27, nrc_invalid_key]
+	}
+	// a correct key clears it all: the next reset does not wait
+	r := call(mut s, [u8(0x27), 0x01])
+	assert send_key(mut s, key_for(r[2..])) == [u8(0x67), 0x02]
+	s.reset_state()
+	s.tick(3_800_000)
+	call(mut s, [u8(0x10), 0x03])
+	assert call(mut s, [u8(0x27), 0x01])[0] == 0x67, 'a reset after a correct key waited'
+}
+
+// REQ-DIAG-033: a reset follows the rule a start-up restores by (sa_restart) — after an ended
+// lockout and more wrong keys, the reset's delay is followed by the level's full attempts, as a
+// target restoring a saturated count grants them, never fewer and never more.
+fn test_a_reset_after_an_ended_lockout_and_more_wrong_keys_grants_the_attempts() {
+	mut s := secured()
+	for attempt in 1 .. 4 {
+		r := call(mut s, [u8(0x27), 0x01])
+		want := if attempt < 3 { nrc_invalid_key } else { nrc_exceeded_attempts }
+		assert send_key(mut s, key_for(r[2..]).map(it ^ 0x01)) == [u8(0x7F), 0x27, want]
+	}
+	s.tick(2_000_000) // the lockout has ended
+	for _ in 0 .. 2 {
+		r := call(mut s, [u8(0x27), 0x01])
+		assert send_key(mut s, key_for(r[2..]).map(it ^ 0x01)) == [u8(0x7F), 0x27, nrc_invalid_key]
+	}
+	s.reset_state()
+	s.tick(2_100_000)
+	call(mut s, [u8(0x10), 0x03])
+	assert call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x37]
+	s.tick(3_100_000)
+	for attempt in 1 .. 4 {
+		r := call(mut s, [u8(0x27), 0x01])
+		assert r[0] == 0x67, 'attempt ${attempt}: ${r}'
+		want := if attempt < 3 { nrc_invalid_key } else { nrc_exceeded_attempts }
+		assert send_key(mut s, key_for(r[2..]).map(it ^ 0x01)) == [u8(0x7F), 0x27, want], 'attempt ${attempt}'
+	}
+}
+
 // A boot (init) with no history unlocks at once.
 fn test_boot_imposes_no_lockout() {
 	mut s := started()
@@ -693,36 +763,6 @@ fn test_a_too_small_buffer_silences_the_server() {
 	assert call(mut s, [u8(0x19)]).len == 0
 	s.init(min_resp_cap)
 	assert call(mut s, [u8(0x10), 0x03]).len == 6
-}
-
-// what an owner that restarts the MCU keeps across its reset: the counts, and a running lockout —
-// whose count the server has already zeroed — so neither a reset between guesses nor one during
-// a lockout buys fresh attempts
-fn test_security_state_kept_across_the_owners_reset() {
-	mut s := Server{}
-	s.init(64)
-	s.sa_failed[0] = 2
-	mut k := s.kept_security()
-	assert k[0] == 2 && k[max_security_level] == 0
-	mut t := Server{}
-	t.init(64)
-	t.restore_security(k)
-	assert t.sa_failed[0] == 2 && t.sa_arm_delay
-	// a lockout running, its count already zeroed
-	s.sa_failed[0] = 0
-	s.now_us = 1000
-	s.sa_delay_until = 5000
-	k = s.kept_security()
-	assert k[0] == 0 && k[max_security_level] == 1
-	mut r := Server{}
-	r.init(64)
-	r.restore_security(k)
-	assert r.sa_arm_delay, 'a lockout running at the reset must run on from boot'
-	// nothing to keep: nothing armed
-	mut q := Server{}
-	q.init(64)
-	q.restore_security([kept_len]u8{})
-	assert !q.sa_arm_delay
 }
 
 // The service table. A server with every seam wired (0x27, the fault memory, 0x11 and 0x28), so

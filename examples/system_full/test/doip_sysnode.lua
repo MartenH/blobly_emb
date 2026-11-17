@@ -78,6 +78,8 @@ end)
 -- cannot then reset under its OWN lockout — the reset needs its unlock, which a locked-out 0x27
 -- cannot give, and an unlock earned first answers a seed request with zeros, spending no key —
 -- so the lockout kept through a DoIP-requested reset is the next test's, the keys spent from CAN.
+-- The count (at the limit, the lockout) is kept in sysnode's NvM journal (sectors 6 + 7 of the H735),
+-- across a reset and a power cycle alike (docs/diagnostics.md §3.1).
 test("wrong keys over DoIP lock 0x27 out, for the bus too", function()
   local d, c = uds.open("sysnode"), can()
   d:session(0x03)

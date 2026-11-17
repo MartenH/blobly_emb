@@ -662,11 +662,18 @@ date = "2026-09-30"
 # (the count and a running lockout kept across a reset, both run here). The functional 0x27 sent was
 # a seed request only, so REQ-DIAG-035 (no key checked either) is evidence, not a verification.
 # REQ-DIAG-007 (hardReset AND softReset) ran its 0x11 01 only: evidence, not a verification.
+# SINCE 2026-11-16 the keep cell is gone: the counts and a running lockout are kept in the node's
+# NvM journal instead (comm/uds sa_store.v, REQ-DIAG-065/067/068), across every reset and a power
+# cycle. This run exercised the keep cell, so it no longer verifies REQ-DIAG-033: that requirement
+# rests on its tests (comm/uds, and comm/diag sa_persist_test.v over the real journal) until
+# diag_domain.lua is re-run on the journal build — with a reset the server did not perform and a
+# real power removal, the planned uds-on-target-power — and REQ-DIAG-033 is added back here then.
+# One key per seed (REQ-DIAG-008) does not touch the storage and stays verified.
 [[review]]
 id = "uds-on-target-reset"
 method = "review"
 context = "h755/threadx"
-verifies = ["REQ-DIAG-008", "REQ-DIAG-033"]
+verifies = ["REQ-DIAG-008"]
 approved_by = "Claude bench session — NUCLEO-H755ZI-Q (system_full domain) vs CANsub.4 ch2"
 date = "2026-09-30"
 
@@ -685,6 +692,12 @@ date = "2026-09-30"
 # Evidence, not verifications, for REQ-DIAG-007
 # (0x11 answered before the reset; 0x28 is not served) and REQ-DIAG-008 (the lockout kept across
 # the reset; one key per seed and the ignored functional 0x27 are checked on domain only).
+# SINCE 2026-11-16 the lockout is kept in the NvM journal, not the keep cell, and sysnode has a
+# journal of its own (sectors 6 + 7 of the H735, its app slot now sectors 1..5): this run predates
+# both, so its lockout-across-the-reset is evidence for the keep cell only and verifies nothing of
+# the journal; it verifies REQ-DIAG-001 alone (UDS served from the comm thread), which neither
+# change touches. diag_nodes.lua and doip_sysnode.lua are to be re-run on the journal build, after
+# the bench H735's bootloader is reflashed for the new map and sectors 6 + 7 erased once.
 [[review]]
 id = "uds-on-target-sysnode"
 method = "review"
@@ -775,4 +788,29 @@ method = "review"
 context = "h723/ThreadX"
 verifies = ["REQ-BOOT-020"]
 approved_by = "Claude (coding agent) on Marten Hildell's bench — system_full zone_a, domain, sysnode vs CANsub.4"
+date = "2026-11-17"
+
+# The 0x27 state in the NvM journal on silicon (U3a, the keep cell removed): all three system_full CAN
+# nodes flashed from one build — domain (H755, both banks), zone_a (H723) and sysnode (H735, its
+# bootloader reflashed for the new map: app in sectors 1..5, the journal in 6 + 7 erased once).
+# diag_domain.lua 14/14 (wrong keys still counted after a reset; a lockout runs on through a reset)
+# and diag_nodes.lua 11/11 (on sysnode and zone_a, the lockout runs on through ECUReset) over the
+# CANsub. With no RAM cell left, what a reset keeps it keeps in the journal, so these runs verify
+# REQ-DIAG-033 on the journal. A power removal was not done (unattended run): REQ-DIAG-065 rests on
+# its tests (comm/diag sa_persist_test.v over the real journal) until one is. doip_sysnode.lua was
+# not run: the bench Ethernet segment (192.168.77.0/24) was not connected.
+# The run was on the build with the write budget (since replaced by the monotonic record: each
+# level's wrong keys since its last correct key, saturating, written only when it changes). The flows
+# it exercised — each test ending with a correct key, a count below the limit restored and arming the
+# delay, a lockout running on through a reset — answer the same under the reworked rule. The clause
+# the rework added — a reset after a lockout that has ENDED costing the full delay, with the full
+# attempts after it — rests on comm/uds uds_test.v and sa_store_test.v and comm/diag
+# sa_persist_test.v until diag_domain and diag_nodes are re-run on the reworked build, which is
+# recommended before merge.
+[[review]]
+id = "uds-on-target-journal"
+method = "review"
+context = "h755/threadx"
+verifies = ["REQ-DIAG-033"]
+approved_by = "Claude (coding agent) on Marten Hildell's bench — system_full domain, zone_a, sysnode vs CANsub.4"
 date = "2026-11-17"

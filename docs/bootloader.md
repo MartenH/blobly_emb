@@ -102,7 +102,7 @@ the handoff instead of refusing it:
    server exactly as it was.
 3. **Performed as an answered reset** by the comm thread (`diag_target_reset`): the same path 0x11
    takes — the bounded controller drain (REQ-BOOT-012), on a `[doip]` node the
-   `doip_tx_pending()` wait, the NvM flush, the 0x27 keep cell — then the **boot request cell**
+   `doip_tx_pending()` wait, the NvM flush (the 0x27 failed-key state with it) — then the **boot request cell**
    (`boards/common/bootcell.h`, one statement of the cells for both sides, addresses from the
    board's `bootmap.h`) and the reset. `[boot]` also serves DID **0xF195**: the running image's
    header `sw_version`, so a tester can see which image the bootloader started.

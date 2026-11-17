@@ -16,7 +16,8 @@
 //     = new identity = declared default). Collisions fail generation with an
 //     `nvm_id = N` pin suggestion.
 //   - the WEAR CHECK (REQ-NVM-010, gen_wear.v): every journal writer — these
-//     signals, the clean markers, the fault memory, the parameters — in one
+//     signals, the clean markers, the fault memory, the parameters, the 0x27
+//     failed-key state — in one
 //     worst-case records/hour against sector geometry + endurance; a config
 //     that cannot survive `min_years` fails generation naming each share.
 //   - the emitted wiring: journal mount + prune + restore staging BEFORE the
@@ -37,6 +38,7 @@ module main
 
 import toml
 import comm.fault
+import comm.uds
 import nvm
 import tools.ecumodel
 
@@ -285,7 +287,8 @@ fn writer_period_ms(doc toml.Doc, sname string) u32 {
 }
 
 fn nvm_on(m Model) bool {
-	return m.nvm.on && (m.nvm_names.len > 0 || fault_persist_on(m) || (m.target.threadx && m.params.len > 0))
+	return m.nvm.on && (m.nvm_names.len > 0 || fault_persist_on(m) || (m.target.threadx && m.params.len > 0)
+		|| sa_persist_on(m))
 }
 
 // fault_persist_on: the image keeps its fault memory in the journal — a ThreadX target's, which
@@ -297,6 +300,63 @@ fn fault_persist_on(m Model) bool {
 // chain_records: the journal records one value of `len` bytes occupies (the journal's own rule).
 fn chain_records(len int) int {
 	return int(nvm.records_for(u16(len)))
+}
+
+// JournalOwner is a journal block's owner, as a collision names it: what it is, and how that side
+// moves to another block ('' = it cannot: a fixed block, the fault memory status or the 0x27 state).
+struct JournalOwner {
+	what string
+	pin  string
+}
+
+// journal_ids_used: every journal block assigned so far — the persisted signals, the 0x27 state,
+// the fault memory's status and snapshot blocks, the parameters — each with its owner. The ONE list
+// each derivation checks a new block against (they run in that order, so it holds what is derived).
+fn journal_ids_used(m Model) map[u16]JournalOwner {
+	mut used := map[u16]JournalOwner{}
+	for sname, id in m.nvm_ids {
+		used[id] = JournalOwner{'persistent signal "${sname}"', 'pin the signal with `nvm_id = <1..65534>`'}
+	}
+	if m.sa_block_id != 0 {
+		used[m.sa_block_id] = JournalOwner{'the 0x27 failed-key state', ''}
+	}
+	if m.fault_status_id != 0 {
+		used[m.fault_status_id] = JournalOwner{'the fault memory status', ''}
+	}
+	for k, id in m.fault_snap_ids {
+		if id != 0 {
+			o := JournalOwner{'a snapshot block of [[fault]] "${m.faults[k].name}"', 'pin [[fault]] "${m.faults[k].name}" with `snapshot_ids`'}
+			used[id] = o
+			used[m.fault_snap_ids_b[k]] = o
+		}
+	}
+	for p in m.params {
+		if p.id != 0 {
+			used[p.id] = JournalOwner{'[[param]] "${p.name}"', 'pin [[param]] "${p.name}" with `nvm_id = <1..65534>`'}
+		}
+	}
+	return used
+}
+
+// sa_block_ident: the identity the 0x27 state's block is hashed from — FIXED, never a schema: the
+// record states its own layout (comm/uds sa_store.v), so no firmware update moves the block and the
+// boot's prune never drops it. nvm_hash16(sa_block_ident) = 0x044E (pinned by a test, docs/nvm.md).
+const sa_block_ident = 'uds:security'
+
+// derive_sa_nvm: the 0x27 state's journal block — 0 where the image keeps no such state; a target
+// node that performs 0x27 must (validate_sa_target, after the other storage refusals, refuses one
+// without [nvm]). A persisted signal on the block is refused, naming the signal's pin (the block
+// itself cannot move).
+fn derive_sa_nvm(m Model) u16 {
+	if !sa_persist_on(m) {
+		return 0
+	}
+	id := nvm_hash16(sa_block_ident)
+	used := journal_ids_used(m)
+	if prev := used[id] {
+		panic('loom2v: ${prev.what} collides with the 0x27 failed-key state\'s fixed journal block 0x${id.hex()} — ${prev.pin}')
+	}
+	return id
 }
 
 // derive_fault_nvm: the persisted fault memory's block ids, and the journal capacity it needs.
@@ -312,15 +372,12 @@ fn derive_fault_nvm(m Model) (u16, []u16, []u16) {
 	if !fault_persist_on(m) {
 		return 0, []u16{}, []u16{}
 	}
-	mut used := map[u16]string{}
-	for sname, id in m.nvm_ids {
-		used[id] = 'persistent signal "${sname}"'
-	}
+	mut used := journal_ids_used(m)
 	status := nvm_hash16('fault_memory:status')
 	if prev := used[status] {
-		panic('loom2v: ${prev} collides with the fault memory\'s status block 0x${status.hex()} — pin the signal with `nvm_id = <1..65534>`')
+		panic('loom2v: ${prev.what} collides with the fault memory\'s status block 0x${status.hex()} — ${prev.pin}')
 	}
-	used[status] = 'the fault memory status'
+	used[status] = JournalOwner{'the fault memory status', ''}
 	mut snaps := []u16{}
 	mut snaps_b := []u16{}
 	for f in m.faults {
@@ -342,9 +399,10 @@ fn derive_fault_nvm(m Model) (u16, []u16, []u16) {
 			if prev := used[id] {
 				// never resolved by the order the faults are declared in: an update that reorders
 				// them, or adds a colliding signal, would move a stored snapshot to another id
-				panic('loom2v: [[fault]] "${f.name}": its snapshot block 0x${id.hex()} collides with ${prev} — pin the other side (a signal with `nvm_id`), or this fault with `snapshot_ids = [0x${a.hex()}, 0x${b.hex()}]` changing only the colliding one (its blocks A and B: keeping the other as it is keeps a stored snapshot in it), and keep the pin')
+				other := if prev.pin != '' { 'pin the other side (${prev.pin}), or ' } else { '' }
+				panic('loom2v: [[fault]] "${f.name}": its snapshot block 0x${id.hex()} collides with ${prev.what} — ${other}pin this fault with `snapshot_ids = [0x${a.hex()}, 0x${b.hex()}]` changing only the colliding one (its blocks A and B: keeping the other as it is keeps a stored snapshot in it), and keep the pin')
 			}
-			used[id] = 'a snapshot block of [[fault]] "${f.name}"'
+			used[id] = JournalOwner{'a snapshot block of [[fault]] "${f.name}"', 'pin [[fault]] "${f.name}" with `snapshot_ids`'}
 		}
 		snaps << a
 		snaps_b << b
@@ -362,8 +420,9 @@ fn check_journal_capacity(m Model) {
 		return
 	}
 	fblocks := if fault_persist_on(m) { 1 + 2 * m.faults.filter(it.freeze.len > 0).len } else { 0 }
-	what := '${m.nvm_names.len} persistent signals + the fault memory (${fblocks} blocks) + ${m.params.len} parameters'
-	if m.nvm_names.len + fblocks + m.params.len > 48 {
+	sa := if sa_persist_on(m) { 1 } else { 0 }
+	what := '${m.nvm_names.len} persistent signals + the fault memory (${fblocks} blocks) + ${m.params.len} parameters + ${sa} 0x27 state'
+	if m.nvm_names.len + fblocks + m.params.len + sa > 48 {
 		panic('loom2v: ${what} exceed the safe journal pool budget (48 of nvm.max_blocks)')
 	}
 	live := journal_live_records(m)
@@ -373,10 +432,11 @@ fn check_journal_capacity(m Model) {
 }
 
 // journal_live_records: the journal's live set in records — every persisted signal, the fault
-// memory's (fault_live_records), every parameter, and the clean marker. The capacity check and the
-// wear check (a compaction copies it) both read it here.
+// memory's (fault_live_records), every parameter, the 0x27 state, and the clean marker. The
+// capacity check and the wear check (a compaction copies it) both read it here.
 fn journal_live_records(m Model) int {
-	return m.nvm_names.len + fault_live_records(m) + m.params.len + 1
+	sa := if sa_persist_on(m) { chain_records(uds.sa_record_len) } else { 0 }
+	return m.nvm_names.len + fault_live_records(m) + m.params.len + sa + 1
 }
 
 // fault_live_records: the journal records the persisted fault memory keeps live — the status image
@@ -395,19 +455,20 @@ fn fault_live_records(m Model) int {
 	return chain_records(2 + m.faults.len * fault.image_rec) + 2 * nsnap * snap_recs
 }
 
-// fault_store_fns: the fault memory's store seam over the journal (one thread: the comm thread
-// owns both, so the seam is a plain call).
-fn fault_store_fns(m Model) []string {
-	if !fault_persist_on(m) {
+// nvm_store_fns: the ONE store seam over the journal every store points at — the fault memory's,
+// the parameters', the 0x27 state's (one thread: the comm thread owns the journal and every store,
+// so the seam is a plain call).
+fn nvm_store_fns(m Model) []string {
+	if !fault_persist_on(m) && !(m.target.threadx && m.params.len > 0) && !sa_persist_on(m) {
 		return []string{}
 	}
 	return [
 		'',
-		'fn fmem_put(ctx voidptr, id u16, data &u8, len u16) bool {',
+		'fn nvm_store_put(ctx voidptr, id u16, data &u8, len u16) bool {',
 		'\treturn g_nvm.put(id, data, len)',
 		'}',
 		'',
-		'fn fmem_get(ctx voidptr, id u16, out &u8, cap u16) u16 {',
+		'fn nvm_store_get(ctx voidptr, id u16, out &u8, cap u16) u16 {',
 		'\treturn g_nvm.get(id, out, cap)',
 		'}',
 	]
@@ -421,8 +482,8 @@ fn fault_store_lines(m Model, fmem string, ind string) []string {
 	}
 	return [
 		'${ind}${fmem}.store = fault.Store{',
-		'${ind}\tput:      fmem_put',
-		'${ind}\tget:      fmem_get',
+		'${ind}\tput:      nvm_store_put',
+		'${ind}\tget:      nvm_store_get',
 		'${ind}\tid:       u16(0x${m.fault_status_id.hex()}) // the status image',
 		'${ind}\tretry_us: u64(${m.nvm.min_write_ms}) * 1000 // a refused write waits the system floor',
 		'${ind}}',
@@ -529,6 +590,9 @@ fn nvm_boot_lines(m Model, ioc_idx map[string]int) []string {
 	}
 	for p in m.params {
 		keep << 'u16(0x${p.id.hex()}) /* [[param]] ${p.name} */'
+	}
+	if sa_persist_on(m) {
+		keep << 'u16(0x${m.sa_block_id.hex()}) /* the 0x27 failed-key state */'
 	}
 	g << '\t\tkeep := [${keep.join(', ')}]!'
 	g << '\t\tg_nvm.prune(&keep[0], ${keep.len})'
@@ -792,7 +856,7 @@ fn nvm_sat_restore_lines(m Model, doc toml.Doc, thr string) []string {
 // write may be a DoIP tester's 0x14, whose answer waits in the mailbox for the network threads
 // below this one — a 1-2 s erase here would hold it past P2 (REQ-DIAG-064). A sector a
 // compaction left behind waits for the next sleep edge; until then a refused put or marker
-// stays refused (0x72 to a tester), never erased for.
+// stays refused (0x72 to a tester; the 0x27 state is held in RAM and retried), never erased for.
 fn nvm_flush_choreo(m Model, ioc_idx map[string]int, ind string, erase bool) []string {
 	mut g := []string{}
 	g << '${ind}mut nvm_flush_ok := true'
@@ -826,6 +890,11 @@ fn nvm_flush_choreo(m Model, ioc_idx map[string]int, ind string, erase bool) []s
 		g << '${ind}\t\tnvm_flush_ok = false'
 		g << '${ind}\t}'
 	}
+	if sa_persist_on(m) {
+		g << '${ind}\tif !g_diag.server.persist_security(true) { // the 0x27 failed-key state'
+		g << '${ind}\t\tnvm_flush_ok = false'
+		g << '${ind}\t}'
+	}
 	if erase {
 		g << '${ind}\tif nvm_flush_ok || nvm_pass > 0 {'
 		g << '${ind}\t\tbreak'
@@ -850,6 +919,37 @@ fn nvm_flush_choreo(m Model, ioc_idx map[string]int, ind string, erase bool) []s
 	if erase {
 		g << '${ind}g_nvm.erase_pending() // cleanup AFTER values + marker are durable'
 	}
+	return g
+}
+
+// nvm_sleep_write_lines: ONE flush choreography for every writer the pass ran — the fault memory,
+// the parameters, the 0x27 state — when one of them wrote while the bus sleeps, so the clean marker
+// never sits below a record it does not cover (REQ-NVM-014) and is laid once a pass, however many
+// wrote. An NM node's; after each writer's own write of the pass.
+fn nvm_sleep_write_lines(m Model, ioc_idx map[string]int) []string {
+	if !m.nm.on {
+		return []string{}
+	}
+	mut g := []string{}
+	mut wrote := []string{}
+	if fault_persist_on(m) {
+		wrote << 'g_fmem.wrote > 0'
+	}
+	if m.target.threadx && m.params.len > 0 {
+		g << '\t\tparam_wrote := g_param.take_wrote()'
+		wrote << 'param_wrote'
+	}
+	if sa_persist_on(m) {
+		g << '\t\tsa_wrote := g_diag.server.take_sa_wrote()'
+		wrote << 'sa_wrote'
+	}
+	if wrote.len == 0 {
+		return []string{}
+	}
+	cond := if wrote.len > 1 { '(${wrote.join(' || ')})' } else { wrote[0] }
+	g << '\t\tif ${cond} && g_nm.state() == .bus_sleep {'
+	g << nvm_flush_choreo(m, ioc_idx, '\t\t\t', false)
+	g << '\t\t}'
 	return g
 }
 

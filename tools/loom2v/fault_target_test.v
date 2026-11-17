@@ -197,6 +197,13 @@ fn test_the_power_cycle_begins_with_the_comm_thread() {
 	assert o2.contains('needs an operation cycle: [nm]'), o2
 }
 
+// boot_fn: the generated boot() — mount, prune, restore, up to the kernel start — as one string
+// (diag_target_test.v has its own: each test file is its own program).
+fn boot_fn(glue string) string {
+	at := glue.index('pub fn boot() {') or { return '' }
+	return glue[at..].all_before('\n}\n')
+}
+
 // The fault memory on the target is persisted (R6b): wired to the journal and restored from it
 // before the power cycle begins, written every pass after the cycle's step, flushed with the
 // persisted signals at every quiet point (the ECUReset included, after the latest reports and
@@ -219,7 +226,7 @@ fn test_the_fault_memory_is_persisted_in_the_journal() {
 		'g_fmem.consume(0, g_frep_load_slow.r[0])', 'if g_fmem.capture_due() {', 'g_diag.refresh_now()',
 		'g_fmem.capture(&g_diag.server)', 'g_fmem.persist(t1, false)',
 		'if g_diag.reset_due() != 0 {', 'g_fmem.consume(0, g_frep_load_slow.r[0])',
-		'if !g_fmem.persist(t1, true) {', 'C.diag_sys_reset()', 'fn fmem_put(_ voidptr, id u16, data &u8, len u16) bool {',
+		'if !g_fmem.persist(t1, true) {', 'C.diag_sys_reset()', 'fn nvm_store_put(_ voidptr, id u16, data &u8, len u16) bool {',
 		'return g_nvm.put(id, data, len)', 'pub fn boot() {', 'if g_nvm.mounted {',
 		'keep := [', '/* the fault memory status */', 'g_nvm.prune(&keep[0], 3)',
 		'g_nvm.erase_pending() // the boot quiet point (no NM)',
@@ -229,11 +236,13 @@ fn test_the_fault_memory_is_persisted_in_the_journal() {
 	run := glue.all_after('fn comm_thread_entry').all_before('if g_diag.reset_due() != 0 {')
 	assert !run.contains('erase_pending()'), 'an erase at run time'
 	assert mk.contains(r'$(REPO)/boards/common/nvm_map.c $(BOARD_FLASH)'), mk
+	assert !glue.contains('fmem_put'), 'the fault memory has a store seam of its own again'
 	// with NM: no erase at boot (the sleep edges are the quiet points), and a write made in bus
 	// sleep re-lays the clean marker through the whole choreography
 	c2, o2, g2, _ := ft_generate('persist_nm', same, ft_conn + ft_fault)
 	assert c2 == 0, o2
-	assert !g2.contains('g_nvm.erase_pending() // the boot quiet point')
+	assert boot_fn(glue).contains('erase_pending()'), 'boot_fn found no erase in a node without NM'
+	assert !boot_fn(g2).contains('erase_pending'), 'an NM node erases at boot:\n${boot_fn(g2)}'
 	assert !g2.contains('g_fmem.refused && g_nvm.pending_erase'), 'an NM node erased outside its sleep edges'
 	in_order(g2, ['if g_fmem.ending { // woken inside the grace', 'g_fmem.consume(0, g_frep_load_slow.r[0])',
 		'g_fmem.cycle_start()', 'g_fmem.end_cycle_after(t1, u64(200000)) // the cycle-end barrier',
