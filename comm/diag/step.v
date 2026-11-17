@@ -96,6 +96,9 @@ pub fn wire_drain[H](mut ch H, clock fn () u64) bool {
 // again — never the work unannounced).
 // Returns true when the reset the server answered is due: its answer has left the link — the owner
 // then wire_drains and resets.
+// req and resp hold the link's capacities, and may be the link's own buffers (the bootloader binds
+// them so): a request is read from req before the pass goes on, and resp is written only while the
+// link is idle, so neither is touched under a transfer in flight.
 pub fn serve_step[T, H](mut s T, mut l isotp.Link, rx_id u32, tx_id u32, now u64, mut ch H, req &u8, resp &u8, clock fn () u64) bool {
 	l.tick(now)
 	mut f := can.Frame{}

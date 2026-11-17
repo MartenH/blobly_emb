@@ -114,7 +114,11 @@ fn test_the_comm_thread_serves_doip_from_the_mailbox() {
 	code, out, glue := generate('doip_ok', doip_conn)
 	assert code == 0, out
 	assert glue.contains('import comm.doip')
-	for g in ['g_doip      doip.Server', 'g_doip_out  [doip.max_resp]u8', 'g_doip_resp [doip.max_uds]u8'] {
+	// sized by the node's [isotp] max_message (520 when not configured), literal: 12 + 520, 25 + 520
+	for g in ['g_doip      doip.Server', 'g_doip_buf  [532]u8', 'g_doip_in   [532]u8',
+		'g_doip_out  [545]u8', 'g_doip_req  [520]u8', 'g_doip_resp [520]u8',
+		'g_doip.bind(&g_doip_buf[0], 520)', 'C.doip_mb_init(&g_doip_req[0], 520, &g_doip_resp[0], 520)',
+		'fn C.doip_mb_init(&u8, int, &u8, int)'] {
 		assert glue.contains(g), g
 	}
 	// the TCP seed before the loop; each pass: housekeep, what the doip thread reported, then the
@@ -476,7 +480,7 @@ fn test_doip_and_someip_share_one_netx() {
 // A DoIP gateway (REQ-NET-019/020): the routes sysgen lowers into [[doip.route]] — the router on
 // the comm thread, fed from the route's bus and pumped onto it, served from the route channel after
 // the mailbox; the entity told the routed addresses and given the hook; the doip loop the gateway's.
-// @verifies REQ-NET-019 REQ-NET-020
+// @verifies REQ-NET-019 REQ-NET-020 REQ-CAN-TP-023
 // the routed node on the gateway's second bus (the fixture runs NM on can0)
 const doip_route = '
 [bus.can1]
@@ -511,9 +515,18 @@ fn test_a_gateway_routes_from_the_comm_thread() {
 	assert glue.contains('import comm.diagroute')
 	assert glue.contains('g_droute   diagroute.Router')
 	// the router before the loop: the level a tester must hold (route_level's default, 1), BS 8
-	assert glue.contains('g_droute.init(u8(1), u8(8))')
+	assert glue.contains('g_droute.init(u8(1), u8(8), &g_droute_buf[0], 520)')
+	assert glue.contains('g_droute_buf [2080]u8') // diagroute.storage_len(520)
 	assert glue.contains('logical: u16(0x7c0)') && glue.contains('tx_id:   u32(0x7c0)')
 		&& glue.contains('rx_id:   u32(0x7c8)')
+	// the route carries its node's maximum message (absent: the default), which the router refuses a
+	// longer request by (REQ-CAN-TP-023)
+	assert glue.contains('max_message: 520 // its [isotp] max_message')
+	code4, out4, glue4 := generate('doip_route_big', doip_conn + doip_route + 'max_message = 4095\n')
+	assert code4 == 0, out4
+	assert glue4.contains('max_message: 4095 // its [isotp] max_message')
+	code0, out0, _ := generate('doip_route_tiny', doip_conn + doip_route + 'max_message = 7\n')
+	assert code0 != 0 && out0.contains('max_message'), out0
 	// each pass: the mailbox first (a dropped tester's unlock ends before the next is judged),
 	// then the route channel, the bus drain feeding the router, its pump after the server's answer
 	steps := [
@@ -545,7 +558,9 @@ fn test_a_gateway_routes_from_the_comm_thread() {
 	assert glue.contains('g_doip.routes[0] = u16(0x7c0) // zone_a')
 	assert glue.contains('g_doip.n_routes = 1')
 	assert glue.contains('g_doip.serve.route = doipnet.route')
-	assert glue.contains('C.doip_rt_init(&g_rt_req[0], &g_rt_ans[0])')
+	assert glue.contains('C.doip_rt_init(&g_rt_req[0], 520, &g_rt_ans[0], 520)')
+	assert glue.contains('fn C.doip_rt_init(&u8, int, &u8, int)')
+	assert glue.contains('g_rt_req   [520]u8') && glue.contains('g_rt_ans   [520]u8')
 	assert glue.contains('doipnet.run_gateway(mut g_doip, 3, 500, &g_doip_in[0], &g_doip_out[0], &g_rt_ans[0])')
 }
 
@@ -636,4 +651,20 @@ core      = 0
 	// a route bus assigned to another core: the comm thread here would drive it anyway
 	code2, out2, _ := generate('doip_route_core', doip_conn + doip_route.replace('core      = 0', 'core      = 1'))
 	assert code2 != 0 && out2.contains('is on core 1'), out2
+}
+
+// @verifies REQ-CAN-TP-023
+// the entity's UDS limit, its buffers, the mailbox, the route channel and the gateway's router all
+// follow the node's [isotp] max_message: 4095 sizes every one of them, and the entity is bound to it
+fn test_the_doip_buffers_follow_the_maximum_message() {
+	conn := doip_conn.replace('functional_id = 0x7DF', 'functional_id = 0x7DF\nmax_message   = 4095')
+	code, out, glue := generate('doip_4095', conn + doip_route)
+	assert code == 0, out
+	for g in ['g_doip_buf  [4107]u8', 'g_doip_in   [4107]u8', 'g_doip_out  [4120]u8',
+		'g_doip_req  [4095]u8', 'g_doip_resp [4095]u8', 'g_doip.bind(&g_doip_buf[0], 4095)',
+		'C.doip_mb_init(&g_doip_req[0], 4095, &g_doip_resp[0], 4095)', 'g_droute_buf [16380]u8',
+		'g_droute.init(u8(1), u8(8), &g_droute_buf[0], 4095)',
+		'C.doip_rt_init(&g_rt_req[0], 4095, &g_rt_ans[0], 4095)', 'g_diag_req [4095]u8'] {
+		assert glue.contains(g), g
+	}
 }

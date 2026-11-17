@@ -9,10 +9,14 @@ implementation. The requirements are [`requirements/can-tp.toml`](../requirement
 it frames and sends what it produces).
 
 `Link` works on bare 8-byte PDUs and knows nothing about CAN ids or the driver: its owner filters
-received frames by id and stamps the transmit id. It is no-alloc, with one reassembly buffer and
-one transmit buffer of `max_payload` bytes each, and poll-based: `on_frame` takes a received PDU,
-`poll` gives the next PDU to send, `tick` runs the timers, `send` starts a message and `take` hands
-over a completed one.
+received frames by id and stamps the transmit id. It is no-alloc and holds no message storage of
+its own: the owner gives it a reassembly buffer and a transmit buffer (`bind_rx`, `bind_tx`), whose
+sizes are the longest message it takes in and sends — on a node's diagnostic connection the node's
+`[isotp] max_message` (§2), on the shell and trace streams their own fixed 520 bytes (§4). So a node
+pays RAM only for the maximum it configures. A link nobody bound fails closed: it sends nothing and
+answers every first frame with OVFLW. It is poll-based: `on_frame` takes a received PDU, `poll`
+gives the next PDU to send, `tick` runs the timers, `send` starts a message and `take` hands over a
+completed one.
 
 ## 1. What is supported
 
@@ -23,7 +27,7 @@ over a completed one.
 | Addressing | **normal addressing, 11-bit identifiers**: one request id and one response id per connection | 29-bit normal addressing, normal fixed (`0x18DA…`), extended (target address in byte 0) and mixed addressing. `[isotp]` refuses an id above `0x7FF`, and a frame with a 29-bit id is never this connection's |
 | Functional addressing | single-frame requests on `functional_id` (§3.6) | multi-frame functional requests (ISO allows only single frames anyway) |
 | Frame size (TX_DL) | **8**. On a CAN-FD bus the same 8-byte PDUs go out as CAN-FD frames (FDF set; BRS set unless the image is built with `BLOB_FDCAN_NOBRS`) | TX_DL above 8: the FD single-frame escape (`SF_DL` in byte 1) and 64-byte consecutive frames |
-| Message length | 1 to **520 bytes** (`isotp.max_payload`) | 521 to 4095 bytes, and the escape first frame (`FF_DL` above 4095). Both are refused with OVFLW (§3.4) |
+| Message length | 1 to the connection's maximum: the node's **`[isotp] max_message`**, 8–4095 bytes, **520** when not configured (§2) | a message above the maximum, and the escape first frame (`FF_DL` above 4095): both are refused with OVFLW (§3.4) |
 | Padding | every frame we send has DLC 8, unused bytes `0x00` | a configurable fill byte. We accept received frames shorter than 8 (§3.5) |
 | Timers | N_Bs and N_Cr, both 1000 ms; WFTmax 16 (§3.1). N_Bs also bounds a send whose frames stop leaving, which is N_As's job | N_As as a timer of its own; **N_Ar**: nothing bounds our own flow control waiting for room in the transmit FIFO (§3.1); the N_Br and N_Cs performance targets |
 | Connections | one per node: the diagnostic server's (`[isotp]`). Its bootloader serves the same one | a second diagnostic connection (refused at generation, [diagnostics.md](diagnostics.md) §7) |
@@ -41,6 +45,7 @@ tx_id         = 0x7E8    # responses are sent on this id (11-bit)
 functional_id = 0x7DF    # optional: functional requests, single frames only
 bs            = 0        # block size we grant in our flow control (0 = the whole message)
 stmin_ms      = 0        # STmin we ask the sender to keep, in milliseconds
+max_message   = 520      # the longest message either way, in bytes
 ```
 
 | Key | Range | Default | Notes |
@@ -49,9 +54,15 @@ stmin_ms      = 0        # STmin we ask the sender to keep, in milliseconds
 | `functional_id` | `0x001`–`0x7FF` | absent = none | 11-bit only; 0 also means none |
 | `bs` | 0–255 | 0 | one byte on the wire |
 | `stmin_ms` | 0–127 | 0 | milliseconds only: the microsecond codes `0xF1`–`0xF9` cannot be asked for |
+| `max_message` | 8–4095 | 520 | the longest message either way. 4095 is the most a first frame states without the escape, which stays refused (REQ-CAN-TP-021). It sizes the connection's request and response buffers (generated storage, so the node pays for what it configures), the server's response capacity, the node's DoIP message limit and the maximum data size its entity status reports, a DoIP gateway's routed messages (a longer routed answer comes back responseTooLong, a routed bootloader's block offer is lowered to it), and its bootloader's buffers and TransferData block ([bootloader.md](bootloader.md)) — REQ-CAN-TP-023, REQ-CAN-TP-025, REQ-BOOT-020 |
 
 A value outside its range is refused when the node is generated, never narrowed
-(REQ-CAN-TP-020). N_Bs, N_Cr and WFTmax are not configurable: every owner of a `Link` calls
+(REQ-CAN-TP-020, REQ-CAN-TP-021). Generation also refuses a `max_message` smaller than the longest
+message the configuration says the server must exchange whole — a DID's 0x22 answer and 0x2E
+request, the DTC list (0x19 02 / 0A), a DTC's snapshot (0x19 04) or extended data (0x19 06), and on a
+`[boot]` node the bootloader's 66-byte 0x29 proof — naming that message (REQ-CAN-TP-022). A read of
+several DIDs is not fixed by the configuration: one whose answer does not fit is answered
+responseTooLong (0x14). N_Bs, N_Cr and WFTmax are not configurable: every owner of a `Link` calls
 `init_defaults()`. The full key list is in [config-reference.md](config-reference.md).
 
 ## 3. Where the standard leaves the choice: what we do
@@ -110,11 +121,11 @@ own stall timer (§4); the diagnostic server and the bootloader do not yet.
 
 | Received | What we do |
 |---|---|
-| SF with `SF_DL` 1–7 | delivered as a complete message (REQ-CAN-TP-003) |
+| SF with `SF_DL` 1–7 | delivered as a complete message (REQ-CAN-TP-003) — up to the maximum, which only a stream with no receive buffer has below 7 |
 | SF with `SF_DL` 0 (the FD escape included) or above 7 | ignored |
-| FF with `FF_DL` 8–520 | reception starts, CTS sent |
+| FF with `FF_DL` 8 up to the maximum (`max_message`) | reception starts, CTS sent |
 | FF with `FF_DL` 1–7 | ignored (a message that fits a single frame must be sent as one) |
-| FF with `FF_DL` 521–4095, or the escape FF (`FF_DL` = 0, 32-bit length) | answered with FC **OVFLW** so the sender fails at once instead of waiting out its N_Bs (REQ-CAN-TP-015). Like any first frame, it ends a reception in progress |
+| FF with `FF_DL` above the maximum, or the escape FF (`FF_DL` = 0, 32-bit length) | answered with FC **OVFLW** so the sender fails at once instead of waiting out its N_Bs (REQ-CAN-TP-015). Like any first frame, it ends a reception in progress |
 | CF with the expected sequence number | appended. Numbers run 1…15, 0, 1… (REQ-CAN-TP-001) |
 | CF with the wrong sequence number | the reception is abandoned and nothing of it is delivered. The next FF starts a new one (REQ-CAN-TP-011) |
 | CF with no reception in progress | ignored |
@@ -159,8 +170,12 @@ serves no functional requests.
 ### 3.7 Transmitting, and half duplex at the server
 
 - **One message at a time per connection.** `send` refuses a message while another is in flight,
-  or one of 0 or more than 520 bytes. Nothing is queued; the owner asks `busy()` (REQ-CAN-TP-014,
-  REQ-CAN-TP-016).
+  or one of 0 bytes or longer than the connection's maximum. Nothing is queued; the owner asks
+  `busy()` (REQ-CAN-TP-014, REQ-CAN-TP-016).
+- **The message is copied into the transmit buffer**, so the owner may reuse its own at once —
+  unless it sends from the transmit buffer itself, which the diagnostic server and the bootloader
+  do: their response buffer IS the link's, written only while the link is idle, and their request
+  buffer is the link's reassembly buffer, read before the pass goes on.
 - **1–7 bytes go as a single frame**, longer messages as a first frame and consecutive frames.
 - **A frame the CAN driver refuses** (the channel would not take it) abandons the transmission
   rather than retrying it, because the receiver could never reassemble the rest
@@ -177,12 +192,12 @@ serves no functional requests.
 
 ## 4. Who runs a `Link`
 
-| Owner | Ids | Flow control it grants | Notes |
-|---|---|---|---|
-| Diagnostic server ([`comm/diag`](../comm/diag/diag.v)): the host bridge, and the ThreadX comm thread on a target | `[isotp]` `rx_id` / `tx_id` / `functional_id` | `bs`, `stmin_ms` | the connection this page describes |
-| Bootloader ([`boot/target`](../boot/target/main.v), `diag.serve_step`) | the node's `[isotp]`, from `gen/boot_gen.h` | the node's `bs`, `stmin_ms` | same bus, ids, frame format; no functional requests ([bootloader.md](bootloader.md)) |
-| DoIP gateway router ([`comm/diagroute`](../comm/diagroute/diagroute.v)) | each routed node's request / response ids | BS 8, STmin 0 | the gateway acting as a **tester** on CAN. Besides the ISO timers: an exchange whose frames stop moving for 5 s is ended (`stall_us`), and an answer is awaited 6 s after the request left (`answer_wait_us`: P2*max plus 1 s) ([net.md](net.md)) |
-| Shell response ([`comm/shell`](../comm/shell/shell.v)) and trace dump ([`comm/trace`](../comm/trace/module.v)) | a stream id plus a separate flow-control id (`out` / `fc`, `record` / `dump_fc`) | — (they send messages, never receive one) | one ISO-TP message per response or dump block; the request is a plain frame, not ISO-TP ([onboard_trace.md](onboard_trace.md)). Every frame on the flow-control id reaches the link today, so a first frame there would start a reception and put a CTS into the stream |
+| Owner | Ids | Flow control it grants | Buffers | Notes |
+|---|---|---|---|---|
+| Diagnostic server ([`comm/diag`](../comm/diag/diag.v)): the host bridge, and the ThreadX comm thread on a target | `[isotp]` `rx_id` / `tx_id` / `functional_id` | `bs`, `stmin_ms` | a request and a response buffer of `max_message` bytes, generated beside the connection (the host bridge's state, `g_diag_req` / `g_diag_resp` on a target) and shared with the link | the connection this page describes |
+| Bootloader ([`boot/target`](../boot/target/main.v), `diag.serve_step`) | the node's `[isotp]`, from `gen/boot_gen.h` | the node's `bs`, `stmin_ms` | the same two, carved with the DoIP ones from one block `gen/boot_gen.h` sizes (`BOOT_MAX_MESSAGE`, `BOOT_BUF_LEN`, the `boot.bufs` layout) | same bus, ids, frame format; no functional requests ([bootloader.md](bootloader.md)) |
+| DoIP gateway router ([`comm/diagroute`](../comm/diagroute/diagroute.v)) | each routed node's request / response ids | BS 8, STmin 0 | its link's two and one per queued answer, the gateway's own `max_message` each (`diagroute.storage_len`), kept apart because the doip thread fills the next request while the link still sends | the gateway acting as a **tester** on CAN. Besides the ISO timers: an exchange whose frames stop moving for 5 s is ended (`stall_us`), and an answer is awaited 6 s after the request left (`answer_wait_us`: P2*max plus 1 s). Past the gateway's maximum: a longer routed request never reaches it (the DoIP entity refuses it with the generic NACK 0x02 and discards it, the connection kept, REQ-CAN-TP-023); past the routed node's (`[[doip.route]] max_message`, the node's own), a request is refused at once with the diagnostic NACK 0x04 rather than forwarded to be refused with FC.OVFLW; a longer answer is refused on the bus with FC.OVFLW and answered to the tester in the node's name as `7F <service> 14` — when its first frame answers the request in flight, a late one being dropped like any late answer; and a RequestDownload answer's block length is lowered to the gateway's maximum, so a node with a larger one is reprogrammed through it in blocks it carries (REQ-CAN-TP-025, [net.md](net.md)) |
+| Shell response ([`comm/shell`](../comm/shell/shell.v)) and trace dump ([`comm/trace`](../comm/trace/module.v)) | a stream id plus a separate flow-control id (`out` / `fc`, `record` / `dump_fc`) | — (they send messages, never receive one) | a transmit buffer of 520 bytes, their own whatever the node's `max_message` (`shell.max_rsp`, `trace.dump_block`: an 8-byte header and 64 records), and none to receive into | one ISO-TP message per response or dump block; the request is a plain frame, not ISO-TP ([onboard_trace.md](onboard_trace.md)). Only a **flow control** (PCI type 3, at least PCI, BS and STmin) received on the flow-control id reaches the link — the one rule both call, `isotp` `on_flow_control`: any other frame there, a first frame above all, is dropped, so it never starts a reception or puts a flow control into the stream (REQ-CAN-TP-024) |
 
 ## 5. Verification
 
@@ -190,7 +205,16 @@ Every requirement in `requirements/can-tp.toml` is verified by a unit test:
 [`comm/isotp/isotp_test.v`](../comm/isotp/isotp_test.v) for the protocol,
 [`comm/diag/diag_test.v`](../comm/diag/diag_test.v) and
 [`comm/diag/step_test.v`](../comm/diag/step_test.v) for the frame intake and the driver-refusal
-abort, and [`tools/loom2v/diag_target_test.v`](../tools/loom2v/diag_target_test.v) for the
-configuration ranges. The status table is [traceability.md](traceability.md). On the bus, blobly_net's
+abort and the maximum message's server capacity,
+[`comm/shell/shell_test.v`](../comm/shell/shell_test.v) and
+[`comm/trace/module_test.v`](../comm/trace/module_test.v) for the flow-control-only streams, the DoIP
+tests ([`comm/doip`](../comm/doip/doip_test.v), [`comm/diagroute`](../comm/diagroute/diagroute_test.v),
+[`driver/doipnet`](../driver/doipnet/doipnet_test.v)) for the entity and the gateway following the
+maximum, and [`tools/loom2v/diag_target_test.v`](../tools/loom2v/diag_target_test.v) (with
+`fault_target_test.v` and `doip_target_test.v`) for the configuration ranges, the refusal of a
+maximum too short for what the node exchanges and the generated buffers. `isotp_test.v` runs the
+length cases at the floor, the default and the limit (8, 520, 4095). The status table is [traceability.md](traceability.md). On the bus, blobly_net's
 ISO-TP and UDS client exchanges single- and multi-frame messages with every example's server, on
-classic CAN and on zone_a's CAN-FD bus.
+classic CAN and on zone_a's CAN-FD bus; system_full's zone_a is configured at 4095 and
+[`examples/system_full/test/isotp_len.lua`](../examples/system_full/test/isotp_len.lua) runs messages
+over 520 both ways against it, and against domain at the default.

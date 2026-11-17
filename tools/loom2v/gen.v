@@ -23,6 +23,7 @@ import tools.ecumodel
 import tools.cfgschema
 import comm.uds
 import comm.fault
+import comm.isotp
 
 struct SigInfo {
 mut:
@@ -83,6 +84,9 @@ struct IsotpConn {
 	bs            int
 	stmin         int
 	functional_id int // 0 = no functional requests on this connection
+	// the longest message either way (REQ-CAN-TP-021): the connection's buffers, the server's
+	// response capacity, the DoIP entity's limit, the bootloader's block all follow it
+	max_message int
 }
 
 // DidCfg is one [[did]]: constant bytes, a writable RAM cell, and/or a live signal.
@@ -1060,6 +1064,8 @@ fn parse_isotp(doc toml.Doc) []IsotpConn {
 		bs:            schema_int(m, 'isotp', 'bs', 0, '[isotp]')
 		stmin:         schema_int(m, 'isotp', 'stmin_ms', 0, '[isotp]')
 		functional_id: toml_int(m, 'functional_id', 0, 0, 0x1FFFFFFF, '[isotp]')
+		// refused outside 8..4095, never narrowed (REQ-CAN-TP-021); 520 when not configured
+		max_message: schema_int(m, 'isotp', 'max_message', isotp.default_message, '[isotp]')
 	}
 	// the connection matches and sends its ids as standard frames: a wider value never matches
 	// on receive and goes out masked on transmit
@@ -1818,6 +1824,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	validate_uds(m)
 	validate_live_dids(m)
 	validate_faults(m, doc)
+	validate_max_message(m) // after the DIDs and faults it measures are known good
 	validate_e2e_timeouts(m)
 	for sname in m.sig_names {
 		si := m.sig_of[sname] or { continue }
@@ -2673,8 +2680,8 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// [nvm] — the journal put path into the real flash driver. 4 KB was
 				// measured paper-thin on the H755 bench (the v4 image faulted with PSP
 				// 40 B below the DTCM floor mid-put): 8 KB with [nvm], 4 KB without.
-				// the diagnostic server's dispatch copies its ISO-TP link / UDS server by value into
-				// several frames (~1 KB each): 8 KB with [isotp] too
+				// the diagnostic server's dispatch copies its UDS server (~1 KB, the DID table) by
+				// value into several frames: 8 KB with [isotp] too
 				comm_stack := if m.nvm.on || m.isotp_conns.len > 0 { 8192 } else { 4096 }
 				glue << '\tg_comm_stack [${comm_stack}]u8'
 				// (The load cell is the volatile C scratch in comm_glue.c, via load_pub/load_*.)
@@ -5770,18 +5777,25 @@ fn fault_freeze_lens(m Model, f FaultCfg) []int {
 		mut n := 0
 		for d in m.dids {
 			if d.id == id {
-				n = if d.signal != '' {
-					did_value_width((m.sig_of[d.signal] or { SigInfo{} }).val_type) or { 0 }
-				} else if d.param != '' || d.param_status {
-					param_did_len(m, d)
-				} else {
-					d.bytes.len
-				}
+				n = did_len(m, d)
 			}
 		}
 		out << n
 	}
 	return out
+}
+
+// did_len: the byte size of DID d's record — a constant DID's bytes, a live one's value width, a
+// parameter's or the status DID's — the size a snapshot holds it at, and (with the saturation
+// count's u32, diag_did_answer_len) the size 0x22 answers it at.
+fn did_len(m Model, d DidCfg) int {
+	return if d.signal != '' {
+		did_value_width((m.sig_of[d.signal] or { SigInfo{} }).val_type) or { 0 }
+	} else if d.param != '' || d.param_status {
+		param_did_len(m, d)
+	} else {
+		d.bytes.len
+	}
 }
 
 // fault_entries: the snapshot entries the memory holds — declared, or one per fault with a

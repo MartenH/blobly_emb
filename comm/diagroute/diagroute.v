@@ -33,6 +33,16 @@ import driver.can
 // (hold), not when the first routed request comes: a tester may unlock, then wait out S3 before
 // it routes. A new connection starts unrouted.
 //
+// Length (REQ-CAN-TP-023/025): the router carries messages up to the gateway's own maximum message
+// length (init), and a request up to the TARGET's too (Route.max_message). A request longer than
+// the gateway's never reaches it (the DoIP entity refuses it first); one longer than its target's is
+// refused here (Verdict.too_large, DoIP's diagnostic NACK 0x04), not forwarded to be refused on the
+// bus with FC.OVFLW and left unanswered; an answer longer than the gateway's is refused on the bus
+// and answered to the tester as responseTooLong in the target's name (refuse_too_long) — when it
+// answers the request in flight, like any answer (answers); and a RequestDownload answer offering
+// longer TransferData blocks than that is lowered to it (fit_block_length), so a target with a
+// larger maximum is still reprogrammed through the gateway, in blocks the gateway carries.
+//
 // No field defaults (the _vinit rule): start from a zeroed Router — a __global — and call init().
 
 // the most routes one gateway holds
@@ -67,6 +77,9 @@ pub mut:
 	bus     u8  // the owner's index of the bus the target is on
 	tx_id   u32 // the target's physical request id (standard id)
 	rx_id   u32 // its response id
+	// the longest request the target takes: its own maximum message length ([isotp] max_message);
+	// 0 = the gateway's (init) — a request longer than either is refused (accept)
+	max_message int
 }
 
 // Verdict is the router's answer to a routed request; the DoIP framing NACKs all but .accepted.
@@ -75,7 +88,8 @@ pub enum Verdict {
 	unknown_target // no such route
 	locked         // the tester does not hold the gateway's unlock (REQ-NET-020)
 	busy           // the previous request is still being sent to its target
-	refused        // the link refused the request (too long, or empty)
+	too_large      // longer than the target, or the gateway, carries (REQ-CAN-TP-023)
+	refused        // the link refused the request (empty)
 }
 
 // answers: does UDS answer `a` (n bytes) answer the request whose first bytes are `req` (rn of
@@ -154,7 +168,13 @@ pub mut:
 	logical u16 // the target it comes from
 	ticket  u32 // the request it answers
 	len     int
-	data    [isotp.max_payload]u8
+	data    &u8 = unsafe { nil } // max_message bytes of the router's storage (init)
+}
+
+// storage_len: the bytes a router of `max_message` needs from its owner (init) — its link's
+// receive and transmit buffers and one buffer per queued answer, each one message long.
+pub fn storage_len(max_message int) int {
+	return (2 + queue_len) * max_message
 }
 
 pub struct Router {
@@ -169,6 +189,10 @@ pub mut:
 	failed    u32 // requests ISO-TP gave up sending (no flow control within N_Bs, an overflow)
 	stale     u32 // answers to another request than the one in flight (a late one), dropped
 	lost      u32 // answers that completed with the queue full (the doip thread fell behind)
+	too_long  u32 // answers longer than max_message, refused on the bus and answered 0x14 (refuse_too_long)
+	lowered   u32 // RequestDownload answers whose block length was lowered to max_message (fit_block_length)
+	// the longest request and answer carried: the gateway's own maximum message length (init)
+	max_message int
 mut:
 	link       isotp.Link
 	active     int // the route of the exchange in flight, -1 = none
@@ -179,6 +203,7 @@ mut:
 	aborts     u32 // link.tx_aborts when it was accepted: a change is a send ISO-TP gave up
 	moved_at   u64 // the last frame of the exchange either way (stall_us)
 	sending    bool
+	ending     bool // the answer was refused as too long: the exchange ends once the refusal is out
 	full_held  bool // the queue is full and its bus is held undrained since full_since (room)
 	full_since u64
 	deadline   u64 // while sending: the request must have left by; after: the next answer must have begun by
@@ -192,12 +217,21 @@ mut:
 
 // init sets the flow control this side grants (bs blocks of consecutive frames before the next
 // flow control: the gateway drains its bus's receive FIFO each pass, so the target never sends
-// more frames in a burst than that FIFO holds) and the level a tester must hold.
-pub fn (mut r Router) init(level u8, bs u8) {
+// more frames in a burst than that FIFO holds), the level a tester must hold, and the storage its
+// owner gives it: storage_len(max_message) bytes, the gateway's maximum message length, so a routed
+// request or answer is carried up to that length. The link's buffers and the answers' stay apart:
+// the doip thread fills the next request while the link is still sending the last.
+pub fn (mut r Router) init(level u8, bs u8, storage &u8, max_message int) {
 	r.level = level
 	r.link.bs = bs
 	r.link.stmin = 0
 	r.link.init_defaults()
+	r.max_message = max_message
+	r.link.bind_rx(storage, max_message)
+	r.link.bind_tx(unsafe { storage + max_message }, max_message)
+	for i in 0 .. queue_len {
+		r.queue[i].data = unsafe { storage + (2 + i) * max_message }
+	}
 	r.active = -1
 }
 
@@ -232,8 +266,9 @@ pub fn (mut r Router) accept(idx int, req &u8, n int, conn u32, ticket u32, unlo
 	if idx < 0 || idx >= r.n_routes {
 		return .unknown_target
 	}
-	if n < 1 || n > isotp.max_payload {
-		return .refused // refused before anything of the exchange in flight is touched
+	// refused before anything of the exchange in flight is touched
+	if n < 1 || r.link.tx_cap < 1 {
+		return .refused // empty, or an unbound router
 	}
 	if r.granted && r.bound && r.grant_conn != conn {
 		r.granted = false // a new connection: its tester authenticates for itself
@@ -246,6 +281,11 @@ pub fn (mut r Router) accept(idx int, req &u8, n int, conn u32, ticket u32, unlo
 	if !r.bound {
 		r.bound = true
 		r.grant_conn = conn
+	}
+	// after the lock (REQ-NET-020): a tester without the gateway's unlock learns nothing of a route,
+	// its size included; and still before anything of the exchange in flight is touched
+	if n > r.route_max(idx) {
+		return .too_large // the target would refuse its first frame (FC.OVFLW) and answer nothing
 	}
 	if r.active >= 0 && r.sending {
 		return .busy
@@ -269,6 +309,13 @@ pub fn (mut r Router) accept(idx int, req &u8, n int, conn u32, ticket u32, unlo
 	r.sending = true
 	r.forwarded++
 	return .accepted
+}
+
+// route_max: the longest request route `idx` carries — its target's maximum message length, never
+// more than the gateway's own (the link's transmit buffer)
+pub fn (r &Router) route_max(idx int) int {
+	m := r.routes[idx].max_message
+	return if m > 0 && m < r.link.tx_cap { m } else { r.link.tx_cap }
 }
 
 // hold: the network tester holds `unlocked` on the gateway's server now — the route level, and the
@@ -334,8 +381,27 @@ pub fn (mut r Router) on_frame(bus u8, f &can.Frame, now u64) bool {
 	// it was not waiting for, a reserved PCI, a truncated or out-of-sequence frame move nothing. Our
 	// own sends count in pump.
 	before := r.link.progress
+	oversize := oversize_first_frame(&r.link, f)
 	if diag.take_frame(mut r.link, now, f) {
 		r.collect(now)
+	}
+	// judged from the frame, not from an OVFLW becoming owed: one already owed (a late oversize first
+	// frame of an earlier request) must not hide this one's
+	if oversize && !r.ending {
+		// the answer's first frame announced more than the gateway carries: refused in the target's
+		// name when it answers the request in flight — a late one to an earlier request is not
+		// this one's, as in collect
+		if first_frame_answers(f, &r.req_head[0], r.req_len, r.req_full) {
+			r.refuse_too_long()
+		} else {
+			r.stale++
+		}
+	}
+	if oversize {
+		// the link owes its FC.OVFLW now (and the tester, maybe, the refusal): work the exchange
+		// took on, which a stall window run down by an earlier wait must not discard before pump
+		// sends it — the link counts no progress for a frame it refused
+		r.moved_at = now
 	}
 	if r.link.progress != before {
 		r.moved_at = now
@@ -352,24 +418,115 @@ fn (mut r Router) collect(now u64) {
 		return
 	}
 	mut a := &r.queue[(r.q_head + r.q_len) % queue_len]
-	a.len = r.link.take(&a.data[0])
+	a.len = r.link.take(a.data)
 	if a.len <= 0 {
 		return
 	}
-	if !answers(&a.data[0], a.len, &r.req_head[0], r.req_len, r.req_full) {
+	if !answers(a.data, a.len, &r.req_head[0], r.req_len, r.req_full) {
 		// a late answer to an earlier request (the tester gave up on it): not this one's — this
 		// one's is still to come, within the same wait
 		r.stale++
 		return
 	}
+	if fit_block_length(a.data, a.len, r.max_message) {
+		r.lowered++
+	}
 	a.logical = r.routes[r.active].logical
 	a.ticket = r.ticket
 	r.q_len++
 	r.answered++
-	if a.len >= 3 && a.data[0] == 0x7F && a.data[2] == 0x78 {
+	if a.len >= 3 && unsafe { a.data[0] == 0x7F && a.data[2] == 0x78 } {
 		r.deadline = now + answer_wait_us
 	} else {
 		r.end_exchange()
+	}
+}
+
+// first_frame_answers: does the first frame `f` the link refused begin an answer to the request in
+// flight? It carries the answer's first bytes (six, two after an escape length), which hold what
+// answers() compares: the service and what identifies the request.
+fn first_frame_answers(f &can.Frame, req &u8, rn int, full int) bool {
+	n := if f.len > 8 { 8 } else { int(f.len) } // classic-sized ISO-TP, as take_frame reads it
+	if n < 2 || (f.data[0] & 0xF0) != 0x10 {
+		return false
+	}
+	escape := (f.data[0] & 0x0F) == 0 && f.data[1] == 0
+	at := if escape { 6 } else { 2 }
+	if n <= at {
+		return false
+	}
+	return answers(&f.data[at], n - at, req, rn, full)
+}
+
+// refuse_too_long: the target's answer is longer than the gateway's maximum message, and the link
+// refuses its first frame with FC.OVFLW (REQ-CAN-TP-015), so the target gives it up at once. The
+// tester is answered in the target's name with what a server answers when its answer does not fit
+// its connection — 7F <service> 14, responseTooLong — instead of waiting out its P2* for an answer
+// that never comes; the exchange ends once the refusal has left (finish). (REQ-CAN-TP-025)
+fn (mut r Router) refuse_too_long() {
+	r.too_long++
+	r.ending = true
+	if r.q_len >= queue_len {
+		r.lost++
+		return
+	}
+	mut a := &r.queue[(r.q_head + r.q_len) % queue_len]
+	unsafe {
+		a.data[0] = 0x7F
+		a.data[1] = r.req_head[0]
+		a.data[2] = 0x14
+	}
+	a.len = 3
+	a.logical = r.routes[r.active].logical
+	a.ticket = r.ticket
+	r.q_len++
+	r.answered++
+}
+
+// finish: an exchange whose answer was refused as too long ends once the link has nothing left
+// to send — the FC.OVFLW is out
+fn (mut r Router) finish() {
+	if r.ending && r.link.idle() {
+		r.end_exchange()
+	}
+}
+
+// fit_block_length: a RequestDownload answer (74, a length format identifier whose high nibble is
+// the width of maxNumberOfBlockLength, 1..15, then that many bytes) that offers blocks longer than
+// the gateway's maximum message has its block length lowered to that maximum, in place and in the
+// same width (its leading bytes zero): the tester sizes its TransferData blocks by it (the length
+// counts the whole 0x36 request), and a block longer than the gateway's maximum would be refused
+// by the gateway's DoIP entity. A server takes any block up to the length it offered, so a shorter
+// one is still its to take. True when lowered (REQ-CAN-TP-025).
+fn fit_block_length(a &u8, n int, max_message int) bool {
+	unsafe {
+		if n < 3 || a[0] != 0x74 {
+			return false
+		}
+		w := int(a[1] >> 4)
+		if w < 1 || n < 2 + w {
+			return false
+		}
+		// a field wider than eight bytes offers more than any u64 past its last eight: any nonzero
+		// byte ahead of them is more than the gateway carries
+		mut over := false
+		mut v := u64(0)
+		for i in 0 .. w {
+			if i < w - 8 {
+				over = over || a[2 + i] != 0
+			} else {
+				v = (v << 8) | u64(a[2 + i])
+			}
+		}
+		if !over && v <= u64(max_message) {
+			return false
+		}
+		mut m := u64(max_message)
+		for i := w - 1; i >= 0; i-- {
+			a[2 + i] = u8(m & 0xFF)
+			m >>= 8
+		}
+		return true
 	}
 }
 
@@ -383,6 +540,7 @@ pub fn (mut r Router) step(now u64) {
 		return
 	}
 	r.settle(now)
+	r.finish()
 	if r.active < 0 {
 		return
 	}
@@ -413,6 +571,7 @@ pub fn (mut r Router) pump[H](now u64, mut ch H) {
 	}
 	// the request's last frame has just left: the answer is due from now, not from the next step
 	r.settle(now)
+	r.finish() // ... or the refusal of a too-long answer has
 }
 
 // cancel ends the exchange of a tester whose connection ended, and drops the answers it would have
@@ -493,7 +652,22 @@ pub fn (mut r Router) pop() {
 fn (mut r Router) end_exchange() {
 	r.active = -1
 	r.sending = false
+	r.ending = false
 	r.deadline = 0
 	r.link.abort_tx()
 	r.link.abort_rx() // a reception in progress belongs to the exchange that ended
 }
+
+// oversize_first_frame: `f` is a first frame announcing more than the link `l` holds, or the escape
+// first frame (FF_DL 0, a 32-bit length past 4095) — what the link refuses with FC.OVFLW. Read as
+// diag.take_frame reads it: the bytes that arrived, classic-sized, and a frame shorter than its PCI
+// says (isotp.Link.truncated) is nothing, not a refusal to answer for.
+fn oversize_first_frame(l &isotp.Link, f &can.Frame) bool {
+	n := if f.len > 8 { 8 } else { int(f.len) }
+	if n < 2 || f.data[0] >> 4 != 1 || l.truncated(f.data[0], n) {
+		return false
+	}
+	total := (int(f.data[0] & 0x0F) << 8) | int(f.data[1])
+	return total == 0 || total > l.rx_cap
+}
+

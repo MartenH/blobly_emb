@@ -89,7 +89,8 @@ fn shell_c_decls(m Model) []string {
 	return g
 }
 
-// shell_module_globals / init: the module lives in __global (its ISO-TP link is ~1 KB).
+// shell_module_globals / init: the module lives in __global (its response writer and transmit
+// buffer are ~1 KB, shell.max_rsp each — too much for the 4 KB comm stack).
 fn shell_module_globals(m Model) []string {
 	if !m.shell.on {
 		return []string{}

@@ -1,6 +1,7 @@
 module cfgschema
 
 import comm.doip
+import comm.isotp
 import comm.uds
 import comm.fault
 import comm.param
@@ -16,6 +17,7 @@ fn ecu_diag_tables() []Table {
 			k('bs', .int).d('0').range(0, 255).doc('the block size granted in our Flow Control, one byte on the wire (0 = the whole message at once)'),
 			k('stmin_ms', .int).d('0').range(0, 127).doc('the STmin (ms) we ask a sender to keep between consecutive frames; ISO 15765-2 encodes milliseconds only up to 127'),
 			k('functional_id', .int).range(0, 0x7FF).hex().doc('the functional (broadcast) request id, e.g. 0x7DF, single frames only; absent = none'),
+			k('max_message', .int).d('${isotp.default_message}').range(isotp.min_message, isotp.message_limit).doc('the longest diagnostic message either way, in bytes (the escape first frame above 4095 is not supported). It sizes the server\'s buffers and response capacity, the DoIP entity\'s message limit, a gateway\'s routed messages and the bootloader\'s TransferData block; generation refuses one smaller than the largest message the configuration determines'),
 		]),
 		tbl('uds', '[uds]', "The node's one ISO 14229 diagnostic server: session and security timing, the 0x27 key, the service table.", [
 			k('s3_ms', .int).d('${uds.default_s3_us / 1000}').doc('the session timeout back to the default session (ms; 0 = the default)'),
@@ -35,6 +37,7 @@ fn ecu_diag_tables() []Table {
 			req('bus', .str).doc('the CAN bus ([bus.*] name) it is on'),
 			req('tx_id', .int).range(0, 0x7FF).hex().doc('its physical request id: what the gateway sends on (11-bit)'),
 			req('rx_id', .int).range(0, 0x7FF).hex().doc('its response id: what the gateway receives on (11-bit)'),
+			k('max_message', .int).d('${isotp.default_message}').range(isotp.min_message, isotp.message_limit).doc('its [isotp] max_message: the gateway refuses a longer routed request at once (diagnostic NACK 0x04) rather than forward one the node would refuse on its bus (REQ-CAN-TP-023); sysgen writes it when the node\'s is not the default'),
 		]),
 		tbl('did', '[[did]]', 'A data identifier the server reads (0x22) and may write (0x2E). Its value is ONE of: `ascii` / `bytes` (a constant), `signal` (live), `param` (a coded [[param]]), `param_status`, `tx_saturations`.', [
 			req('id', .int).range(0, 0xFFFF).hex().doc('the 16-bit data identifier (0 is skipped)'),

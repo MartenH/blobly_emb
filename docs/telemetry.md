@@ -383,7 +383,7 @@ self-describing blocks, each one:
 - **leading epoch**: every block re-anchors its own timeline (the base applicable at its
   first record), so blocks decode independently and in sequence alike.
 - **block size** is the transport binding's payload cap, not a format constant: over
-  ISO-TP a block is ≤ 520 bytes (64 records); a future Ethernet/DoIP binding carries the
+  ISO-TP a block is ≤ 520 bytes (`trace.dump_block`: 64 records, the dump stream's own size, not the node's `[isotp] max_message`); a future Ethernet/DoIP binding carries the
   identical block sequence with its own cap and neither the format nor the decoder
   changes. This is why the ring depth (`buffer_records`, up to 4096) is decoupled from
   any transport limit.

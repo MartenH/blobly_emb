@@ -36,6 +36,15 @@ int boot_can_fd(void) { return BOOT_CAN_FD; }
 uint8_t boot_bs(void) { return BOOT_BS; }
 uint8_t boot_stmin(void) { return BOOT_STMIN; }
 
+/* the message buffers: one block, sized by the generator from the node's maximum message length
+ * (BOOT_MAX_MESSAGE, its [isotp] max_message) through boot.bufs' layout, which the V side carves
+ * it by too — and refuses to run on when this block is smaller than its layout */
+static uint8_t g_boot_buf[BOOT_BUF_LEN] __attribute__((aligned(4)));
+
+uint8_t *boot_buf(void) { return g_boot_buf; }
+int boot_buf_len(void) { return (int)BOOT_BUF_LEN; }
+int boot_max_message(void) { return (int)BOOT_MAX_MESSAGE; }
+
 static const uint8_t g_image_key[32] = BOOT_IMAGE_KEY;
 static const uint8_t g_session_key[32] = BOOT_SESSION_KEY;
 

@@ -393,6 +393,7 @@ The diagnostic server's ISO 15765-2 connection on CAN (docs/diagnostics.md).
 | `bs` | integer |  | `0` | 0..255 | the block size granted in our Flow Control, one byte on the wire (0 = the whole message at once) |
 | `stmin_ms` | integer |  | `0` | 0..127 | the STmin (ms) we ask a sender to keep between consecutive frames; ISO 15765-2 encodes milliseconds only up to 127 |
 | `functional_id` | integer |  | — | 0x0..0x7FF | the functional (broadcast) request id, e.g. 0x7DF, single frames only; absent = none |
+| `max_message` | integer |  | `520` | 8..4095 | the longest diagnostic message either way, in bytes (the escape first frame above 4095 is not supported). It sizes the server's buffers and response capacity, the DoIP entity's message limit, a gateway's routed messages and the bootloader's TransferData block; generation refuses one smaller than the largest message the configuration determines |
 
 <a id="ecu-uds"></a>
 
@@ -455,6 +456,7 @@ A node behind this DoIP gateway that diagnostic messages to its logical address 
 | `bus` | string | yes | — |  | the CAN bus ([bus.*] name) it is on |
 | `tx_id` | integer | yes | — | 0x0..0x7FF | its physical request id: what the gateway sends on (11-bit) |
 | `rx_id` | integer | yes | — | 0x0..0x7FF | its response id: what the gateway receives on (11-bit) |
+| `max_message` | integer |  | `520` | 8..4095 | its [isotp] max_message: the gateway refuses a longer routed request at once (diagnostic NACK 0x04) rather than forward one the node would refuse on its bus (REQ-CAN-TP-023); sysgen writes it when the node's is not the default |
 
 <a id="ecu-boot"></a>
 

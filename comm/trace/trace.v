@@ -475,7 +475,7 @@ pub fn (t TraceBuffer) pack_block(out &u8, out_cap int, core u8) int {
 // decoder re-anchors per block, so every block must be self-anchoring) and the block header
 // (core, count, more). Returns (bytes written, next `from`, more-blocks-follow). Chunk size is
 // the CALLER's cap — the transport binding passes its own payload limit, the format doesn't
-// care (520 B over ISO-TP today, a datagram-sized cap over Ethernet later).
+// care (dump_block, 520 B, over ISO-TP today, a datagram-sized cap over Ethernet later).
 pub fn (t TraceBuffer) pack_chunk(out &u8, out_cap int, core u8, from u32) (int, u32, bool) {
 	if from >= t.used {
 		return 0, from, false

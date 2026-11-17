@@ -944,3 +944,25 @@ fn test_the_active_session_did() {
 	assert call(mut raw, [u8(0x22), 0xF1, 0x86]) == [u8(0x7F), 0x22, 0x31]
 }
 
+// @verifies REQ-CAN-TP-022
+// a DID's 0x22 answer, and the 0x2E request writing it, are did_answer_len of its data
+fn test_a_did_answer_is_did_answer_len_long() {
+	mut s := Server{}
+	s.init(256)
+	s.dids[0] = Did{
+		id:       0x0110
+		len:      u8(max_did_data)
+		writable: true
+	}
+	s.ndid = 1
+	mut resp := [256]u8{}
+	req := [u8(0x22), 0x01, 0x10]
+	assert s.handle(&req[0], req.len, &resp[0]) == did_answer_len(max_did_data)
+	s.session = session_extended
+	mut w := [u8(0x2E), 0x01, 0x10]
+	for _ in 0 .. max_did_data {
+		w << 0x5A
+	}
+	assert w.len == did_answer_len(max_did_data)
+	assert s.handle(unsafe { &w[0] }, w.len, &resp[0]) == 3 && resp[0] == 0x6E
+}

@@ -13,8 +13,12 @@ import driver.can
 // frame to on_frame (breaking on .request, re-sampling the gate on .served) → serve → produce until
 // the channel is not ready.
 //
-// No field defaults (the _vinit rule): start from a zeroed Connection — a fresh state struct or a
-// __global — and call init().
+// No field defaults (the _vinit rule; the buffer pointers' nil is a zero value): start from a
+// zeroed Connection — a fresh state struct or a __global — and call init() with the request and
+// response buffers, max_message bytes each, which the owner provides (generated storage sized by
+// the node's [isotp] max_message). The link reassembles into the request buffer and sends from the
+// response buffer: the server writes an answer only while the link is idle and reads a request
+// before the pass goes on, so neither is touched under a transfer in flight.
 pub struct Connection {
 pub mut:
 	link          isotp.Link
@@ -36,8 +40,8 @@ pub mut:
 	// power-on here, which is all a host bridge can do.
 	owner_resets bool
 mut:
-	req  [isotp.max_payload]u8
-	resp [isotp.max_payload]u8
+	req  &u8 = unsafe { nil }
+	resp &u8 = unsafe { nil }
 	// a request served over another transport (serve_remote): the session in force was set by it
 	// (a request that did not change it does not move this), and an answer of its not yet sent —
 	// ANY answer: no reset, whichever transport asked for it, may overtake an executed request's
@@ -75,9 +79,11 @@ pub enum Rx {
 	served  // a functional request, served on arrival: re-sample what its answer may have changed (0x28's gate)
 }
 
-// init configures the link (the flow control this side grants) and puts the server in the default
-// session with a response capacity of the whole buffer. The owner then sets the server's options.
-pub fn (mut c Connection) init(rx_id u32, tx_id u32, functional_id u32, bs u8, stmin u8) {
+// init configures the link (the flow control this side grants), gives it the owner's request and
+// response buffers (`max_message` bytes each, the node's maximum message length) and puts the
+// server in the default session with a response capacity of the whole buffer. The owner then sets
+// the server's options.
+pub fn (mut c Connection) init(rx_id u32, tx_id u32, functional_id u32, bs u8, stmin u8, req &u8, resp &u8, max_message int) {
 	c.rx_id = rx_id
 	c.tx_id = tx_id
 	c.functional_id = functional_id
@@ -85,7 +91,11 @@ pub fn (mut c Connection) init(rx_id u32, tx_id u32, functional_id u32, bs u8, s
 	c.link.stmin = stmin
 	// no field defaults on Link: the N_Bs / N_Cr / WFTmax bounds are set here or a lost FC wedges it
 	c.link.init_defaults()
-	c.server.init(isotp.max_payload)
+	c.req = req
+	c.resp = resp
+	c.link.bind_rx(req, max_message)
+	c.link.bind_tx(resp, max_message)
+	c.server.init(c.link.tx_cap)
 }
 
 // housekeep is the top of a pass, before the owner samples its gates: ISO-TP timeouts expire (a
@@ -130,10 +140,10 @@ fn (mut c Connection) functional(f &can.Frame) Rx {
 	}
 	c.refresh_dids()
 	before, held := c.enter(false)
-	rlen := c.server.handle_functional(&f.data[1], n, &c.resp[0])
+	rlen := c.server.handle_functional(&f.data[1], n, c.resp)
 	c.leave(before, held, false)
 	c.remote.asked(false) // a reset asked here is the bus's (none was pending, or this was not served)
-	if rlen > 0 && !c.link.send(&c.resp[0], rlen) {
+	if rlen > 0 && !c.link.send(c.resp, rlen) {
 		c.cancel_reset() // never reset unanswered
 	}
 	// a SUPPRESSED reset (0x11 with bit 7) leaves the link idle: apply it before the next frame of
@@ -150,14 +160,14 @@ fn (mut c Connection) functional(f &can.Frame) Rx {
 pub fn (mut c Connection) serve() {
 	// nor once a reset is pending: the owner is about to restart, and an answer given now would
 	// describe state the restart discards (take_request, step.v — the boot's rule too)
-	n := take_request(mut c.link, &c.req[0], c.server.reset_req != 0)
+	n := take_request(mut c.link, c.req, c.server.reset_req != 0)
 	if n > 0 {
 		c.refresh_dids()
 		before, held := c.enter(false)
-		rlen := c.server.handle(&c.req[0], n, &c.resp[0])
+		rlen := c.server.handle(c.req, n, c.resp)
 		c.leave(before, held, false)
 		c.remote.asked(false)
-		if rlen > 0 && !c.link.send(&c.resp[0], rlen) {
+		if rlen > 0 && !c.link.send(c.resp, rlen) {
 			c.cancel_reset() // the answer could not be queued: never reset unanswered
 		}
 	}
@@ -165,7 +175,7 @@ pub fn (mut c Connection) serve() {
 
 // serve_remote answers a request that arrived over another transport (DoIP) on this same server,
 // so both transports share one session (the unlock is per transport: enter/leave); resp holds
-// isotp.max_payload. The
+// max_message bytes. The
 // answer leaves over that transport, so a reset it asks for is due only once the owner reports it
 // sent (remote_sent), and is abandoned with a connection that drops first (remote_dropped). Once a
 // reset is due nothing is served, as on the bus.

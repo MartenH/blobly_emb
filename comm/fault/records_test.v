@@ -437,3 +437,22 @@ fn test_an_extended_record_is_bounded_by_the_response_not_a_buffer() {
 	mut b := [2]u8{}
 	assert m.extended_of(0, 0x01, &b[0], 1) == -1 && m.extended_of(0, 0x01, &b[0], 2) == 2
 }
+
+// @verifies REQ-CAN-TP-022
+// the answer lengths generation sizes a node's maximum message by are the lengths the server
+// writes: a DTC list, a snapshot record, every extended record
+fn test_the_answer_lengths_are_the_bytes_written() {
+	mut m := snap_memory(2, 2)
+	mut s := snap_server(mut m, 120)
+	mut d := rcounter(1, 1)
+	m.cycle_start()
+	fail_once(mut m, mut d, 0, &s)
+	fail_once(mut m, mut d, 1, &s)
+	assert rcall(mut s, [u8(0x19), 0x0A]).len == uds.dtc_list_len(2)
+	assert rcall(mut s, [u8(0x19), 0x02, 0xFF]).len == uds.dtc_list_len(2)
+	body := snapshot_body_len(2, 4 + 2)
+	assert body == m.snap_len(0)
+	assert rcall(mut s, [u8(0x19), 0x04, 0xC1, 0x00, 0x00, 0x01]).len == uds.snapshot_answer_len(body)
+	assert rcall(mut s, [u8(0x19), 0x06, 0xC1, 0x00, 0x00, 0xFF]).len == extended_answer_len()
+	assert extended_answer_len() == 13
+}

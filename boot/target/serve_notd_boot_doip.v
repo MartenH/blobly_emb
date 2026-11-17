@@ -1,5 +1,7 @@
 module main
 
+import boot.bufs
+
 // The serve loop of a node with no DoIP: the bus is the boot's one transport, so the stay path is a
 // bare superloop — no kernel, the main stack.
 
@@ -14,7 +16,7 @@ fn net_serves() bool {
 	return false
 }
 
-fn net_pass(_ u64) {}
+fn net_pass(_ u64, _ bufs.Layout) {}
 
 fn net_drain() {}
 

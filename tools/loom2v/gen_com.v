@@ -680,6 +680,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 		for c in conns {
 			tp := snake(c.name)
 			glue << '\tconn_${tp} diag.Connection // the node\'s diagnostic server on its ISO-TP connection'
+			glue << '\tconn_${tp}_req [${c.max_message}]u8 // its request buffer: [isotp] max_message'
+			glue << '\tconn_${tp}_resp [${c.max_message}]u8 // its response buffer'
 			if m.faults.len > 0 {
 				glue << '\tfmem fault.Memory // the node\'s fault memory: this bridge is its one writer (D2)'
 				glue << '\tfcycle_on bool // the operation-cycle signal as last seen'

@@ -38,12 +38,16 @@ pub const endpoints = [
 	},
 ]
 
-pub const max_rsp = isotp.max_payload // one ISO-TP block; help/ps for a handful of threads fits
+// max_rsp is the longest response: one ISO-TP message of the shell's own stream (help/ps for a
+// handful of threads fits). The shell's, not the node's diagnostic connection's maximum: the
+// response stream is not that connection, and a client reads it at this size whatever the node's
+// [isotp] max_message is.
+pub const max_rsp = 520
 
 // Rsp is the no-alloc response writer — a fixed buffer the handlers append text into.
 pub struct Rsp {
 pub mut:
-	buf [isotp.max_payload]u8 // derived: raising the cap grows this with it (codex #202)
+	buf [max_rsp]u8
 	len int
 }
 
@@ -126,19 +130,23 @@ struct Cmd {
 pub struct ShellModule {
 pub mut:
 	// The response writer lives IN the module (bss via the __global), never as a comm-thread
-	// stack local: buf derives from isotp.max_payload, so a raised cap would otherwise grow a
-	// 520+ B local on the 4 KB comm stack — the stack-copy-boot-hang rule, and codex #206.
+	// stack local: a 520 B local on the 4 KB comm stack is the stack-copy-boot-hang rule, and
+	// codex #206.
 	rsp Rsp
 mut:
 	out_id u32
 	link   isotp.Link
+	// the link's transmit buffer: the response being streamed, apart from rsp, which the eth RPC
+	// path writes too (bound before each send: the module is built in place, never copied)
+	tx [max_rsp]u8
 	cmds   [16]Cmd
 	ncmd   int
 }
 
-// init prepares the module IN PLACE — the instance usually lives in a __global (its ISO-TP
-// link alone is ~1 KB), and building it as a stack local + return-copy would put ~2x its size
-// on the caller's (4 KB comm) stack. No constructor by value, ever, for module-sized structs.
+// init prepares the module IN PLACE — the instance usually lives in a __global (its response and
+// transmit buffers alone are ~1 KB), and building it as a stack local + return-copy would put ~2x
+// its size on the caller's (4 KB comm) stack. No constructor by value, ever, for module-sized
+// structs.
 pub fn (mut m ShellModule) init(out_id u32) {
 	m.out_id = out_id
 	m.link.init_defaults() // _vinit never runs on target: timeouts are set HERE
@@ -189,6 +197,7 @@ pub fn (mut m ShellModule) on_in(now u64, f can.Frame) {
 	}
 	m.rsp.len = 0
 	m.dispatch(f.data, int(f.len), now, true, mut m.rsp)
+	m.link.bind_tx(&m.tx[0], max_rsp)
 	m.link.send(&m.rsp.buf[0], m.rsp.len)
 }
 
@@ -264,16 +273,10 @@ fn name_eq(name string, data [64]u8, n int) bool {
 	return true
 }
 
-// on_fc serves the `fc` endpoint: the host's ISO-TP flow control for the response stream.
+// on_fc serves the `fc` endpoint: the host's ISO-TP flow control for the response stream — only
+// a flow control reaches the link (isotp on_flow_control, REQ-CAN-TP-024).
 pub fn (mut m ShellModule) on_fc(now u64, f can.Frame) {
-	if f.len < 3 {
-		return
-	}
-	mut p := isotp.Pdu{}
-	for i in 0 .. 8 {
-		p.data[i] = f.data[i]
-	}
-	m.link.on_frame(now, p)
+	m.link.on_flow_control(now, &f.data[0], int(f.len))
 }
 
 // produce fills at most ONE tx frame per call (the bus owner gates on tx_ready) — the response

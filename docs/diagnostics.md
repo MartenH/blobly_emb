@@ -413,9 +413,9 @@ period never taken as less than 50 ms (an interrupt-driven handler has none), so
 - **Fixed shape**: each DID at its declared size, zero-filled while nothing has published it.
 - **No side door**: a `freeze` DID must be readable in every session 0x19 is served in, behind no
   0x27 level but 0x19's own. Also refused: a DID that is not the node's, one named twice, more than 4.
-- **Fits the transport**, by the limits rather than a check: a 0x19 02 / 0A answer is at most
-  3 + 32 × 4 bytes and a snapshot at most 144 bytes, both well inside the 520-byte message. Raising
-  `max_faults`, `max_freeze` or `max_did_data` needs a check that does not exist yet.
+- **Fits the transport**: generation refuses an `[isotp] max_message` (520 by default) that cannot
+  hold the 0x19 02 / 0A list, a fault's 0x19 04 snapshot or its 0x19 06 extended data
+  (REQ-CAN-TP-022, [can-tp.md](can-tp.md) §2).
 
 #### Extended data (0x19 06)
 
@@ -571,6 +571,7 @@ param_status = true                         # one byte per parameter: 0 default,
 | A test result is never lost to the not-completed bits or aging: the tested count is monotonic | `comm/fault/fault_test.v` |
 | The cycle end waits for reports in flight (the grace) | `comm/fault/fault_test.v` |
 | A snapshot is never a side door around a DID's gate | `tools/loom2v/fault_target_test.v` `test_snapshot_declarations_are_checked` |
+| Every 0x19 answer, and every DID answer and write, fits the node's `max_message` | `tools/loom2v/diag_target_test.v` (REQ-CAN-TP-022) |
 | A power cut anywhere leaves one coherent memory; a lowered `entries` keeps the most important snapshots | `comm/fault/persist_test.v` power-cut fuzz |
 | A refused 0x14 or parameter 0x2E answers 0x72 and changes nothing live; nothing stored either, unless the flash took the record and only its read-back failed | `persist_test.v` `test_a_refused_clear_answers_0x72_and_changes_nothing`; `comm/param/param_test.v` `test_a_refused_write_answers_0x72_and_changes_nothing` |
 | An automatic write the journal refuses is retried, paced | `persist_test.v` `test_a_refused_write_is_retried_after_the_pause` |

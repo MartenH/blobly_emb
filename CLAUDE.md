@@ -38,7 +38,7 @@ comm/   comms stack: com (tx modes; encode_raw, the ONE send encode — emitted 
         signal at GenSigStartValue or the in-range value nearest 0, candb init_payload, emitted by loom2v
         pdu_init_lines alone (#399); the receive rule — RxMonitor / RxGate in rxmon.v, ONE rule the host
         bridge and the ThreadX comm thread both run, emitted by tools/loom2v/gen_rx.v), e2e (AUTOSAR E2E
-        Profile 1), secoc (AES-CMAC), isotp (15765-2), uds (14229), nm,
+        Profile 1), secoc (AES-CMAC), isotp (15765-2: a link holds no buffer — its owner binds them, sized by the node's `[isotp] max_message`, 8..4095, default 520; docs/can-tp.md), uds (14229), nm,
         fault (debounce + fault memory behind 0x19/0x14/0x85; snapshots, extended data, displacement
         and its persistence in the NvM journal — entry.v, persist.v), param (variant coding: read-only
         FB inputs coded with 0x2E on a bound DID, one NvM journal record each, docs/diagnostics.md §3.4),
@@ -49,7 +49,10 @@ comm/   comms stack: com (tx modes; encode_raw, the ONE send encode — emitted 
         drain — is step.v, which the bootloader runs whole as serve_step), diagroute (a DoIP
         gateway's tester on its buses: a diagnostic message for a node behind it forwarded on the
         node's ids and its answers returned from its logical address — REQ-NET-019, only for a
-        tester holding the gateway's own unlock for its connection, REQ-NET-020; docs/net.md)
+        tester holding the gateway's own unlock for its connection, REQ-NET-020; up to the
+        gateway's own max_message — a longer answer answered 0x14 in the node's name, a routed 0x34's
+        block length lowered to it, REQ-CAN-TP-025 — and a request up to its node's ([[doip.route]]
+        max_message; longer is NACK 0x04), REQ-CAN-TP-023; docs/net.md)
 driver/ driver port: can — SocketCAN (host) / ST FDCAN HAL / AUTOSAR CanIf (CDD); see docs/porting.md
 osal/   OS abstraction: time, cores, IOC (sim=POSIX, target=ThreadX AMP)
 tools/  BUILD-TIME only (heap OK): dbc2cfg, cfg2v, loom2v, sigmap, benches, candb
@@ -251,7 +254,8 @@ the boot request cell and the reset by 0x11's path; docs/bootloader.md "App → 
 That file includes the board's `bootmap.h`; on a board with none the build stops there, naming
 `[boot]`. A `[boot]` node's `gen/loom_build.mk` also includes **`boot/boot.mk`**: the ONE boot
 manager program (`boot/target/main.v`, `boards/common/boot_glue.c`) built for that node from its
-`[isotp]` and `[boot]` keys (`gen/boot_gen.h`) and its board's `bootmap.h`, the application linked
+`[isotp]` and `[boot]` keys (`gen/boot_gen.h`; its message buffers are one block sized by `[isotp]
+max_message` through the `boot.bufs` layout, which the image carves it by too) and its board's `bootmap.h`, the application linked
 at the app slot, `make image SW_VERSION=<n>`, and `make flash` = boot + factory image
 (`threadx_makefiles_test.v` pins that). The system_full CAN nodes all run that way, so
 **`make flash` on domain / sysnode / zone_a writes the boot at 0x08000000 and the app at

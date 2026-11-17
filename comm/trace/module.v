@@ -43,6 +43,12 @@ pub const endpoints = [
 	},
 ]
 
+// dump_block is the longest ISO-TP message of the dump stream: one self-describing block, an 8-byte
+// header and a full 64-record window (8 + 64 x 8). The trace's own stream, not the node's
+// diagnostic connection: the host reads a dump at this size whatever the node's [isotp]
+// max_message is.
+pub const dump_block = 8 + 64 * 8
+
 pub struct TraceModule {
 mut:
 	rsp_id    u32
@@ -80,15 +86,17 @@ mut:
 	// transport binding (Ethernet/DoIP) unchanged.
 	local_due  bool
 	local_from u32
-	// pack scratch — a full ISO-TP payload. The module lives in __global on target, so this
-	// is bss; a [isotp.max_payload]u8 STACK local in produce() overran the 4 KB comm stack
-	// (baseline ~2.6 K) the moment a dump ran (see stack-copy-boot-hang).
-	scratch [isotp.max_payload]u8
+	// pack scratch — one dump block, and the link's transmit buffer while that block streams
+	// (bound before each send: the module may be built by value, so a pointer bound at init would
+	// name a dead copy). The module lives in __global on target, so this is bss; a 520 B STACK
+	// local in produce() overran the 4 KB comm stack (baseline ~2.6 K) the moment a dump ran (see
+	// stack-copy-boot-hang).
+	scratch [dump_block]u8
 }
 
 // new_module builds a module by VALUE — host use only (a spacious stack). On target the
-// module lives in __global and MUST be built in place: it carries an ISO-TP link (~1 KB),
-// the remote import buffer, and a full-payload scratch — a return-copy of all that overran
+// module lives in __global and MUST be built in place: it carries an ISO-TP link,
+// the remote import buffer, and a full-block scratch — a return-copy of all that overran
 // the 4 KB comm stack at boot (stack-copy-boot-hang; TraceModule was the 'survived by luck'
 // case that note warned about — the scratch field finally tipped it). Use init() on target.
 pub fn new_module(rsp_id u32, record_id u32, core u8, use_isotp bool, buf TraceBuffer) TraceModule {
@@ -145,16 +153,10 @@ pub fn (mut m TraceModule) on_cmd(f can.Frame) {
 	}
 }
 
-// on_dump_fc serves the `dump_fc` endpoint: the host's ISO-TP flow control for an in-flight dump.
+// on_dump_fc serves the `dump_fc` endpoint: the host's ISO-TP flow control for an in-flight dump
+// — only a flow control reaches the link (isotp on_flow_control, REQ-CAN-TP-024).
 pub fn (mut m TraceModule) on_dump_fc(now u64, f can.Frame) {
-	if f.len < 3 {
-		return // an FC frame is at least PCI + FS + BS + STmin
-	}
-	mut p := isotp.Pdu{}
-	for i in 0 .. 8 {
-		p.data[i] = f.data[i]
-	}
-	m.link.on_frame(now, p)
+	m.link.on_flow_control(now, &f.data[0], int(f.len))
 }
 
 // produce fills at most ONE tx frame per call and reports whether it did — the bus owner loops
@@ -177,17 +179,17 @@ pub fn (mut m TraceModule) produce(now u64, mut f can.Frame) bool {
 		if !m.link.busy() {
 			// the previous transfer completed: send the next continuation block — the local
 			// window first, then the satellite's, each block its own FC-handshaked transfer
+			m.link.bind_tx(&m.scratch[0], dump_block) // the block streams from where it is packed
 			if m.local_due {
-				n, next, more := m.buf.pack_chunk(&m.scratch[0], isotp.max_payload, m.core,
-					m.local_from)
+				n, next, more := m.buf.pack_chunk(&m.scratch[0], dump_block, m.core, m.local_from)
 				m.local_from = next
 				m.local_due = more
 				if n > 0 {
 					m.link.send(&m.scratch[0], n)
 				}
 			} else if m.remote_due {
-				n, next, more := m.remote.pack_chunk(&m.scratch[0], isotp.max_payload,
-					m.remote_core, m.remote_from)
+				n, next, more := m.remote.pack_chunk(&m.scratch[0], dump_block, m.remote_core,
+					m.remote_from)
 				m.remote_from = next
 				m.remote_due = more
 				if n > 0 {

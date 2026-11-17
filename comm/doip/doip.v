@@ -1,6 +1,5 @@
 module doip
 
-import comm.isotp
 import comm.uds
 
 // DoIP (ISO 13400-2) server framing, no-alloc and transport-agnostic — the
@@ -30,14 +29,18 @@ import comm.uds
 
 pub const header_len = 8
 
-// the largest UDS message either way: one ISO-TP message, so a server shared with a CAN
-// connection takes over DoIP whatever it takes there — a bootloader's TransferData block
-// (boot.max_block_data) included — and answers whatever it answers there
-pub const max_uds = isotp.max_payload
+// The largest UDS message either way is the node's maximum message length (its [isotp]
+// max_message, the one ISO-TP connection it serves — REQ-CAN-TP-023), so a server shared with a CAN
+// connection takes over DoIP whatever it takes there — a bootloader's TransferData block included —
+// and answers whatever it answers there. It is the Server's max_uds, set with its assembly buffer by
+// bind; these are the sizes that follow from it.
 
-// the largest DoIP message this entity assembles: a diagnostic message carrying max_uds
-// (header, source and target address, the UDS bytes)
-pub const max_msg = header_len + 4 + max_uds
+// msg_len: the largest DoIP message an entity of `max_uds` assembles: a diagnostic message
+// carrying max_uds UDS bytes (header, source and target address, the UDS bytes). Its assembly
+// buffer holds this many.
+pub fn msg_len(max_uds int) int {
+	return header_len + 4 + max_uds
+}
 
 // the most tester addresses and activation types the routing-activation policy holds (policy.v);
 // here, beside the arrays they size: declared in policy.v, the checker read them as 0 when
@@ -45,9 +48,11 @@ pub const max_msg = header_len + 4 + max_uds
 pub const max_testers = 8
 pub const max_act_types = 4
 
-// the response room one diagnostic message may need with a serve hook (its
-// max_resp_per_msg): a feed buffer this size always makes progress
-pub const max_resp = header_len + 5 + header_len + 4 + max_uds
+// resp_len: the response room one diagnostic message may need with a serve hook on an entity of
+// `max_uds` (its max_resp_per_msg): a feed buffer this size always makes progress
+pub fn resp_len(max_uds int) int {
+	return header_len + 5 + header_len + 4 + max_uds
+}
 
 // the functional logical address used when Server.functional_addr is 0 (ISO
 // 13400-2's functional group range starts here)
@@ -109,14 +114,10 @@ const node_type_gateway = u8(0x00)
 const node_type_node = u8(0x01)
 const power_ready = u8(0x01)
 
-// the largest DoIP message this entity accepts, as entity status reports it: the payload room of
-// the assembly buffer — whether a tester reads the field as the payload or the whole message, a
-// message sized to it fits
-pub const max_data_size = max_msg - header_len
-
 // diagnostic-message NACK codes
 pub const dnack_invalid_source = u8(0x02)
 pub const dnack_unknown_target = u8(0x03)
+pub const dnack_too_large = u8(0x04) // longer than the routed target takes (REQ-CAN-TP-023)
 pub const dnack_out_of_memory = u8(0x05) // a gateway still sending the previous routed request
 pub const dnack_unreachable = u8(0x06) // a routed target the tester may not reach (REQ-NET-020)
 pub const dnack_transport_error = u8(0x08)
@@ -127,7 +128,7 @@ pub mut:
 	tester_addr u16 // learned from routing activation
 	activated   bool
 	// the transport must drop the connection once the response written so far is sent: the
-	// stream desynced (bad pattern / oversized), a payload length was invalid for its type, or a
+	// stream desynced (a bad pattern, a chunk past the assembly buffer), a payload length was invalid for its type, or a
 	// routing activation was refused with a code that closes the socket. feed processes nothing
 	// after it.
 	fatal bool
@@ -142,9 +143,16 @@ pub mut:
 	serve       Serve
 	// a diagnostic message to this address is a functional request (0 = default_functional_addr)
 	functional_addr u16
-	// assembly buffer: TCP chunks accumulate here until a message completes
-	buf     [max_msg]u8
+	// assembly buffer: TCP chunks accumulate here until a message completes — msg_len(max_uds)
+	// bytes, the owner's (bind). The nil default is a zero value (no _vinit initializer): an
+	// unbound server assembles nothing.
+	buf     &u8 = unsafe { nil }
 	buf_len int
+	// bytes still to come of a message refused as too large (NACK 0x02): discarded as they arrive,
+	// the connection kept (ISO 13400-2's generic header handler)
+	skip u64
+	// the longest UDS message either way: the node's maximum message length (bind)
+	max_uds int
 	// a gateway's routes (REQ-NET-019): the logical addresses of the nodes behind it, set at boot
 	routes   [max_routes]u16
 	n_routes int
@@ -155,6 +163,31 @@ pub mut:
 	// taken (the transport polls for it at its fastest, and gives up on it after its poll budget)
 	ticket     u32
 	route_open bool
+}
+
+// bind gives the server its assembly buffer, msg_len(max_uds) bytes at `buf`, and the longest UDS
+// message it carries either way: the node's maximum message length. Anything buffered is dropped.
+pub fn (mut s Server) bind(buf &u8, max_uds int) {
+	s.buf = buf
+	s.max_uds = if buf == unsafe { nil } || max_uds < 0 { 0 } else { max_uds }
+	s.buf_len = 0
+	s.skip = 0
+}
+
+// msg_cap: the largest DoIP message the server assembles (0 when unbound) — what the transport
+// reads into it at most, and what entity status reports less the header.
+pub fn (s &Server) msg_cap() int {
+	return if s.buf == unsafe { nil } { 0 } else { msg_len(s.max_uds) }
+}
+
+// resp_cap: the response buffer a transport feeds with, so every message is served
+// (max_resp_per_msg never exceeds it).
+pub fn (s &Server) resp_cap() int {
+	return resp_len(s.max_uds)
+}
+
+fn (s &Server) at(i int) u8 {
+	return unsafe { s.buf[i] }
 }
 
 fn put_header(resp &u8, at int, ptype u16, plen u32) int {
@@ -191,8 +224,8 @@ fn nack_if_room(resp &u8, at int, code u8, resp_max int) int {
 
 // routed_message frames an answer of a node behind the gateway (`from`, its logical address) to
 // the activated tester: a diagnostic message, `n` UDS bytes. Returns its length; out holds
-// header_len + 4 + n bytes. An answer that is not responsePending is the request's last: no
-// further one is expected (route_open).
+// header_len + 4 + n bytes, n at most max_uds. An answer that is not responsePending is the
+// request's last: no further one is expected (route_open).
 pub fn (mut s Server) routed_message(from u16, uds_resp &u8, n int, out &u8) int {
 	o := put_header(out, 0, pt_diag, u32(4 + n))
 	unsafe {
@@ -326,37 +359,52 @@ pub fn (s &Server) udp_response(data &u8, data_len int, eid &u8, open int, resp 
 // is written to resp. Returns the number of response bytes (0 = nothing yet).
 // resp_max must hold at least max_resp_per_msg(), or no message is ever served.
 pub fn (mut s Server) feed(data &u8, data_len int, resp &u8, resp_max int) int {
-	// append (a chunk that would overflow the assembly buffer is a too-large
-	// message: drop the stream state and NACK — the glue closes on that).
-	if s.buf_len + data_len > max_msg {
+	// what is still to come of a message refused as too large is discarded first
+	mut from := 0
+	if s.skip > 0 && data_len > 0 {
+		from = if s.skip < u64(data_len) { int(s.skip) } else { data_len }
+		s.skip -= u64(from)
+	}
+	// append (a chunk past what the assembly buffer can still take — more than the transport was
+	// told it may read — desyncs the stream: drop its state and NACK, and the glue closes on that)
+	if s.buf_len + data_len - from > s.msg_cap() {
 		s.buf_len = 0
+		s.skip = 0
 		s.fatal = true
 		return nack_if_room(resp, 0, nack_too_large, resp_max)
 	}
 	unsafe {
-		for i in 0 .. data_len {
-			s.buf[s.buf_len + i] = data[i]
+		for i in from .. data_len {
+			s.buf[s.buf_len + i - from] = data[i]
 		}
 	}
-	s.buf_len += data_len
+	s.buf_len += data_len - from
 
 	mut out := 0
 	for {
 		if s.buf_len < header_len {
 			break
 		}
-		if s.buf[0] != proto_ver || s.buf[1] != proto_inv {
+		if s.at(0) != proto_ver || s.at(1) != proto_inv {
 			s.buf_len = 0
 			s.fatal = true
 			return nack_if_room(resp, out, nack_bad_pattern, resp_max)
 		}
-		plen := (u32(s.buf[4]) << 24) | (u32(s.buf[5]) << 16) | (u32(s.buf[6]) << 8) | u32(s.buf[7])
+		plen := (u32(s.at(4)) << 24) | (u32(s.at(5)) << 16) | (u32(s.at(6)) << 8) | u32(s.at(7))
 		// compare in u32: a high-bit length narrowed to int goes negative and
 		// would bypass the bound, then run the shift loop off the buffer
-		if plen > u32(max_msg - header_len) {
+		if plen > u32(s.msg_cap() - header_len) {
+			// longer than this entity assembles (REQ-CAN-TP-023): ISO 13400-2's generic header
+			// handler answers NACK 0x02 and discards the message — the connection stays open, and
+			// the message's bytes still to come are skipped (all of the buffer is this message's:
+			// it is longer than the buffer)
+			if out + header_len + 1 > resp_max {
+				break // the NACK waits for room: drained with feed(len 0)
+			}
+			out = gen_nack(resp, out, nack_too_large)
+			s.skip = u64(header_len) + u64(plen) - u64(s.buf_len)
 			s.buf_len = 0
-			s.fatal = true
-			return nack_if_room(resp, out, nack_too_large, resp_max)
+			break
 		}
 		total := header_len + int(plen)
 		if s.buf_len < total {
@@ -368,7 +416,7 @@ pub fn (mut s Server) feed(data &u8, data_len int, resp &u8, resp_max int) int {
 		if out + s.max_resp_per_msg() > resp_max {
 			break
 		}
-		ptype := (u16(s.buf[2]) << 8) | u16(s.buf[3])
+		ptype := (u16(s.at(2)) << 8) | u16(s.at(3))
 		out = s.dispatch(ptype, int(plen), resp, out)
 		if s.fatal {
 			// the connection closes after this response: what follows it is never served
@@ -378,7 +426,7 @@ pub fn (mut s Server) feed(data &u8, data_len int, resp &u8, resp_max int) int {
 		// shift any following message to the front
 		unsafe {
 			for i in 0 .. s.buf_len - total {
-				s.buf[i] = s.buf[total + i]
+				s.buf[i] = s.at(total + i)
 			}
 		}
 		s.buf_len -= total
@@ -395,12 +443,29 @@ pub fn (s &Server) max_resp_per_msg() int {
 // where a UDS response starts in the frames answering one diagnostic message
 const diag_resp_at = header_len + 5 + header_len + 4
 
-// the longest UDS response the answering server may write
+// the longest UDS response the answering server may write: a hook's is the bound limit; the
+// embedded server's its own capacity (init, else the legacy one) held to that limit — a server
+// refusing to run (init below its minimum) writes nothing
 fn (s &Server) uds_cap() int {
 	if s.serve.answer != unsafe { nil } {
-		return max_uds
+		return s.max_uds
 	}
-	return if s.uds.resp_cap > 0 { s.uds.resp_cap } else { uds.legacy_resp_cap }
+	if s.uds.resp_cap < 0 {
+		return 0
+	}
+	own := if s.uds.resp_cap > 0 { s.uds.resp_cap } else { uds.legacy_resp_cap }
+	return if own < s.max_uds { own } else { s.max_uds }
+}
+
+// hold_uds_cap gives the embedded server the capacity uds_cap reserves, so what it writes stays
+// within the room feed checked — whether its own init came before bind or after. Below the
+// server's minimum it stays silent rather than overrun.
+fn (mut s Server) hold_uds_cap() {
+	if s.uds.resp_cap < 0 {
+		return
+	}
+	cap := s.uds_cap()
+	s.uds.resp_cap = if cap >= uds.min_resp_cap { cap } else { -1 }
 }
 
 fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
@@ -411,8 +476,8 @@ fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
 			if plen != 7 && plen != 11 {
 				return s.bad_length(resp, at)
 			}
-			sa := (u16(s.buf[header_len]) << 8) | u16(s.buf[header_len + 1])
-			code := s.activation_code(sa, s.buf[header_len + 2])
+			sa := (u16(s.at(header_len)) << 8) | u16(s.at(header_len + 1))
+			code := s.activation_code(sa, s.at(header_len + 2))
 			if code == ra_ok {
 				s.tester_addr = sa
 				s.activated = true
@@ -455,8 +520,8 @@ fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
 			if plen < 5 {
 				return s.bad_length(resp, at)
 			}
-			sa := (u16(s.buf[header_len]) << 8) | u16(s.buf[header_len + 1])
-			ta := (u16(s.buf[header_len + 2]) << 8) | u16(s.buf[header_len + 3])
+			sa := (u16(s.at(header_len)) << 8) | u16(s.at(header_len + 1))
+			ta := (u16(s.at(header_len + 2)) << 8) | u16(s.at(header_len + 3))
 			if !s.activated || sa != s.tester_addr {
 				return s.diag_nack(resp, at, sa, dnack_invalid_source)
 			}
@@ -477,8 +542,10 @@ fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
 			ulen := if s.serve.answer != unsafe { nil } {
 				s.serve.answer(s.serve.ctx, req, plen - 4, functional, out, cap)
 			} else if functional {
+				s.hold_uds_cap()
 				s.uds.handle_functional(req, plen - 4, out)
 			} else {
+				s.hold_uds_cap()
 				s.uds.handle(req, plen - 4, out)
 			}
 			if ulen < 0 || ulen > cap {
@@ -599,7 +666,10 @@ fn (s &Server) info_response(ptype u16, open int, resp &u8, at int) int {
 			return o + 2
 		}
 		pt_status_req {
-			// node type, max concurrent TCP_DATA sockets, currently open ones, max data size
+			// node type, max concurrent TCP_DATA sockets, currently open ones, max data size: the
+			// payload room of the assembly buffer — whether a tester reads the field as the payload
+			// or the whole message, a message sized to it fits
+			max_data_size := s.msg_cap() - header_len
 			o := put_header(resp, at, pt_status_resp, 7)
 			unsafe {
 				resp[o] = if s.n_routes > 0 { node_type_gateway } else { node_type_node }

@@ -15,12 +15,25 @@ module isotp
 // PDU types (N_PCI high nibble of byte 0):
 //   0x0 SF single   0x1 FF first   0x2 CF consecutive   0x3 FC flow-control
 
-// max_payload bounds one reassembled message — fixes the per-Link buffer size.
-// (ISO-TP allows 4095; we cap lower for an embedded, no-alloc footprint.) Sized to hold the
-// largest message the system sends: one trace dump block = an 8-byte self-describing block
-// header + a full 64-record ring (64 x 8) = 520 bytes (see comm/trace.pack_block + the
-// multi-core dump owner). buffer_records is bounded to 64 so a block always fits one payload.
-pub const max_payload = 520
+// A Link holds no message storage of its own: its owner gives it a receive buffer and a transmit
+// buffer (bind_rx / bind_tx) and their capacities, which are the longest message the link takes in
+// and sends. So each connection pays for the maximum it is configured with — a node's diagnostic
+// connection its [isotp] max_message, the shell and the trace their own fixed message — and none
+// pays for another's. An unbound link fails closed: it sends nothing and refuses every first frame.
+
+// min_message is the shortest maximum a node's diagnostic connection may be configured with: a
+// first frame needs at least 8 bytes behind it, and every service the server answers in one frame
+// (0x10, 0x27, 0x3E and their refusals) fits.
+pub const min_message = 8
+
+// default_message is a diagnostic connection's maximum message length when its node does not
+// configure one ([isotp] max_message): what every link had before it became configurable.
+pub const default_message = 520
+
+// message_limit is the longest message a link takes: the longest length a first frame's 12-bit
+// FF_DL states. The escape first frame (FF_DL 0 and a 32-bit length) is not supported and stays
+// refused with FC.OVFLW (REQ-CAN-TP-015), so no capacity above this is ever used.
+pub const message_limit = 4095
 
 // Pdu is one CAN frame's worth of ISO-TP bytes (always 8, padded). No id: the
 // bridge owns the rx/tx addressing.
@@ -74,20 +87,23 @@ pub mut:
 	// directions; the gap was documented in move-data.md and is now closed).
 	// 0 disables. No field default — the _vinit rule again: init_defaults() sets it.
 	n_cr_us u64
-	// reassembly (rx)
+	// reassembly (rx): rx_buf holds rx_cap bytes, the owner's (bind_rx). The nil default is a zero
+	// value, so it is no _vinit initializer: an unbound link has rx_cap 0 and takes nothing.
 	rx        RxPhase
-	rx_buf    [max_payload]u8
+	rx_buf    &u8 = unsafe { nil }
+	rx_cap    int
 	rx_len    int
 	rx_pos    int
 	rx_sn     u8
 	rx_count  u8 // CFs since our last FC
 	fc_send   bool
-	fc_ovflw  bool // an FC.OVFLW is owed: a first frame announced more than max_payload
+	fc_ovflw  bool // an FC.OVFLW is owed: a first frame announced more than rx_cap
 	ready     bool
 	ready_len int
-	// segmentation (tx)
+	// segmentation (tx): tx_buf holds tx_cap bytes, the owner's (bind_tx)
 	tx         TxPhase
-	tx_buf     [max_payload]u8
+	tx_buf     &u8 = unsafe { nil }
+	tx_cap     int
 	tx_len     int
 	tx_pos     int
 	tx_sn      u8
@@ -100,15 +116,48 @@ pub mut:
 	wft_count   u8  // consecutive FC.WAIT frames seen for the current block (vs wft_max)
 }
 
-// send starts transmitting `len` bytes from `src`. Drops the message if a tx is
-// already in flight or it exceeds max_payload.
-pub fn (mut l Link) send(src &u8, len int) bool {
-	if l.tx != .idle || len <= 0 || len > max_payload {
+// bind_rx gives the link its receive buffer: `cap` bytes at `buf`, the longest message it takes
+// in (clamped to message_limit; a nil buffer is capacity 0). A reception in progress, and a message
+// not yet taken, are abandoned — they were in the old buffer. An owner may hand the same buffer to
+// take() as dst: a message is then read where it was reassembled.
+pub fn (mut l Link) bind_rx(buf &u8, cap int) {
+	l.abort_rx()
+	l.rx_buf = buf
+	l.rx_cap = bounded_cap(buf, cap)
+}
+
+// bind_tx gives the link its transmit buffer: `cap` bytes at `buf`, the longest message it sends
+// (clamped to message_limit; a nil buffer is capacity 0). Refused while a transmission is in
+// flight, whose bytes are still read from the old buffer.
+pub fn (mut l Link) bind_tx(buf &u8, cap int) bool {
+	if l.tx != .idle {
 		return false
 	}
-	unsafe {
-		for i in 0 .. len {
-			l.tx_buf[i] = src[i]
+	l.tx_buf = buf
+	l.tx_cap = bounded_cap(buf, cap)
+	return true
+}
+
+fn bounded_cap(buf &u8, cap int) int {
+	if buf == unsafe { nil } || cap <= 0 {
+		return 0
+	}
+	return if cap > message_limit { message_limit } else { cap }
+}
+
+// send starts transmitting `len` bytes from `src`, copied into the transmit buffer, so `src` may be
+// reused at once — unless it IS the transmit buffer, which then holds the message until the link
+// is idle again. Refused if a tx is already in flight or the message exceeds the transmit
+// capacity (REQ-CAN-TP-014).
+pub fn (mut l Link) send(src &u8, len int) bool {
+	if l.tx != .idle || len <= 0 || len > l.tx_cap {
+		return false
+	}
+	if src != l.tx_buf {
+		unsafe {
+			for i in 0 .. len {
+				l.tx_buf[i] = src[i]
+			}
 		}
 	}
 	l.tx_len = len
@@ -161,15 +210,18 @@ pub fn (l &Link) has_request() bool {
 	return l.ready
 }
 
-// take copies a completed message to `dst` and returns its length (0 if none).
+// take copies a completed message to `dst` and returns its length (0 if none). `dst` holds rx_cap
+// bytes, or is the receive buffer itself.
 pub fn (mut l Link) take(dst &u8) int {
 	if !l.ready {
 		return 0
 	}
 	n := l.ready_len
-	unsafe {
-		for i in 0 .. n {
-			dst[i] = l.rx_buf[i]
+	if dst != l.rx_buf {
+		unsafe {
+			for i in 0 .. n {
+				dst[i] = l.rx_buf[i]
+			}
 		}
 	}
 	l.ready = false
@@ -193,15 +245,34 @@ pub fn (l &Link) truncated(pci u8, n int) bool {
 	}
 }
 
+// on_flow_control feeds a link that only transmits — the shell's response stream, the trace's
+// dump — one frame received on its flow-control id (`n` bytes at `data`): only a flow control
+// (PCI type 3, whole enough to read FS, BS and STmin) reaches it. Anything else there, a first
+// frame above all, is dropped rather than start a reception whose flow control would go out
+// inside the stream (REQ-CAN-TP-024). True when the frame was taken in.
+pub fn (mut l Link) on_flow_control(now u64, data &u8, n int) bool {
+	if n < 1 || unsafe { data[0] } >> 4 != 3 || l.truncated(unsafe { data[0] }, n) {
+		return false
+	}
+	mut p := Pdu{}
+	for i in 0 .. (if n > 8 { 8 } else { n }) {
+		p.data[i] = unsafe { data[i] }
+	}
+	l.on_frame(now, p)
+	return true
+}
+
 pub fn (mut l Link) on_frame(now u64, p Pdu) {
 	pci := p.data[0] & 0xF0
 	low := p.data[0] & 0x0F
 	match pci {
 		0x00 { // single frame
 			n := int(low)
-			if n > 0 && n <= 7 {
+			if n > 0 && n <= 7 && n <= l.rx_cap {
 				for i in 0 .. n {
-					l.rx_buf[i] = p.data[1 + i]
+					unsafe {
+						l.rx_buf[i] = p.data[1 + i]
+					}
 				}
 				l.ready = true
 				l.ready_len = n
@@ -214,13 +285,15 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 		0x10 { // first frame
 			// 0 is the escape first frame: a 32-bit length follows, always above 4095
 			total := int((u32(low) << 8) | u32(p.data[1]))
-			if total > 7 && total <= max_payload {
+			if total > 7 && total <= l.rx_cap {
 				l.fc_ovflw = false // a refusal owed for an earlier first frame is moot now
 				// a first frame that replaces a reception in progress restarts it, and moves
 				// nothing: a sender repeating its first frame is not a transfer advancing
 				fresh := l.rx != .receiving
 				for i in 0 .. 6 {
-					l.rx_buf[i] = p.data[2 + i]
+					unsafe {
+						l.rx_buf[i] = p.data[2 + i]
+					}
 				}
 				l.rx_len = total
 				l.rx_pos = 6
@@ -235,8 +308,8 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 				if fresh {
 					l.progress++
 				}
-			} else if total == 0 || total > max_payload {
-				// more than we can hold: refuse it at once with FC.OVFLW, so the sender fails now
+			} else if total == 0 || total > l.rx_cap {
+				// more than we can hold (the escape first frame always is, above message_limit): refuse it at once with FC.OVFLW, so the sender fails now
 				// rather than waiting out its N_Bs (REQ-CAN-TP-015); like any first frame it ends a
 				// reception in progress (REQ-CAN-TP-012)
 				l.rx = .idle
@@ -256,7 +329,9 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 					n = 7
 				}
 				for i in 0 .. n {
-					l.rx_buf[l.rx_pos + i] = p.data[1 + i]
+					unsafe {
+						l.rx_buf[l.rx_pos + i] = p.data[1 + i]
+					}
 				}
 				l.rx_pos += n
 				l.rx_sn = (l.rx_sn + 1) & 0x0F
@@ -375,7 +450,7 @@ pub fn (mut l Link) poll(now u64, mut out Pdu) bool {
 			zero(mut out)
 			out.data[0] = 0x00 | u8(l.tx_len)
 			for i in 0 .. l.tx_len {
-				out.data[1 + i] = l.tx_buf[i]
+				out.data[1 + i] = unsafe { l.tx_buf[i] }
 			}
 			l.tx = .idle
 			return true
@@ -385,7 +460,7 @@ pub fn (mut l Link) poll(now u64, mut out Pdu) bool {
 			out.data[0] = 0x10 | u8((u32(l.tx_len) >> 8) & 0x0F)
 			out.data[1] = u8(l.tx_len & 0xFF)
 			for i in 0 .. 6 {
-				out.data[2 + i] = l.tx_buf[i]
+				out.data[2 + i] = unsafe { l.tx_buf[i] }
 			}
 			l.tx_pos = 6
 			l.tx_sn = 1
@@ -412,7 +487,7 @@ pub fn (mut l Link) poll(now u64, mut out Pdu) bool {
 				n = 7
 			}
 			for i in 0 .. n {
-				out.data[1 + i] = l.tx_buf[l.tx_pos + i]
+				out.data[1 + i] = unsafe { l.tx_buf[l.tx_pos + i] }
 			}
 			l.tx_pos += n
 			l.tx_sn = (l.tx_sn + 1) & 0x0F

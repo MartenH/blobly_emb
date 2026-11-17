@@ -21,10 +21,11 @@ import comm.doip
 // served, and each response the framing writes is sent before the next is made (feed stops when
 // its response buffer fills, and is drained with zero-length feeds). A connection the framing
 // condemns (a desynced stream's NACK, a refused activation) is dropped once that response is out.
-// inb holds doip.max_msg bytes, out doip.max_resp.
+// inb holds s.msg_cap() bytes, out s.resp_cap() (doip.msg_len / resp_len of the node's maximum
+// message length).
 pub fn pass[S](mut st S, mut s doip.Server, inb &u8, out &u8) {
 	// only what the assembly buffer can still take
-	n := st.recv(inb, doip.max_msg - s.buf_len)
+	n := st.recv(inb, s.msg_cap() - s.buf_len)
 	if n < 0 {
 		end(mut st, mut s)
 		return
@@ -35,7 +36,7 @@ pub fn pass[S](mut st S, mut s doip.Server, inb &u8, out &u8) {
 	// serve what the bytes complete, a response buffer at a time
 	mut fed := n
 	for {
-		rlen := s.feed(inb, fed, out, doip.max_resp)
+		rlen := s.feed(inb, fed, out, s.resp_cap())
 		if rlen <= 0 {
 			break
 		}
@@ -71,9 +72,9 @@ pub fn push[S](mut st S, mut s doip.Server, resp &u8, n int, out &u8) bool {
 // only to the latest routed request, only while an answer to it is still taken (route_open: not
 // past the transport's poll budget, which runs once the router has let the exchange go), and only while its tester
 // is still connected — an answer that came after the tester gave up, or after its connection
-// ended, is no one's.
+// ended, is no one's. An answer longer than the entity's UDS limit (its max_uds) is not framed.
 pub fn routed[S](mut st S, mut s doip.Server, from u16, ticket u32, ans &u8, n int, out &u8) bool {
-	if !s.activated || !s.route_open || ticket != s.ticket || n <= 0 {
+	if !s.activated || !s.route_open || ticket != s.ticket || n <= 0 || n > s.max_uds {
 		return false
 	}
 	if st.send(out, s.routed_message(from, ans, n, out)) < 0 {
@@ -90,6 +91,7 @@ pub fn verdict_code(v diagroute.Verdict) int {
 		.unknown_target { int(doip.dnack_unknown_target) }
 		.locked { int(doip.dnack_unreachable) }
 		.busy { int(doip.dnack_out_of_memory) }
+		.too_large { int(doip.dnack_too_large) }
 		.refused { int(doip.dnack_transport_error) }
 	}
 }
@@ -101,6 +103,7 @@ pub fn end[S](mut st S, mut s doip.Server) {
 	s.activated = false
 	s.fatal = false
 	s.buf_len = 0
+	s.skip = 0
 	s.conn++
 	s.ticket++ // an answer still due belongs to the tester that went: no ticket of it matches now
 	s.route_open = false

@@ -434,6 +434,18 @@ fn check_route_ids(s System) []Issue {
 					msg:      '${where} sends on 0x${r.tx_id.hex()} and listens on 0x${r.rx_id.hex()} on bus "${bus.name}", but no [isotp] of "${t.name}" there listens and answers on those ids — every routed request would go unanswered'
 				}
 			}
+			// the gateway forwards a request up to the route's max_message: the node's own, or a
+			// longer request is refused by the node with FC.OVFLW and the tester left unanswered
+			// (REQ-CAN-TP-023)
+			for c in t.view.isotp_conns {
+				if c.rx_id == r.tx_id && c.tx_id == r.rx_id && c.max_len() != r.max_len() {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-CAN-TP-023'
+						msg:      '${where}: its max_message is ${r.max_len()}, but "${t.name}"\'s [isotp] max_message is ${c.max_len()} — the gateway refuses a routed request by the route\'s maximum, so it must be the node\'s'
+					}
+				}
+			}
 			routes << RouteTx{gw.name, t.name, bus.name, r.tx_id}
 		}
 	}
