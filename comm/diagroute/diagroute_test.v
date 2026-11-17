@@ -69,20 +69,25 @@ fn router_at(m int) Router {
 	return r
 }
 
+// frame: a PDU as the frame it goes out as on `id`, at its length (a hand-built one's 0 as 8)
 fn frame(id u32, p isotp.Pdu) can.Frame {
+	n := if p.len == 0 { 8 } else { p.len }
 	mut f := can.Frame{
 		id:  id
-		len: 8
+		len: u8(n)
 	}
-	for i in 0 .. 8 {
+	for i in 0 .. n {
 		f.data[i] = p.data[i]
 	}
 	return f
 }
 
+// pdu: a frame as a link reads it, at its length
 fn pdu(f can.Frame) isotp.Pdu {
-	mut p := isotp.Pdu{}
-	for i in 0 .. 8 {
+	mut p := isotp.Pdu{
+		len: int(f.len)
+	}
+	for i in 0 .. int(f.len) {
 		p.data[i] = f.data[i]
 	}
 	return p
@@ -533,8 +538,12 @@ fn test_a_slow_transfer_that_keeps_moving_is_not_cut_off() {
 	assert r.live_ticket() == 0 // answered: the exchange is over
 }
 
+// our flow control for an answer that never leaves ends the exchange at the stall bound even with
+// ISO-TP's N_Ar off (n_ar_us 0): the bound is the backstop of a link that does not give up itself —
+// N_Ar's own ending is test_an_answer_whose_flow_control_cannot_leave_ends_at_n_ar
 fn test_flow_control_that_cannot_leave_ends_the_exchange() {
 	mut r := new_router()
+	r.link.n_ar_us = 0
 	mut n := new_node()
 	mut ch := Chan{}
 	mut now := u64(0)
@@ -548,7 +557,8 @@ fn test_flow_control_that_cannot_leave_ends_the_exchange() {
 	answer(mut n, long)
 	ch.stalled = true // the gateway's controller takes nothing: our flow control never leaves
 	run(mut r, mut n, mut ch, mut &now, 3)
-	assert r.busy()
+	r.step(now + 4_000_000) // past N_Ar, short of the stall bound: nothing ended it yet
+	assert r.busy() && r.timeouts == 0
 	now += stall_us
 	r.step(now)
 	assert !r.busy()
@@ -576,6 +586,18 @@ fn test_a_send_iso_tp_gave_up_on_ends_the_exchange() {
 	f.data[1] = 0x76
 	assert !r.on_frame(edge, &f, 2_000_100)
 	assert r.waiting() == 0
+	// the abandoned send is not held against the next exchange, which is routed and answered
+	ch.tx.clear()
+	mut n := new_node()
+	mut now := u64(2_000_100)
+	req := [u8(0x22), 0xF1, 0x90]
+	assert r.accept(0, &req[0], req.len, 1, 2, 1, now) == .accepted
+	run(mut r, mut n, mut ch, mut &now, 2)
+	assert n.requests == [req]
+	answer(mut n, [u8(0x62), 0xF1, 0x90, 0x41])
+	run(mut r, mut n, mut ch, mut &now, 2)
+	assert r.failed == 1
+	assert take(mut r) == [u8(0x62), 0xF1, 0x90, 0x41]
 }
 
 fn test_an_invalid_request_leaves_the_exchange_in_flight_alone() {
@@ -664,7 +686,7 @@ fn test_a_full_queue_holds_the_bus_only_briefly() {
 fn test_flow_control_alone_does_not_count_as_progress() {
 	mut r := new_router()
 	mut ch := Chan{
-		stalled: true // the request's first frame cannot leave
+		stalled: true // the request's single frame cannot leave
 	}
 	req := [u8(0x22), 0xF1, 0x90]
 	assert r.accept(0, &req[0], req.len, 1, 1, 1, 0) == .accepted
@@ -762,8 +784,11 @@ fn test_a_real_servers_answers_are_told_apart_by_the_correlation() {
 	assert !judged([u8(0x62), 0xB0, 0x00, 0x00], many[..7])
 }
 
+// N_Ar off (n_ar_us 0), so the stall bound is what ends the exchange and the frames it ignores are
+// what must not hold it off
 fn test_a_frame_iso_tp_ignores_is_no_progress() {
 	mut r := new_router()
+	r.link.n_ar_us = 0
 	mut n := new_node()
 	mut ch := Chan{}
 	mut now := u64(0)
@@ -786,6 +811,7 @@ fn test_a_frame_iso_tp_ignores_is_no_progress() {
 		r.on_frame(edge, &f, t)
 		r.step(t)
 	}
+	assert r.busy() // past N_Ar: only the stall bound ends it
 	r.step(now + stall_us)
 	assert !r.busy() && r.timeouts == 1
 }
@@ -804,7 +830,9 @@ fn test_a_transfer_that_has_run_out_does_not_hold_the_next_request_off() {
 	assert r.accept(0, &req[0], req.len, 1, 2, 1, 1_001_000) == .accepted
 }
 
-// the stall bound holds whatever frames keep arriving that move nothing — the class, not one shape
+// the stall bound holds whatever frames keep arriving that move nothing — the class, not one shape.
+// N_Ar is off (n_ar_us 0) throughout: with it, ISO-TP would end each of these at 1 s, whatever the
+// frames did to the stall bound
 fn test_no_frame_that_moves_nothing_keeps_a_stalled_exchange_alive() {
 	junk := [
 		[u8(0x40)], // reserved PCI
@@ -816,6 +844,7 @@ fn test_no_frame_that_moves_nothing_keeps_a_stalled_exchange_alive() {
 	]
 	for j in junk {
 		mut r := new_router()
+		r.link.n_ar_us = 0
 		mut n := new_node()
 		mut ch := Chan{}
 		mut now := u64(0)
@@ -841,12 +870,16 @@ fn test_no_frame_that_moves_nothing_keeps_a_stalled_exchange_alive() {
 			r.on_frame(edge, &f, t)
 			r.step(t)
 		}
+		if j[0] != 0x2F { // an out-of-sequence consecutive frame ends the reception itself (REQ-CAN-TP-011)
+			assert r.busy(), 'ended before the stall bound with ${j}'
+		}
 		r.step(start + stall_us)
 		assert !r.busy(), 'kept alive by ${j}'
 	}
 	// a target that restarts its answer, first frame and the next, while our flow control cannot
 	// leave, advances nothing either
 	mut r := new_router()
+	r.link.n_ar_us = 0
 	mut n := new_node()
 	mut ch := Chan{}
 	mut now := u64(0)
@@ -872,6 +905,7 @@ fn test_no_frame_that_moves_nothing_keeps_a_stalled_exchange_alive() {
 		r.on_frame(edge, &cf, t + 50_000)
 		r.step(t + 50_000)
 	}
+	assert r.busy() // past N_Ar: only the stall bound ends it
 	r.step(start + 100_000 + stall_us) // the stall bound from the first first frame, the one that moved
 	assert !r.busy()
 }
@@ -1284,7 +1318,7 @@ fn test_the_routers_link_takes_no_answer_past_the_gateways_maximum() {
 
 // @verifies REQ-CAN-TP-025
 // a first frame shorter than its PCI says is nothing to the router, as it is to the link
-// (isotp.Link.truncated): five bytes announcing an answer past a gateway of 8 neither answer the
+// (isotp on_frame): five bytes announcing an answer past a gateway of 8 neither answer the
 // request in flight responseTooLong nor end its exchange — its own answer still comes
 fn test_a_truncated_oversize_first_frame_is_not_answered_response_too_long() {
 	mut r := router_at(8)
@@ -1339,4 +1373,153 @@ fn test_a_too_long_answer_late_in_the_answer_wait_still_refuses_the_target() {
 	assert n.link.tx_aborts == 1, 'the node was refused by FC.OVFLW'
 	assert take(mut r) == [u8(0x7F), 0x22, 0x14]
 	assert r.timeouts == 0 && r.too_long == 1 && !r.busy()
+}
+
+// ---- CAN-FD frames on a route, and N_Ar ---------------------------------------------------------
+
+// @verifies REQ-CAN-TP-026 REQ-CAN-TP-027
+// a route sends at its node's TX_DL: at 64 a 100-byte request is a first frame of 64 bytes and a
+// consecutive frame of the last 38, padded to 48; a route at 0 sends 8-byte frames, also right after
+// one at 64 (the link takes the value per request); the flow control it answers an answer with is 8
+fn test_a_route_sends_at_its_nodes_tx_dl() {
+	mut r := new_router()
+	r.routes[0].tx_dl = 64
+	assert r.add(Route{
+		logical: 0x07D0
+		bus:     edge
+		tx_id:   0x7D0
+		rx_id:   0x7D8
+	})
+	mut n := new_node()
+	mut ch := Chan{}
+	mut req := []u8{len: 100, init: u8(index)}
+	req[0] = 0x2E
+	assert r.accept(0, unsafe { &req[0] }, req.len, 1, 1, 1, 0) == .accepted
+	r.pump(0, mut ch)
+	assert ch.tx.len == 1 && ch.tx[0].len == 64
+	assert ch.tx[0].data[..2] == [u8(0x10), 100] && ch.tx[0].data[2..64] == req[..62]
+	n.link.on_frame(0, pdu(ch.tx[0]))
+	ch.tx.clear()
+	mut fc := isotp.Pdu{}
+	assert n.link.poll(0, mut fc) && fc.len == 8
+	f := frame(rsp_id, fc)
+	r.on_frame(edge, &f, 0)
+	r.pump(1000, mut ch)
+	assert ch.tx.len == 1 && ch.tx[0].len == 48
+	assert ch.tx[0].data[0] == 0x21 && ch.tx[0].data[1..39] == req[62..]
+	for i in 39 .. 48 {
+		assert ch.tx[0].data[i] == 0
+	}
+	n.link.on_frame(1000, pdu(ch.tx[0]))
+	ch.tx.clear()
+	assert n.link.has_request()
+	// the next request, to the route at 0: 8-byte frames again
+	long := []u8{len: 20, init: 0x2E}
+	assert r.accept(1, &long[0], long.len, 1, 2, 1, 2000) == .accepted
+	r.pump(2000, mut ch)
+	assert ch.tx.len == 1 && ch.tx[0].len == 8 && ch.tx[0].id == 0x7D0
+}
+
+// @verifies REQ-CAN-TP-028
+// the router takes its node's answer in 64-byte frames with no setting of its own, and a first frame
+// it refuses is matched to the request by bytes past the eighth
+fn test_the_router_takes_an_answer_in_64_byte_frames() {
+	mut r := new_router()
+	mut n := new_node()
+	n.link.tx_dl = 64
+	mut ch := Chan{}
+	mut now := u64(0)
+	req := [u8(0x22), 0xF1, 0x90]
+	assert r.accept(0, &req[0], req.len, 1, 1, 1, now) == .accepted
+	run(mut r, mut n, mut ch, mut &now, 2)
+	mut ans := []u8{len: 300, init: u8(index)}
+	ans[0] = 0x62
+	ans[1] = 0xF1
+	ans[2] = 0x90
+	answer(mut n, ans)
+	run(mut r, mut n, mut ch, mut &now, 6)
+	assert take(mut r) == ans
+	// an escape first frame of 64 bytes (refused) answers the request by what it carries
+	mut ff := can.Frame{
+		id:  rsp_id
+		len: 64
+	}
+	for i, b in [u8(0x10), 0x00, 0x00, 0x00, 0x10, 0x00, 0x62, 0xF1, 0x90] {
+		ff.data[i] = b
+	}
+	many := [u8(0x22), 0xF1, 0x80, 0xF1, 0x90] // the answer's DID is the request's second
+	assert first_frame_answers(&ff, &many[0], many.len, many.len)
+	ff.data[8] = 0x91
+	assert !first_frame_answers(&ff, &many[0], many.len, many.len)
+}
+
+// @verifies REQ-CAN-TP-025 REQ-CAN-TP-028
+// a 64-byte first frame announcing more than the gateway carries is refused and answered
+// responseTooLong as an 8-byte one is; a 10-byte one — no CAN-FD length, a frame the link ignores —
+// is nothing: no responseTooLong, no FC.OVFLW owed, the exchange still waiting for its answer
+fn test_an_oversize_fd_first_frame_and_a_frame_of_no_fd_length() {
+	mut r := new_router()
+	mut n := new_node()
+	mut ch := Chan{}
+	mut now := u64(0)
+	req := [u8(0x22), 0xF1, 0x90]
+	assert r.accept(0, &req[0], req.len, 1, 1, 1, now) == .accepted
+	run(mut r, mut n, mut ch, mut &now, 2)
+	mut odd := can.Frame{
+		id:  rsp_id
+		len: 10
+	}
+	for i, b in [u8(0x13), 0x00, 0x62, 0xF1, 0x90, 0, 0, 0, 0, 0] {
+		odd.data[i] = b
+	}
+	assert !oversize_first_frame(&r.link, &odd)
+	assert r.on_frame(edge, &odd, now)
+	assert r.waiting() == 0 && r.too_long == 0 && r.link.idle()
+	assert r.active_bus() == int(edge), 'the exchange in flight goes on'
+	mut ff := odd
+	ff.len = 64
+	assert oversize_first_frame(&r.link, &ff)
+	assert r.on_frame(edge, &ff, now)
+	assert take(mut r) == [u8(0x7F), 0x22, 0x14]
+	assert r.too_long == 1
+	r.pump(now, mut ch)
+	assert ch.tx.len == 1 && ch.tx[0].len == 8 && ch.tx[0].data[0] == 0x32
+}
+
+// @verifies REQ-CAN-TP-029
+// our flow control for an answer that cannot leave (the gateway's controller takes nothing) is
+// given up by ISO-TP after N_Ar, and the exchange ends then, counted — not at the stall bound; the
+// abandoned answer is not held against the next exchange, which is routed and answered
+fn test_an_answer_whose_flow_control_cannot_leave_ends_at_n_ar() {
+	mut r := new_router()
+	mut n := new_node()
+	mut ch := Chan{}
+	mut now := u64(0)
+	req := [u8(0x22), 0xF1, 0x00]
+	assert r.accept(0, &req[0], req.len, 1, 1, 1, now) == .accepted
+	run(mut r, mut n, mut ch, mut &now, 2)
+	mut long := [u8(0x62), 0xF1, 0x00]
+	for i in 0 .. 40 {
+		long << u8(i)
+	}
+	answer(mut n, long)
+	ch.stalled = true
+	run(mut r, mut n, mut ch, mut &now, 1) // the answer's first frame: our CTS is owed from here
+	owed := now
+	r.step(owed + 999_999)
+	assert r.busy() && r.timeouts == 0
+	r.step(owed + 1_000_000)
+	assert !r.busy() && r.timeouts == 1 && r.active_bus() == -1
+	// the bus drains again; the node, its own send given up (N_Bs), takes the next request
+	ch.stalled = false
+	n = new_node()
+	now = owed + 1_000_000
+	assert r.accept(0, &req[0], req.len, 1, 1, 1, now) == .accepted
+	run(mut r, mut n, mut ch, mut &now, 2)
+	assert n.requests == [req]
+	answer(mut n, long)
+	run(mut r, mut n, mut ch, mut &now, 8)
+	assert r.timeouts == 1
+	assert take(mut r) == long
+	assert !r.busy()
 }

@@ -1,6 +1,6 @@
 -- @project diag_bench.blobnet
 -- UDS on the target beyond the domain node (docs/diagnostics.md): the gateway (sysnode, H735) on
--- the compute bus, and zone_a (H723) on the EDGE bus — CAN-FD, carrying classic-sized ISO-TP — each
+-- the compute bus, and zone_a (H723) on the EDGE bus — CAN-FD, carrying ISO-TP at TX_DL 64 — each
 -- serving ISO 14229 from its ThreadX comm thread while it keeps routing and transmitting. The same
 -- checks run on both; diag_domain.lua is the full set, this proves the server and the board seam
 -- (TRNG seed, reset, the 0x27 state kept in the NvM journal) on two more chips. Bench only (the

@@ -116,6 +116,9 @@ pub fn allowed(k Key) string {
 	if k.choices.len > 0 {
 		return k.choices.map('`"${it}"`').join(', ')
 	}
+	if k.int_choices.len > 0 {
+		return k.int_choices.map(num(k, it)).join(', ')
+	}
 	if k.ipv4 {
 		return 'dotted IPv4'
 	}
@@ -280,6 +283,9 @@ const ip4_octet = '([01]?[0-9]?[0-9]|2[0-4][0-9]|25[0-5])'
 const ip4_pattern = '^${ip4_octet}(\\.${ip4_octet}){3}\$'
 
 fn bounds(k Key) string {
+	if k.int_choices.len > 0 {
+		return '"enum": [${k.int_choices.map(it.str()).join(', ')}]'
+	}
 	if !k.ranged {
 		return ''
 	}

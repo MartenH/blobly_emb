@@ -110,6 +110,7 @@ fn boot_gen_h(m Model, can_idx string, fd bool) []string {
 		'#define BOOT_TX_ID 0x${c.tx_id.hex()}u',
 		'#define BOOT_BS ${c.bs}u',
 		'#define BOOT_STMIN ${c.stmin}u',
+		'#define BOOT_TX_DL ${c.tx_dl}u /* [isotp] tx_dl: the frame length it answers with (above 8 only with BOOT_CAN_FD) */',
 		// the node's maximum message length and the one block every message buffer is carved from
 		// (boot.bufs: the image lays it out by the same function) — REQ-BOOT-020
 		'#define BOOT_MAX_MESSAGE ${c.max_message}u /* [isotp] max_message: the TransferData block follows it */',
@@ -530,6 +531,10 @@ fn conn_init_lines(m Model, c IsotpConn, conn string) []string {
 	// the request and response buffers are the owner's, max_message bytes each: `<conn>_req` /
 	// `<conn>_resp` beside the connection (diag_target_globals, the host bridge state)
 	g << '\t${conn}.init(u32(0x${c.rx_id.hex()}), u32(0x${c.tx_id.hex()}), u32(0x${c.functional_id.hex()}), ${c.bs}, ${c.stmin}, &${conn}_req[0], &${conn}_resp[0], ${c.max_message})'
+	if c.tx_dl != 8 {
+		// its channel is opened CAN-FD: read_tx_dl refused the rest (REQ-CAN-TP-026)
+		g << '\t${conn}.link.tx_dl = ${c.tx_dl} // [isotp] tx_dl: CAN-FD frames of up to ${c.tx_dl} bytes'
+	}
 	g << '\t${srv}.no_programming = true // programming is the bootloader\'s'
 	if m.boot.on {
 		// [boot]: 0x10 02 is answered and handed to the owner (reset_into_boot) — behind its own

@@ -45,23 +45,17 @@ fn new_tester() isotp.Link {
 	return t
 }
 
+// frame_of: a PDU on the wire on `id`, at its length (pdu_of, step.v, is the way back)
 fn frame_of(id u32, p isotp.Pdu) &can.Frame {
+	n := if p.len == 0 { 8 } else { p.len }
 	mut f := &can.Frame{
 		id:  id
-		len: 8
+		len: u8(n)
 	}
-	for i in 0 .. 8 {
+	for i in 0 .. n {
 		f.data[i] = p.data[i]
 	}
 	return f
-}
-
-fn pdu_of(f can.Frame) isotp.Pdu {
-	mut p := isotp.Pdu{}
-	for i in 0 .. 8 {
-		p.data[i] = f.data[i]
-	}
-	return p
 }
 
 // single frame on `id`, as a tester puts one on the wire
@@ -90,7 +84,7 @@ fn pass(mut c Connection, now u64, mut t isotp.Link) {
 	mut f := can.Frame{}
 	for c.produce(now, mut f) {
 		assert f.id == tx
-		t.on_frame(now, pdu_of(f))
+		t.on_frame(now, pdu_of(&f))
 	}
 }
 
@@ -145,9 +139,18 @@ fn test_a_live_did_is_refreshed_before_every_dispatch() {
 	assert out.data[..5] == [u8(0x04), 0x62, 0xF1, 0xA0, 0x42]
 }
 
+// @verifies REQ-CAN-TP-019
+// a functional single frame is served at once and dropped while the connection is busy; a frame of
+// another PCI type on the functional id — its low nibble reading as a length — is no request
 fn test_a_functional_request_is_served_on_arrival_and_dropped_while_busy() {
 	mut c := new_conn()
 	mut out := can.Frame{}
+	for pci in [u8(0x10), 0x20, 0x30] {
+		mut other := sf(fid, [u8(0x3E), 0x00]) // 02 3E 00 as 12 3E 00, 22 3E 00, 32 3E 00
+		other.data[0] |= pci
+		assert c.on_frame(0, other) == .taken, 'PCI ${pci:02X}'
+		assert c.link.idle() && !c.produce(0, mut out), 'PCI ${pci:02X}'
+	}
 	assert c.on_frame(0, sf(fid, [u8(0x3E), 0x00])) == .served
 	assert c.produce(0, mut out)
 	assert out.id == tx && out.data[..3] == [u8(0x02), 0x7E, 0x00]
@@ -178,7 +181,7 @@ fn test_a_request_completing_while_an_answer_is_in_flight_is_dropped() {
 	// a second request completes meanwhile: taken out of the link and discarded
 	assert c.on_frame(0, sf(rx, [u8(0x22), 0xF1, 0xA0])) == .request
 	c.serve()
-	t.on_frame(0, pdu_of(ff))
+	t.on_frame(0, pdu_of(&ff))
 	mut now := u64(0)
 	for _ in 0 .. 10 {
 		now += 1000
@@ -1108,4 +1111,107 @@ fn test_a_request_over_the_maximum_is_refused_with_overflow() {
 		pass(mut c, now, mut t)
 	}
 	assert t.has_request() // answered (refused by the server, but carried whole)
+}
+
+// fd_sf: a single frame behind the CAN-FD escape on `id`, padded to `len` bytes
+fn fd_sf(id u32, req []u8, len int) &can.Frame {
+	mut f := &can.Frame{
+		id:  id
+		len: u8(len)
+	}
+	f.data[1] = u8(req.len)
+	for i, b in req {
+		f.data[2 + i] = b
+	}
+	return f
+}
+
+// @verifies REQ-CAN-TP-027 REQ-CAN-TP-028
+// a connection at TX_DL 64 answers in CAN-FD frames — a 20-byte answer behind the escape in 24
+// bytes, its flow control 8 — and takes a tester's 64-byte frames whole: a 200-byte request
+// reassembles and is answered
+fn test_a_connection_at_tx_dl_64_exchanges_fd_frames() {
+	mut c := new_conn()
+	c.link.tx_dl = 64
+	c.server.dids[1].len = 17 // 62 F1 A0 + 17 bytes: a 20-byte answer
+	assert c.on_frame(0, sf(rx, [u8(0x22), 0xF1, 0xA0])) == .request
+	c.serve()
+	mut f := can.Frame{}
+	assert c.produce(0, mut f)
+	assert f.len == 24 && f.data[..5] == [u8(0x00), 20, 0x62, 0xF1, 0xA0]
+	assert !c.produce(0, mut f)
+	mut t := new_tester()
+	t.tx_dl = 64
+	mut now := u64(0)
+	mut req := []u8{len: 200, init: u8(index)}
+	req[0] = 0x3E // a TesterPresent 200 bytes long: answered incorrectMessageLength once whole
+	req[1] = 0x00
+	assert exchange(mut c, mut t, mut &now, req) == [u8(0x7F), 0x3E, 0x13]
+	// the flow control it answers a 64-byte first frame with is 8 bytes
+	mut ff := &can.Frame{
+		id:  rx
+		len: 64
+	}
+	ff.data[0] = 0x10
+	ff.data[1] = 100
+	assert c.on_frame(now, ff) == .taken
+	assert c.produce(now, mut f) && f.len == 8 && f.data[..3] == [u8(0x30), 0, 0]
+}
+
+// @verifies REQ-CAN-TP-019 REQ-CAN-TP-028
+// a functional request behind the CAN-FD escape is served as on the physical id; a classic single
+// frame in a 12-byte frame — one whose second byte is a valid escape length too (8), so only the
+// escape byte refuses it, as on the physical id —, frames of 10 and 13 bytes (no CAN-FD length),
+// and one longer than the connection's maximum are not requests and leave the link untouched
+fn test_a_functional_request_in_a_can_fd_frame() {
+	mut c := new_conn()
+	mut out := can.Frame{}
+	assert c.on_frame(0, fd_sf(fid, [u8(0x3E), 0x00, 0, 0, 0, 0, 0, 0, 0, 0], 12)) == .served // 0x3E of 10 bytes
+	assert c.produce(0, mut out) && out.data[..4] == [u8(0x03), 0x7F, 0x3E, 0x13]
+	mut classic := sf(fid, [u8(0x3E), 0x00])
+	classic.len = 12
+	mut classic_esc := sf(fid, [u8(0x08), 0x3E]) // 02 08 3E 00 ..: read through the escape, 8 bytes
+	classic_esc.len = 12
+	for bad in [classic, classic_esc, fd_sf(fid, [u8(0x3E), 0x00], 10),
+		fd_sf(fid, [u8(0x3E), 0x00], 13)] {
+		assert c.on_frame(0, bad) == .taken, '${bad.len} bytes'
+		assert c.link.idle() && !c.produce(0, mut out), '${bad.len} bytes'
+	}
+	assert c.on_frame(0, fd_sf(fid, [u8(0x3E), 0x00], 12)) == .served
+	assert c.produce(0, mut out) && out.data[..3] == [u8(0x02), 0x7E, 0x00]
+	// on a connection whose maximum is 16, an escape single frame of 17 bytes is no request on either
+	// id — a single frame has no flow control to refuse it with — and one of 16 is
+	mut s := conn_at(16)
+	long := []u8{len: 17, init: if index == 0 { u8(0x3E) } else { u8(0) }}
+	assert s.on_frame(0, fd_sf(fid, long, 20)) == .taken
+	assert s.on_frame(0, fd_sf(rx, long, 20)) == .taken
+	assert s.link.idle() && !s.produce(0, mut out)
+	assert s.on_frame(0, fd_sf(fid, long[..16], 20)) == .served
+	assert s.produce(0, mut out) && out.data[..4] == [u8(0x03), 0x7F, 0x3E, 0x13]
+}
+
+// @verifies REQ-CAN-TP-029
+// a flow control the controller never takes (produce is never called: the transmit FIFO stays
+// full) holds the connection — S3 held, functional requests dropped — only until N_Ar abandons the
+// reception, 1 s after its first frame: then S3 runs from the last pass that held it, and a
+// functional TesterPresent is served
+fn test_n_ar_releases_a_connection_whose_flow_control_cannot_leave() {
+	mut c := new_conn()
+	c.server.s3_us = 5000
+	mut t := new_tester()
+	mut now := u64(0)
+	exchange(mut c, mut t, mut &now, [u8(0x10), 0x03])
+	mut ff := sf(rx, [u8(0x2E), 0xF1, 0xA0, 1, 2, 3])
+	ff.data[0] = 0x10 // a first frame of a 20-byte request: its CTS is owed
+	ff.data[1] = 20
+	start := now
+	assert c.on_frame(start, ff) == .taken
+	c.housekeep(start + 999_999)
+	assert c.server.session == uds.session_extended && !c.link.idle()
+	assert c.on_frame(start + 999_999, sf(fid, [u8(0x3E), 0x00])) == .taken // dropped: not quiet
+	c.housekeep(start + 1_000_000)
+	assert c.link.idle() && c.link.rx_aborts == 1
+	c.housekeep(start + 999_999 + 5001)
+	assert c.server.session == uds.session_default
+	assert c.on_frame(start + 1_005_000, sf(fid, [u8(0x3E), 0x00])) == .served
 }

@@ -18,6 +18,7 @@ fn ecu_diag_tables() []Table {
 			k('stmin_ms', .int).d('0').range(0, 127).doc('the STmin (ms) we ask a sender to keep between consecutive frames; ISO 15765-2 encodes milliseconds only up to 127'),
 			k('functional_id', .int).range(0, 0x7FF).hex().doc('the functional (broadcast) request id, e.g. 0x7DF, single frames only; absent = none'),
 			k('max_message', .int).d('${isotp.default_message}').range(isotp.min_message, isotp.message_limit).doc('the longest diagnostic message either way, in bytes (the escape first frame above 4095 is not supported). It sizes the server\'s buffers and response capacity, the DoIP entity\'s message limit, a gateway\'s routed messages and the bootloader\'s TransferData block; generation refuses one smaller than the largest message the configuration determines'),
+			k('tx_dl', .int).d('8').one_of_ints(tx_dls()).doc('the frame length (TX_DL) the connection transmits with, in bytes: ${tx_dl_list()}. Above 8 only on a CAN-FD bus ([bus.*] fd = true): single frames of up to TX_DL - 2 bytes behind the escape, consecutive frames of TX_DL - 1. Frames of any length are received without it; the bootloader and a gateway\'s route to the node send with it too (REQ-CAN-TP-026)'),
 		]),
 		tbl('uds', '[uds]', "The node's one ISO 14229 diagnostic server: session and security timing, the 0x27 key, the service table.", [
 			k('s3_ms', .int).d('${uds.default_s3_us / 1000}').doc('the session timeout back to the default session (ms; 0 = the default)'),
@@ -38,6 +39,7 @@ fn ecu_diag_tables() []Table {
 			req('tx_id', .int).range(0, 0x7FF).hex().doc('its physical request id: what the gateway sends on (11-bit)'),
 			req('rx_id', .int).range(0, 0x7FF).hex().doc('its response id: what the gateway receives on (11-bit)'),
 			k('max_message', .int).d('${isotp.default_message}').range(isotp.min_message, isotp.message_limit).doc('its [isotp] max_message: the gateway refuses a longer routed request at once (diagnostic NACK 0x04) rather than forward one the node would refuse on its bus (REQ-CAN-TP-023); sysgen writes it when the node\'s is not the default'),
+			k('tx_dl', .int).d('8').one_of_ints(tx_dls()).doc('its [isotp] tx_dl: the frame length the gateway sends to it with (${tx_dl_list()}; above 8 only on a CAN-FD bus); sysgen writes it when the node\'s is not 8, and syscheck refuses an authored route whose tx_dl is not its node\'s (REQ-CAN-TP-026)'),
 		]),
 		tbl('did', '[[did]]', 'A data identifier the server reads (0x22) and may write (0x2E). Its value is ONE of: `ascii` / `bytes` (a constant), `signal` (live), `param` (a coded [[param]]), `param_status`, `tx_saturations`.', [
 			req('id', .int).range(0, 0xFFFF).hex().doc('the 16-bit data identifier (0 is skipped)'),
@@ -122,4 +124,23 @@ fn doip_ecu_keys() []Key {
 		}
 	}
 	return keys
+}
+
+// tx_dls: the frame lengths ISO-TP transmits with, as isotp.valid_dl states them — the values
+// [isotp] tx_dl and [[doip.route]] tx_dl take, so the schema check, the generated reference and
+// the JSON Schema refuse what generation refuses
+pub fn tx_dls() []i64 {
+	mut dls := []i64{}
+	for dl in 0 .. 65 {
+		if isotp.valid_dl(dl) {
+			dls << i64(dl)
+		}
+	}
+	return dls
+}
+
+// tx_dl_list: tx_dls as a sentence reads them ("8, 12, 16, 20, 24, 32, 48 or 64")
+pub fn tx_dl_list() string {
+	dls := tx_dls().map(it.str())
+	return dls[..dls.len - 1].join(', ') + ' or ' + dls.last()
 }

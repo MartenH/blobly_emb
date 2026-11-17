@@ -1999,3 +1999,15 @@ fn test_signal_field_types_are_sized_scalars() {
 		assert !f.any(it.contains('field "a"')), f.str()
 	}
 }
+
+// [bus.*] fd is read in one place for every generator: true only where the bus says so
+fn test_bus_fd_reads_the_bus_table_and_defaults_false() {
+	doc := toml.parse_text('[bus.edge]\nfd = true\n[bus.compute]\nbitrate = 500000\n') or {
+		panic('bad test toml: ${err}')
+	}
+	assert bus_fd(doc, 'edge')
+	assert !bus_fd(doc, 'compute') // key absent
+	assert !bus_fd(doc, 'body') // bus absent
+	none_doc := toml.parse_text('[isotp]\nrx_id = 0x7E0\n') or { panic('bad test toml: ${err}') }
+	assert !bus_fd(none_doc, 'edge') // no [bus] at all
+}

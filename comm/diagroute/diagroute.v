@@ -54,9 +54,10 @@ pub const max_routes = 8
 pub const answer_wait_us = u64(6_000_000)
 
 // how long frames of an exchange may stop moving, either way, while something is in flight: the
-// request's next frame waiting for room in the bus's transmit FIFO, or our flow control for an
-// answer waiting for it — states ISO-TP's own timers do not bound (N_Bs runs only once a frame has
-// left, N_Cr only once our flow control has). A bus that takes nothing (no node acknowledges,
+// request's single or first frame waiting for room in the bus's transmit FIFO — a state ISO-TP's
+// own timers do not bound (N_Bs runs only once a frame has left). Our flow control for an answer
+// waiting for room is ISO-TP's N_Ar first (1 s), and an answer reception ISO-TP abandons (N_Ar,
+// N_Cr) ends the exchange at once (step). A bus that takes nothing (no node acknowledges,
 // bus-off) must not hold every route busy; a transfer that keeps moving, however slowly (a target
 // asking STmin 127 ms), is never cut off by it.
 pub const stall_us = u64(5_000_000)
@@ -80,6 +81,10 @@ pub mut:
 	// the longest request the target takes: its own maximum message length ([isotp] max_message);
 	// 0 = the gateway's (init) — a request longer than either is refused (accept)
 	max_message int
+	// the frame length the gateway sends to the target with: its [isotp] tx_dl (isotp.valid_dl —
+	// above 8 only on a CAN-FD bus, which generation enforces); 0 = 8. Its answers are taken at
+	// whatever length it sends them (REQ-CAN-TP-026/028)
+	tx_dl u8
 }
 
 // Verdict is the router's answer to a routed request; the DoIP framing NACKs all but .accepted.
@@ -201,6 +206,7 @@ mut:
 	req_len    int
 	req_full   int // ... of a request this long
 	aborts     u32 // link.tx_aborts when it was accepted: a change is a send ISO-TP gave up
+	rx_aborts  u32 // link.rx_aborts when it was accepted: a change is an answer ISO-TP gave up (N_Cr, N_Ar)
 	moved_at   u64 // the last frame of the exchange either way (stall_us)
 	sending    bool
 	ending     bool // the answer was refused as too long: the exchange ends once the refusal is out
@@ -294,6 +300,9 @@ pub fn (mut r Router) accept(idx int, req &u8, n int, conn u32, ticket u32, unlo
 	r.end_exchange()
 	r.q_len = 0
 	r.full_held = false
+	// the link is idle (end_exchange): its frames for this request go at the target's TX_DL, which
+	// send() takes for the whole message
+	r.link.tx_dl = r.routes[idx].tx_dl
 	if !r.link.send(req, n) {
 		return .refused
 	}
@@ -305,6 +314,7 @@ pub fn (mut r Router) accept(idx int, req &u8, n int, conn u32, ticket u32, unlo
 		r.req_head[i] = unsafe { req[i] }
 	}
 	r.aborts = r.link.tx_aborts
+	r.rx_aborts = r.link.rx_aborts
 	r.moved_at = now
 	r.sending = true
 	r.forwarded++
@@ -378,8 +388,8 @@ pub fn (mut r Router) on_frame(bus u8, f &can.Frame, now u64) bool {
 	}
 	// progress is what the link took (isotp progress: a frame of the answer, a flow control the
 	// request waits for — a WAIT too, which N_Bs and WFTmax bound), not what arrived: a flow control
-	// it was not waiting for, a reserved PCI, a truncated or out-of-sequence frame move nothing. Our
-	// own sends count in pump.
+	// it was not waiting for, a reserved PCI, a truncated, wrong-length or out-of-sequence frame move
+	// nothing. Our own sends count in pump.
 	before := r.link.progress
 	oversize := oversize_first_frame(&r.link, f)
 	if diag.take_frame(mut r.link, now, f) {
@@ -443,10 +453,10 @@ fn (mut r Router) collect(now u64) {
 }
 
 // first_frame_answers: does the first frame `f` the link refused begin an answer to the request in
-// flight? It carries the answer's first bytes (six, two after an escape length), which hold what
-// answers() compares: the service and what identifies the request.
+// flight? It carries the answer's first bytes (its length less two, less six after an escape
+// length), which hold what answers() compares: the service and what identifies the request.
 fn first_frame_answers(f &can.Frame, req &u8, rn int, full int) bool {
-	n := if f.len > 8 { 8 } else { int(f.len) } // classic-sized ISO-TP, as take_frame reads it
+	n := if f.len > can.max_dlc { int(can.max_dlc) } else { int(f.len) } // as take_frame reads it
 	if n < 2 || (f.data[0] & 0xF0) != 0x10 {
 		return false
 	}
@@ -530,9 +540,10 @@ fn fit_block_length(a &u8, n int, max_message int) bool {
 	}
 }
 
-// step runs the timers: a request ISO-TP gave up sending ends (settle); frames that stop moving
-// for stall_us while something is in flight end it; once the request has left, the target's answer
-// must begin within answer_wait_us (a reception in progress is ISO-TP's to bound, N_Cr) — an
+// step runs the timers: a request ISO-TP gave up sending ends (settle); an answer reception ISO-TP
+// gave up (N_Cr, or our flow control that could not leave within N_Ar) ends it; frames that stop
+// moving for stall_us while something is in flight end it; once the request has left, the target's
+// answer must begin within answer_wait_us (a reception in progress is ISO-TP's to bound, N_Cr) — an
 // overdue exchange ends, and the tester's own P2* tells it.
 pub fn (mut r Router) step(now u64) {
 	r.link.tick(now)
@@ -542,6 +553,11 @@ pub fn (mut r Router) step(now u64) {
 	r.settle(now)
 	r.finish()
 	if r.active < 0 {
+		return
+	}
+	if r.link.rx_aborts != r.rx_aborts {
+		r.timeouts++ // the answer will not come whole (REQ-CAN-TP-029)
+		r.end_exchange()
 		return
 	}
 	if !r.link.idle() && now - r.moved_at >= stall_us {
@@ -658,16 +674,15 @@ fn (mut r Router) end_exchange() {
 	r.link.abort_rx() // a reception in progress belongs to the exchange that ended
 }
 
-// oversize_first_frame: `f` is a first frame announcing more than the link `l` holds, or the escape
-// first frame (FF_DL 0, a 32-bit length past 4095) — what the link refuses with FC.OVFLW. Read as
-// diag.take_frame reads it: the bytes that arrived, classic-sized, and a frame shorter than its PCI
-// says (isotp.Link.truncated) is nothing, not a refusal to answer for.
+// oversize_first_frame: `f` is a first frame the link `l` refuses with FC.OVFLW — announcing more than
+// it holds, or the escape first frame (FF_DL 0, a 32-bit length past 4095). The link's own judgement
+// (isotp overflows), of the frame as diag.take_frame hands it over: a frame too short for its PCI,
+// or of a length no CAN-FD frame has, is nothing, not a refusal to answer for.
 fn oversize_first_frame(l &isotp.Link, f &can.Frame) bool {
-	n := if f.len > 8 { 8 } else { int(f.len) }
-	if n < 2 || f.data[0] >> 4 != 1 || l.truncated(f.data[0], n) {
+	if f.len < 1 || f.len > can.max_dlc {
 		return false
 	}
-	total := (int(f.data[0] & 0x0F) << 8) | int(f.data[1])
-	return total == 0 || total > l.rx_cap
+	p := diag.pdu_of(f)
+	return l.overflows(&p)
 }
 

@@ -1,6 +1,6 @@
 module shell
 
-// @verifies REQ-SHELL-001 REQ-SHELL-002 REQ-SHELL-003
+// @verifies REQ-SHELL-001 REQ-SHELL-002 REQ-SHELL-003 REQ-CAN-TP-026
 import comm.isotp
 import driver.can
 
@@ -15,6 +15,7 @@ fn pump(mut m ShellModule) string {
 	for _ in 0 .. 200 {
 		if m.produce(now, mut f) {
 			assert f.id == 0x7f1
+			assert f.len == 8 // the response stream transmits at TX_DL 8 (REQ-CAN-TP-026)
 			mut p := isotp.Pdu{}
 			for j in 0 .. 8 {
 				p.data[j] = f.data[j]

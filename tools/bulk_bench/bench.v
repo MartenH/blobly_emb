@@ -357,10 +357,10 @@ fn main() {
 		bench_isotp(s)
 	}
 	println('')
-	println('reading (CLASSIC 500 kbit/s wire figures — the only path this stack')
-	println('implements: comm/isotp segments into 8-byte PDUs regardless of bus): the ring')
-	println('moves ownership in ~microseconds at any size; classic-CAN ISO-TP costs')
-	println('milliseconds of BUS time per transfer. An FD ISO-TP path (larger frames)')
-	println('would shrink wire time substantially — measure it when it exists, do not')
-	println('extrapolate from these rows.')
+	println('reading (CLASSIC 500 kbit/s wire figures: comm/isotp segments into TX_DL-sized')
+	println('PDUs, 8 unless [isotp] tx_dl, and these rows run at 8): the ring moves')
+	println('ownership in ~microseconds at any size; classic-CAN ISO-TP costs')
+	println('milliseconds of BUS time per transfer. A CAN-FD TX_DL (larger frames) would')
+	println('shrink wire time substantially — measure it, do not extrapolate from these')
+	println('rows.')
 }

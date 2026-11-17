@@ -142,8 +142,8 @@ no H735 image carries them until sysnode gains a `[shell]` / `[trace]`.
   the ring moves ownership at ~5 M transfers/s (0.3 µs median publish→take,
   pinned cross-core) and ~0.9–6 GB/s payload filled+consumed, vs ~3–10 ms of
   classic-CAN bus time per ISO-TP transfer — "how big before it leaves the chip"
-  is now a measured number (classic-scoped; FD ISO-TP unimplemented, not
-  extrapolated).
+  is now a measured number (classic-scoped; CAN-FD ISO-TP — `[isotp] tx_dl` —
+  not measured, not extrapolated).
 
 ## Network management & boot
 

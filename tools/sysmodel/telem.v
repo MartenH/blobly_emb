@@ -434,15 +434,26 @@ fn check_route_ids(s System) []Issue {
 					msg:      '${where} sends on 0x${r.tx_id.hex()} and listens on 0x${r.rx_id.hex()} on bus "${bus.name}", but no [isotp] of "${t.name}" there listens and answers on those ids — every routed request would go unanswered'
 				}
 			}
-			// the gateway forwards a request up to the route's max_message: the node's own, or a
-			// longer request is refused by the node with FC.OVFLW and the tester left unanswered
-			// (REQ-CAN-TP-023)
+			// what the route carries of the node's [isotp] must be the node's own: the gateway
+			// forwards a request up to the route's max_message, or a longer request is refused by
+			// the node with FC.OVFLW and the tester left unanswered (REQ-CAN-TP-023); it sends at the
+			// route's tx_dl, which the node's TX_DL is (REQ-CAN-TP-026)
 			for c in t.view.isotp_conns {
-				if c.rx_id == r.tx_id && c.tx_id == r.rx_id && c.max_len() != r.max_len() {
+				if c.rx_id != r.tx_id || c.tx_id != r.rx_id {
+					continue
+				}
+				if c.max_len() != r.max_len() {
 					issues << Issue{
 						severity: .error
 						req:      'REQ-CAN-TP-023'
 						msg:      '${where}: its max_message is ${r.max_len()}, but "${t.name}"\'s [isotp] max_message is ${c.max_len()} — the gateway refuses a routed request by the route\'s maximum, so it must be the node\'s'
+					}
+				}
+				if c.dl() != r.dl() {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-CAN-TP-026'
+						msg:      '${where}: its tx_dl is ${r.dl()}, but "${t.name}"\'s [isotp] tx_dl is ${c.dl()} — the gateway sends to it at the route\'s frame length, which must be the node\'s'
 					}
 				}
 			}

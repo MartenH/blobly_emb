@@ -38,7 +38,7 @@ comm/   comms stack: com (tx modes; encode_raw, the ONE send encode — emitted 
         signal at GenSigStartValue or the in-range value nearest 0, candb init_payload, emitted by loom2v
         pdu_init_lines alone (#399); the receive rule — RxMonitor / RxGate in rxmon.v, ONE rule the host
         bridge and the ThreadX comm thread both run, emitted by tools/loom2v/gen_rx.v), e2e (AUTOSAR E2E
-        Profile 1), secoc (AES-CMAC), isotp (15765-2: a link holds no buffer — its owner binds them, sized by the node's `[isotp] max_message`, 8..4095, default 520; docs/can-tp.md), uds (14229), nm,
+        Profile 1), secoc (AES-CMAC), isotp (15765-2: a link holds no buffer — its owner binds them, sized by the node's `[isotp] max_message`, 8..4095, default 520; it transmits at the node's `[isotp] tx_dl` — 8, or a CAN-FD length up to 64 on an fd bus — and receives any frame length; N_Bs / N_Cr / N_Ar; docs/can-tp.md), uds (14229), nm,
         fault (debounce + fault memory behind 0x19/0x14/0x85; snapshots, extended data, displacement
         and its persistence in the NvM journal — entry.v, persist.v), param (variant coding: read-only
         FB inputs coded with 0x2E on a bound DID, one NvM journal record each, docs/diagnostics.md §3.4),
@@ -52,7 +52,8 @@ comm/   comms stack: com (tx modes; encode_raw, the ONE send encode — emitted 
         tester holding the gateway's own unlock for its connection, REQ-NET-020; up to the
         gateway's own max_message — a longer answer answered 0x14 in the node's name, a routed 0x34's
         block length lowered to it, REQ-CAN-TP-025 — and a request up to its node's ([[doip.route]]
-        max_message; longer is NACK 0x04), REQ-CAN-TP-023; docs/net.md)
+        max_message; longer is NACK 0x04), REQ-CAN-TP-023, sent at its node's frame length ([[doip.route]]
+        tx_dl, REQ-CAN-TP-026); docs/net.md)
 driver/ driver port: can — SocketCAN (host) / ST FDCAN HAL / AUTOSAR CanIf (CDD); see docs/porting.md
 osal/   OS abstraction: time, cores, IOC (sim=POSIX, target=ThreadX AMP)
 tools/  BUILD-TIME only (heap OK): dbc2cfg, cfg2v, loom2v, sigmap, benches, candb

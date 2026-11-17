@@ -173,7 +173,12 @@ pub fn (mut m TraceModule) produce(now u64, mut f can.Frame) bool {
 		m.link.tick(now) // advance the N_Bs timeout even when tx_ready gates poll out
 		mut p := isotp.Pdu{}
 		if m.link.poll(now, mut p) {
-			fill(mut f, m.record_id, p.data)
+			// the link transmits at TX_DL 8 (its tx_dl is never set): every frame is 8 bytes
+			mut b := [8]u8{}
+			for i in 0 .. 8 {
+				b[i] = p.data[i]
+			}
+			fill(mut f, m.record_id, b)
 			return true
 		}
 		if !m.link.busy() {

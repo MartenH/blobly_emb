@@ -210,8 +210,9 @@ stmin_ms = 0        # min separation time we request
 max_message = 520   # optional: the longest message either way (8..4095)
 ```
 
-What is implemented — normal addressing on 11-bit ids, 8-byte frames (sent as CAN-FD frames on an
-FD bus), single, first, consecutive and flow-control frames, N_Bs / N_Cr / WFTmax — and how it
+What is implemented — normal addressing on 11-bit ids, 8-byte frames by default and CAN-FD frames up
+to 64 bytes per `[isotp] tx_dl` (any length received; every frame a CAN-FD frame on an FD bus),
+single, first, consecutive and flow-control frames, N_Bs / N_Cr / N_Ar / WFTmax — and how it
 behaves where the standard leaves the choice, is [can-tp.md](can-tp.md); the requirements are
 [requirements/can-tp.toml](../requirements/can-tp.toml).
 

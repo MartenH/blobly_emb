@@ -15,19 +15,27 @@ import driver.can
 // a dead bus must not hold the reset off.
 pub const drain_us = u64(20_000)
 
-// take_frame feeds one frame of this connection's physical request id to the link — only the bytes
-// that arrived (an owner may reuse one frame, so a short one's tail is stale), a frame shorter than
-// its PCI says dropped (isotp.Link.truncated). True when it completed a request.
-pub fn take_frame(mut l isotp.Link, now u64, f &can.Frame) bool {
-	n := if f.len > 8 { 8 } else { int(f.len) } // classic-sized ISO-TP, on CAN-FD too
-	if n < 1 || l.truncated(f.data[0], n) {
-		return false
+// pdu_of: a received frame as the link reads it — only the bytes that arrived (an owner may reuse
+// one frame, so a short one's tail is stale), at most 64, and its length.
+pub fn pdu_of(f &can.Frame) isotp.Pdu {
+	n := if f.len > can.max_dlc { int(can.max_dlc) } else { int(f.len) }
+	mut p := isotp.Pdu{
+		len: n
 	}
-	mut p := isotp.Pdu{}
 	for i in 0 .. n {
 		p.data[i] = f.data[i]
 	}
-	l.on_frame(now, p)
+	return p
+}
+
+// take_frame feeds one frame of this connection's physical request id to the link, at whatever
+// length it arrived: a classic frame, or a CAN-FD one up to 64 bytes (the link judges the length
+// against its PCI and the reception — isotp on_frame). True when it completed a request.
+pub fn take_frame(mut l isotp.Link, now u64, f &can.Frame) bool {
+	if f.len < 1 || f.len > can.max_dlc { // no frame, or a length no controller delivers
+		return false
+	}
+	l.on_frame(now, pdu_of(f))
 	return l.has_request()
 }
 
@@ -40,17 +48,19 @@ pub fn take_request(mut l isotp.Link, buf &u8, blocked bool) int {
 	return if l.busy() || blocked { 0 } else { got }
 }
 
-// next_frame: the next frame of the answer in flight, paced by the peer's flow control. Ask only
-// while the channel is ready: the link counts the frame as sent.
+// next_frame: the next frame of the answer in flight, paced by the peer's flow control, at the
+// length the link gives it — 8 bytes, or up to its TX_DL on a CAN-FD connection, which only an
+// owner whose channel is opened CAN-FD configures. Ask only while the channel is ready: the link
+// counts the frame as sent.
 pub fn next_frame(mut l isotp.Link, tx_id u32, now u64, mut f can.Frame) bool {
 	mut p := isotp.Pdu{}
 	if !l.poll(now, mut p) {
 		return false
 	}
 	f.id = tx_id
-	f.len = 8
+	f.len = u8(p.len)
 	f.ext = false
-	for i in 0 .. 8 {
+	for i in 0 .. p.len {
 		f.data[i] = p.data[i]
 	}
 	return true

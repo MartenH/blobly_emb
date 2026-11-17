@@ -146,17 +146,22 @@ fn tester_frames(mut t isotp.Link, now u64, req []u8) []can.Frame {
 	mut out := []can.Frame{}
 	mut p := isotp.Pdu{}
 	for t.poll(now, mut p) {
-		mut f := can.Frame{
-			id:  srx
-			len: 8
-		}
-		for i in 0 .. 8 {
-			f.data[i] = p.data[i]
-		}
-		out << f
+		out << wire(srx, p)
 		p = isotp.Pdu{}
 	}
 	return out
+}
+
+// wire: a PDU as the frame it goes out as on `id`, at its length
+fn wire(id u32, p isotp.Pdu) can.Frame {
+	mut f := can.Frame{
+		id:  id
+		len: u8(p.len)
+	}
+	for i in 0 .. p.len {
+		f.data[i] = p.data[i]
+	}
+	return f
 }
 
 struct Bufs {
@@ -610,27 +615,136 @@ fn test_the_step_takes_a_block_as_long_as_the_maximum_holds() {
 	for now := u64(0); now < 2_000_000 && s.handled == 0; now += 1000 {
 		mut p := isotp.Pdu{}
 		for t.poll(now, mut p) {
-			mut f := can.Frame{
-				id:  srx
-				len: 8
-			}
-			for i in 0 .. 8 {
-				f.data[i] = p.data[i]
-			}
-			ch.rx << f
+			ch.rx << wire(srx, p)
 		}
 		step(mut s, mut l, now, mut ch, mut b)
 		for f in ch.tx {
-			mut q := isotp.Pdu{}
-			for i in 0 .. 8 {
-				q.data[i] = f.data[i]
-			}
-			t.on_frame(now, q)
+			t.on_frame(now, pdu_of(&f))
 		}
 		ch.tx.clear()
 	}
 	assert s.handled == 1 && s.last_len == n
 	for i in 1 .. n {
 		assert b.req[i] == u8(i)
+	}
+}
+
+// @verifies REQ-CAN-TP-028
+// pdu_of carries a frame at its length and never the stale bytes past it; a frame of no bytes is no
+// request
+fn test_pdu_of_takes_only_the_bytes_that_arrived() {
+	mut f := can.Frame{
+		id:  srx
+		len: 12
+	}
+	for i in 0 .. 64 {
+		f.data[i] = 0xEE
+	}
+	p := pdu_of(&f)
+	assert p.len == 12 && p.data[11] == 0xEE && p.data[12] == 0
+	f.len = 200 // past any frame: 64
+	assert pdu_of(&f).len == 64
+	mut l := new_link()
+	f.len = 0
+	assert !take_frame(mut l, 0, &f) && l.idle()
+	f.len = 200 // a length no controller delivers is refused, never clipped to 64 and read
+	f.data[0] = 0x00 // an escape single frame, valid in a 64-byte frame
+	f.data[1] = 0x02
+	f.data[2] = 0x3E
+	f.data[3] = 0x00
+	assert !take_frame(mut l, 0, &f) && l.idle()
+	f.len = 64
+	assert take_frame(mut l, 0, &f), 'the same frame at 64 bytes is a request'
+}
+
+// @verifies REQ-CAN-TP-027 REQ-CAN-TP-028
+// the step carries CAN-FD frames both ways: a tester at TX_DL 64 sends a 200-byte request in
+// 64-byte frames, which reach the link at their length and reassemble; the server's link at TX_DL
+// 64 answers its 40 bytes behind the escape in a 48-byte frame, and its flow control is 8 bytes
+fn test_the_step_carries_fd_frames_both_ways() {
+	mut s := FakeServer{}
+	mut l := new_link()
+	l.tx_dl = 64
+	mut ch := FakeChan{}
+	mut b := Bufs{}
+	mut t := new_link()
+	t.tx_dl = 64
+	req := []u8{len: 200, init: u8(index + 1)}
+	ch.rx << tester_frames(mut t, 0, req)
+	assert ch.rx.len == 1 && ch.rx[0].len == 64
+	step(mut s, mut l, 0, mut ch, mut b)
+	assert ch.tx.len == 1 && ch.tx[0].len == 8 && ch.tx[0].data[0] == 0x30
+	t.on_frame(0, pdu_of(&ch.tx[0]))
+	ch.tx.clear()
+	mut p := isotp.Pdu{}
+	for t.poll(1000, mut p) {
+		ch.rx << wire(srx, p)
+	}
+	assert ch.rx.map(it.len) == [u8(64), 64, 16]
+	step(mut s, mut l, 1000, mut ch, mut b)
+	assert s.handled == 1 && s.last_len == 200
+	for i in 0 .. 200 {
+		assert b.req[i] == u8(i + 1)
+	}
+	assert ch.tx.len == 1
+	f := ch.tx[0]
+	assert f.id == stx && f.len == 48 && f.data[0] == 0x00 && f.data[1] == 40
+	for i in 0 .. 40 {
+		assert f.data[2 + i] == u8(0x62 + i)
+	}
+	for i in 42 .. 48 {
+		assert f.data[i] == 0
+	}
+}
+
+// @verifies REQ-CAN-TP-026
+// the bootloader's link, configured as its image configures it (boot.LinkCfg — BOOT_BS, BOOT_STMIN,
+// BOOT_TX_DL), answers its boot.Prog through the bootloader's own serve step at the node's TX_DL: a
+// 33-byte DID answer behind the escape in one 48-byte frame at 64, a first frame of 8 at 8; the flow
+// control it answers a long request with is 8 bytes and carries the node's BS and STmin; and the
+// configuration gives the link ISO-TP's timers, N_Ar among them
+fn test_the_bootloader_answers_at_its_nodes_tx_dl() {
+	for dl in [u8(8), 64] {
+		mut p := boot.Prog{}
+		p.init(isotp.default_message)
+		ident := []u8{len: 30, init: u8(0x41 + index)}
+		assert p.add_did(0xF190, &ident[0], ident.len)
+		mut l := isotp.Link{}
+		boot.LinkCfg{
+			bs:    4
+			stmin: 2
+			tx_dl: dl
+		}.configure(mut l)
+		assert l.n_bs_us == 1_000_000 && l.n_cr_us == 1_000_000 && l.n_ar_us == 1_000_000
+			&& l.wft_max == 16
+		rxb := []u8{len: isotp.default_message}
+		txb := []u8{len: isotp.default_message}
+		l.bind_rx(&rxb[0], rxb.len)
+		assert l.bind_tx(&txb[0], txb.len)
+		mut ch := FakeChan{}
+		mut b := Bufs{}
+		mut t := new_link()
+		ch.rx << tester_frames(mut t, 0, [u8(0x22), 0xF1, 0x90])
+		serve_step(mut p, mut l, srx, stx, 0, mut ch, &b.req[0], &b.resp[0], zero_clock)
+		assert ch.tx.len == 1, 'TX_DL ${dl}'
+		f := ch.tx[0]
+		if dl == 64 {
+			assert f.len == 48 && f.data[..5] == [u8(0x00), 33, 0x62, 0xF1, 0x90], f.str()
+			assert f.data[5..35] == ident
+		} else {
+			assert f.len == 8 && f.data[..5] == [u8(0x10), 33, 0x62, 0xF1, 0x90], f.str()
+		}
+		ch.tx.clear()
+		// a first frame of a long request: the flow control it owes, 8 bytes, BS 4 and STmin 2
+		mut ff := can.Frame{
+			id:  srx
+			len: 8
+		}
+		ff.data[0] = 0x10
+		ff.data[1] = 40
+		l.abort_tx() // the answer's rest is not this case's
+		ch.rx << ff
+		serve_step(mut p, mut l, srx, stx, 1000, mut ch, &b.req[0], &b.resp[0], zero_clock)
+		assert ch.tx.len == 1 && ch.tx[0].len == 8 && ch.tx[0].data[..3] == [u8(0x30), 4, 2], 'TX_DL ${dl}'
 	}
 }

@@ -41,6 +41,9 @@ pub:
 	sub      string // tbl / arr / namedmap: the context of the sub-table(s)
 	def      string // the default as TOML spells it; '' = none (required, or absence is stated in desc)
 	choices  []string // the values a string (or a string array's elements) may take; empty = any
+	// the values an integer may take, when they are a set rather than a range (a frame length);
+	// empty = any (or the range's)
+	int_choices []i64
 	min      i64
 	max      i64
 	ranged   bool // min..max applies (an integer, or an integer array's elements)
@@ -123,6 +126,14 @@ fn (k Key) one_of(choices []string) Key {
 	return Key{
 		...k
 		choices: choices
+	}
+}
+
+// one_of_ints: the integer values the key may take, a set no min..max states
+fn (k Key) one_of_ints(choices []i64) Key {
+	return Key{
+		...k
+		int_choices: choices
 	}
 }
 
@@ -236,8 +247,12 @@ pub fn (t Table) names() []string {
 	return t.keys.map(it.name)
 }
 
-// in_range: v lies within the key's range (a key with no range takes everything)
+// in_range: v is one of the key's integer values and lies within its range (a key with neither
+// takes everything) — the one question every leaf check of an integer asks
 pub fn (k Key) in_range(v i64) bool {
+	if k.int_choices.len > 0 && v !in k.int_choices {
+		return false
+	}
 	return !k.ranged || (v >= k.min && v <= k.max) || (k.or_zero && v == 0)
 }
 
@@ -349,8 +364,9 @@ fn value_errors(label string, key Key, v toml.Any) []string {
 		if key.ipv4 && e is string && !key.ip4_ok(e) {
 			errs << '${label} "${key.name}": "${e}" is not a dotted IPv4 address'
 		}
-		if key.ranged && e is i64 && !key.in_range(e) {
-			errs << '${label} "${key.name}": ${num(key, e)} is outside ${allowed(key)}'
+		if (key.ranged || key.int_choices.len > 0) && e is i64 && !key.in_range(e) {
+			what := if key.int_choices.len > 0 { 'is not one of' } else { 'is outside' }
+			errs << '${label} "${key.name}": ${num(key, e)} ${what} ${allowed(key)}'
 		}
 	}
 	return errs

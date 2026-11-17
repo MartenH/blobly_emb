@@ -185,8 +185,8 @@ detail_id = 0x7E5
 period_ms = 500
 
 # The diagnostic server (docs/diagnostics.md): UDS over ISO-TP on the ids system.toml allocates
-# this node (diag = { req = 0x7C0, rsp = 0x7C8 }), on the edge bus — CAN-FD, carrying classic-
-# sized ISO-TP (TX_DL = 8, which ISO 15765-2 allows on an FD bus), with the same functional id the
+# this node (diag = { req = 0x7C0, rsp = 0x7C8 }), on the edge bus — CAN-FD, carrying ISO-TP in
+# CAN-FD frames of up to 64 bytes (TX_DL = 64, [isotp] tx_dl below), with the same functional id the
 # compute nodes answer. 0x27 as on domain: a TRNG seed, and on this BENCH node the reference key.
 [uds]
 s3_ms             = 5000
@@ -218,6 +218,11 @@ stmin_ms      = 0
 # says so): a longer answer comes back responseTooLong, and sysnode lowers the bootloader's offered
 # block to 520, so zone_a is still reprogrammed through it, in smaller blocks.
 max_message   = 4095
+# the frame length it transmits with: 64-byte CAN-FD frames (single frames of up to 62 bytes behind
+# the escape, consecutive frames of 63; every other node stays at the default 8). The one node that
+# opts in, on the CAN-FD edge bus: its bootloader answers in them too, and sysnode's route sends to
+# it in them (sysgen lowers this onto the route). It receives any frame length without a setting.
+tx_dl         = 64
 
 # 18 bytes: the read answer is multi-frame
 [[did]]
