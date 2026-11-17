@@ -827,6 +827,25 @@ verifies = ["REQ-CAN-TP-040", "REQ-CAN-TP-041", "REQ-CAN-TP-042"]
 approved_by = "Claude (coding agent) on Marten Hildell's bench — system_full zone_a, domain, sysnode vs CANsub.4"
 date = "2026-11-17"
 
+# RoutineControl and responsePending on silicon: system_full flashed from one build, zone_a (H723)
+# serving two [[routine]]s run by its RoutineRunner FB on front_thread. routine_zone_a.lua 10/11 over
+# the CANsub: a 2 s self-test answered done after a 0x78; a 9 s one sent 0x78 at once, then every 4 s,
+# then its answer; the final answer under the suppress bit; the refusals in ISO 14229-1's order; a
+# self-test past timeout_ms answered 0x22 and the next one served; an async calibration started,
+# read (0x31 03) to done and stopped (0x31 02); a session re-entry stopping it; a request while an
+# answer is owed dropped. The routed leg (through sysnode over DoIP) was not run, the bench Ethernet
+# segment not being connected — REQ-DIAG-086 rests on comm/diagroute's test. Regression on the same
+# images: diag_nodes.lua 11/11, boot_handoff.lua roundtrip 3/3, diag_domain.lua 15/15 twice (a first
+# run lost its S3 test once: domain serves no routine and no DoIP, so nothing of this change holds
+# S3 there; not reproduced in two re-runs). Host: overspeed's routine.lua on vcan0, 4/4.
+[[review]]
+id = "routine-control-silicon"
+method = "review"
+context = "h723/ThreadX"
+verifies = ["REQ-DIAG-080", "REQ-DIAG-082", "REQ-DIAG-083", "REQ-DIAG-084", "REQ-DIAG-085"]
+approved_by = "Claude (coding agent) on Marten Hildell's bench — system_full zone_a, domain, sysnode vs CANsub.4"
+date = "2026-11-17"
+
 # The 0x27 state in the NvM journal on silicon (U3a, the keep cell removed): all three system_full CAN
 # nodes flashed from one build of the reworked rule (each level's wrong keys since its last correct
 # key, saturating, written only when it changes; a delay per level) — domain (H755, both banks),

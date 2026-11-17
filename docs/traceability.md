@@ -160,12 +160,12 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-059 | QM | test | verified | param_test.v (pass) |
 | REQ-DIAG-060 | QM | test | verified | param_test.v (pass) |
 | REQ-DIAG-061 | QM | test | verified | param_target_test.v (pass) |
-| REQ-DIAG-080 | QM | test | verified | routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
+| REQ-DIAG-080 | QM | test | verified | routine-control-silicon (approved), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
 | REQ-DIAG-081 | QM | test | verified | routine_gen_test.v (pass), routine_gen_test.v (pass), routine_gen_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
-| REQ-DIAG-082 | QM | test | verified | routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
-| REQ-DIAG-083 | QM | test | verified | routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
-| REQ-DIAG-084 | QM | test | verified | routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
-| REQ-DIAG-085 | QM | test | verified | routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
+| REQ-DIAG-082 | QM | test | verified | routine-control-silicon (approved), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
+| REQ-DIAG-083 | QM | test | verified | routine-control-silicon (approved), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
+| REQ-DIAG-084 | QM | test | verified | routine-control-silicon (approved), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
+| REQ-DIAG-085 | QM | test | verified | routine-control-silicon (approved), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
 | REQ-DIAG-086 | QM | test | verified | diagroute_test.v (pass) |
 | REQ-DIAG-087 | QM | test | verified | routine_gen_test.v (pass) |
 | REQ-E2E-001 | B | test | verified | e2e_test.v (pass) |
@@ -486,12 +486,12 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-059 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-060 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-061 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-DIAG-080 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-080 | ✓ | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-081 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-DIAG-082 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-DIAG-083 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-DIAG-084 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-DIAG-085 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-082 | ✓ | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-083 | ✓ | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-084 | ✓ | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-085 | ✓ | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-086 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-087 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-E2E-001 | | | | | | | | | | | | | | | | | | | ✓ | | | |
