@@ -43,7 +43,10 @@ RX monitoring, and the router + ISO-TP sit beneath it.
 
 ## 1. COM — signal ⇄ PDU, with transmission modes
 
-The DBC gives the *layout*; COM config gives the *behavior* per PDU (frame). A new
+The DBC gives the *layout*; COM config gives the *behavior* per PDU (frame). A message's id is
+11-bit, or 29-bit where its `BO_` id carries the extended flag (bit 31): the host bridge and the
+ThreadX comm thread both send it in that format and receive it only in that format, a standard and
+an extended frame of one number being two frames. A new
 `[[frame]]` section maps a DBC message to its COM treatment:
 
 ```toml

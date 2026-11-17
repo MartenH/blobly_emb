@@ -932,6 +932,9 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			glue << '\tmut tx_${msg} := can.Frame{'
 			glue << '\t\tid:  ${msg}_id'
 			glue << '\t\tlen: ${msg}_dlc'
+			if (m.sig_of[list[0]] or { SigInfo{} }).dbc_ext {
+				glue << '\t\text: true // an extended (29-bit) DBC message'
+			}
 			glue << '\t}'
 			// a field no local signal has published this pass goes out at its initial value
 			glue << pdu_init_lines(m.sig_of[list[0]] or { SigInfo{} }, 'tx_${msg}', '\t')

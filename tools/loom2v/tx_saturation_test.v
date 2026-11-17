@@ -150,3 +150,27 @@ fn test_a_target_signal_route_is_held_to_the_range_and_a_frame_route_is_copied()
 	assert !frame_arm.contains('encode_raw')
 	assert target_encodes(m)
 }
+
+// @verifies REQ-COM-012
+// The host bridge sends a 29-bit DBC message as an extended frame: its frame carries the width
+// beside the id, as the receive arms and the routes do.
+fn test_the_host_bridge_sends_a_29_bit_dbc_message_as_extended() {
+	ex := example('overspeed')
+	tmp := os.join_path(os.temp_dir(), 'tx_ext_${os.getpid()}')
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	os.mkdir_all(tmp) or { panic(err) }
+	dbc := (os.read_file(os.join_path(ex, 'bus.dbc')) or { panic(err) }).replace('BO_ 272 ',
+		'BO_ 2566844672 ')
+	os.write_file(os.join_path(tmp, 'bus.dbc'), dbc) or { panic(err) }
+	os.cp(os.join_path(ex, 'ecu.toml'), os.join_path(tmp, 'ecu.toml')) or { panic(err) }
+	glue := os.join_path(tmp, 'gen.v')
+	r := os.exec([ts_bin, os.join_path(tmp, 'ecu.toml'), os.join_path(tmp, 'bus.dbc'),
+		os.join_path(tmp, 'sig.v'), os.join_path(tmp, 'ports.v'), glue,
+		os.join_path(tmp, 'manifest.csv')])
+	assert r.exit_code == 0, r.output
+	g := os.read_file(glue) or { '' }
+	assert g.contains('mut tx_lamp_frame := can.Frame{\n\t\tid:  lamp_frame_id\n\t\tlen: lamp_frame_dlc\n\t\text: true'), g
+	assert !g.contains('mut tx_heartbeat := can.Frame{\n\t\tid:  heartbeat_id\n\t\tlen: heartbeat_dlc\n\t\text'), g
+}
