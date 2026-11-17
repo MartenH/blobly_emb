@@ -381,7 +381,7 @@ pub fn (mut r Router) on_frame(bus u8, f &can.Frame, now u64) bool {
 	// it was not waiting for, a reserved PCI, a truncated or out-of-sequence frame move nothing. Our
 	// own sends count in pump.
 	before := r.link.progress
-	oversize := oversize_first_frame(f, r.link.rx_cap)
+	oversize := oversize_first_frame(&r.link, f)
 	if diag.take_frame(mut r.link, now, f) {
 		r.collect(now)
 	}
@@ -396,6 +396,12 @@ pub fn (mut r Router) on_frame(bus u8, f &can.Frame, now u64) bool {
 		} else {
 			r.stale++
 		}
+	}
+	if oversize {
+		// the link owes its FC.OVFLW now (and the tester, maybe, the refusal): work the exchange
+		// took on, which a stall window run down by an earlier wait must not discard before pump
+		// sends it — the link counts no progress for a frame it refused
+		r.moved_at = now
 	}
 	if r.link.progress != before {
 		r.moved_at = now
@@ -486,26 +492,33 @@ fn (mut r Router) finish() {
 }
 
 // fit_block_length: a RequestDownload answer (74, a length format identifier whose high nibble is
-// the width of maxNumberOfBlockLength, then that many bytes) that offers blocks longer than the
-// gateway's maximum message has its block length lowered to that maximum, in place and in the same
-// width: the tester sizes its TransferData blocks by it (the length counts the whole 0x36 request),
-// and a block longer than the gateway's maximum would be refused by the gateway's DoIP entity. A
-// server takes any block up to the length it offered, so a shorter one is still its to take.
-// True when lowered (REQ-CAN-TP-025).
+// the width of maxNumberOfBlockLength, 1..15, then that many bytes) that offers blocks longer than
+// the gateway's maximum message has its block length lowered to that maximum, in place and in the
+// same width (its leading bytes zero): the tester sizes its TransferData blocks by it (the length
+// counts the whole 0x36 request), and a block longer than the gateway's maximum would be refused
+// by the gateway's DoIP entity. A server takes any block up to the length it offered, so a shorter
+// one is still its to take. True when lowered (REQ-CAN-TP-025).
 fn fit_block_length(a &u8, n int, max_message int) bool {
 	unsafe {
 		if n < 3 || a[0] != 0x74 {
 			return false
 		}
 		w := int(a[1] >> 4)
-		if w < 1 || w > 4 || n < 2 + w {
+		if w < 1 || n < 2 + w {
 			return false
 		}
+		// a field wider than eight bytes offers more than any u64 past its last eight: any nonzero
+		// byte ahead of them is more than the gateway carries
+		mut over := false
 		mut v := u64(0)
 		for i in 0 .. w {
-			v = (v << 8) | u64(a[2 + i])
+			if i < w - 8 {
+				over = over || a[2 + i] != 0
+			} else {
+				v = (v << 8) | u64(a[2 + i])
+			}
 		}
-		if v <= u64(max_message) {
+		if !over && v <= u64(max_message) {
 			return false
 		}
 		mut m := u64(max_message)
@@ -645,13 +658,16 @@ fn (mut r Router) end_exchange() {
 	r.link.abort_rx() // a reception in progress belongs to the exchange that ended
 }
 
-// oversize_first_frame: `f` is a first frame announcing more than `cap` bytes, or the escape first
-// frame (FF_DL 0, a 32-bit length past 4095) — what the link refuses with FC.OVFLW
-fn oversize_first_frame(f &can.Frame, cap int) bool {
-	if f.len < 2 || f.data[0] >> 4 != 1 {
+// oversize_first_frame: `f` is a first frame announcing more than the link `l` holds, or the escape
+// first frame (FF_DL 0, a 32-bit length past 4095) — what the link refuses with FC.OVFLW. Read as
+// diag.take_frame reads it: the bytes that arrived, classic-sized, and a frame shorter than its PCI
+// says (isotp.Link.truncated) is nothing, not a refusal to answer for.
+fn oversize_first_frame(l &isotp.Link, f &can.Frame) bool {
+	n := if f.len > 8 { 8 } else { int(f.len) }
+	if n < 2 || f.data[0] >> 4 != 1 || l.truncated(f.data[0], n) {
 		return false
 	}
 	total := (int(f.data[0] & 0x0F) << 8) | int(f.data[1])
-	return total == 0 || total > cap
+	return total == 0 || total > l.rx_cap
 }
 

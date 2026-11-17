@@ -440,6 +440,40 @@ fn test_embedded_server_answers_within_its_init_capacity() {
 	assert resp[3] == 0x03 && resp[12] == 0x03 // unknown target
 }
 
+// @verifies REQ-CAN-TP-023
+// an embedded server on an entity bound at 8 answers within that limit: fed through a response
+// buffer of resp_cap(), the activation and a request are served (its legacy capacity of 35 had
+// kept every message waiting), and a DID past the limit is refused with 0x14 — whether its
+// own init came before bind or after
+fn test_embedded_server_follows_the_bound_limit() {
+	for init_first in [false, true] {
+		mut s := Server{}
+		if init_first {
+			s.uds.init(100)
+		}
+		buf := []u8{len: msg_len(8)}
+		s.bind(&buf[0], 8)
+		s.entity_addr = 0x0E80
+		s.uds.session = 0x01
+		s.uds.dids[0].id = 0xF190
+		s.uds.dids[0].len = 4
+		s.uds.dids[1].id = 0xF191
+		s.uds.dids[1].len = 8
+		s.uds.ndid = 2
+		assert s.max_resp_per_msg() <= s.resp_cap()
+		mut bytes := [64]u8{}
+		n := frame(&bytes[0], 0x0005, [u8(0x0E), 0x00, 0x00, 0, 0, 0, 0])
+		got := feed_in_room(mut s, bytes[..n], s.resp_cap())
+		assert got.len == 17 && got[12] == 0x10
+		n2 := frame(&bytes[0], 0x8001, [u8(0x0E), 0x00, 0x0E, 0x80, 0x22, 0xF1, 0x90])
+		ok := feed_in_room(mut s, bytes[..n2], s.resp_cap())
+		assert ok.len == 13 + 12 + 7 && ok[25] == 0x62
+		n3 := frame(&bytes[0], 0x8001, [u8(0x0E), 0x00, 0x0E, 0x80, 0x22, 0xF1, 0x91])
+		long := feed_in_room(mut s, bytes[..n3], s.resp_cap())
+		assert long.len == 13 + 12 + 3 && long[25..] == [u8(0x7F), 0x22, 0x14]
+	}
+}
+
 fn test_max_resp_is_a_hook_servers_room() {
 	mut s := new_server()
 	s.serve.answer = serve_big

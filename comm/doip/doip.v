@@ -443,12 +443,29 @@ pub fn (s &Server) max_resp_per_msg() int {
 // where a UDS response starts in the frames answering one diagnostic message
 const diag_resp_at = header_len + 5 + header_len + 4
 
-// the longest UDS response the answering server may write
+// the longest UDS response the answering server may write: a hook's is the bound limit; the
+// embedded server's its own capacity (init, else the legacy one) held to that limit — a server
+// refusing to run (init below its minimum) writes nothing
 fn (s &Server) uds_cap() int {
 	if s.serve.answer != unsafe { nil } {
 		return s.max_uds
 	}
-	return if s.uds.resp_cap > 0 { s.uds.resp_cap } else { uds.legacy_resp_cap }
+	if s.uds.resp_cap < 0 {
+		return 0
+	}
+	own := if s.uds.resp_cap > 0 { s.uds.resp_cap } else { uds.legacy_resp_cap }
+	return if own < s.max_uds { own } else { s.max_uds }
+}
+
+// hold_uds_cap gives the embedded server the capacity uds_cap reserves, so what it writes stays
+// within the room feed checked — whether its own init came before bind or after. Below the
+// server's minimum it stays silent rather than overrun.
+fn (mut s Server) hold_uds_cap() {
+	if s.uds.resp_cap < 0 {
+		return
+	}
+	cap := s.uds_cap()
+	s.uds.resp_cap = if cap >= uds.min_resp_cap { cap } else { -1 }
 }
 
 fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
@@ -525,8 +542,10 @@ fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
 			ulen := if s.serve.answer != unsafe { nil } {
 				s.serve.answer(s.serve.ctx, req, plen - 4, functional, out, cap)
 			} else if functional {
+				s.hold_uds_cap()
 				s.uds.handle_functional(req, plen - 4, out)
 			} else {
+				s.hold_uds_cap()
 				s.uds.handle(req, plen - 4, out)
 			}
 			if ulen < 0 || ulen > cap {

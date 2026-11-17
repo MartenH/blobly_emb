@@ -1236,7 +1236,18 @@ fn test_a_request_download_answer_is_lowered_to_the_gateways_maximum() {
 	assert fit_block_length(unsafe { &wide[0] }, wide.len, 520) && wide == [u8(0x74), 0x40, 0x00, 0x00, 0x02, 0x08]
 	mut narrow := [u8(0x74), 0x10, 0xFF]
 	assert fit_block_length(unsafe { &narrow[0] }, narrow.len, 64) && narrow == [u8(0x74), 0x10, 0x40]
-	for bad in [[u8(0x74), 0x00, 0xFF], [u8(0x74), 0x50, 1, 2, 3, 4, 5], [u8(0x74), 0x20, 0xFF],
+	// a field wider than four bytes, as ISO 14229-1 allows (1..15): lowered in its own width, its
+	// leading bytes zero — past eight bytes too, where a nonzero leading byte is more than any
+	// gateway carries
+	mut five := [u8(0x74), 0x50, 0x00, 0x00, 0x00, 0x0F, 0xE2] // 4066
+	assert fit_block_length(unsafe { &five[0] }, five.len, 520)
+	assert five == [u8(0x74), 0x50, 0x00, 0x00, 0x00, 0x02, 0x08]
+	mut ten := [u8(0x74), 0xA0, 0x01, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x10]
+	assert fit_block_length(unsafe { &ten[0] }, ten.len, 520)
+	assert ten == [u8(0x74), 0xA0, 0, 0, 0, 0, 0, 0, 0, 0, 0x02, 0x08]
+	mut ten_fits := [u8(0x74), 0xA0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01, 0x00]
+	assert !fit_block_length(unsafe { &ten_fits[0] }, ten_fits.len, 520)
+	for bad in [[u8(0x74), 0x00, 0xFF], [u8(0x74), 0x50, 0, 0, 0, 0x0F], [u8(0x74), 0x20, 0xFF],
 		[u8(0x7F), 0x34, 0x22]] {
 		mut b := bad.clone()
 		assert !fit_block_length(unsafe { &b[0] }, b.len, 8) && b == bad, bad.str()
@@ -1269,4 +1280,63 @@ fn test_the_routers_link_takes_no_answer_past_the_gateways_maximum() {
 	answer(mut n, over)
 	run(mut r, mut n, mut ch, mut &now, 20)
 	assert take(mut r) == [u8(0x7F), 0x22, 0x14], 'not the 65-byte answer'
+}
+
+// @verifies REQ-CAN-TP-025
+// a first frame shorter than its PCI says is nothing to the router, as it is to the link
+// (isotp.Link.truncated): five bytes announcing an answer past a gateway of 8 neither answer the
+// request in flight responseTooLong nor end its exchange — its own answer still comes
+fn test_a_truncated_oversize_first_frame_is_not_answered_response_too_long() {
+	mut r := router_at(8)
+	mut n := new_node()
+	mut ch := Chan{}
+	mut now := u64(0)
+	req := [u8(0x22), 0xF1, 0x90]
+	assert r.accept(0, &req[0], req.len, 1, 1, 1, now) == .accepted
+	run(mut r, mut n, mut ch, mut &now, 2)
+	mut short := can.Frame{
+		id:  rsp_id
+		len: 5
+	}
+	for i, b in [u8(0x10), 0x20, 0x62, 0xF1, 0x90] {
+		short.data[i] = b
+	}
+	assert r.on_frame(edge, &short, now)
+	assert r.waiting() == 0 && r.too_long == 0
+	assert r.active_bus() == int(edge), 'the exchange in flight goes on'
+	run(mut r, mut n, mut ch, mut &now, 2)
+	answer(mut n, [u8(0x62), 0xF1, 0x90, 0x41])
+	run(mut r, mut n, mut ch, mut &now, 2)
+	assert take(mut r) == [u8(0x62), 0xF1, 0x90, 0x41]
+	assert !oversize_first_frame(&r.link, &short)
+	short.len = 8
+	assert oversize_first_frame(&r.link, &short), 'the whole frame is one the link refuses'
+}
+
+// @verifies REQ-CAN-TP-025
+// a too-long final answer five seconds after a responsePending — inside the answer wait, past the
+// stall window that wait ran down — is still refused on the bus: its FC.OVFLW reaches the node
+// (which gives the answer up at once) and the tester gets the responseTooLong, the exchange not
+// counted as stalled
+fn test_a_too_long_answer_late_in_the_answer_wait_still_refuses_the_target() {
+	mut r := new_router() // the gateway at 520
+	mut n := new_node() // the node at 4095
+	mut ch := Chan{}
+	mut now := u64(0)
+	req := [u8(0x22), 0xF1, 0x90]
+	assert r.accept(0, &req[0], req.len, 1, 7, 1, now) == .accepted
+	run(mut r, mut n, mut ch, mut &now, 2)
+	answer(mut n, [u8(0x7F), 0x22, 0x78])
+	run(mut r, mut n, mut ch, mut &now, 2)
+	assert take(mut r) == [u8(0x7F), 0x22, 0x78]
+	now += 5_000_000
+	mut long := []u8{len: isotp.default_message + 21, init: u8(index)}
+	long[0] = 0x62
+	long[1] = 0xF1
+	long[2] = 0x90
+	answer(mut n, long)
+	run(mut r, mut n, mut ch, mut &now, 4)
+	assert n.link.tx_aborts == 1, 'the node was refused by FC.OVFLW'
+	assert take(mut r) == [u8(0x7F), 0x22, 0x14]
+	assert r.timeouts == 0 && r.too_long == 1 && !r.busy()
 }

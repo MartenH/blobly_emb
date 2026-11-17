@@ -69,9 +69,9 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-CAN-TP-020 | QM | test | verified | diag_target_test.v (pass) |
 | REQ-CAN-TP-021 | QM | test | verified | diag_target_test.v (pass) |
 | REQ-CAN-TP-022 | QM | test | verified | diag_target_test.v (pass), diag_target_test.v (pass), fault_target_test.v (pass), fault_target_test.v (pass), records_test.v (pass), uds_test.v (pass) |
-| REQ-CAN-TP-023 | QM | test | verified | diag_target_test.v (pass), diag_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), doip_target_test.v (pass), doip_target_test.v (pass), doip_test.v (pass), doip_test.v (pass), doipnet_test.v (pass), doipnet_test.v (pass), doipnet_test.v (pass), route_size_test.v (pass), route_test.v (pass), someip_test.v (pass) |
+| REQ-CAN-TP-023 | QM | test | verified | diag_target_test.v (pass), diag_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), doip_target_test.v (pass), doip_target_test.v (pass), doip_test.v (pass), doip_test.v (pass), doip_test.v (pass), doipnet_test.v (pass), doipnet_test.v (pass), doipnet_test.v (pass), route_size_test.v (pass), route_test.v (pass), someip_test.v (pass) |
 | REQ-CAN-TP-024 | QM | test | verified | isotp_test.v (pass), module_test.v (pass), shell_test.v (pass) |
-| REQ-CAN-TP-025 | QM | test | verified | diagroute_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass) |
+| REQ-CAN-TP-025 | QM | test | verified | diagroute_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass) |
 | REQ-COM-001 | QM | test | uncovered | — |
 | REQ-COM-002 | QM | test | uncovered | — |
 | REQ-COM-003 | QM | test | verified | com_test.v (pass) |
