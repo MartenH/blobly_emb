@@ -33,6 +33,7 @@ fn C.boot_app_size() u32
 fn C.boot_erase_unit() u32
 fn C.boot_rx_id() u32
 fn C.boot_tx_id() u32
+fn C.boot_ext() int
 fn C.boot_can_idx() int
 fn C.boot_can_fd() int
 fn C.boot_bs() u8
@@ -175,8 +176,11 @@ fn serve_loop() {
 	if !can_ok && !net_serves() {
 		for {} // no transport, nothing to serve — parked, but flashable over SWD
 	}
+	// the node's [isotp] ids, and their format: 29-bit when the application's are (ext, or normal
+	// fixed addressing), so a tester reaches the bootloader on the ids it used for the application
 	rx_id := C.boot_rx_id()
 	tx_id := C.boot_tx_id()
+	ext := C.boot_ext() != 0
 	lay := buffers()
 	req := region(lay.req)
 	rsp := region(lay.rsp)
@@ -194,8 +198,8 @@ fn serve_loop() {
 		// pumped with a refusal aborting it, S3 held while an exchange is in flight
 		mut due := false
 		if can_ok {
-			due = diag.serve_step(mut g_prog, mut g_link, rx_id, tx_id, now, mut ch, req, rsp,
-				now_us)
+			due = diag.serve_step(mut g_prog, mut g_link, rx_id, tx_id, ext, now, mut ch, req,
+				rsp, now_us)
 		} else {
 			g_prog.tick(now)
 			due = g_prog.reset_due()

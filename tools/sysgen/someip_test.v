@@ -1444,6 +1444,30 @@ fn test_a_route_carries_its_nodes_tx_dl() {
 	assert doip_route_section(fd, fd.nodes[0]).join('\n').contains('tx_dl = 64')
 }
 
+// @verifies REQ-NET-021
+// a node on normal fixed addressing: the route carries its derived 29-bit ids and the format, and
+// is judged by them like any other (its [isotp] serving on the allocation)
+fn test_a_29_bit_node_is_routed_in_its_format() {
+	mut sys := route_system()
+	zone := sys.nodes.len - 1
+	sys.nodes[zone].diag.req = 0x18DA10F1
+	sys.nodes[zone].diag.rsp = 0x18DAF110
+	sys.nodes[zone].diag.ext = true
+	sys.nodes[zone].diag.fixed = true
+	sys.nodes[zone].view.isotp_conns[0].rx_id = 0x18DA10F1
+	sys.nodes[zone].view.isotp_conns[0].tx_id = 0x18DAF110
+	sys.nodes[zone].view.isotp_conns[0].ext = true
+	assert route_errs(sys).len == 0, route_errs(sys).str()
+	sec := doip_route_section(sys, sys.nodes[0]).join('\n')
+	assert sec.contains('tx_id   = 0x18DA10F1') && sec.contains('rx_id   = 0x18DAF110')
+	assert sec.contains('ext     = true')
+	// the 11-bit node's route states no format
+	assert !doip_route_section(route_system(), route_system().nodes[0]).join('\n').contains('ext')
+	// a server on the same numbers as 11-bit ids does not serve the allocation
+	sys.nodes[zone].view.isotp_conns[0].ext = false
+	assert route_errs(sys).any(it.contains('the gateway forwards to the allocation')), route_errs(sys).str()
+}
+
 fn test_a_route_the_system_cannot_serve_is_refused() {
 	cases := {
 		'no such node':                          fn (mut s sysmodel.System) {

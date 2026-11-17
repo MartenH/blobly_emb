@@ -26,8 +26,8 @@ completed one.
 |---|---|---|
 | Frame types | single (SF), first (FF), consecutive (CF), flow control (FC). An FC received may be CTS, WAIT or OVFLW | — |
 | Flow control we send | CTS, and OVFLW for a first frame too long to hold | WAIT: we never send one |
-| Addressing | **normal addressing, 11-bit identifiers**: one request id and one response id per connection | 29-bit normal addressing, normal fixed (`0x18DA…`), extended (target address in byte 0) and mixed addressing. `[isotp]` refuses an id above `0x7FF`, and a frame with a 29-bit id is never this connection's |
-| Functional addressing | single-frame requests on `functional_id` (§3.6) | multi-frame functional requests (ISO allows only single frames anyway) |
+| Addressing | **normal addressing on 11-bit identifiers** (the default): one request id and one response id per connection. **Normal addressing on 29-bit identifiers** (`[isotp] ext = true`): the same, every id 29-bit (REQ-CAN-TP-040). **Normal fixed addressing** (`addressing = "normal_fixed"`): 29-bit ids derived from the node's address `sa` and the tester's `ta` — requests on `0x18DA<sa><ta>`, answers on `0x18DA<ta><sa>`, functional requests on `0x18DB<functional_ta><ta>` (REQ-CAN-TP-041, §3.8). The format is part of the id: a frame of the same number in the other format is never this connection's (REQ-CAN-TP-042) | **extended addressing** (the target address in byte 0) and **mixed addressing** (an address extension byte: 11-bit, or 29-bit `0x18CE…` / `0x18CD…`). Without `ext`, `[isotp]` refuses an id above `0x7FF` rather than promote it |
+| Functional addressing | single-frame requests on the functional id — `functional_id`, or with normal fixed addressing `0x18DB<functional_ta><ta>` (§3.6) | multi-frame functional requests (ISO allows only single frames anyway) |
 | Frame size (TX_DL) | **8** by default; 12, 16, 20, 24, 32, 48 or 64 per **`[isotp] tx_dl`** on a CAN-FD bus (§2): a single frame of up to TX_DL − 2 bytes behind the escape (`SF_DL` in byte 1), a first frame of TX_DL bytes, consecutive frames of TX_DL − 1 (§3.5). Frames of any length up to 64 are **received** without configuration. On a CAN-FD bus every frame goes out as a CAN-FD frame (FDF set; BRS set unless the image is built with `BLOB_FDCAN_NOBRS`), 8-byte ones included | a TX_DL above 8 on a classic bus (refused at generation) |
 | Message length | 1 to the connection's maximum: the node's **`[isotp] max_message`**, 8–4095 bytes, **520** when not configured (§2) | a message above the maximum, and the escape first frame (`FF_DL` above 4095): both are refused with OVFLW (§3.4) |
 | Padding | unused bytes `0x00`, to 8 bytes or, past 8, to the next CAN-FD length (12, 16, 20, 24, 32, 48, 64), never past TX_DL; flow control frames are 8 bytes | a configurable fill byte. We accept received frames shorter than 8, and a last consecutive frame shorter than its first frame (§3.5) |
@@ -51,17 +51,52 @@ max_message   = 520      # the longest message either way, in bytes
 tx_dl         = 8        # the frame length we transmit with (above 8 only on a CAN-FD bus)
 ```
 
+The same connection on 29-bit identifiers, by normal addressing or by normal fixed addressing
+(§3.8):
+
+```toml
+[isotp]
+bus           = "can0"
+rx_id         = 0x18DA10F1   # 29-bit, because of ext
+tx_id         = 0x18DAF110
+ext           = true
+
+# ... or the same ids derived from two addresses (no rx_id / tx_id / ext then):
+# addressing    = "normal_fixed"
+# sa            = 0x10       # this node: requests arrive on 0x18DA10F1, answers go on 0x18DAF110
+# ta            = 0xF1       # the tester
+# functional_ta = 0x33       # optional: functional requests on 0x18DB33F1
+```
+
 | Key | Range | Default | Notes |
 |---|---|---|---|
-| `rx_id`, `tx_id` | `0x000`–`0x7FF` | — | 11-bit only |
-| `functional_id` | `0x001`–`0x7FF` | absent = none | 11-bit only; 0 also means none |
+| `addressing` | `"normal"`, `"normal_fixed"` | `"normal"` | how the ids are stated: given (`rx_id` / `tx_id`), or derived from `sa` / `ta`. Extended and mixed addressing are not supported |
+| `rx_id`, `tx_id` | `0x000`–`0x7FF`; `0x00000000`–`0x1FFFFFFF` with `ext` | — | required with normal addressing, refused with `normal_fixed` |
+| `functional_id` | as `rx_id` | absent = none | 0 also means none; refused with `normal_fixed` (`functional_ta`); not one of the connection's physical ids |
+| `ext` | true / false | false | the three ids are 29-bit: received and sent with the extended (IDE) id (REQ-CAN-TP-040). Refused with `normal_fixed`, which is always 29-bit |
+| `sa` | 0–255 | — | `normal_fixed`: this node's own address — N_TA of the requests it receives, N_SA of its answers. Required there, refused with normal addressing |
+| `ta` | 0–255 | — | `normal_fixed`: the tester's address (e.g. `0xF1`) — N_SA of the requests, N_TA of the answers; not `sa`. Required there, refused with normal addressing |
+| `functional_ta` | 0–255 | absent = none | `normal_fixed`: the functional target address (conventionally `0x33`, ISO 15765-4); functional requests arrive on `0x18DB<functional_ta><ta>` |
 | `bs` | 0–255 | 0 | one byte on the wire |
 | `stmin_ms` | 0–127 | 0 | milliseconds only: the microsecond codes `0xF1`–`0xF9` cannot be asked for |
 | `max_message` | 8–4095 | 520 | the longest message either way. 4095 is the most a first frame states without the escape, which stays refused (REQ-CAN-TP-021). It sizes the connection's request and response buffers (generated storage, so the node pays for what it configures), the server's response capacity, the node's DoIP message limit and the maximum data size its entity status reports, a DoIP gateway's routed messages (a longer routed answer comes back responseTooLong, a routed bootloader's block offer is lowered to it), and its bootloader's buffers and TransferData block ([bootloader.md](bootloader.md)) — REQ-CAN-TP-023, REQ-CAN-TP-025, REQ-BOOT-020 |
 | `tx_dl` | 8, 12, 16, 20, 24, 32, 48, 64 | 8 | the frame length the connection transmits with (§3.5). Above 8 only on a `[bus.*] fd = true` bus — the bus whose channel every generator opens CAN-FD (a host node's through cfg2v's `<bus>_fd`, a target's comm thread, a gateway's route buses and `BOOT_CAN_FD` through loom2v), all reading the key through one rule (`ecumodel.bus_fd`) — else refused at generation; any other value is refused by the schema check (ecucheck, the editor's JSON Schema) and at generation alike (REQ-CAN-TP-026). The node's bootloader (`BOOT_TX_DL`) and a DoIP gateway's route to the node (`[[doip.route]] tx_dl`, which sysgen writes; syscheck refuses an authored route whose `tx_dl` is not its node's) send with it too. Opt-in per node, so a tester that speaks classic frames only keeps working: a receiver takes any length without it |
 
 A value outside its range is refused when the node is generated, never narrowed
-(REQ-CAN-TP-020, REQ-CAN-TP-021). Generation also refuses a `max_message` smaller than the longest
+(REQ-CAN-TP-020, REQ-CAN-TP-021). So is an id above `0x7FF` without `ext`, ids or `ext` given beside
+`sa` / `ta`, a missing address, an address outside 0–255, and `sa` equal to `ta`
+(REQ-CAN-TP-040, REQ-CAN-TP-041) — one reader states those rules for `[isotp]`, a system node's
+`diag` and a gateway's `[[doip.route]]` alike (`tools/ecumodel` `diag_ids`). On a node of a
+dissolved system ([multi-node.md](multi-node.md)) the node's `diag` in system.toml is the
+allocation its server serves on: an `[isotp]` that states no physical ids (no `rx_id`, `tx_id`,
+`addressing`, `sa`, `ta` or `functional_ta`) takes them from it — sysgen writes the allocation's keys
+under the `[isotp]` header of the generated node. A `diag` on normal addressing states no functional
+id, so such an `[isotp]` may state its own `functional_id` beside the allocation it takes, read in the
+allocation's format (not wider than it, and not one of its physical ids), and an `ext` only where it
+agrees with the allocation's format; beside a `diag` on normal fixed addressing it states neither,
+the allocation's `functional_ta` being its functional id. One that states its physical ids must state
+the allocation's, format and functional id included (REQ-TOPO-014); a `diag` giving one of `req` /
+`rsp` without the other is refused (REQ-TOPO-013), never lowered. Generation also refuses a `max_message` smaller than the longest
 message the configuration says the server must exchange whole — a DID's 0x22 answer and 0x2E
 request, the DTC list (0x19 02 / 0A), a DTC's snapshot (0x19 04) or extended data (0x19 06), and on a
 `[boot]` node the bootloader's 66-byte 0x29 proof — naming that message (REQ-CAN-TP-022). A read of
@@ -146,7 +181,7 @@ N_Cr, "handed to the controller" is the end point: the `Link` sees no transmit c
 | A valid SF or FF (one the rows above accept) **while a reception is in progress** | the partial message is discarded and the new frame handled as a new reception (REQ-CAN-TP-012). A pending OVFLW is dropped too. An SF or FF that is ignored (rows above) leaves the reception running |
 | A frame longer than 8 bytes of a length no CAN-FD frame has (9–11, 13–15, …) | ignored, whatever its PCI: a controller delivers only DLC lengths, so only a host's virtual bus can hand one over (REQ-CAN-TP-028). This rule is ours: blobly_net's ISO-TP and the Linux kernel's take such a single frame when it holds its `SF_DL` (both refuse a first frame of such a length) |
 | A reserved PCI type (`0x4_`–`0xF_`) | ignored |
-| A frame with a 29-bit id, or an id other than `rx_id` / `functional_id` | not this connection's |
+| A frame whose id or format is not the connection's: another id than `rx_id` / `functional_id`, or one of them in the other format (11-bit on a 29-bit connection, 29-bit on an 11-bit one) | not this connection's (REQ-CAN-TP-042) |
 
 None of these outcomes is reported as an error code. ISO's `N_USData.indication` results
 (`N_WRONG_SN`, `N_UNEXP_PDU`, `N_TIMEOUT_Cr`, …) have no counterpart: a reception that fails
@@ -189,10 +224,11 @@ what the server answers with is its own TX_DL.
 
 ### 3.6 Functional requests
 
-A request on `functional_id` must be a single frame: PCI `0x0N` with N from 1 to 7 in a frame of up
-to 8 bytes long enough to hold it, or the escape in a CAN-FD frame longer than 8 bytes — decoded by
-the same `isotp.single_frame` as the physical id, so the two ids cannot disagree about a frame
-(REQ-CAN-TP-028). Anything else on that id is discarded and does not disturb the physical
+A request on the functional id (`functional_id`, or with normal fixed addressing
+`0x18DB<functional_ta><ta>`; none when neither is configured) must be a single frame: PCI `0x0N`
+with N from 1 to 7 in a frame of up to 8 bytes long enough to hold it, or the escape in a CAN-FD
+frame longer than 8 bytes — decoded by the same `isotp.single_frame` as the physical id, so the two
+ids cannot disagree about a frame (REQ-CAN-TP-028). Anything else on that id is discarded and does not disturb the physical
 connection (REQ-CAN-TP-019). A valid one is served the moment it is read, in bus order, so a
 functional 0x28 gates the very next frame. Its answer, if any, goes out on `tx_id` like a physical
 answer. It is **dropped, not queued**, while the physical connection is busy in either direction or
@@ -223,13 +259,43 @@ serves no functional requests.
   half-duplex rule and will retry. A request that completes while a reset is pending is dropped
   as well ([`comm/diag/step.v`](../comm/diag/step.v) `take_request`).
 
+### 3.8 Identifiers: their format, and normal fixed addressing
+
+- **The format is part of the id** (REQ-CAN-TP-042). A connection is 11-bit or 29-bit as a whole:
+  its request, response and functional ids share one format, and it takes a frame only when both
+  the id and the format are its own. `0x7B0` as an 11-bit and as a 29-bit id are two frames; the
+  other one is left to the owner's other receivers. The same comparison is made by the
+  application's server ([`comm/diag`](../comm/diag/diag.v) `Connection.on_frame`), the bootloader
+  (`diag.serve_step`, its `ext` from `BOOT_EXT`; `examples/boot_sim` on its 11-bit ids) and a DoIP gateway's router
+  ([`comm/diagroute`](../comm/diagroute/diagroute.v) `Router.on_frame`, the route's `ext`). Every
+  frame a 29-bit connection sends goes out with the extended id.
+- **Normal fixed addressing at priority 6** (REQ-CAN-TP-043). ISO 15765-2 leaves the priority (the
+  id's top three bits) open; we send 6, the conventional value (ISO 15765-4), as `0x18DA…` /
+  `0x18DB…`. Ids are compared whole, with no mask, so only priority-6 frames are received: a request
+  sent at priority 7 (`0x1CDA…`) is not served. The derivation is
+  [`comm/isotp/addressing.v`](../comm/isotp/addressing.v) `fixed_id`, which the tools share.
+- **No acceptance filtering in hardware.** The H7 FDCAN is set up to accept data frames of both
+  widths into its receive FIFO with no filter elements (`driver/can/can_fdcan.c`: `GFC`, `SIDFC`),
+  the ST HAL backend and SocketCAN likewise (SocketCAN carries a 29-bit id with `CAN_EFF_FLAG`), so
+  a 29-bit diagnostic id needs no driver configuration: the (id, format) comparison above is the
+  only filter. Hardware filter lists would gate every frame a node receives and are not used yet.
+  Keeping the width in both directions, on a CAN-FD frame too, is the driver's REQ-CAN-DRV-010:
+  the SocketCAN backend's encoding is tested on host (`driver/can/can_test.v`, through a socket
+  pair), and the register-level FDCAN backend exchanged 29-bit frames on H723 silicon
+  (`isotp-29bit-silicon`: zone_a on normal fixed addressing at TX_DL 64, §5); the ST HAL backend and
+  a classic-bus 29-bit run are not verified yet.
+- **0 is no functional id**, in either format: a 29-bit functional id of 0 cannot be configured. With
+  normal fixed addressing an absent `functional_ta` means none (a derived `0x18DB…` id is never 0).
+- **The AUTOSAR CanIf backend** (`driver/can/can_canif.c`) maps (id, ext) pairs to PDUs: a 29-bit
+  diagnostic connection needs rows with `ext = 1` there, or its frames are refused.
+
 ## 4. Who runs a `Link`
 
 | Owner | Ids | Flow control it grants | Buffers | Notes |
 |---|---|---|---|---|
-| Diagnostic server ([`comm/diag`](../comm/diag/diag.v)): the host bridge, and the ThreadX comm thread on a target | `[isotp]` `rx_id` / `tx_id` / `functional_id` | `bs`, `stmin_ms` | a request and a response buffer of `max_message` bytes, generated beside the connection (the host bridge's state, `g_diag_req` / `g_diag_resp` on a target) and shared with the link | the connection this page describes, at the node's `tx_dl` |
-| Bootloader ([`boot/target`](../boot/target/main.v), `diag.serve_step`) | the node's `[isotp]`, from `gen/boot_gen.h` | the node's `bs`, `stmin_ms` | the same two, carved with the DoIP ones from one block `gen/boot_gen.h` sizes (`BOOT_MAX_MESSAGE`, `BOOT_BUF_LEN`, the `boot.bufs` layout) | same bus, ids, frame format and frame length (the node's `tx_dl`, `BOOT_TX_DL`); no functional requests ([bootloader.md](bootloader.md)) |
-| DoIP gateway router ([`comm/diagroute`](../comm/diagroute/diagroute.v)) | each routed node's request / response ids | BS 8, STmin 0 | its link's two and one per queued answer, the gateway's own `max_message` each (`diagroute.storage_len`), kept apart because the doip thread fills the next request while the link still sends | the gateway acting as a **tester** on CAN. Each route sends at its node's `tx_dl` (`[[doip.route]] tx_dl`, lowered by sysgen; its flow control 8 bytes), and an answer is taken at whatever RX_DL the node sends. Besides the ISO timers: an answer reception ISO-TP abandons (N_Cr, or our flow control that could not leave within N_Ar) ends the exchange at once, counted in `timeouts`; an exchange whose frames stop moving for 5 s is ended (`stall_us`: a request whose single or first frame cannot leave); and an answer is awaited 6 s after the request left (`answer_wait_us`: P2*max plus 1 s). Past the gateway's maximum: a longer routed request never reaches it (the DoIP entity refuses it with the generic NACK 0x02 and discards it, the connection kept, REQ-CAN-TP-023); past the routed node's (`[[doip.route]] max_message`, the node's own), a request is refused at once with the diagnostic NACK 0x04 rather than forwarded to be refused with FC.OVFLW; a longer answer is refused on the bus with FC.OVFLW and answered to the tester in the node's name as `7F <service> 14` — when its first frame answers the request in flight, a late one being dropped like any late answer; and a RequestDownload answer's block length is lowered to the gateway's maximum, so a node with a larger one is reprogrammed through it in blocks it carries (REQ-CAN-TP-025, [net.md](net.md)) |
+| Diagnostic server ([`comm/diag`](../comm/diag/diag.v)): the host bridge, and the ThreadX comm thread on a target | `[isotp]` `rx_id` / `tx_id` / `functional_id`, or with normal fixed addressing the ids `sa` / `ta` / `functional_ta` derive (§3.8); 29-bit with `ext` or `normal_fixed` | `bs`, `stmin_ms` | a request and a response buffer of `max_message` bytes, generated beside the connection (the host bridge's state, `g_diag_req` / `g_diag_resp` on a target) and shared with the link | the connection this page describes, at the node's `tx_dl` |
+| Bootloader ([`boot/target`](../boot/target/main.v), `diag.serve_step`) | the node's `[isotp]` ids and their format, from `gen/boot_gen.h` (`BOOT_RX_ID`, `BOOT_TX_ID`, `BOOT_EXT`) | the node's `bs`, `stmin_ms` | the same two, carved with the DoIP ones from one block `gen/boot_gen.h` sizes (`BOOT_MAX_MESSAGE`, `BOOT_BUF_LEN`, the `boot.bufs` layout) | same bus, ids and their format, frame format and frame length (the node's `tx_dl`, `BOOT_TX_DL`); no functional requests ([bootloader.md](bootloader.md)) |
+| DoIP gateway router ([`comm/diagroute`](../comm/diagroute/diagroute.v)) | each routed node's request / response ids, in the node's format (`[[doip.route]] ext`, REQ-NET-021) | BS 8, STmin 0 | its link's two and one per queued answer, the gateway's own `max_message` each (`diagroute.storage_len`), kept apart because the doip thread fills the next request while the link still sends | the gateway acting as a **tester** on CAN. Each route sends at its node's `tx_dl` (`[[doip.route]] tx_dl`, lowered by sysgen; its flow control 8 bytes), and an answer is taken at whatever RX_DL the node sends. Besides the ISO timers: an answer reception ISO-TP abandons (N_Cr, or our flow control that could not leave within N_Ar) ends the exchange at once, counted in `timeouts`; an exchange whose frames stop moving for 5 s is ended (`stall_us`: a request whose single or first frame cannot leave); and an answer is awaited 6 s after the request left (`answer_wait_us`: P2*max plus 1 s). Past the gateway's maximum: a longer routed request never reaches it (the DoIP entity refuses it with the generic NACK 0x02 and discards it, the connection kept, REQ-CAN-TP-023); past the routed node's (`[[doip.route]] max_message`, the node's own), a request is refused at once with the diagnostic NACK 0x04 rather than forwarded to be refused with FC.OVFLW; a longer answer is refused on the bus with FC.OVFLW and answered to the tester in the node's name as `7F <service> 14` — when its first frame answers the request in flight, a late one being dropped like any late answer; and a RequestDownload answer's block length is lowered to the gateway's maximum, so a node with a larger one is reprogrammed through it in blocks it carries (REQ-CAN-TP-025, [net.md](net.md)) |
 | Shell response ([`comm/shell`](../comm/shell/shell.v)) and trace dump ([`comm/trace`](../comm/trace/module.v)) | a stream id plus a separate flow-control id (`out` / `fc`, `record` / `dump_fc`) | — (they send messages, never receive one) | a transmit buffer of 520 bytes, their own whatever the node's `max_message` (`shell.max_rsp`, `trace.dump_block`: an 8-byte header and 64 records), and none to receive into | one ISO-TP message per response or dump block, at TX_DL 8 whatever the node's `tx_dl`; the request is a plain frame, not ISO-TP ([onboard_trace.md](onboard_trace.md)). Only a **flow control** (PCI type 3, at least PCI, BS and STmin) received on the flow-control id reaches the link — the one rule both call, `isotp` `on_flow_control`: any other frame there, a first frame above all, is dropped, so it never starts a reception or puts a flow control into the stream (REQ-CAN-TP-024) |
 
 ## 5. Verification
@@ -251,7 +317,20 @@ owners: `step_test.v` runs the bootloader's link, configured as its image config
 [`tools/sysgen`](../tools/sysgen/node_gate_test.v) reads zone_a's `tx_dl = 64` from its ecu.toml and
 lowers it onto sysnode's route, and syscheck refuses an authored route whose `tx_dl` is not its
 node's; [`tools/cfgschema`](../tools/cfgschema/cfgschema_test.v) holds the schema's set of lengths
-to `isotp.valid_dl`, so ecucheck refuses what generation refuses. `isotp_test.v` runs the
+to `isotp.valid_dl`, so ecucheck refuses what generation refuses. The identifier formats:
+[`comm/isotp/addressing_test.v`](../comm/isotp/addressing_test.v) pins normal fixed addressing's ids
+(the same golden vectors as blobly_net's `blobly/sysview`), `diag_test.v`, `step_test.v` and
+`diagroute_test.v` run 29-bit connections, routes and bootloader steps next to their numbers in the
+other format, [`tools/ecumodel/addressing_test.v`](../tools/ecumodel/addressing_test.v) the reader's
+refusals, `diag_target_test.v` / `doip_target_test.v` the generated configuration and the
+format-aware collision checks, [`tools/sysmodel/diag_format_test.v`](../tools/sysmodel/diag_format_test.v)
+the system checks (a diag-only node's ids, routes and the NM range by format, and an `[isotp]` that
+states no ids taking its node's `diag`), [`tools/sysgen/gen_test.v`](../tools/sysgen/gen_test.v)
+the lowering of a `diag` into such an `[isotp]`, and
+[`tools/sysgen/fb_move_test.v`](../tools/sysgen/fb_move_test.v) generates system_full with zone_a on
+normal fixed addressing, stated once in its `diag` and lowered into its `[isotp]` and its gateway's
+route, and type-checks zone_a's and its gateway's images.
+`isotp_test.v` runs the
 length cases at the floor, the default and the limit (8, 520, 4095), every TX_DL against a receiver
 with no setting, and pins the CAN-FD frames with blobly_net's own byte vectors
 (`blobly/isotp/fd_test.v` — its fill bytes `0xAA` / `0xCC` read `0x00` here, and a frame a CAN-FD
@@ -264,4 +343,10 @@ over 520 both ways against it, and against domain at the default, and exchanges 
 zone_a directly and through sysnode's route;
 [`boot_handoff.lua`](../examples/system_full/test/boot_handoff.lua) checks each CAN bootloader's
 0x29 challenge on the wire at its node's TX_DL (one 48-byte frame behind the escape on zone_a, a
-first frame of 8 on the classic bus).
+first frame of 8 on the classic bus). 29-bit and normal fixed addressing ran on silicon once, by
+hand: zone_a generated temporarily on normal fixed addressing (sa 0x10, ta 0xF1, functional_ta
+0x33), its application and bootloader answering a CANsub on the derived 29-bit ids, an 11-bit request
+of the same number unanswered (`isotp-29bit-silicon` in
+[`requirements/verifications.toml`](../requirements/verifications.toml)). Every committed example and
+bench suite uses 11-bit ids, so that run is not repeated by `make hwtest`; 29-bit and normal fixed
+addressing are otherwise verified by the unit and generation tests above.

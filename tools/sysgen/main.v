@@ -233,7 +233,10 @@ fn copy_dbcs(sys sysmodel.System, dst string) ! {
 // system-facing preamble, then the node's authored internals verbatim.
 fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 	node_path := if os.is_abs_path(node.ecu) { node.ecu } else { os.join_path(sys.dir, node.ecu) }
-	authored := os.read_file(node_path) or { return error('read ${node_path}: ${err}') }
+	text := os.read_file(node_path) or { return error('read ${node_path}: ${err}') }
+	// the authored internals, with the node's diag allocation lowered into an [isotp] that states
+	// no ids (REQ-TOPO-014)
+	authored := lower_isotp(node, text)!
 	doc := toml.parse_file(node_path) or { return error('parse ${node_path}: ${err}') }
 	view := sysmodel.parse_node_view(doc)
 
@@ -932,6 +935,46 @@ fn subnet_lines(node sysmodel.Node, mask_key string, gw_key string) []string {
 	return b
 }
 
+// lower_isotp: a node's authored internals with its diag allocation lowered into its [isotp] when
+// that states no ids (sysmodel lower_diag marked it `lowered`) — the keys the allocation states,
+// written under the table's header: req / rsp as rx_id / tx_id with `ext` where 29-bit, or normal
+// fixed addressing's addressing / sa / ta / functional_ta (REQ-TOPO-014); a functional_id and an
+// ext the [isotp] states beside the allocation stay as authored. The text is unchanged
+// for every other node. The authored [isotp] keeps its other keys (bus, bs, max_message, ...): the
+// table is the node's, and a generated one beside it would be a second table of one name.
+fn lower_isotp(node sysmodel.Node, authored string) !string {
+	if node.view.isotp_conns.len != 1 || !node.view.isotp_conns[0].lowered {
+		return authored
+	}
+	d := node.diag
+	mut keys := ['# lowered by sysgen from the node\'s diag in system.toml (REQ-TOPO-014)']
+	if d.fixed {
+		keys << 'addressing = "normal_fixed"'
+		keys << 'sa = 0x${d.sa.hex().to_upper()}'
+		keys << 'ta = 0x${d.ta.hex().to_upper()}'
+		if d.functional != 0 {
+			keys << 'functional_ta = 0x${d.functional_ta.hex().to_upper()}'
+		}
+	} else {
+		keys << 'rx_id = 0x${d.req.hex().to_upper()}'
+		keys << 'tx_id = 0x${d.rsp.hex().to_upper()}'
+		// an ext the [isotp] states is kept as authored (syscheck holds it to the allocation's
+		// format), as its functional_id is: a key written twice is a TOML error
+		if d.ext && !node.view.isotp_conns[0].ext_stated {
+			keys << 'ext = true'
+		}
+	}
+	mut lines := authored.split('\n')
+	for i, l in lines {
+		// the table's header, however spaced and commented
+		if l.all_before('#').replace(' ', '').replace('\t', '').trim_space() == '[isotp]' {
+			lines.insert(i + 1, keys)
+			return lines.join('\n')
+		}
+	}
+	return error('node "${node.name}": its [isotp] states no ids, and sysgen lowers its diag allocation under an `[isotp]` table header, which its ecu.toml does not have — write [isotp] as a table, or state its ids')
+}
+
 // doip_route_section: a DoIP gateway's routes (REQ-NET-019), lowered from its doip `routes` — one
 // [[doip.route]] per routed node: its diag `logical`, the gateway's interface on the CAN bus the
 // two share, the node's diag request id (what the gateway sends on) and response id (what it
@@ -948,8 +991,13 @@ fn doip_route_section(sys sysmodel.System, node sysmodel.Node) []string {
 		b << 'node    = "${name}"'
 		b << 'logical = 0x${t.diag.logical.hex().to_upper()}'
 		b << 'bus     = "${sysmodel.local_can_iface(node, bus)}"'
+		// the node's ids in its format: diag req / rsp are the derived 29-bit ids of a node on normal
+		// fixed addressing, so the route carries numbers and `ext` (REQ-NET-021)
 		b << 'tx_id   = 0x${t.diag.req.hex().to_upper()}'
 		b << 'rx_id   = 0x${t.diag.rsp.hex().to_upper()}'
+		if t.diag.ext {
+			b << 'ext     = true'
+		}
 		// the longest request the gateway forwards: the node's own maximum (written only when it is
 		// not the default the key takes absent)
 		if t.view.isotp_conns.len == 1 && t.view.isotp_conns[0].max_len() != isotp.default_message {

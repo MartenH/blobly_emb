@@ -84,6 +84,9 @@ struct IsotpConn {
 	bs            int
 	stmin         int
 	functional_id int // 0 = no functional requests on this connection
+	// the ids are 29-bit ([isotp] ext, or normal fixed addressing: REQ-CAN-TP-040/041); the
+	// connection matches and sends them in that format (REQ-CAN-TP-042)
+	ext bool
 	// the longest message either way (REQ-CAN-TP-021): the connection's buffers, the server's
 	// response capacity, the DoIP entity's limit, the bootloader's block all follow it
 	max_message int
@@ -1066,50 +1069,40 @@ fn dbc_sig_in_frame(db candb.Database, frame_key string, signame string) ?candb.
 
 // parse_isotp parses the [isotp] connection — the node's one diagnostic server on CAN (one server
 // per node, docs/diagnostics.md, so a table and not an array: the old [[isotp]] form, and server
-// keys left in it, are refused by ecumodel.validate with the move they need).
+// keys left in it, are refused by ecumodel.validate with the move they need). Its ids are read by
+// the ONE reader of how an id is stated (ecumodel.diag_ids: normal addressing on 11- or 29-bit ids,
+// or normal fixed addressing's derived ids), which ecucheck has already run — every refusal (an id
+// wider than its format, ids beside sa / ta, a key of the wrong type, ...) is said there. Read
+// here as no walk precedes it (isotp_keys_unwalked), so a wrong type is refused rather than read.
 fn parse_isotp(doc toml.Doc) []IsotpConn {
 	iv := doc.value_opt('isotp') or { return []IsotpConn{} }
 	if iv !is map[string]toml.Any {
 		return []IsotpConn{}
 	}
 	m := iv.as_map()
-	c := IsotpConn{
-		name:          'diag'
-		bus:           (m['bus'] or { toml.Any('') }).string()
-		rx_id:         toml_int(m, 'rx_id', 0, 0, 0x1FFFFFFF, '[isotp]')
-		tx_id:         toml_int(m, 'tx_id', 0, 0, 0x1FFFFFFF, '[isotp]')
-		// both go out as one Flow Control byte (and the bootloader's as a uint8_t): a block size
-		// of 256 would wrap to 0, the whole message, and an STmin past 127 is a reserved or a
-		// microsecond code — refused here rather than narrowed (REQ-CAN-TP-020)
-		bs:            schema_int(m, 'isotp', 'bs', 0, '[isotp]')
-		stmin:         schema_int(m, 'isotp', 'stmin_ms', 0, '[isotp]')
-		functional_id: toml_int(m, 'functional_id', 0, 0, 0x1FFFFFFF, '[isotp]')
-		// refused outside 8..4095, never narrowed (REQ-CAN-TP-021); 520 when not configured
-		max_message: schema_int(m, 'isotp', 'max_message', isotp.default_message, '[isotp]')
-		// a frame length ISO-TP transmits with, above 8 only on a CAN-FD bus (REQ-CAN-TP-026)
-		tx_dl: read_tx_dl(m, 'isotp', doc, (m['bus'] or { toml.Any('') }).string(), '[isotp]')
+	ids, errs := ecumodel.diag_ids(cfgschema.ecu, ecumodel.isotp_keys_unwalked, m, '[isotp]')
+	if errs.len > 0 {
+		panic('loom2v: ${errs[0]}') // unreachable after ecucheck
 	}
-	// the connection matches and sends its ids as standard frames: a wider value never matches
-	// on receive and goes out masked on transmit
-	for field, v in {
-		'rx_id': c.rx_id
-		'tx_id': c.tx_id
-	} {
-		if !schema_key('isotp', field).in_range(v) {
-			panic('loom2v: [isotp] ${field} 0x${v.hex()} must be a standard 11-bit id (<= 0x${schema_key('isotp', field).max:X})')
-		}
-	}
-	if c.functional_id != 0 {
-		// the bridge matches it as a standard frame, and it must not be the physical id
-		fk := schema_key('isotp', 'functional_id')
-		if !fk.in_range(c.functional_id) {
-			panic('loom2v: [isotp] functional_id 0x${c.functional_id.hex()} must be a standard 11-bit id (<= 0x${fk.max:X})')
-		}
-		if c.functional_id == c.rx_id || c.functional_id == c.tx_id {
-			panic('loom2v: [isotp] functional_id 0x${c.functional_id.hex()} is also the connection\'s physical rx/tx id')
-		}
-	}
-	return [c]
+	return [
+		IsotpConn{
+			name:          'diag'
+			bus:           (m['bus'] or { toml.Any('') }).string()
+			rx_id:         int(ids.rx)
+			tx_id:         int(ids.tx)
+			// both go out as one Flow Control byte (and the bootloader's as a uint8_t): a block size
+			// of 256 would wrap to 0, the whole message, and an STmin past 127 is a reserved or a
+			// microsecond code — refused here rather than narrowed (REQ-CAN-TP-020)
+			bs:            schema_int(m, 'isotp', 'bs', 0, '[isotp]')
+			stmin:         schema_int(m, 'isotp', 'stmin_ms', 0, '[isotp]')
+			functional_id: int(ids.functional)
+			ext:           ids.ext
+			// refused outside 8..4095, never narrowed (REQ-CAN-TP-021); 520 when not configured
+			max_message: schema_int(m, 'isotp', 'max_message', isotp.default_message, '[isotp]')
+			// a frame length ISO-TP transmits with, above 8 only on a CAN-FD bus (REQ-CAN-TP-026)
+			tx_dl: read_tx_dl(m, 'isotp', doc, (m['bus'] or { toml.Any('') }).string(), '[isotp]')
+		},
+	]
 }
 
 // parse_dids parses [[did]] UDS Data Identifiers: constant (ascii/bytes), writable RAM, or live signal.
@@ -4383,12 +4376,12 @@ fn main() {
 		if c.functional_id != 0 {
 			ids << ['functional_id', c.functional_id.str()]
 		}
-		diag_ids_refused(m, dbc, c.bus, '[isotp]', ids)
+		diag_ids_refused(m, dbc, c.bus, '[isotp]', c.ext, ids)
 	}
 	// a gateway's routes (REQ-NET-019): the routed node's ids are matched and sent on the route's
-	// bus, beside everything else there, by the same rule
+	// bus, in the node's format (REQ-NET-021), beside everything else there, by the same rule
 	for r in m.doip.routes {
-		diag_ids_refused(m, dbc, r.bus, '[[doip.route]] "${r.node}"', [
+		diag_ids_refused(m, dbc, r.bus, '[[doip.route]] "${r.node}"', r.ext, [
 			['tx_id', r.tx_id.str()],
 			['rx_id', r.rx_id.str()],
 		])
@@ -6370,8 +6363,10 @@ fn fdcan_index(bus string) string {
 // gateway's route) against everything else handled on its bus: an application or module frame with
 // the same id would ALSO be dispatched as a diagnostic frame (a cyclic frame whose first byte looks
 // like a single-frame PCI could switch sessions), or two producers would transmit one id. Panics with
-// the refusal; standalone images get no syscheck.
-fn diag_ids_refused(m Model, dbc string, bus string, table string, ids [][]string) {
+// the refusal; standalone images get no syscheck. An id is its number AND its format (`ext`: the
+// connection's ids are 29-bit, REQ-CAN-TP-042): only a frame of the same width collides — the
+// telemetry, trace, NM and shell frames are 11-bit, so a 29-bit id never meets them.
+fn diag_ids_refused(m Model, dbc string, bus string, table string, ext bool, ids [][]string) {
 	// only what is handled on THIS bus can collide (CAN ids are bus-local): the DBC messages
 	// its signals ride, the frames routed onto or off it, and the module frames that use it
 	mut on_bus := map[string]bool{}
@@ -6391,16 +6386,19 @@ fn diag_ids_refused(m Model, dbc string, bus string, table string, ids [][]strin
 		id := u32(e[1].int())
 		what := 'loom2v: ${table} ${field} 0x${id.hex()} is also'
 		for msg in db.messages {
-			if on_bus[snake(msg.name)] && u32(msg.id) == id && !msg.ext {
+			if on_bus[snake(msg.name)] && u32(msg.id) == id && msg.ext == ext {
 				panic('${what} DBC message "${msg.name}" on bus "${bus}"')
 			}
 		}
 		for r in m.routes {
-			// the diagnostic ids are STANDARD frames: only a standard-width route can collide
-			if (r.from_bus == bus && !r.from_ext && u32(r.from_id) == id)
-				|| (r.to_bus == bus && !r.to_ext && u32(r.to_id) == id) {
+			// only a route of the diagnostic ids' width can collide
+			if (r.from_bus == bus && r.from_ext == ext && u32(r.from_id) == id)
+				|| (r.to_bus == bus && r.to_ext == ext && u32(r.to_id) == id) {
 				panic('${what} a routed frame on bus "${bus}"')
 			}
+		}
+		if ext {
+			continue // the module frames below are 11-bit: a 29-bit id is another frame
 		}
 		if m.telem.on && m.telem.bus == bus && (id == m.telem.id || (m.telem.detail_id != 0 && id == m.telem.detail_id)) {
 			panic('${what} a [telemetry] frame id on bus "${bus}"')

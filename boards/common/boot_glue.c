@@ -31,6 +31,7 @@ uint32_t boot_app_size(void) { return APP_SIZE; }
 uint32_t boot_erase_unit(void) { return FLASH_SECTOR; }
 uint32_t boot_rx_id(void) { return BOOT_RX_ID; }
 uint32_t boot_tx_id(void) { return BOOT_TX_ID; }
+int boot_ext(void) { return BOOT_EXT; } /* BOOT_RX_ID / BOOT_TX_ID are 29-bit identifiers */
 int boot_can_idx(void) { return BOOT_CAN_IDX; }
 int boot_can_fd(void) { return BOOT_CAN_FD; }
 uint8_t boot_bs(void) { return BOOT_BS; }

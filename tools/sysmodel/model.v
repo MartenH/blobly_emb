@@ -76,11 +76,24 @@ pub mut:
 }
 
 // Diag — a node's ISO-TP diagnostic/boot address pair (how the OTA master
-// reaches this node's UDS session). 0 = unset.
+// reaches this node's UDS session). 0 = unset. Stated as `req` / `rsp` (11-bit, or 29-bit with
+// `ext`) or by normal fixed addressing (`sa` / `ta`, the 29-bit ids derived into req / rsp), read
+// by ecumodel.diag_ids — the reader an [isotp] is read by, so the two agree on what an id is.
 pub struct Diag {
 pub mut:
 	req u32
 	rsp u32
+	// the ids are 29-bit (`ext`, or normal fixed addressing); an id is its number AND its format
+	ext   bool
+	fixed bool // derived by normal fixed addressing
+	// the functional id normal fixed addressing derives from `functional_ta`; 0 = none stated
+	functional u32
+	// normal fixed addressing's addresses as read: the node's, the tester's and the functional
+	// target's (meaningful where `functional` is not 0) — what sysgen lowers into an [isotp]
+	sa            u8
+	ta            u8
+	functional_ta u8
+	errs          []string // what the reader refused (check_diag_shape reports it, REQ-TOPO-013)
 	// its DoIP logical address behind a gateway that routes to it (REQ-NET-019): the address a
 	// network tester names; the gateway forwards to req and listens on rsp
 	logical     u32
@@ -167,8 +180,20 @@ pub mut:
 	rx_id         u32
 	tx_id         u32
 	functional_id u32 // 0 = none; a SHARED receive id (every server on the bus may listen)
+	ext           bool // the ids are 29-bit ([isotp] ext, or normal fixed addressing)
 	max_message   int // the longest diagnostic message either way ([isotp] max_message, 520 absent)
 	tx_dl         int // the frame length it transmits with ([isotp] tx_dl, 8 absent)
+	// the [isotp] states its addressing (ecumodel.states_ids); a dissolved node's that does not
+	// takes its diag allocation's ids and format (`lowered`, load_nodes_partial), which sysgen
+	// writes into the generated [isotp] (REQ-TOPO-014)
+	ids_stated bool = true
+	lowered    bool
+	// what the [isotp] states beside an allocation it takes (ecumodel.states_ids counts neither):
+	// its functional id, and its `ext` with the value read — check_diag_lowered holds them to the
+	// allocation, and sysgen keeps them as authored
+	functional_stated bool
+	ext_stated        bool
+	ext_authored      bool
 }
 
 // max_len: the connection's maximum message length — its [isotp] max_message, the default where
@@ -279,6 +304,7 @@ pub:
 	bus         string // the gateway's own name for the bus
 	tx_id       u32
 	rx_id       u32
+	ext         bool // the ids are 29-bit (the node's format, REQ-NET-021)
 	logical     u32
 	has_logical bool // an integer `logical` was given (loom2v refuses the rest)
 	max_message int  // the longest request the gateway forwards to it (520 absent)
@@ -727,9 +753,20 @@ pub fn parse_system(path string) !System {
 			if dm := m['diag'] {
 				d := dm.as_map()
 				sys.note_unknown(d, 'sys_diag', '${where} diag')
+				// req / rsp, or normal fixed addressing's derived ids: every `req == 0 && rsp == 0`
+				// test below still reads "no allocation"
+				ids, id_errs := ecumodel.diag_ids(cfgschema.system, ecumodel.diag_keys, d,
+					'${where} diag')
 				node.diag = Diag{
-					req:         m_u32(d, 'req')
-					rsp:         m_u32(d, 'rsp')
+					req:         ids.rx
+					rsp:         ids.tx
+					ext:         ids.ext
+					fixed:       ids.fixed
+					functional:  ids.functional
+					sa:          ids.sa
+					ta:          ids.ta
+					functional_ta: ids.functional_ta
+					errs:        id_errs
 					logical:     m_u32(d, 'logical')
 					logical_raw: (d['logical'] or { toml.Any(0) }).i64()
 					has_logical: 'logical' in d
@@ -924,7 +961,8 @@ pub fn (mut s System) load_nodes() []string {
 			// or its collision + in-range checks are silently skipped. An NM bus with
 			// no DBC (or no matching system bus) cannot resolve it — that is a config
 			// error, not a clean fall-through (REQ-TOPO-004).
-			b := s.bus_by_interface(s.nodes[i].view.nm_bus) or {
+			// the NM bus by the rule every frame of the node is placed by (node_can_bus)
+			b := node_can_bus(s, s.nodes[i], s.nodes[i].view.nm_bus) or {
 				errs << 'node "${s.nodes[i].name}": [nm].alive names "${name}" but its NM bus "${s.nodes[i].view.nm_bus}" maps to no system bus with a DBC to resolve it'
 				continue
 			}
@@ -978,8 +1016,34 @@ pub fn (mut s System) load_nodes_partial() []string {
 			continue
 		}
 		s.nodes[i].view = parse_node_view(doc)
+		s.nodes[i].lower_diag()
 	}
 	return errs
+}
+
+// lower_diag: a dissolved node's [isotp] that states no ids takes its diag allocation's — request,
+// response and functional id and their format — which sysgen writes into the generated [isotp]
+// (lower_isotp), so every check sees the ids the node will serve on (REQ-TOPO-014). A
+// normal-addressing allocation states no functional id, so the [isotp]'s own is kept (read in the
+// allocation's format, as the generated table reads it). One that states its ids is held to the
+// allocation instead (check_diag_conn); one with no allocation to take is refused
+// (check_diag_lowered). An allocation the reader refused — one id of the two included — is never
+// lowered: check_diag_shape says it, and a missing id would be written as id 0.
+pub fn (mut n Node) lower_diag() {
+	if n.view.isotp_conns.len != 1 || n.view.isotp_conns[0].ids_stated
+		|| (n.diag.req == 0 && n.diag.rsp == 0) || n.diag.errs.len > 0 {
+		return
+	}
+	c := n.view.isotp_conns[0]
+	n.view.isotp_conns[0].rx_id = n.diag.req
+	n.view.isotp_conns[0].tx_id = n.diag.rsp
+	n.view.isotp_conns[0].functional_id = if n.diag.fixed || !c.functional_stated {
+		n.diag.functional
+	} else {
+		c.functional_id
+	}
+	n.view.isotp_conns[0].ext = n.diag.ext
+	n.view.isotp_conns[0].lowered = true
 }
 
 // load_node parses a node's ecu.toml and extracts its NodeView.
@@ -1267,6 +1331,7 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 						bus:   m_str(rm, 'bus')
 						tx_id:       m_u32(rm, 'tx_id')
 						rx_id:       m_u32(rm, 'rx_id')
+						ext:         m_bool(rm, 'ext')
 						logical:     m_u32(rm, 'logical')
 						has_logical: 'logical' in rm && m_is_int(rm, 'logical')
 						max_message: int((rm['max_message'] or { toml.Any(isotp.default_message) }).int())
@@ -1350,13 +1415,21 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 			cm := c.as_map()
 			v.has_isotp = true
 			bus := m_str(cm, 'bus')
+			// the ids as the node gate reads them (normal or normal fixed addressing, 11- or
+			// 29-bit); its refusals are the gate's to say — a refused id is still the id read
+			ids, _ := ecumodel.diag_ids(cfgschema.ecu, ecumodel.isotp_keys, cm, '[isotp]')
 			v.isotp_conns << IsotpConn{
 				iface:         key_iface[bus] or { bus }
-				rx_id:         m_u32(cm, 'rx_id')
-				tx_id:         m_u32(cm, 'tx_id')
-				functional_id: m_u32(cm, 'functional_id')
+				rx_id:         ids.rx
+				tx_id:         ids.tx
+				functional_id: ids.functional
+				ext:           ids.ext
 				max_message:   int((cm['max_message'] or { toml.Any(isotp.default_message) }).int())
 				tx_dl:         int((cm['tx_dl'] or { toml.Any(8) }).int())
+				ids_stated:    ecumodel.states_ids(ecumodel.isotp_keys, cm)
+				functional_stated: 'functional_id' in cm
+				ext_stated:        'ext' in cm
+				ext_authored:      ids.ext
 			}
 		}
 	}

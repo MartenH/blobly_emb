@@ -13,7 +13,7 @@ derives = "SYS-REQ-TOPO-001"
 [[req]]
 id = "REQ-TOPO-002"
 title = "Node identity uniqueness"
-text = "Within a system, no two nodes shall share a network-management id, a diagnostic/boot address, or a trace node id; a collision shall be a generation-time error."
+text = "Within a system, no two nodes shall share a network-management id, a diagnostic/boot address or a trace node id, and no node's diagnostic identifier shall be another frame's on its bus — a frame a node of the system transmits there (by a route included), a bus-contract frame a node of the system receives there, or a bus-contract frame on its response identifier; a bus-contract frame on a request identifier that no node of the system transmits or receives is the request an external tester sends and shall be reported as a warning only. A diagnostic identifier is its number together with its format, an 11-bit and a 29-bit identifier of one number being different identifiers. A collision shall be a generation-time error."
 status = "draft"
 method = "test"
 asil = "QM"
@@ -106,6 +106,27 @@ derives = "SYS-REQ-TOPO-001"
 id = "REQ-TOPO-012"
 title = "A route forwarder counts as a destination-bus writer"
 text = "Because a generated forwarder is an on-wire transmitter of the routed signal/frame on the destination bus, the generator shall add the gateway to that bus's producer / frame-owner set and reject any collision with a signal or frame another node already transmits there. This ownership check extends to the routed value's IOC/xioc cell: each routed signal shall be written by exactly ONE thread — the generator shall reject a gateway-local FB or a second route that also writes it (the IOC/xioc single-writer invariant). A route satisfies a consumer's reachability only after these checks pass, so validation cannot pass and then emit two competing transmitters or two writers to one cell."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-TOPO-001"
+
+# 013..014: a node's diagnostic allocation — how it states its identifiers, and that the node
+# serves on it (docs/multi-node.md, docs/can-tp.md §2)
+
+[[req]]
+id = "REQ-TOPO-013"
+title = "A diagnostic allocation states its identifiers one way"
+text = "A node's diagnostic allocation shall state its identifiers either as a request and a response identifier — 11-bit, or 29-bit when declared so — or by normal fixed addressing as the node's and the tester's one-byte addresses, from which its 29-bit identifiers derive as for the node's own connection; an identifier that is not an integer or is wider than its format, identifiers given beside addresses, one of the request and response identifiers given without the other, a missing or out-of-range address, equal addresses or an unknown addressing shall be a generation-time error."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-TOPO-001"
+
+[[req]]
+id = "REQ-TOPO-014"
+title = "A node serves on its diagnostic allocation"
+text = "A node that has both a diagnostic allocation in the system and its own diagnostic connection shall serve on the allocation: generation shall lower the allocation into a connection of a dissolved node that states no physical identifiers, keeping a functional identifier the connection states beside an allocation that states none, in the allocation's format; a connection that states them shall state the allocation's request and response identifiers and their format, and its functional identifier too where the allocation states a functional target address. A difference, a connection that states no identifiers on a node with no allocation, or a functional identifier or format stated beside the allocation it takes that the allocation contradicts, shall be a generation-time error; an allocation giving one of its request and response identifiers without the other shall never be lowered."
 status = "draft"
 method = "test"
 asil = "QM"

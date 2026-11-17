@@ -171,9 +171,15 @@ fn test_check_refuses_a_value_outside_its_row() {
 		'[target] "kind": "threadX" is not one of "baremetal", "threadx"',
 	]
 	assert errs_of('[[signal]]\nname = "A"\nfields = { v = "u8" }\nfrom = "p"\nto = "q"\ntransport = "tripple"\n').len == 1
-	assert errs_of('[isotp]\nbus = "can0"\nrx_id = 0x800\ntx_id = 0x7E8\n') == [
-		'[isotp] "rx_id": 0x800 is outside 0x0..0x7FF',
+	assert errs_of('[isotp]\nbus = "can0"\nrx_id = 0x7E0\ntx_id = 0x7E8\nbs = 256\n') == [
+		'[isotp] "bs": 256 is outside 0..255',
 	]
+	// an [isotp] id's width depends on `ext` and `addressing`, which a row cannot state: ecumodel's
+	// one reader judges it (own_check), and the walk knows the keys of both addressing formats
+	assert errs_of('[isotp]\nbus = "can0"\nrx_id = 0x18DA10F1\ntx_id = 0x7E8\n') == []
+	assert errs_of('[isotp]\nbus = "can0"\naddressing = "normal_fixed"\nsa = 0x10\nta = 0xF1\nfunctional_ta = 0x33\n') == []
+	assert errs_of('[isotp]\nbus = "can0"\nrx_id = 0x7E0\ntx_id = 0x7E8\next = true\n') == []
+	assert errs_of('[isotp]\nbus = "can0"\next = 1\n') == ['[isotp] "ext": expected a boolean, got an integer']
 	assert errs_of('[[did]]\nid = 0xF190\nread = { session = ["extended", "factory"] }\n') == [
 		'[[did]] read/write "session": "factory" is not one of "default", "extended", "programming", "safety"',
 	]

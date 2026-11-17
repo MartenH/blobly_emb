@@ -453,18 +453,31 @@ blocks the gateway carries: below, "How long a routed message may be").
 
 **Declared by the system.** zone_a's `diag` takes a `logical` (its DoIP address behind a gateway)
 and sysnode's `doip` names it in `routes = ["zone_a"]`. syscheck (`check_doip_routes`) requires a
-routed node to be a CAN node on a bus the gateway sits on, with a `diag` allocation whose ids its
-`[isotp]` listens on, a logical address unique among every entity's and routed node's, and no
+routed node to be a CAN node on a bus the gateway sits on, with a `diag` allocation whose request
+and response ids, in their format, its `[isotp]` serves on (an `[isotp]` stating no ids takes them,
+lowered by sysgen; its functional id is the node's own listener's, never the route's, and is held to
+the allocation by REQ-TOPO-014), a logical address unique among every entity's and routed node's, and no
 `doip` of its own; and a `logical` that no gateway routes to is refused. No other node may listen
 on the routed node's request id on that bus (`check_route_ids`: its `[isotp]` rx or
-functional id, a trace or shell receive id) — it would take the routed requests as its own; a
+functional id — or, for a node with no `[isotp]`, its `diag` request and functional id — a trace or
+shell receive id) — it would take the routed requests as its own; a
 composed system's gateway authors its `[[doip.route]]` itself, and the system reads those (`node`,
 `bus`, `tx_id`, `rx_id`) and holds them to the same rule — and to the node they name, which must
 have an `[isotp]` on that bus listening on `tx_id` and answering on `rx_id`. sysgen lowers each route
 into the gateway's `[[doip.route]]` (`node`, `logical`, `bus` — the gateway's interface on the
 shared bus — `tx_id` = the node's request id, `rx_id` = its response id), and the node gate checks
 them against everything else on that bus (`diag_ids_refused`, the rule `[isotp]` ids follow) and
-against each other. The route goes to the bus the node's diagnostic server is on (its `[isotp]`
+against each other.
+
+**The node's id format** (REQ-NET-021). A route carries `ext`: set, its `tx_id` / `rx_id` are 29-bit
+ids (up to `0x1FFFFFFF`; without it, 11-bit — a wider id is refused), and the router sends the
+request and its flow control with the extended id and takes an answer only as a 29-bit frame on
+`rx_id` ([can-tp.md](can-tp.md) §3.8). sysgen writes it from the node's `diag`: `ext = true`, or
+normal fixed addressing (`addressing = "normal_fixed"`, `sa`, `ta`), whose derived ids it writes as
+the numbers (`tx_id = 0x18DA<sa><ta>`, `rx_id = 0x18DA<ta><sa>`). Every comparison of a route's ids —
+with the routed node's `[isotp]` (`check_doip_routes`, `check_route_ids`), the gateway's own
+`[isotp]` and its other routes (`validate_doip_routes`), and the other frames on the bus — is by
+(id, format): an 11-bit and a 29-bit id of one number are two frames. The route goes to the bus the node's diagnostic server is on (its `[isotp]`
 interface, by the name sysgen gives each bus: `local_can_iface`), which the gateway must sit on; a
 gateway that routes only diagnostics is a gateway all the same (`is_route_gateway`). A route bus
 must be the comm thread's to drive: on its core, and not the node's own controller under another

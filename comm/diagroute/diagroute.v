@@ -76,8 +76,12 @@ pub struct Route {
 pub mut:
 	logical u16 // the target's DoIP logical address
 	bus     u8  // the owner's index of the bus the target is on
-	tx_id   u32 // the target's physical request id (standard id)
+	tx_id   u32 // the target's physical request id
 	rx_id   u32 // its response id
+	// ext: tx_id and rx_id are 29-bit identifiers ([[doip.route]] ext — the node's 29-bit or
+	// normal fixed addressing, REQ-NET-021); false = 11-bit. The request and our flow control go
+	// out in this format, and only an answer in it on rx_id is the target's
+	ext bool
 	// the longest request the target takes: its own maximum message length ([isotp] max_message);
 	// 0 = the gateway's (init) — a request longer than either is refused (accept)
 	max_message int
@@ -366,13 +370,14 @@ fn (mut r Router) overdue(now u64) bool {
 
 // on_frame feeds one received frame from bus `bus`. True when the frame belonged to the exchange
 // in flight; the owner then stops draining that bus when `full()` — an answer that completes with
-// the queue full is lost.
+// the queue full is lost. A frame is the target's only on its response id in the route's format
+// (REQ-CAN-TP-042): the same number in the other format is another frame on the bus.
 pub fn (mut r Router) on_frame(bus u8, f &can.Frame, now u64) bool {
-	if r.active < 0 || f.ext {
+	if r.active < 0 {
 		return false
 	}
 	rt := r.routes[r.active]
-	if rt.bus != bus || f.id != rt.rx_id {
+	if rt.bus != bus || f.ext != rt.ext || f.id != rt.rx_id {
 		return false
 	}
 	// the timers first, whatever order the owner's pass runs in: a send ISO-TP gave up, a stalled
@@ -576,8 +581,9 @@ pub fn (mut r Router) pump[H](now u64, mut ch H) {
 		return
 	}
 	tx_id := r.routes[r.active].tx_id
+	ext := r.routes[r.active].ext
 	mut f := can.Frame{}
-	for ch.tx_ready() && diag.next_frame(mut r.link, tx_id, now, mut f) {
+	for ch.tx_ready() && diag.next_frame(mut r.link, tx_id, ext, now, mut f) {
 		if !ch.send(f) {
 			r.link.abort_tx()
 			r.end_exchange()

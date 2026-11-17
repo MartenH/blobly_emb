@@ -57,10 +57,8 @@ pub fn (db Database) lookup_frame(id u32, ext bool) ?Message {
 	// exact id AND width first: a standard and an extended frame with the same stripped
 	// id are distinct on the wire, so a received extended frame must not select the
 	// standard layout (or vice versa).
-	for m in db.messages {
-		if m.id == id && m.ext == ext {
-			return m
-		}
+	if m := db.frame_exact(id, ext) {
+		return m
 	}
 	if !ext {
 		return none
@@ -68,6 +66,18 @@ pub fn (db Database) lookup_frame(id u32, ext bool) ?Message {
 	pgn := j1939_pgn(id)
 	for m in db.messages {
 		if m.ext && j1939_pgn(m.id) == pgn {
+			return m
+		}
+	}
+	return none
+}
+
+// frame_exact returns the message whose on-wire id is `id` in that width (`ext`: 29-bit), or none —
+// no J1939 PGN fallback: the frame that IS this id, for a check asking whether two frames are one
+// (a diagnostic id against the bus's messages), where a PGN match is a different frame.
+pub fn (db Database) frame_exact(id u32, ext bool) ?Message {
+	for m in db.messages {
+		if m.id == id && m.ext == ext {
 			return m
 		}
 	}

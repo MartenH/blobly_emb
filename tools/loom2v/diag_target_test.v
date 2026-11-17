@@ -874,7 +874,7 @@ fn test_a_boot_node_gets_its_bootloader_config() {
 	assert code == 0, out
 	h := os.read_file(os.join_path(tmp, 'boot_gen.h')) or { panic(err) }
 	for want in ['#define BOOT_CAN_IDX 0', '#define BOOT_CAN_FD 0', '#define BOOT_RX_ID 0x7b0u',
-		'#define BOOT_TX_ID 0x7b8u', '#define BOOT_BS 8u', '#define BOOT_STMIN 2u',
+		'#define BOOT_TX_ID 0x7b8u', '#define BOOT_EXT 0 ', '#define BOOT_BS 8u', '#define BOOT_STMIN 2u',
 		'#define BOOT_IMAGE_KEY {0x03, 0xa1, 0x07,', '#define BOOT_SESSION_KEY {0x29, 0xac, 0xba,'] {
 		assert h.contains(want), '${want} missing:\n${h}'
 	}
@@ -1096,4 +1096,138 @@ fn test_the_frame_length_is_configured_and_refused_off_a_can_fd_bus() {
 		return src.replace('fd        = false\n', '')
 	}, diag_conn.replace(tx, tx + '\ntx_dl = 64'))
 	assert code2 != 0 && out2.contains(classic), out2
+}
+
+// ---- 29-bit identifiers: normal addressing with `ext`, and normal fixed addressing ----
+// @verifies REQ-CAN-TP-040 REQ-CAN-TP-041 REQ-CAN-TP-042
+
+const ids_11 = 'rx_id         = 0x7B0\ntx_id         = 0x7B8\nfunctional_id = 0x7DF'
+
+// the fixture's connection on normal fixed addressing: the node 0x10, the tester 0xF1, functional 0x33
+const ids_fixed = 'addressing    = "normal_fixed"\nsa            = 0x10\nta            = 0xF1\nfunctional_ta = 0x33'
+
+// the connection is configured with its 29-bit ids and told their format, on the comm thread and
+// the host bridge alike; an 11-bit node's generated code carries no format line at all
+fn test_a_29_bit_connection_is_generated_with_its_format() {
+	assert diag_conn.contains(ids_11), 'the fixture [isotp] changed shape — update this test'
+	code, out, glue := generate('ext', diag_conn.replace(ids_11, 'rx_id         = 0x18DA10F1\ntx_id         = 0x18DAF110\nfunctional_id = 0x18DB33F1\next           = true'))
+	assert code == 0, out
+	in_order_dt(glue, ['g_diag.init(u32(0x18da10f1), u32(0x18daf110), u32(0x18db33f1)',
+		'g_diag.ext = true'])
+	c2, o2, g2 := generate('std', diag_conn)
+	assert c2 == 0, o2
+	assert !g2.contains('g_diag.ext')
+	hc, ho, hg := generate_host('ext', fn (src string) string {
+		return src.replace('functional_id = 0x7DF', 'functional_id = 0x7DF\next = true')
+	}, '')
+	assert hc == 0, ho
+	in_order_dt(hg, ['st.conn_diag.init(u32(0x101), u32(0x102), u32(0x7df)', 'st.conn_diag.ext = true'])
+}
+
+// normal fixed addressing: the ids derive from the two addresses (0x18DA<sa><ta>, 0x18DA<ta><sa>,
+// 0x18DB<functional_ta><ta>), always 29-bit; ids beside the addresses, an address out of its byte,
+// equal addresses and an address for normal addressing are refused
+fn test_a_normal_fixed_connection_derives_its_ids() {
+	fixed := diag_conn.replace(ids_11, ids_fixed)
+	code, out, glue := generate('fixed', fixed)
+	assert code == 0, out
+	in_order_dt(glue, ['g_diag.init(u32(0x18da10f1), u32(0x18daf110), u32(0x18db33f1)',
+		'g_diag.ext = true'])
+	for i, c in [
+		[fixed.replace('ta            = 0xF1', 'ta            = 0xF1\nrx_id         = 0x7B0'),
+			'rx_id is given with addressing = "normal_fixed"'],
+		[fixed.replace('sa            = 0x10', 'sa            = 0x100'),
+			'[isotp] sa = 0x100 is out of range (0x0..0xff)'],
+		[fixed.replace('sa            = 0x10', 'sa            = 0xF1'), 'sa and ta are both 0xf1'],
+		[diag_conn.replace('functional_id = 0x7DF', 'functional_id = 0x7DF\nfunctional_ta = 0x33'),
+			'functional_ta is for addressing = "normal_fixed"'],
+	] {
+		cc, oc, _ := generate('fixed_bad_${i}', c[0])
+		assert cc != 0, 'loom2v accepted: ${c[1]}'
+		assert oc.contains(c[1]), oc
+	}
+}
+
+// the bootloader serves on the application's ids in their format: BOOT_EXT beside the derived ids
+fn test_a_boot_node_on_normal_fixed_addressing_gets_its_ids_and_format() {
+	tmp := os.join_path(os.temp_dir(), 'diag_target_boot_fixed_${os.getpid()}')
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	assert boot_conn.contains(ids_11), 'the fixture [isotp] changed shape — update this test'
+	code, out, _ := run_in_scratch(tmp, fixture_dir, same, boot_conn.replace(ids_11, ids_fixed))
+	assert code == 0, out
+	h := os.read_file(os.join_path(tmp, 'boot_gen.h')) or { panic(err) }
+	for want in ['#define BOOT_RX_ID 0x18da10f1u', '#define BOOT_TX_ID 0x18daf110u',
+		'#define BOOT_EXT 1 '] {
+		assert h.contains(want), '${want} missing:\n${h}'
+	}
+}
+
+// an id is its number AND its format: a 29-bit id never meets the 11-bit telemetry, trace, NM and
+// shell frames; it meets a DBC frame on its bus only when that frame is extended too
+fn test_a_diagnostic_ids_collisions_are_judged_in_its_format() {
+	code, out, _ := generate('ext_telem', diag_conn.replace('rx_id         = 0x7B0',
+		'rx_id         = 0x7E0').replace('functional_id = 0x7DF', 'functional_id = 0x7DF\next           = true'))
+	assert code == 0, out
+	// on the host example, Powertrain (0x100, whose VehicleSpeed the node receives) made an
+	// extended frame: the [isotp] rx_id on its number collides only as a 29-bit id
+	tmp := os.join_path(os.temp_dir(), 'diag_target_extdbc_${os.getpid()}')
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	src := os.join_path(tmp, 'overspeed')
+	os.mkdir_all(src) or { panic(err) }
+	ex := example_dir('overspeed')
+	os.cp(os.join_path(ex, 'ecu.toml'), os.join_path(src, 'ecu.toml')) or { panic(err) }
+	dbc := os.read_file(os.join_path(ex, 'bus.dbc')) or { panic(err) }
+	assert dbc.contains('BO_ 256 Powertrain:'), 'the example DBC changed shape — update this test'
+	os.write_file(os.join_path(src, 'bus.dbc'), dbc.replace('BO_ 256 Powertrain:', 'BO_ 2147483904 Powertrain:')) or {
+		panic(err)
+	}
+	on_pt := fn (src string) string {
+		return src.replace('rx_id    = 0x101', 'rx_id    = 0x100')
+	}
+	c1, o1, _ := run_in_scratch(os.join_path(tmp, 'x'), src, fn [on_pt] (src string) string {
+		return on_pt(src).replace('functional_id = 0x7DF', 'functional_id = 0x7DF\next = true')
+	}, '')
+	assert c1 != 0, 'loom2v accepted a 29-bit rx_id on an extended DBC frame of the bus'
+	assert o1.contains('rx_id 0x100 is also DBC message "Powertrain"'), o1
+	c2, o2, _ := run_in_scratch(os.join_path(tmp, 'y'), src, on_pt, '')
+	assert c2 == 0, o2 // the 11-bit 0x100 is not the extended frame 0x100
+}
+
+// ... and it meets a frame a signal route forwards on its bus — onto it or off it — only when that
+// frame has its format: gw_extid's raw route of ExtDiag can0 -> can1, the frame 11-bit (0x500)
+// or 29-bit (0x500 extended), the [isotp] on either end listening on 0x500 in either format
+fn test_a_diagnostic_id_meets_a_routed_frame_only_in_its_format() {
+	tmp := os.join_path(os.temp_dir(), 'diag_target_routed_${os.getpid()}')
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	ex := example_dir('gw_extid')
+	dbc := os.read_file(os.join_path(ex, 'bus.dbc')) or { panic(err) }
+	assert dbc.contains('BO_ 2432500992 ExtDiag:'), 'the example DBC changed shape — update this test'
+	for frame_ext in [false, true] {
+		src := os.join_path(tmp, 'gw_extid_${frame_ext}')
+		os.mkdir_all(src) or { panic(err) }
+		os.cp(os.join_path(ex, 'ecu.toml'), os.join_path(src, 'ecu.toml')) or { panic(err) }
+		// a DBC extended id carries bit 31
+		id := if frame_ext { '${u32(0x80000500)}' } else { '${0x500}' }
+		os.write_file(os.join_path(src, 'bus.dbc'), dbc.replace('2432500992', id)) or { panic(err) }
+		for bus in ['can0', 'can1'] {
+			for conn_ext in [false, true] {
+				extra := '\n[uds]\n\n[isotp]\nbus = "${bus}"\nrx_id = 0x500\ntx_id = 0x508\next = ${conn_ext}\n'
+				code, out, _ := run_in_scratch(os.join_path(tmp, '${frame_ext}_${bus}_${conn_ext}'),
+					src, same, extra)
+				what := 'a ${if frame_ext { '29' } else { '11' }}-bit routed frame, a ${if conn_ext { '29' } else { '11' }}-bit rx_id on ${bus}'
+				if frame_ext == conn_ext {
+					assert code != 0, 'loom2v accepted ${what}'
+					assert out.contains('[isotp] rx_id 0x500 is also a routed frame on bus "${bus}"'), out
+				} else {
+					assert code == 0, '${what}: ${out}'
+				}
+			}
+		}
+	}
 }

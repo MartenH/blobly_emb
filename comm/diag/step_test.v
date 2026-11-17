@@ -5,6 +5,7 @@ module diag
 // (codex #367 r4-r5): a truncated frame read as a request, a request served while an answer was in
 // flight, a refused frame taken as sent, S3 running while a request was still arriving.
 // @verifies REQ-BOOT-012 REQ-DIAG-028 REQ-DIAG-037 REQ-CAN-TP-013 REQ-CAN-TP-018
+// @verifies REQ-CAN-TP-040 REQ-CAN-TP-042
 import boot
 import comm.isotp
 import driver.can
@@ -171,7 +172,7 @@ mut:
 }
 
 fn step(mut s FakeServer, mut l isotp.Link, now u64, mut ch FakeChan, mut b Bufs) bool {
-	return serve_step(mut s, mut l, srx, stx, now, mut ch, &b.req[0], &b.resp[0], zero_clock)
+	return serve_step(mut s, mut l, srx, stx, false, now, mut ch, &b.req[0], &b.resp[0], zero_clock)
 }
 
 // a frame shorter than its PCI says is dropped, never read as a request
@@ -280,7 +281,7 @@ fn test_the_bootloader_runs_the_same_step() {
 	mut b := Bufs{}
 	mut t := new_link()
 	ch.rx << tester_frames(mut t, 0, [u8(0x11), 0x01])
-	due := serve_step(mut p, mut l, srx, stx, 0, mut ch, &b.req[0], &b.resp[0], zero_clock)
+	due := serve_step(mut p, mut l, srx, stx, false, 0, mut ch, &b.req[0], &b.resp[0], zero_clock)
 	assert due && p.reset_due()
 	assert ch.tx.len == 1 && ch.tx[0].id == stx && ch.tx[0].data[..3] == [u8(0x02), 0x51, 0x01]
 	// refused: the bootloader does not reset unanswered either
@@ -292,7 +293,7 @@ fn test_the_bootloader_runs_the_same_step() {
 	}
 	mut t2 := new_link()
 	ch2.rx << tester_frames(mut t2, 0, [u8(0x11), 0x01])
-	assert !serve_step(mut q, mut l2, srx, stx, 0, mut ch2, &b.req[0], &b.resp[0], zero_clock)
+	assert !serve_step(mut q, mut l2, srx, stx, false, 0, mut ch2, &b.req[0], &b.resp[0], zero_clock)
 	assert !q.reset_due()
 }
 
@@ -359,7 +360,7 @@ fn test_routine_work_steps_once_the_wire_is_drained() {
 	mut answers := [][]u8{}
 	for i in 0 .. 8 {
 		ch.pending = 3 // what the previous response left in the controller
-		serve_step(mut p, mut l, srx, stx, u64(i), mut ch, &b.req[0], &b.resp[0], zero_clock)
+		serve_step(mut p, mut l, srx, stx, false, u64(i), mut ch, &b.req[0], &b.resp[0], zero_clock)
 		for f in ch.tx {
 			answers << f.data[..f.data[0] + 1].clone()
 		}
@@ -396,10 +397,10 @@ fn test_routine_work_waits_for_the_link() {
 	er := [u8(0x31), 0x01, 0xFF, 0x00, 0x08, 0x02, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00]
 	n := p.handle(&er[0], er.len, unsafe { &resp[0] })
 	assert l.send(unsafe { &resp[0] }, n) // the 0x78, not yet taken by the controller
-	serve_step(mut p, mut l, srx, stx, 0, mut ch, &b.req[0], &b.resp[0], zero_clock)
+	serve_step(mut p, mut l, srx, stx, false, 0, mut ch, &b.req[0], &b.resp[0], zero_clock)
 	assert g_step_pending_at_erase.len == 0, 'a step with the previous response still in the link'
 	ch.stalled = false
-	serve_step(mut p, mut l, srx, stx, 1, mut ch, &b.req[0], &b.resp[0], zero_clock)
+	serve_step(mut p, mut l, srx, stx, false, 1, mut ch, &b.req[0], &b.resp[0], zero_clock)
 	assert g_step_pending_at_erase.len == 1
 }
 
@@ -430,11 +431,11 @@ fn test_a_refused_pending_answer_is_said_again_before_any_erase() {
 	// the 0x78 is refused on its way out: lost, said again, nothing erased
 	l.abort_tx()
 	p.work_lost()
-	serve_step(mut p, mut l, srx, stx, 0, mut ch, &b.req[0], &b.resp[0], zero_clock)
+	serve_step(mut p, mut l, srx, stx, false, 0, mut ch, &b.req[0], &b.resp[0], zero_clock)
 	assert g_step_pending_at_erase.len == 0, 'erased with its 0x78 refused'
 	ch.refuse = false
 	for i in 1 .. 6 {
-		serve_step(mut p, mut l, srx, stx, u64(i), mut ch, &b.req[0], &b.resp[0], zero_clock)
+		serve_step(mut p, mut l, srx, stx, false, u64(i), mut ch, &b.req[0], &b.resp[0], zero_clock)
 		if p.work == 0 {
 			break
 		}
@@ -462,7 +463,7 @@ fn test_a_refused_pending_answer_is_said_again_before_any_erase() {
 	g_step_ch = ch2
 	mut l2 := new_link()
 	for i in 0 .. 10 {
-		serve_step(mut q, mut l2, srx, stx, u64(i), mut ch2, &b.req[0], &b.resp[0], zero_clock)
+		serve_step(mut q, mut l2, srx, stx, false, u64(i), mut ch2, &b.req[0], &b.resp[0], zero_clock)
 	}
 	assert q.work == 0 && g_step_pending_at_erase.len == 0, 'given up without erasing'
 }
@@ -488,7 +489,7 @@ fn test_a_refused_first_pending_answer_holds_the_routine() {
 	mut b := Bufs{}
 	mut t := new_link()
 	ch.rx << tester_frames(mut t, 0, [u8(0x31), 0x01, 0xFF, 0x01])
-	serve_step(mut p, mut l, srx, stx, 0, mut ch, &b.req[0], &b.resp[0], zero_clock)
+	serve_step(mut p, mut l, srx, stx, false, 0, mut ch, &b.req[0], &b.resp[0], zero_clock)
 	assert p.work != 0 && p.work_resend && !p.work_ready, 'the check ran with its 0x78 refused'
 }
 
@@ -537,13 +538,13 @@ fn test_a_drain_that_runs_out_is_a_lost_response() {
 	mut b := Bufs{}
 	start_erase(mut p)
 	for i in 0 .. 3 {
-		serve_step(mut p, mut l, srx, stx, u64(i), mut ch, &b.req[0], &b.resp[0], moving_clock)
+		serve_step(mut p, mut l, srx, stx, false, u64(i), mut ch, &b.req[0], &b.resp[0], moving_clock)
 	}
 	assert g_step_pending_at_erase.len == 0, 'erased with its 0x78 undrained'
 	assert ch.tx.len == 3, 'the 0x78 said again, each time it ran out'
 	ch.stuck = false
 	for i in 3 .. 12 {
-		serve_step(mut p, mut l, srx, stx, u64(i), mut ch, &b.req[0], &b.resp[0], moving_clock)
+		serve_step(mut p, mut l, srx, stx, false, u64(i), mut ch, &b.req[0], &b.resp[0], moving_clock)
 		if p.work == 0 {
 			break
 		}
@@ -559,7 +560,7 @@ fn test_a_drain_that_runs_out_is_a_lost_response() {
 	mut l2 := new_link()
 	start_erase(mut q)
 	for i in 0 .. 40 {
-		serve_step(mut q, mut l2, srx, stx, u64(i), mut ch2, &b.req[0], &b.resp[0], moving_clock)
+		serve_step(mut q, mut l2, srx, stx, false, u64(i), mut ch2, &b.req[0], &b.resp[0], moving_clock)
 	}
 	assert q.work == 0 && g_step_pending_at_erase.len == 0, 'given up without erasing'
 	mut said := []u8{}
@@ -581,14 +582,14 @@ fn test_an_undrained_answer_is_sent_again() {
 	mut l := new_link()
 	mut b := Bufs{}
 	start_erase(mut p)
-	serve_step(mut p, mut l, srx, stx, 1, mut ch, &b.req[0], &b.resp[0], moving_clock) // erase, 0x71
+	serve_step(mut p, mut l, srx, stx, false, 1, mut ch, &b.req[0], &b.resp[0], moving_clock) // erase, 0x71
 	assert g_step_pending_at_erase.len == 1 && p.work != 0
 	ch.stuck = true
-	serve_step(mut p, mut l, srx, stx, 2, mut ch, &b.req[0], &b.resp[0], moving_clock)
+	serve_step(mut p, mut l, srx, stx, false, 2, mut ch, &b.req[0], &b.resp[0], moving_clock)
 	assert p.work != 0, 'an undrained answer confirmed'
 	ch.stuck = false
 	for i in 3 .. 6 {
-		serve_step(mut p, mut l, srx, stx, u64(i), mut ch, &b.req[0], &b.resp[0], moving_clock)
+		serve_step(mut p, mut l, srx, stx, false, u64(i), mut ch, &b.req[0], &b.resp[0], moving_clock)
 	}
 	assert p.work == 0 && g_step_pending_at_erase.len == 1, 'confirmed, erased once'
 	mut said := []u8{}
@@ -725,7 +726,7 @@ fn test_the_bootloader_answers_at_its_nodes_tx_dl() {
 		mut b := Bufs{}
 		mut t := new_link()
 		ch.rx << tester_frames(mut t, 0, [u8(0x22), 0xF1, 0x90])
-		serve_step(mut p, mut l, srx, stx, 0, mut ch, &b.req[0], &b.resp[0], zero_clock)
+		serve_step(mut p, mut l, srx, stx, false, 0, mut ch, &b.req[0], &b.resp[0], zero_clock)
 		assert ch.tx.len == 1, 'TX_DL ${dl}'
 		f := ch.tx[0]
 		if dl == 64 {
@@ -744,7 +745,56 @@ fn test_the_bootloader_answers_at_its_nodes_tx_dl() {
 		ff.data[1] = 40
 		l.abort_tx() // the answer's rest is not this case's
 		ch.rx << ff
-		serve_step(mut p, mut l, srx, stx, 1000, mut ch, &b.req[0], &b.resp[0], zero_clock)
+		serve_step(mut p, mut l, srx, stx, false, 1000, mut ch, &b.req[0], &b.resp[0], zero_clock)
 		assert ch.tx.len == 1 && ch.tx[0].len == 8 && ch.tx[0].data[..3] == [u8(0x30), 4, 2], 'TX_DL ${dl}'
 	}
+}
+
+// the step on 29-bit ids (the bootloader of a node on 29-bit or normal fixed addressing): a request
+// is taken only as a 29-bit frame on rx_id, and every frame of the answer goes out 29-bit on tx_id —
+// the tester's flow control taken only in that format too
+fn test_a_29_bit_step_serves_29_bit_frames_only() {
+	rx29 := u32(0x18DA20F1)
+	tx29 := u32(0x18DAF120)
+	mut s := FakeServer{}
+	mut l := new_link()
+	mut ch := FakeChan{}
+	mut b := Bufs{}
+	mut t := new_link()
+	mut req := tester_frames(mut t, 0, [u8(0x22), 0xF1, 0x90])
+	req[0].id = rx29 // the rx number, as an 11-bit frame: another frame
+	ch.rx << req
+	serve_step(mut s, mut l, rx29, tx29, true, 0, mut ch, &b.req[0], &b.resp[0], zero_clock)
+	assert s.handled == 0 && ch.tx.len == 0
+	req[0].ext = true
+	ch.rx << req
+	serve_step(mut s, mut l, rx29, tx29, true, 0, mut ch, &b.req[0], &b.resp[0], zero_clock)
+	assert s.handled == 1
+	assert ch.tx.len == 1 && ch.tx[0].ext && ch.tx[0].id == tx29 // the first frame of 40 bytes
+	t.on_frame(0, pdu_of(&ch.tx[0]))
+	mut p := isotp.Pdu{}
+	assert t.poll(0, mut p) // the tester's flow control
+	mut fc := wire(rx29, p)
+	ch.rx << fc // as an 11-bit frame: not this connection's, nothing more is sent
+	serve_step(mut s, mut l, rx29, tx29, true, 1, mut ch, &b.req[0], &b.resp[0], zero_clock)
+	assert ch.tx.len == 1
+	fc.ext = true
+	ch.rx << fc
+	serve_step(mut s, mut l, rx29, tx29, true, 2, mut ch, &b.req[0], &b.resp[0], zero_clock)
+	assert ch.tx.len == 6 // the first frame and five consecutive frames: 6 + 5 * 7 >= 40
+	assert ch.tx.all(it.ext && it.id == tx29)
+}
+
+// an 11-bit step skips a 29-bit frame on its rx number (the bootloader of an 11-bit node)
+fn test_an_11_bit_step_skips_29_bit_frames() {
+	mut s := FakeServer{}
+	mut l := new_link()
+	mut ch := FakeChan{}
+	mut b := Bufs{}
+	mut t := new_link()
+	mut req := tester_frames(mut t, 0, [u8(0x22), 0xF1, 0x90])
+	req[0].ext = true
+	ch.rx << req
+	step(mut s, mut l, 0, mut ch, mut b)
+	assert s.handled == 0 && ch.tx.len == 0
 }

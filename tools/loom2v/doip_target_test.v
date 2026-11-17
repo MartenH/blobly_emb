@@ -545,6 +545,7 @@ fn test_a_gateway_routes_from_the_comm_thread() {
 	assert glue.contains('g_droute_buf [2080]u8') // diagroute.storage_len(520)
 	assert glue.contains('logical: u16(0x7c0)') && glue.contains('tx_id:   u32(0x7c0)')
 		&& glue.contains('rx_id:   u32(0x7c8)')
+	assert !glue.contains('ext:     true') // an 11-bit node's route states no format
 	// the route carries its node's maximum message (absent: the default), which the router refuses a
 	// longer request by (REQ-CAN-TP-023)
 	assert glue.contains('max_message: 520 // its [isotp] max_message')
@@ -692,5 +693,54 @@ fn test_the_doip_buffers_follow_the_maximum_message() {
 		'g_droute.init(u8(1), u8(8), &g_droute_buf[0], 4095)',
 		'C.doip_rt_init(&g_rt_req[0], 4095, &g_rt_ans[0], 4095)', 'g_diag_req [4095]u8'] {
 		assert glue.contains(g), g
+	}
+}
+
+// @verifies REQ-NET-021
+// a node on 29-bit (or normal fixed) addressing: its route carries the format, which the router
+// sends and receives in — and the route's ids are compared with the gateway's own [isotp] and the
+// other routes' in their format, an 11-bit and a 29-bit id of one number being two frames
+fn test_a_29_bit_route_carries_its_format() {
+	ext := doip_route.replace('tx_id   = 0x7C0', 'tx_id   = 0x18DA20F1').replace('rx_id   = 0x7C8',
+		'rx_id   = 0x18DAF120\next     = true')
+	assert ext != doip_route, 'the fixture route changed shape — update this test'
+	code, out, glue := generate('doip_route_ext', doip_conn + ext)
+	assert code == 0, out
+	assert glue.contains('tx_id:   u32(0x18da20f1)') && glue.contains('rx_id:   u32(0x18daf120)')
+	assert glue.contains('ext:     true')
+	code2, out2, _ := generate('doip_route_wide', doip_conn +
+		doip_route.replace('tx_id   = 0x7C0', 'tx_id   = 0x800'))
+	assert code2 != 0 && out2.contains('[[doip.route]] "zone_a" tx_id 0x800 must be a standard 11-bit id'), out2
+	// on can0, the gateway's own [isotp] numbers (0x7B0 / 0x7B8) as 29-bit ids are other frames
+	code3, out3, _ := generate_without_nm('doip_route_ext_can0', doip_conn +
+		doip_route_can0.replace('tx_id   = 0x7C0', 'tx_id   = 0x7B8').replace('rx_id   = 0x7C8', 'rx_id   = 0x7C8\next     = true'))
+	assert code3 == 0, out3
+	// two routes on one bus with one number: accepted in two formats, refused in one
+	twin := doip_route_more.replace('"zone_a"', '"twin"').replace('0x07C0', '0x07D0')
+	code4, out4, _ := generate('doip_route_twin_ext', doip_conn + doip_route +
+		twin.replace('rx_id   = 0x7C8', 'rx_id   = 0x7C8\next     = true'))
+	assert code4 == 0, out4
+	code5, out5, _ := generate('doip_route_twin', doip_conn + ext +
+		twin.replace('tx_id   = 0x7C0', 'tx_id   = 0x18DA20F1').replace('rx_id   = 0x7C8', 'rx_id   = 0x18DAF121\next     = true'))
+	assert code5 != 0 && out5.contains('share a diagnostic id'), out5
+}
+
+// @verifies REQ-NET-021
+// a route's ids meet the gateway's other frames on the route bus in the route's format: a 29-bit
+// route on the number of an 11-bit frame there — the [telemetry] frame, a DBC message — is another
+// frame, an 11-bit one is that frame (a ThreadX gateway's DBC frames are 11-bit: its comm thread
+// refuses an extended one)
+fn test_a_routes_collisions_are_judged_in_its_format() {
+	// can0 without NM: the [telemetry] id 0x7E0 and the DBC's WorkloadFrame (0x200) are there
+	for id, want in {
+		'0x7E0': 'tx_id 0x7e0 is also a [telemetry] frame id'
+		'0x200': 'tx_id 0x200 is also DBC message "WorkloadFrame"'
+	} {
+		route := doip_route_can0.replace('tx_id   = 0x7C0', 'tx_id   = ${id}')
+		code, out, _ := generate_without_nm('doip_route_ext_on', doip_conn +
+			route.replace('rx_id   = 0x7C8', 'rx_id   = 0x7C8\next     = true'))
+		assert code == 0, '${id}: ${out}'
+		c11, o11, _ := generate_without_nm('doip_route_std_on', doip_conn + route)
+		assert c11 != 0 && o11.contains('[[doip.route]] "zone_a" ${want}'), o11
 	}
 }

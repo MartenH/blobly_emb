@@ -98,7 +98,13 @@ bench suites behind them.
 
 The configuration follows the standards' layers. **`[uds]` is the server** (ISO 14229, one per
 node); **its transports refer to it**: `[isotp]` on CAN ([can-tp.md](can-tp.md)), `[doip]` on
-Ethernet ([net.md](net.md)).
+Ethernet ([net.md](net.md)). `[isotp]` states its CAN ids by normal addressing — `rx_id` /
+`tx_id` / `functional_id`, 11-bit, or 29-bit with `ext = true` — or by normal fixed addressing
+(`addressing = "normal_fixed"`, the node's address `sa` and the tester's `ta`, from which the 29-bit
+ids `0x18DA<sa><ta>` / `0x18DA<ta><sa>` derive, and functional requests on
+`0x18DB<functional_ta><ta>`); the node's bootloader serves on the same ids in the same format
+([can-tp.md](can-tp.md) §2, §3.8). In a dissolved system an `[isotp]` may state no ids and take its
+node's `diag` from system.toml, which sysgen writes into it ([multi-node.md](multi-node.md)).
 
 ```toml
 [uds]                           # ISO 14229: the node's ONE diagnostic server
@@ -247,7 +253,8 @@ unanswered**.
 
 NRCs come in ISO 14229-1's evaluation order: first for the service, 0x11, 0x7F and the service
 row's 0x33; then within the service, 0x12 / 0x7E, 0x13, 0x22, 0x24, 0x31, and a DID's own 0x33 where
-it is checked. A functional request (`[isotp] functional_id`, single frames only) is served the moment it is
+it is checked. A functional request (on `[isotp] functional_id`, or normal fixed addressing's
+`0x18DB<functional_ta><ta>`; single frames only) is served the moment it is
 read, so a functional 0x28 gates the very next frame. Its negative responses 0x11, 0x12, 0x31, 0x7E
 and 0x7F are withheld, so a broadcast into a gated service stays silent on every ECU. It is dropped,
 not queued, while the physical connection is busy ([can-tp.md](can-tp.md) §3.6).

@@ -6,12 +6,14 @@
 #
 # Scope — what this transport deliberately does NOT do (non-goals until a requirement here
 # says otherwise; silence is not compliance):
-#   * CAN FD frame formats as ISO 15765-2:2016 defines them for normal addressing: a node opts into
-#     a transmit frame length (TX_DL) above 8 per [isotp] tx_dl (REQ-CAN-TP-026..028), any received
-#     length is taken without configuration; the escape first frame (FF_DL > 4095) is only refused,
-#     even one stating 4095 or less, which ISO has a receiver ignore (REQ-CAN-TP-015);
-#   * normal addressing on 11-bit identifiers only: no extended, mixed or 29-bit normal-fixed
-#     addressing (`[isotp] rx_id` / `tx_id` are 0x000..0x7FF);
+#   * CAN FD frame formats as ISO 15765-2:2016 defines them for normal and normal fixed addressing:
+#     a node opts into a transmit frame length (TX_DL) above 8 per [isotp] tx_dl
+#     (REQ-CAN-TP-026..028), any received length is taken without configuration; the escape first
+#     frame (FF_DL > 4095) is only refused, even one stating 4095 or less, which ISO has a receiver
+#     ignore (REQ-CAN-TP-015);
+#   * normal addressing on 11- or 29-bit identifiers and normal fixed addressing (29-bit,
+#     priority 6) only: no extended or mixed addressing (an address byte in the payload); a 29-bit
+#     functional identifier of 0 cannot be configured (0 = none);
 #   * a fixed padding byte (0x00) on every frame sent; no configurable fill value;
 #   * no enforcement of the peer's STmin or block size on frames WE receive (ISO 15765-2 leaves
 #     that to the sender), and no N_Br / N_Cs performance targets;
@@ -277,6 +279,45 @@ derives = "SYS-REQ-DIAG-001"
 id = "REQ-CAN-TP-029"
 title = "Flow control that cannot be sent (N_Ar)"
 text = "When a flow control the transport owes (a clear-to-send, or an overflow) has not been handed to the CAN controller within N_Ar (1000 ms) of first becoming owed — a repeated first frame not restarting it — the transport shall abandon the reception it belongs to, owe no flow control for it, and count it with the receptions N_Cr abandons, so a transmit FIFO that never drains cannot hold the connection busy, its session timer held or its functional requests dropped. A DoIP gateway shall end a routed exchange whose answer's reception its transport abandoned."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+# 040..043: 29-bit identifiers — normal addressing with 29-bit ids and normal fixed addressing
+# (docs/can-tp.md §1, §2, §3.8)
+
+[[req]]
+id = "REQ-CAN-TP-040"
+title = "Normal addressing with 29-bit identifiers"
+text = "A diagnostic connection configured with 29-bit identifiers shall receive its physical and functional requests, and the flow control for its answers, only as frames with an extended (29-bit) identifier, and shall send every frame with an extended identifier, its identifiers taking any value 0x00000000..0x1FFFFFFF. A connection not so configured shall use 11-bit identifiers, and generation shall refuse an identifier above 0x7FF for it rather than pass to the driver an identifier it would send truncated."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-CAN-TP-041"
+title = "Normal fixed addressing"
+text = "A diagnostic connection configured for normal fixed addressing by its own address and the tester's address, one byte each, shall receive physical requests on the 29-bit identifier 0x18DA<own><tester> (PF 0xDA, its own address the target address, the tester's the source address), send its answers on 0x18DA<tester><own>, and, when a functional target address is configured, receive functional requests on 0x18DB<functional target><tester>; with none it shall have no functional identifier. Generation shall refuse identifiers or an identifier format given beside the addresses, a missing address, one outside 0..255, and the two addresses being equal."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-CAN-TP-042"
+title = "The identifier format is part of the connection's identity"
+text = "The diagnostic server, its bootloader and a DoIP gateway's router shall take a received frame as their connection's only when both its identifier and its format (11-bit or 29-bit) are the connection's; a frame with the same identifier number in the other format shall be left to the owner's other receivers, in either direction."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-CAN-TP-043"
+title = "Normal fixed addressing at priority 6"
+text = "A connection with normal fixed addressing shall send its frames at priority 6 and shall take as its own only frames received at priority 6, its identifiers being compared whole; a request sent at another priority shall not be served."
 status = "agreed"
 method = "test"
 asil = "QM"

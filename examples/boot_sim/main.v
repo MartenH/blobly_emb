@@ -23,6 +23,10 @@ const app_base = u32(0x0802_0000)
 const app_size = u32(0x0001_0000)
 const req_id = u32(0x7B0)
 const rsp_id = u32(0x7B8)
+// the ids' format: 11-bit, as a bootloader built with BOOT_EXT 0 serves them. A frame is this
+// connection's only on req_id in that format (REQ-CAN-TP-042), as diag.serve_step takes it, and
+// every frame goes out in it
+const ids_ext = false
 const flash_file = 'bin/flash.bin'
 
 struct FileFlash {
@@ -65,6 +69,12 @@ fn sim_rng(out &u8, n int) bool {
 		}
 	}
 	return true
+}
+
+// is_request: a frame of this connection's physical request id, in its format, at a length a
+// controller delivers — anything else is left alone, as the bootloader leaves it
+fn is_request(id u32, ext bool, len u8) bool {
+	return id == req_id && ext == ids_ext && len >= 1 && len <= can.max_dlc
 }
 
 fn main() {
@@ -134,8 +144,8 @@ fn main() {
 		now := u64(time.sys_mono_now() / 1000)
 		mut f := can.Frame{}
 		for ch.recv(mut f) {
-			if f.id != req_id || f.len < 1 || f.len > can.max_dlc {
-				continue // another id, or no frame a controller delivers
+			if !is_request(f.id, f.ext, f.len) {
+				continue // another id or format, or no frame a controller delivers
 			}
 			mut pdu := isotp.Pdu{
 				len: int(f.len) // the link reads only the bytes that arrived
@@ -160,6 +170,7 @@ fn main() {
 			mut tf := can.Frame{
 				id:  rsp_id
 				len: u8(out.len) // 8: the channel is classic, the link's TX_DL 8
+				ext: ids_ext
 			}
 			for i in 0 .. out.len {
 				tf.data[i] = out.data[i]
