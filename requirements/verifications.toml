@@ -790,6 +790,24 @@ verifies = ["REQ-BOOT-020"]
 approved_by = "Claude (coding agent) on Marten Hildell's bench — system_full zone_a, domain, sysnode vs CANsub.4"
 date = "2026-11-17"
 
+# [isotp] tx_dl on silicon: system_full flashed from one build, zone_a (H723, the CAN-FD edge bus) at
+# TX_DL 64 and its bootloader at BOOT_TX_DL 64, every other node at 8. isotp_len.lua: zone_a
+# exchanges 64-byte CAN-FD frames both ways with blobly_net's tester at TX_DL 64 (an escape single
+# frame, a 64-byte first frame and consecutive frames), messages over 520 still whole both ways; the
+# two routed legs (through sysnode over DoIP) were not run, the bench Ethernet segment not being
+# connected. boot_bench.sh zone_a: the handoff, then the bootloader's 34-byte 0x29 challenge as ONE
+# 48-byte escape single frame at TX_DL 64, the image flashed in 15 blocks of 4064 and run.
+# diag_nodes.lua 11/11 (zone_a answering at TX_DL 64), diag_domain.lua 15/15, boot_handoff.lua
+# roundtrip 3/3. The comm thread's stack high-water after the runs, read over SWD from the 0xEF
+# fill: zone_a 852 of 8192 bytes, sysnode 1980, domain 3204 (the Pdu grew from 8 to 64 bytes).
+[[review]]
+id = "isotp-canfd-silicon"
+method = "review"
+context = "h723/ThreadX"
+verifies = ["REQ-CAN-TP-027", "REQ-CAN-TP-028"]
+approved_by = "Claude (coding agent) on Marten Hildell's bench — system_full zone_a, domain, sysnode vs CANsub.4"
+date = "2026-11-17"
+
 # The 0x27 state in the NvM journal on silicon (U3a, the keep cell removed): all three system_full CAN
 # nodes flashed from one build of the reworked rule (each level's wrong keys since its last correct
 # key, saturating, written only when it changes; a delay per level) — domain (H755, both banks),

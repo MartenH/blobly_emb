@@ -73,8 +73,8 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-CAN-TP-024 | QM | test | verified | isotp_test.v (pass), module_test.v (pass), shell_test.v (pass) |
 | REQ-CAN-TP-025 | QM | test | verified | diagroute_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass) |
 | REQ-CAN-TP-026 | QM | test | verified | cfgschema_test.v (pass), diag_target_test.v (pass), diagroute_test.v (pass), doip_target_test.v (pass), module_test.v (pass), multicore_dump_test.v (pass), node_gate_test.v (pass), shell_test.v (pass), someip_test.v (pass), someip_test.v (pass), step_test.v (pass) |
-| REQ-CAN-TP-027 | QM | test | verified | diag_test.v (pass), diagroute_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), step_test.v (pass) |
-| REQ-CAN-TP-028 | QM | test | verified | diag_test.v (pass), diag_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), step_test.v (pass), step_test.v (pass) |
+| REQ-CAN-TP-027 | QM | test | verified | diag_test.v (pass), diagroute_test.v (pass), isotp-canfd-silicon (approved), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), step_test.v (pass) |
+| REQ-CAN-TP-028 | QM | test | verified | diag_test.v (pass), diag_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), isotp-canfd-silicon (approved), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), step_test.v (pass), step_test.v (pass) |
 | REQ-CAN-TP-029 | QM | test | verified | diag_test.v (pass), diagroute_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass) |
 | REQ-COM-001 | QM | test | uncovered | — |
 | REQ-COM-002 | QM | test | uncovered | — |
@@ -382,8 +382,8 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-CAN-TP-024 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-CAN-TP-025 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-CAN-TP-026 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-CAN-TP-027 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-CAN-TP-028 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-027 | ✓ | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-028 | ✓ | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-CAN-TP-029 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-COM-001 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-COM-002 | | | | | | | | | | | | | | | | | | | | | | |
