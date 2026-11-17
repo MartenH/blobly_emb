@@ -6,13 +6,14 @@
 # otherwise; silence is not compliance). docs/diagnostics.md §1 "What is supported" is the
 # per-service statement of the same:
 #   * services not served by an application: 0x23/0x3D memory access, 0x24, 0x2A, 0x2C dynamic
-#     DIDs, 0x2F InputOutputControl, generic 0x31 RoutineControl, 0x34..0x38 transfers (the
-#     bootloader keeps its own 0x31/0x34/0x36/0x37), 0x29 Authentication (the bootloader's only),
-#     0x86 ResponseOnEvent, 0x87 LinkControl, OBD / WWH-OBD services;
+#     DIDs, 0x2F InputOutputControl, 0x34..0x38 transfers (the bootloader keeps its own
+#     0x31/0x34/0x36/0x37), 0x29 Authentication (the bootloader's only), 0x86 ResponseOnEvent,
+#     0x87 LinkControl, OBD / WWH-OBD services;
 #   * 0x11 subfunctions other than hardReset (01) and softReset (03); 0x19 subfunctions other
 #     than 01, 02, 03, 04, 06 and 0A; 0x28 communication types other than normal messages;
-#   * no busyRepeatRequest (0x21): a request that arrives while an answer is in flight is
-#     dropped (REQ-DIAG-037); no responsePending (0x78) in an application (REQ-DIAG-062);
+#   * no busyRepeatRequest (0x21): a request that arrives while an answer is in flight, or while
+#     a routine's answer is owed, is dropped (REQ-DIAG-037, REQ-DIAG-084); responsePending (0x78)
+#     only while a routine's answer is owed (REQ-DIAG-083);
 #   * no memorySelection byte on 0x14 (a 4-byte request only); no power-up delay on 0x27 (the
 #     failed-key count surviving a reset and a power cycle, REQ-DIAG-033 and REQ-DIAG-065, does
 #     that job);
@@ -92,7 +93,7 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-DIAG-062"
 title = "A request's own write never erases"
-text = "The write a request makes durable before its answer — a parameter's 0x2E, a 0x14 clear — shall append its own records and, when the journal sector is full, at most copy the live set into the already-erased partner sector, never erase one; a write that would need an erase shall be refused with generalProgrammingFailure (0x72) instead. The application server computes the answer in the pass that served the request and sends no responsePending (0x78)."
+text = "The write a request makes durable before its answer — a parameter's 0x2E, a 0x14 clear — shall append its own records and, when the journal sector is full, at most copy the live set into the already-erased partner sector, never erase one; a write that would need an erase shall be refused with generalProgrammingFailure (0x72) instead. The application server answers such a write in the pass that served it, never with responsePending (0x78)."
 status = "agreed"
 method = "test"
 asil = "QM"
@@ -101,7 +102,7 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-DIAG-064"
 title = "Response within P2"
-text = "On a target the application server shall send its answer within P2server_max (50 ms) of the request's last frame, a parameter write that copies the live set included."
+text = "On a target the application server shall send its answer — a routine's responsePending (REQ-DIAG-083) included — within P2server_max (50 ms) of the request's last frame, a parameter write that copies the live set included."
 status = "draft"   # a bench measurement, not yet run (the in-sleep flush no longer erases, REQ-NVM-015)
 method = "test"
 asil = "QM"
@@ -647,6 +648,80 @@ derives = "SYS-REQ-DIAG-001"
 id = "REQ-DIAG-061"
 title = "Parameters restored before any FB runs"
 text = "Every parameter shall be restored before any FB dispatches."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+# ---- Routines (RoutineControl, run by an FB) -------------------------------------------------
+
+[[req]]
+id = "REQ-DIAG-080"
+title = "RoutineControl per configured routine"
+text = "An application server shall serve RoutineControl (0x31) for each routine its node configures — startRoutine (01) always, stopRoutine (02) and requestRoutineResults (03) where the routine offers them — and refuse, in this order: a request shorter than 2 bytes 0x13; a sub-function other than 01, 02 or 03 0x12; a request shorter than 4 bytes 0x13; a routine not configured, or not allowed in the active session, 0x31; its 0x27 level not unlocked 0x33; a sub-function the routine does not offer 0x12; a length other than its declared option record's 0x13; a start while the routine runs (a stop its FB refused leaving it running), a stop while it does not, or results unless the latest start was answered positively (since the server's last reset) 0x24. requestRoutineResults shall answer from the FB's latest report. A functionally addressed 0x31 shall be ignored, unanswered and unperformed."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-081"
+title = "A routine runs in its FB, through two cells"
+text = "A routine shall run in the FB handler that reads its request and writes its result, on that handler's thread, never on the server's: the server shall write each start or stop into the routine's request cell under a fresh sequence number; the handler shall see each operation, with its option record, in exactly one dispatch and in the order the server wrote them — a stop the server wrote before a later start included, in a dispatch before that start's — save that stops written before the handler took the first are seen as one, and a start the server stopped before the handler took it is not handed over; the state and record it writes shall be stamped with the request it answers and stand until it writes another state, a refusal changing neither; and the server shall act on a result only when it answers the latest request, but for requestRoutineResults."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-082"
+title = "When a routine is answered"
+text = "A synchronous routine's start shall be answered when its FB reports it done, stopped or failed; an asynchronous routine's once its FB reports any state — each positively, with that state as routineInfo and the routine's start record — or, when the FB refuses it, with the FB's NRC (0x22, 0x24, 0x31 or 0x72; any other as 0x22). A stop shall be answered when the FB reports the routine no longer running. A start or stop not answered within the routine's timeout shall be answered conditionsNotCorrect (0x22) and its FB asked to stop at that moment, the answer abandoned when the transport that asked cannot take it within P2*server_max (5 s) after."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-083"
+title = "responsePending while a routine's answer is owed"
+text = "A start or stop the server cannot answer in the pass that serves it shall be answered responsePending (0x78) in that pass, again at most P2*server_max less 1 s (4 s) after each responsePending, and finally with its answer, on the transport the request came over — the final answer sent even when the request set suppressPosRspMsgIndicationBit. On CAN each responsePending is a single frame and a lost one is sent again in the next pass; over DoIP every response after the first is pushed once the one before it has been acknowledged."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-084"
+title = "The server while a routine's answer is owed"
+text = "While a routine's answer is owed the server shall drop every other request unanswered and unperformed — physical or functional, on CAN or over DoIP, TesterPresent included — without moving the answer to the transport the dropped request came over; shall not let S3 run (nor while a pushed answer awaits its acknowledgement); and shall hold the network awake. When the DoIP connection that asked drops, the answer owed to it shall be abandoned and the routine's FB asked to stop."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-085"
+title = "A routine does not outlive its session"
+text = "Every session entry — a DiagnosticSessionControl (re-entering the active session included), S3, a reset, or a network tester's session ending with its connection — shall ask every running routine's FB to stop; an answer then still owed shall be answered conditionsNotCorrect (0x22) on the transport that asked; the server shall not wait for the stop to be acknowledged before serving the next start."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-086"
+title = "A gateway keeps a routed exchange open through responsePending"
+text = "A DoIP gateway routing a request to a node behind it shall forward each responsePending the node answers to the tester and renew its wait for the next answer by P2*server_max plus 1 s from each, so that the final answer of a routine answered responsePending several times, over longer than one such wait, reaches the tester."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-087"
+title = "A routine is generated only where it can run"
+text = "Generation shall refuse a routine its node cannot serve, naming the reason: no diagnostic server or a bare-metal target; a duplicate routineIdentifier, one outside 0x0200-0xDFFF and 0xF000-0xFEFF, or the bootloader's own on a node behind a bootloader; a stop on a synchronous routine; a results record without results; a record longer than 32 bytes, a request or answer longer than the node's maximum message length, or on a DoIP node a start record over 11 bytes; a routine reachable from the default session with no 0x27 level, or a level whose sessions leave out extended; a gate sharing no session, or another level, with the 0x31 service row, or a table leaving 0x31 out; a timeout not above the serving handler's period plus 20 ms; a request not read by exactly one FB handler or written by any, a result not written by that same handler, written by another or read by any; an FB on a satellite core, a hand-written satellite or in a multi-thread partition; a name colliding with a signal, parameter or routine; more routines than the server holds, or more byte cells than the image has."
 status = "agreed"
 method = "test"
 asil = "QM"

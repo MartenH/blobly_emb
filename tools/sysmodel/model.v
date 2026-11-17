@@ -494,6 +494,9 @@ pub mut:
 	authored_signals bool     // a [[signal]] with a BUS endpoint (forbidden)
 	local_signals    []string // node-local signal names (io / cross-partition) — allowed
 	params           []string // [[param]] names: node-local INPUTS an FB reads (docs/diagnostics.md §3.4)
+	// each [[routine]]'s `<Name>Request` and `<Name>Result`: what its FB reads and writes, the
+	// node's own (docs/diagnostics.md §3.1)
+	routine_ports []string
 	authored_frames  bool
 	authored_routes  bool
 }
@@ -1147,6 +1150,12 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 	for pv in (doc.value_opt('param') or { toml.Any([]toml.Any{}) }).array() {
 		if nm := pv.as_map()['name'] {
 			v.params << nm.string()
+		}
+	}
+	for rv in (doc.value_opt('routine') or { toml.Any([]toml.Any{}) }).array() {
+		if nm := rv.as_map()['name'] {
+			v.routine_ports << nm.string() + 'Request'
+			v.routine_ports << nm.string() + 'Result'
 		}
 	}
 	if fv := doc.value_opt('frame') {

@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 312 | 220 | 30 | 62 | 0 |
+| 321 | 228 | 30 | 63 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -160,6 +160,14 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-059 | QM | test | verified | param_test.v (pass) |
 | REQ-DIAG-060 | QM | test | verified | param_test.v (pass) |
 | REQ-DIAG-061 | QM | test | verified | param_target_test.v (pass) |
+| REQ-DIAG-080 | QM | test | verified | routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
+| REQ-DIAG-081 | QM | test | verified | routine_gen_test.v (pass), routine_gen_test.v (pass), routine_gen_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
+| REQ-DIAG-082 | QM | test | verified | routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
+| REQ-DIAG-083 | QM | test | verified | routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
+| REQ-DIAG-084 | QM | test | verified | routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
+| REQ-DIAG-085 | QM | test | verified | routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
+| REQ-DIAG-086 | QM | test | verified | diagroute_test.v (pass) |
+| REQ-DIAG-087 | QM | test | verified | routine_gen_test.v (pass) |
 | REQ-E2E-001 | B | test | verified | e2e_test.v (pass) |
 | REQ-E2E-002 | B | test | verified | e2e_test.v (pass), rx_target_test.v (pass), rxmon_test.v (pass) |
 | REQ-E2E-003 | B | test | verified | e2e_test.v (pass) |
@@ -268,6 +276,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-PLACE-010 | QM | test | uncovered | — |
 | REQ-PLACE-011 | QM | test | uncovered | — |
 | REQ-PLACE-012 | QM | test | uncovered | — |
+| REQ-PLACE-013 | QM | test | uncovered | — |
 | REQ-SEC-001 | QM | test | verified | secoc_test.v (pass) |
 | REQ-SEC-002 | QM | test | uncovered | — |
 | REQ-SEC-003 | QM | test | uncovered | — |
@@ -477,6 +486,14 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-059 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-060 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-061 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-080 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-081 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-082 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-083 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-084 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-085 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-086 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-087 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-E2E-001 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-E2E-002 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-E2E-003 | | | | | | | | | | | | | | | | | | | ✓ | | | |
@@ -585,6 +602,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-PLACE-010 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-PLACE-011 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-PLACE-012 | | | | | | | | | | | | | | | | | | | | | | |
+| REQ-PLACE-013 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-SEC-001 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-SEC-002 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-SEC-003 | | | | | | | | | | | | | | | | | | | | | | |

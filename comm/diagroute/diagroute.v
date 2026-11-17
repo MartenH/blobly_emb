@@ -2,6 +2,7 @@ module diagroute
 
 import comm.diag
 import comm.isotp
+import comm.uds
 import driver.can
 
 // Diagnostic routing on a DoIP gateway (REQ-NET-019): a diagnostic message whose target address is
@@ -48,10 +49,12 @@ import driver.can
 // the most routes one gateway holds
 pub const max_routes = 8
 
-// how long the gateway waits for the target's next answer once the request has left: P2*max (5 s,
-// the server's enhanced response timing, comm/uds) plus one second, so a target that answers
-// responsePending within its P2* is never cut off before the tester's own P2* runs out
-pub const answer_wait_us = u64(6_000_000)
+// how long the gateway waits for the target's next answer once the request has left, and again
+// after each responsePending it answers (REQ-DIAG-086): P2*server_max (5 s, the server's enhanced
+// response timing, comm/uds p2_star_server_us — which an application server repeats its 0x78
+// well within, uds.pending_repeat_us) plus one second, so a target that answers responsePending
+// within its P2* is never cut off before the tester's own P2* runs out
+pub const answer_wait_us = uds.p2_star_server_us + 1_000_000
 
 // how long frames of an exchange may stop moving, either way, while something is in flight: the
 // request's single or first frame waiting for room in the bus's transmit FIFO — a state ISO-TP's

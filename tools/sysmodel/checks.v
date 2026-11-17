@@ -694,7 +694,7 @@ fn check_signals_dissolved(s System) []Issue {
 						msg:      'node "${n.name}": FB writes "${w}" but its declared producer is "${sig.producer}" — only the producer may write a signal'
 					}
 				}
-			} else if w !in n.view.local_signals {
+			} else if w !in n.view.local_signals && w !in n.view.routine_ports {
 				// a node-local signal (an io output, or a node-internal signal) is
 				// the node's own — only a name that is neither system nor local errors.
 				issues << Issue{
@@ -708,8 +708,8 @@ fn check_signals_dissolved(s System) []Issue {
 			if _ := s.signal_by_name(r) {
 				continue
 			}
-			if r in n.view.local_signals || r in n.view.params {
-				continue // a node-local (io) input or a parameter — the node's own
+			if r in n.view.local_signals || r in n.view.params || r in n.view.routine_ports {
+				continue // a node-local (io) input, a parameter or a routine's request — the node's own
 			}
 			issues << Issue{
 				severity: .error

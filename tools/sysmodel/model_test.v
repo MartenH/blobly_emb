@@ -3831,6 +3831,18 @@ fn test_dissolved_local_io_signal_accepted() {
 	assert !issue_msgs(validate_system_gen(s)).any(it.contains('LedGreen'))
 }
 
+// REQ-TOPO-001: a [[routine]]'s request and result (docs/diagnostics.md §3.1) are the node's own —
+// its FB reads one and writes the other — while a name that is no routine's still fails.
+fn test_dissolved_routine_ports_accepted() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.routine_ports = ['SelfTestRequest', 'SelfTestResult']
+	s.nodes[0].view.fb_reads = ['Rpm', 'SelfTestRequest']
+	s.nodes[0].view.fb_writes = ['SelfTestResult']
+	assert !issue_msgs(validate_system_gen(s)).any(it.contains('SelfTest'))
+	s.nodes[0].view.fb_reads = ['Rpm', 'SelfTestRequest', 'OtherRequest']
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('reads "OtherRequest"'))
+}
+
 // REQ-TOPO-001: a signal no other node reads is a warning, not an error.
 fn test_dissolved_unread_signal_is_warning() {
 	mut s := clean_dissolved()

@@ -68,6 +68,9 @@ mut:
 	frep_engine_monitor fault.Reports // debounced state + counters, to the bridge
 	brake_monitor app.BrakeMonitor
 	lamp_controller app.LampController
+	self_checker app.SelfChecker
+	rtq_self_check uds.RoutineRequest // routine "SelfCheck": its request cell, as last read
+	rtf_self_check uds.RoutineFb // ... and its FB side: the request taken, the result standing
 	cell_high_rev sig.HighRev // local FB->FB signal
 }
 
@@ -111,6 +114,26 @@ fn handler_ctrl_lamp_controller_on_10ms(ctx voidptr) {
 	osal.ioc_publish2(secure_status_ch, &outp.secure_status, u8(sizeof(outp.secure_status)))
 }
 
+fn handler_ctrl_self_checker_on_50ms(ctx voidptr) {
+	mut st := unsafe { &Partition_ctrl_state(ctx) }
+	mut inp := ports.SelfCheckerIn{}
+	osal.ioc_acquire(routine_req_self_check_ch, &st.rtq_self_check, u8(sizeof(st.rtq_self_check))) // routine "SelfCheck": the request the bridge wrote
+	inp.self_check_request.op = st.rtf_self_check.take(&st.rtq_self_check)
+	if inp.self_check_request.op != .none {
+		for k in 0 .. 1 {
+			inp.self_check_request.option[k] = st.rtq_self_check.data[k]
+		}
+	}
+	mut outp := ports.SelfCheckerOut{}
+	st.self_checker.on_50ms(inp, mut outp)
+	if st.rtf_self_check.report(outp.self_check_result.state, outp.self_check_result.nrc) {
+		for k in 0 .. 2 {
+			st.rtf_self_check.res.data[k] = outp.self_check_result.record[k]
+		}
+	}
+	osal.ioc_publish(routine_res_self_check_ch, &st.rtf_self_check.res, u8(sizeof(st.rtf_self_check.res))) // routine "SelfCheck": to the bridge
+}
+
 __global (
 	g_st_ctrl Partition_ctrl_state
 	g_sched_ctrl loom.Scheduler
@@ -132,6 +155,7 @@ pub fn partition_ctrl(core i32, _ voidptr) {
 	sched.every(10000, handler_ctrl_engine_monitor_on_10ms, st)
 	sched.every(10000, handler_ctrl_brake_monitor_on_10ms, st)
 	sched.every(10000, handler_ctrl_lamp_controller_on_10ms, st)
+	sched.every(50000, handler_ctrl_self_checker_on_50ms, st)
 	for {
 		loom_t0 := osal.now_us()
 		sched.run(loom_t0)
@@ -222,6 +246,8 @@ fn io_can0_10ms(ctx voidptr) {
 	st.fctl_engine_monitor.gen[1] = st.fmem.control_gen(1)
 	st.fctl_engine_monitor.held[1] = st.fmem.control_held(1)
 	osal.ioc_publish(fault_ctl_engine_monitor_ch, &st.fctl_engine_monitor, u8(sizeof(st.fctl_engine_monitor)))
+	osal.ioc_acquire(routine_res_self_check_ch, &st.conn_diag.server.routines[0].res, u8(sizeof(st.conn_diag.server.routines[0].res))) // routine "SelfCheck": its FB's latest report
+	osal.ioc_publish(routine_req_self_check_ch, &st.conn_diag.server.routines[0].req, u8(sizeof(st.conn_diag.server.routines[0].req))) // ... and the request the server wrote
 	if st.fmem.capture_due() {
 		st.conn_diag.refresh_now()
 		st.fmem.capture(&st.conn_diag.server) // the snapshot: the DIDs as 0x22 reads them now
@@ -567,6 +593,16 @@ pub fn partition_can0(ch can.Channel) {
 	st.conn_diag.server.dids[5].data[0] = u8(0x00)
 	st.conn_diag.server.dids[5].len = 1
 	st.conn_diag.server.ndid = 6
+	st.conn_diag.server.routines[0] = uds.Routine{ // "SelfCheck" (docs/diagnostics.md §3.1)
+		id:          u16(0x0201)
+		sessions:    u8(0x04)
+		results:     true
+		start_in:    1
+		start_out:   2
+		results_out: 2
+		timeout_us:  u64(10000) * 1000
+	}
+	st.conn_diag.server.nroutines = 1
 	st.conn_diag.refresh = diag_refresh_diag
 	st.conn_diag.server.security = st.sa_diag.ops(u32(osal.now_us()))
 	st.conn_diag.server.security_levels = u8(0x01)

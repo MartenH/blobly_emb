@@ -162,7 +162,7 @@ no H735 image carries them until sysnode gains a `[shell]` / `[trace]`.
 
 ## Diagnostics & variant coding
 
-[docs/diagnostics.md](docs/diagnostics.md) (#286–#288) says what is supported; its §4 records the decisions D1–D6.
+[docs/diagnostics.md](docs/diagnostics.md) (#286–#288) says what is supported; its §4 records the decisions D1–D8.
 The rungs below (R0–R7, and blobly_net's tester rungs N1–N4) are how it was built. The FB sees a port, and the platform does the work;
 the FB never calls a service API.
 
@@ -216,6 +216,19 @@ the FB never calls a service API.
   back with 0x22; `apply` = next dispatch or next start (comm/param, tools/loom2v/gen_param.v). zone_a
   codes `SteerLimit` (bench suite `test/param_zone_a.lua`, run pending). Left: the host bridge, FBs in
   a satellite partition, 0x78 for a write that waits on flash (§7)
+- 🧭 **U1 / U2a routines in the application** — *built:* RoutineControl (0x31) per `[[routine]]`
+  (sync or async, stop and results opt-in, fixed records, a gate like a DID's), run by the FB that
+  reads its `<Name>Request` and writes its `<Name>Result` through two cells (byte IOC on ThreadX,
+  triple channels on the host; comm/uds routine.v, tools/loom2v/gen_routine.v); responsePending
+  (0x78) generic in comm/uds (pending.v): at once, every 4 s, the final answer whatever the suppress
+  bit, requests dropped and S3 held meanwhile, a timeout answered 0x22, on CAN and over DoIP (pushed);
+  the DoIP gateway forwards each 0x78 (REQ-DIAG-086). zone_a runs a sync and an async routine (bench
+  suite `test/routine_zone_a.lua`, run pending), overspeed a sync one (`test/routine.lua`, vcan).
+  Left: a routine's FB on a satellite core or in a multi-thread partition (REQ-PLACE-013), start
+  records over 11 bytes on a `[doip]` node, and blobly_net listing and simulating routines (its
+  sysview reads no `[[routine]]` yet, so its simulated zone_a answers every 0x31 with 0x11 where the
+  board serves it — `tests/diag_described.lua`'s `31 01 FF 00 → 0x11` and sysview's "the format has
+  no RoutineControl" are stale until then; docs/diagnostics.md §5)
 
 ## Drivers & IO
 

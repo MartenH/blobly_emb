@@ -269,6 +269,18 @@ pub fn (k Key) default_int() i64 {
 	return k.def.replace('_', '').i64()
 }
 
+// default_value: the default of any row as the TOML value it spells, for a reader that takes an
+// omitted key's default from the schema rather than stating it a second time
+pub fn (k Key) default_value() toml.Any {
+	if k.def == '' {
+		panic('cfgschema: "${k.name}" has no default')
+	}
+	doc := toml.parse_text('v = ${k.def}') or {
+		panic('cfgschema: "${k.name}" default `${k.def}` is not a TOML value: ${err}')
+	}
+	return doc.value('v')
+}
+
 // ---- the structural walk: unknown keys, types, required keys, values ----
 
 // check validates a parsed document against the schema from its root — unknown keys (with a "did

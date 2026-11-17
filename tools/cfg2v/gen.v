@@ -98,6 +98,20 @@ fn main() {
 		transports << transport_variant('triple')
 		chcount++
 	}
+	// --- routine cells (docs/diagnostics.md §3.1): per [[routine]], a REQUEST channel (the
+	//     diagnostic bridge writes the operation, its thread reads) and a RESULT channel (the FB's
+	//     thread writes its report, the bridge reads). Triple, SPSC, in declaration order.
+	if rv := doc.value_opt('routine') {
+		for r in rv.array() {
+			rname := snake(((r.as_map())['name'] or { toml.Any('') }).string())
+			b << 'pub const routine_req_${rname}_ch = ${chcount}'
+			transports << transport_variant('triple')
+			chcount++
+			b << 'pub const routine_res_${rname}_ch = ${chcount}'
+			transports << transport_variant('triple')
+			chcount++
+		}
+	}
 	// The host pools are fixed (osal_native.c: 256 slots per variant). Past that, publishes
 	// are silently range-rejected — a large config would build green and lose signals at
 	// runtime. Fail generation instead (codex #200).

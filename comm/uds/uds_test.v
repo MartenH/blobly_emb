@@ -182,6 +182,11 @@ fn test_every_supported_service_dispatches() {
 		avail:       0x7F
 	}
 	assert s.service_supported(0x19) && s.service_supported(0x14) && s.service_supported(0x85)
+	s.routines[0] = Routine{ // and 0x31 only with a routine configured (`31 00 ..` -> 0x12)
+		id: 0x0201
+	}
+	s.nroutines = 1
+	assert s.service_supported(0x31)
 	call(mut s, [u8(0x10), 0x03])
 	for sid in 0 .. 256 {
 		if !s.service_supported(u8(sid)) {

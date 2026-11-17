@@ -156,6 +156,11 @@ pub mut:
 	// (`erase_unit`, the flash sector; 0 = the whole region at once) or the image check per step,
 	// a 0x78 between steps, the routine's answer after the last. work_via: the transport that
 	// asked, which carries every response. A request meanwhile is answered busyRepeatRequest.
+	// This is the bootloader's own responsePending, not comm/uds pending.v's (the application's,
+	// for routines an FB runs): the work here runs a unit at a time on this thread behind the wire
+	// drain, a request meanwhile is answered 0x21 rather than dropped, a lost 0x78 is resent then
+	// given up with 0x72 (an erase cannot be repeated blind), this server's uds.Server is never
+	// ticked, and dispatch takes 0x31 before it. Only the announced P2/P2* are shared.
 	work      u8
 	work_via  u8
 	work_addr u32

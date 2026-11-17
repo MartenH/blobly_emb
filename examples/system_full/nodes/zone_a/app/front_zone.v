@@ -81,3 +81,87 @@ pub fn (mut fb SafetyMonitor) on_50ms(inp ports.SafetyMonitorIn, mut out ports.S
 	}
 	out.safety_view.code = u32(inp.safety_cmd.status) | ((inp.safety_cmd.lost & 0xFF) << 8) | (u32(fb.level) << 16)
 }
+
+// calibration_dispatches: how many dispatches SensorCalibration runs before it is done (5 s at 50 ms)
+const calibration_dispatches = u16(100)
+
+// RoutineRunner runs zone_a's two routines (RoutineControl 0x31, ecu.toml; docs/diagnostics.md §3.1):
+// the request of each arrives as an op in exactly one dispatch, and what it writes into each result is
+// what the diagnostic server answers. Every op is answered, a stop the server issues itself (a timeout,
+// the session ending) included.
+//   ActuatorSelfTest (sync): option N runs N steps of 100 ms — 2N dispatches — then done, the count of
+//     dispatches its record (u16 big-endian); option 0 is refused (requestOutOfRange).
+//   SensorCalibration (async): running from its start, the count rising every dispatch so 0x31 03
+//     sees it move; done after calibration_dispatches, stopped by a stop.
+pub struct RoutineRunner {
+pub mut:
+	test_left u32 // self-test dispatches still to run (0 = idle)
+	test_n    u16
+	cal_on    bool
+	cal_n     u16
+}
+
+pub fn (mut fb RoutineRunner) on_50ms(inp ports.RoutineRunnerIn, mut out ports.RoutineRunnerOut) {
+	fb.self_test(inp, mut out)
+	fb.calibration(inp, mut out)
+}
+
+fn (mut fb RoutineRunner) self_test(inp ports.RoutineRunnerIn, mut out ports.RoutineRunnerOut) {
+	match inp.actuator_self_test_request.op {
+		.start {
+			steps := u32(inp.actuator_self_test_request.option[0])
+			if steps == 0 {
+				out.actuator_self_test_result.state = .refused
+				out.actuator_self_test_result.nrc = 0x31
+				return
+			}
+			fb.test_left = 2 * steps
+			fb.test_n = 0
+		}
+		.stop {
+			fb.test_left = 0
+			out.actuator_self_test_result.state = .stopped
+			put_u16(mut out.actuator_self_test_result.record, fb.test_n)
+			return
+		}
+		else {}
+	}
+	if fb.test_left == 0 {
+		return // idle: the last report stands
+	}
+	fb.test_n++
+	fb.test_left--
+	out.actuator_self_test_result.state = if fb.test_left == 0 { .done } else { .running }
+	put_u16(mut out.actuator_self_test_result.record, fb.test_n)
+}
+
+fn (mut fb RoutineRunner) calibration(inp ports.RoutineRunnerIn, mut out ports.RoutineRunnerOut) {
+	match inp.sensor_calibration_request.op {
+		.start {
+			fb.cal_on = true
+			fb.cal_n = 0
+		}
+		.stop {
+			fb.cal_on = false // answered stopped even when idle: every op is answered
+			out.sensor_calibration_result.state = .stopped
+			put_u16(mut out.sensor_calibration_result.record, fb.cal_n)
+			return
+		}
+		else {}
+	}
+	if !fb.cal_on {
+		return
+	}
+	fb.cal_n++
+	if fb.cal_n >= calibration_dispatches {
+		fb.cal_on = false
+	}
+	out.sensor_calibration_result.state = if fb.cal_on { .running } else { .done }
+	put_u16(mut out.sensor_calibration_result.record, fb.cal_n)
+}
+
+// put_u16: a count into a 2-byte record, big-endian
+fn put_u16(mut rec [2]u8, v u16) {
+	rec[0] = u8(v >> 8)
+	rec[1] = u8(v)
+}

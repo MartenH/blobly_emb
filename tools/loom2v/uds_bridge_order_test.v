@@ -25,6 +25,12 @@ fn test_the_generated_diagnostic_pass_runs_in_order() {
 	steps := [
 		'st.conn_diag.housekeep(now)',
 		'if st.rxg.sample(st.conn_diag.server.rx_enabled(), true)',
+		// the routines' cells after the fault pass, before the drain: a 0x31 03 reads the newest
+		// report, and a request the server wrote last pass reaches its FB (gen_routine.v)
+		'osal.ioc_publish(fault_ctl_engine_monitor_ch',
+		'osal.ioc_acquire(routine_res_self_check_ch, &st.conn_diag.server.routines[0].res',
+		'osal.ioc_publish(routine_req_self_check_ch, &st.conn_diag.server.routines[0].req',
+		'for st.chan.recv(mut rx) {',
 		'match st.conn_diag.on_frame(now, rx) {',
 		'.request { break }',
 		'.served {',
@@ -46,7 +52,8 @@ fn test_the_generated_diagnostic_pass_runs_in_order() {
 	}
 }
 
-// a connection with no [[did]] names nothing from comm.uds: importing it would warn on every build
+// a connection with no [[did]] and no [[routine]] names nothing from comm.uds: importing it would
+// warn on every build
 fn test_the_uds_import_follows_the_dids() {
 	mut m := Model{
 		isotp_conns: [IsotpConn{
@@ -62,5 +69,12 @@ fn test_the_uds_import_follows_the_dids() {
 	}]
 	_, with_dids := emit_module_headers(m, 'ecu', false, false)
 	assert 'import comm.uds' in with_dids
+	m.dids = []
+	m.routines = [RoutineCfg{
+		name: 'SelfCheck'
+		id:   0x0201
+	}]
+	_, with_routines := emit_module_headers(m, 'ecu', false, false)
+	assert 'import comm.uds' in with_routines
 }
 

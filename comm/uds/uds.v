@@ -9,7 +9,10 @@ module uds
 // DIDs per request), 0x27 SecurityAccess (with injected SecurityOps), 0x28 CommunicationControl,
 // 0x14 / 0x19 / 0x85 over an injected FaultOps (comm/fault),
 // 0x2E WriteDataByIdentifier (a BOUND DID — a parameter — through the injected DidWrite, comm/param),
+// 0x31 RoutineControl (each configured routine run by an FB through two cells, routine.v),
 // 0x3E TesterPresent. Anything else -> 0x11 serviceNotSupported.
+// A routine's start or stop is answered responsePending (0x78) until its FB has reported, every
+// other request dropped meanwhile (pending.v).
 // An application server's 0x10 02 is the programming HANDOFF (boot_handoff): answered, then
 // performed by the owner as a reset into the bootloader (reset_into_boot).
 // Which of those a node answers, where, and behind which 0x27 level is the SERVICE TABLE
@@ -21,11 +24,15 @@ module uds
 // subfunction supported (0x12) → exact length (0x13) → conditions / range. The DID services follow
 // their own flow: 0x22 — length, then each DID's support and session (0x31 when none answers),
 // then security (0x33), then the response size (0x14); 0x2E — length, then the DID's support,
-// writability and session (0x31), then security (0x33), then the record length (0x13). 0x27 —
+// writability and session (0x31), then security (0x33), then the record length (0x13). 0x31 —
+// length < 2 (0x13), subfunction (0x12), length < 4 (0x13), the routine's identifier and session
+// (0x31), its level (0x33), a subfunction it does not offer (0x12), the exact length (0x13), the
+// sequence (0x24), then its FB's own refusal. 0x27 —
 // subfunction (0x12), then requestSeed: the lockout delay (0x37); sendKey: length (0x13), a seed
 // of that level outstanding (0x24), the key (0x35, or 0x36 on the last allowed attempt). A
 // FUNCTIONAL request never answers 0x11, 0x12, 0x31, 0x7E or 0x7F (handle_functional) — a broadcast
-// into an unsupported or gated service stays silent — and a functional 0x27 is ignored outright.
+// into an unsupported or gated service stays silent — and a functional 0x27 or 0x31 is ignored
+// outright.
 
 pub const max_dids = 16
 pub const max_did_data = 32 // bytes stored per DID
@@ -69,6 +76,8 @@ pub const nrc_security_access_denied = u8(0x33)
 pub const nrc_invalid_key = u8(0x35)
 pub const nrc_exceeded_attempts = u8(0x36)
 pub const nrc_time_delay_not_expired = u8(0x37)
+pub const nrc_general_programming_failure = u8(0x72)
+pub const nrc_response_pending = u8(0x78)
 pub const nrc_subfunction_not_in_session = u8(0x7E)
 pub const nrc_service_not_in_session = u8(0x7F)
 
@@ -265,6 +274,18 @@ pub mut:
 	faults FaultOps
 	// Parameters (0x2E on a bound DID): nil `write` = a bound DID cannot be written (0x22).
 	did_write DidWrite
+	// Routines (0x31, routine.v): routines[0 .. nroutines], each with its request and result cells.
+	routines  [max_routines]Routine
+	nroutines int
+	// The answer owed after a responsePending (pending.v): its service (0 = none), the routine and
+	// sub-function it is for, when the next 0x78 is due, when the owed answer runs out (then, with
+	// pend_fail, when it is abandoned), and whether it is to be answered conditionsNotCorrect.
+	pend_sid   u8
+	pend_idx   int
+	pend_sub   u8
+	pend_next  u64
+	pend_until u64
+	pend_fail  bool
 }
 
 // init puts the server in the default session with everything unlocked-state cleared, and
@@ -298,7 +319,8 @@ fn (mut s Server) sa_restart() {
 }
 
 // reset_state returns the diagnostic state to power-on: default session, security locked,
-// communication enabled, no pending reset. DIDs are untouched. The 0x27 failed-key counts SURVIVE
+// communication enabled, no pending reset, every routine asked to stop and none accepted (an owed
+// answer then answered 0x22, stop_routines). DIDs are untouched. The 0x27 failed-key counts SURVIVE
 // it: a reset between guesses must not buy fresh attempts, so a reset with a wrong key of a level
 // counted since that level's last correct key costs the full lockout delay (one after an ended
 // lockout too, and one during a lockout restarts it), by the rule a start-up follows (sa_restart) —
@@ -312,6 +334,10 @@ pub fn (mut s Server) reset_state() {
 	s.session_epoch++
 	s.sa_arm = 0
 	s.sa_restart()
+	s.stop_routines()
+	for i in 0 .. max_routines {
+		s.routines[i].accepted = false
+	}
 	s.normal_tx_off = false
 	s.normal_rx_off = false
 	s.restore_dtc_setting()
@@ -321,7 +347,8 @@ pub fn (mut s Server) reset_state() {
 }
 
 // tick advances the server's clock and applies S3: a non-default session with no request for
-// S3 returns to default (ISO 14229-2). Call once per owner pass, before handling requests.
+// S3 returns to default (ISO 14229-2) — but never while an answer is owed, whose timeout it applies
+// instead (pending_tick). Call once per owner pass, before handling requests.
 pub fn (mut s Server) tick(now_us u64) {
 	s.now_us = now_us
 	if s.sa_arm != 0 {
@@ -332,6 +359,7 @@ pub fn (mut s Server) tick(now_us u64) {
 		}
 		s.sa_arm = 0
 	}
+	s.pending_tick(now_us)
 	if s.session == session_default || s.session == 0 || !s.rx_seen {
 		return
 	}
@@ -370,9 +398,10 @@ pub fn (mut s Server) handle(req &u8, req_len int, resp &u8) int {
 // handle_functional dispatches a FUNCTIONALLY addressed request: identical, except the
 // negative responses ISO 14229-1 forbids for functional requests are withheld.
 pub fn (mut s Server) handle_functional(req &u8, req_len int, resp &u8) int {
-	if req_len >= 1 && unsafe { req[0] } == 0x27 && s.resp_cap >= 0 {
-		// SecurityAccess is physical-only: a broadcast key would spend a guess on every ECU. It is
-		// still a request, so it keeps the session alive like any other (S3).
+	if req_len >= 1 && unsafe { req[0] == 0x27 || req[0] == 0x31 } && s.resp_cap >= 0 {
+		// SecurityAccess is physical-only: a broadcast key would spend a guess on every ECU. So is
+		// RoutineControl: a routine is an action on one ECU, its answer owed to one requester. Each
+		// is still a request, so it keeps the session alive like any other (S3).
 		s.last_rx_us = s.now_us
 		s.rx_seen = true
 		return 0
@@ -392,6 +421,9 @@ pub fn (mut s Server) handle_functional(req &u8, req_len int, resp &u8) int {
 fn (mut s Server) dispatch(req &u8, req_len int, resp &u8) int {
 	if req_len < 1 || s.resp_cap < 0 {
 		return 0
+	}
+	if s.pend_sid != 0 {
+		return 0 // an answer is owed: every request is dropped, unanswered and unperformed (pending.v)
 	}
 	s.last_rx_us = s.now_us // any request keeps the session alive (S3)
 	s.rx_seen = true
@@ -421,6 +453,7 @@ fn (mut s Server) dispatch(req &u8, req_len int, resp &u8) int {
 		0x85 { return s.dtc_setting(req, req_len, resp) }
 		0x28 { return s.communication_control(req, req_len, resp) }
 		0x2E { return s.write_did(req, req_len, resp) }
+		0x31 { return s.routine_control(req, req_len, resp) }
 		else { return negative(resp, sid, nrc_service_not_supported) }
 	}
 }
@@ -435,6 +468,7 @@ fn (s &Server) service_supported(sid u8) bool {
 		0x85 { s.faults.avail != 0 && s.faults.set_setting != unsafe { nil } }
 		0x27 { s.security.seed != unsafe { nil } && s.security.key_ok != unsafe { nil } && s.security_levels != 0 }
 		0x28 { s.serves_comm_control }
+		0x31 { s.nroutines > 0 }
 		else { false }
 	}
 }
@@ -493,9 +527,10 @@ fn in_mask(mask u8, session u8) bool {
 	return mask & (u8(1) << (session - 1)) != 0
 }
 
-// enter_session changes the active session. EVERY entry relocks security and voids an
-// outstanding seed — re-entering the session already active included (ISO 14229-1: security is
-// per session instance, and the plan's "every transition, explicit or by S3") — and a return to
+// enter_session changes the active session. EVERY entry relocks security, voids an outstanding
+// seed and asks every running routine to stop (stop_routines) — re-entering the session already
+// active included (ISO 14229-1: security is per session instance, and the plan's "every
+// transition, explicit or by S3") — and a return to
 // the default session re-enables communication (0x28 state does not survive leaving the
 // non-default session).
 // end_session returns to the default session as S3 would — relocked, the exchange voided — without
@@ -509,6 +544,7 @@ fn (mut s Server) enter_session(session u8) {
 	s.sa_level = 0
 	s.session_epoch++
 	s.session = session
+	s.stop_routines()
 	if session == session_default {
 		s.normal_tx_off = false
 		s.normal_rx_off = false
@@ -604,14 +640,17 @@ fn (mut s Server) session_control(req &u8, req_len int, resp &u8) int {
 // session_answer: the 0x10 positive response — the session and the timing record, which is ONE
 // statement for every server built on this one, the bootloader's included, so the P2/P2* an
 // application announces in answer to a handoff are the ones the bootloader's session keeps.
+// The timing is pending.v's p2_server_us (in ms) and p2_star_server_us (in 10 ms units).
 fn session_answer(resp &u8, session u8) int {
+	p2 := u16(p2_server_us / 1000) // 0x0032: 50 ms
+	p2_star := u16(p2_star_server_us / 10_000) // 0x01F4 * 10 ms: 5 s
 	unsafe {
 		resp[0] = 0x50
 		resp[1] = session
-		resp[2] = 0x00 // P2_server_max  = 0x0032 (50 ms)
-		resp[3] = 0x32
-		resp[4] = 0x01 // P2*_server_max = 0x01F4 * 10 ms (5 s)
-		resp[5] = 0xF4
+		resp[2] = u8(p2 >> 8)
+		resp[3] = u8(p2)
+		resp[4] = u8(p2_star >> 8)
+		resp[5] = u8(p2_star)
 	}
 	return 6
 }

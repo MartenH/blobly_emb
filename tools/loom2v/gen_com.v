@@ -795,6 +795,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			}
 			glue << rx_gate_lines(m, rx_msgs, bname, owner, '\t')
 			glue << fault_pass_lines(m, owner)
+			glue << routine_bridge_lines(m, 'st.conn_${snake(conns[0].name)}')
 			if m.faults.len > 0 {
 				// the FB faults' snapshots at once, before the drain decodes newer values
 				glue << fault_capture_lines(m, 'st.fmem', 'st.conn_${snake(conns[0].name)}', '\t')
