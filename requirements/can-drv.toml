@@ -120,9 +120,10 @@ text = "The CAN driver shall transmit and receive data frames with a 29-bit exte
 # keep the width in both directions and on an FD frame too: fdcan writes and reads XTD (T0/R0
 # bit 30) independently of FDF/BRS, st-hal sets IdType beside FDFormat, socket sets CAN_EFF_FLAG
 # on both frame structs, canif keeps an ext column per PDU. Verified on host for the socket
-# backend's encoding (driver/can/can_test.v, through a socket pair: no kernel CAN layer); no
-# 29-bit frame has run on a wire yet (docs/can-tp.md §5) — the FDCAN backends await a 29-bit
-# node on silicon (zone_a on normal fixed addressing at TX_DL 64), so it stays draft.
+# backend's encoding (driver/can/can_test.v, through a socket pair: no kernel CAN layer). The
+# register-level FDCAN backend exchanged 29-bit frames on H723 silicon (isotp-29bit-silicon: zone_a
+# on normal fixed addressing at TX_DL 64, docs/can-tp.md §5); the ST-HAL backend and a classic-bus
+# 29-bit run are not verified yet, so it stays draft.
 status = "draft"
 method = "test"
 asil = "QM"

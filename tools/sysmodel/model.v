@@ -188,6 +188,12 @@ pub mut:
 	// writes into the generated [isotp] (REQ-TOPO-014)
 	ids_stated bool = true
 	lowered    bool
+	// what the [isotp] states beside an allocation it takes (ecumodel.states_ids counts neither):
+	// its functional id, and its `ext` with the value read — check_diag_lowered holds them to the
+	// allocation, and sysgen keeps them as authored
+	functional_stated bool
+	ext_stated        bool
+	ext_authored      bool
 }
 
 // max_len: the connection's maximum message length — its [isotp] max_message, the default where
@@ -955,7 +961,8 @@ pub fn (mut s System) load_nodes() []string {
 			// or its collision + in-range checks are silently skipped. An NM bus with
 			// no DBC (or no matching system bus) cannot resolve it — that is a config
 			// error, not a clean fall-through (REQ-TOPO-004).
-			b := s.bus_by_interface(s.nodes[i].view.nm_bus) or {
+			// the NM bus by the rule every frame of the node is placed by (node_can_bus)
+			b := node_can_bus(s, s.nodes[i], s.nodes[i].view.nm_bus) or {
 				errs << 'node "${s.nodes[i].name}": [nm].alive names "${name}" but its NM bus "${s.nodes[i].view.nm_bus}" maps to no system bus with a DBC to resolve it'
 				continue
 			}
@@ -1016,17 +1023,25 @@ pub fn (mut s System) load_nodes_partial() []string {
 
 // lower_diag: a dissolved node's [isotp] that states no ids takes its diag allocation's — request,
 // response and functional id and their format — which sysgen writes into the generated [isotp]
-// (lower_isotp), so every check sees the ids the node will serve on (REQ-TOPO-014). One that
-// states its ids is held to the allocation instead (check_diag_conn); one with no allocation to
-// take is refused (check_diag_lowered).
+// (lower_isotp), so every check sees the ids the node will serve on (REQ-TOPO-014). A
+// normal-addressing allocation states no functional id, so the [isotp]'s own is kept (read in the
+// allocation's format, as the generated table reads it). One that states its ids is held to the
+// allocation instead (check_diag_conn); one with no allocation to take is refused
+// (check_diag_lowered). An allocation the reader refused — one id of the two included — is never
+// lowered: check_diag_shape says it, and a missing id would be written as id 0.
 pub fn (mut n Node) lower_diag() {
 	if n.view.isotp_conns.len != 1 || n.view.isotp_conns[0].ids_stated
-		|| (n.diag.req == 0 && n.diag.rsp == 0) {
+		|| (n.diag.req == 0 && n.diag.rsp == 0) || n.diag.errs.len > 0 {
 		return
 	}
+	c := n.view.isotp_conns[0]
 	n.view.isotp_conns[0].rx_id = n.diag.req
 	n.view.isotp_conns[0].tx_id = n.diag.rsp
-	n.view.isotp_conns[0].functional_id = n.diag.functional
+	n.view.isotp_conns[0].functional_id = if n.diag.fixed || !c.functional_stated {
+		n.diag.functional
+	} else {
+		c.functional_id
+	}
 	n.view.isotp_conns[0].ext = n.diag.ext
 	n.view.isotp_conns[0].lowered = true
 }
@@ -1412,6 +1427,9 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 				max_message:   int((cm['max_message'] or { toml.Any(isotp.default_message) }).int())
 				tx_dl:         int((cm['tx_dl'] or { toml.Any(8) }).int())
 				ids_stated:    ecumodel.states_ids(ecumodel.isotp_keys, cm)
+				functional_stated: 'functional_id' in cm
+				ext_stated:        'ext' in cm
+				ext_authored:      ids.ext
 			}
 		}
 	}

@@ -461,3 +461,32 @@ fn test_a_normal_fixed_node_and_its_route_compile() {
 	}
 	assert route.contains('ext:     true')
 }
+
+// zone_a taking its normal-addressing diag allocation while keeping its own functional id: its
+// [isotp] states functional_id and no physical ids, sysgen lowers req / rsp beside it, and the
+// generated node passes the node gate (sysgen runs ecucheck on it)
+fn test_a_lowered_node_keeps_its_functional_id() {
+	dir := stage_move('keep_functional')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	ecu := os.join_path(dir, 'nodes', 'zone_a', 'ecu.toml')
+	src := os.read_file(ecu) or { panic(err) }
+	mut lines := []string{}
+	mut dropped := 0
+	for l in src.split('\n') {
+		if l.all_before('=').trim_space() in ['rx_id', 'tx_id'] && dropped < 2 {
+			dropped++
+			continue
+		}
+		lines << l
+	}
+	assert dropped == 2, 'zone_a\'s [isotp] ids changed shape — update this test'
+	os.write_file(ecu, lines.join('\n')) or { panic(err) }
+	r := run_sysgen(dir)
+	assert r.exit_code == 0, r.output
+	gen := os.read_file(os.join_path(dir, 'gen-zone_a.toml')) or { panic(err) }
+	isotp := gen.all_after('\n[isotp]\n').all_before('\n[')
+	assert isotp.starts_with('# lowered by sysgen from the node\'s diag in system.toml (REQ-TOPO-014)\nrx_id = 0x7C0\ntx_id = 0x7C8\n'), gen
+	assert isotp.contains('functional_id = 0x7DF') && !isotp.contains('ext'), isotp
+}

@@ -933,7 +933,11 @@ fn check_node_generatable(s System) []Issue {
 		}
 		mut dbc := ''
 		if active_iface != '' {
-			if b := s.bus_by_interface(active_iface) {
+			// a node-local interface: placed as the node's frames are (node_can_bus), else a
+			// non-CAN system bus of that interface
+			if b := node_can_bus(s, n, active_iface) {
+				dbc = b.dbc
+			} else if b := s.bus_by_interface(active_iface) {
 				dbc = b.dbc
 			}
 		} else if n.buses.len > 0 {
@@ -1626,7 +1630,7 @@ fn check_nm_cluster_coherence(s System) []Issue {
 		mut hi := u32(0)
 		mut anchor := ''
 		for n in s.nodes {
-			if !nm_participates(n, bus) {
+			if !nm_participates(s, n, bus) {
 				continue
 			}
 			if anchor == '' {
@@ -1651,7 +1655,7 @@ fn check_nm_cluster_coherence(s System) []Issue {
 			mut ref := 0
 			mut ref_node := ''
 			for n in s.nodes {
-				if !nm_participates(n, bus) {
+				if !nm_participates(s, n, bus) {
 					continue
 				}
 				// compare the EFFECTIVE value (declared, or loom2v's default) — a node
@@ -1674,7 +1678,7 @@ fn check_nm_cluster_coherence(s System) []Issue {
 		// inside the cluster range it participates in — the node id itself is a
 		// small ordinal, not a wire id.
 		for n in s.nodes {
-			if !nm_participates(n, bus) || !n.view.has_alive || anchor == '' {
+			if !nm_participates(s, n, bus) || !n.view.has_alive || anchor == '' {
 				continue
 			}
 			if n.view.alive < lo || n.view.alive > hi {
@@ -1703,13 +1707,15 @@ fn check_nm_cluster_coherence(s System) []Issue {
 // NM cluster. [nm] has ONE `bus` binding (loom2v runs the module on that bus
 // only), so a node with an explicit nm.bus participates ONLY on that bus — a
 // gateway on compute+edge with nm.bus="compute" is not compared to edge's
-// cluster. With no explicit nm.bus it participates on the bus(es) it claims.
-fn nm_participates(n Node, bus Bus) bool {
+// cluster. With no explicit nm.bus it participates on the bus(es) it claims. The NM bus is
+// placed by node_can_bus, the rule every frame of the node is placed by (a single-bus node
+// calls its bus can0, whatever the system calls it).
+fn nm_participates(s System, n Node, bus Bus) bool {
 	if bus.name !in n.buses || !n.view.has_nm || !n.view.nm_enabled {
 		return false
 	}
 	if n.view.nm_bus != '' {
-		return n.view.nm_bus == bus.interface
+		return on_nm_bus(s, n, bus)
 	}
 	return true
 }
@@ -3308,19 +3314,50 @@ fn check_diag_conn(s System) []Issue {
 }
 
 // check_diag_lowered: a dissolved node's [isotp] that states no ids serves on its diag allocation,
-// which sysgen lowers into it — so it needs one (REQ-TOPO-014). A diag the reader refused is
+// which sysgen lowers into it — so it needs one (REQ-TOPO-014). What it states beside the
+// allocation must make a table the node gate accepts: its functional id (a normal-addressing
+// allocation has none) in the allocation's format and not one of its physical ids, an `ext` only
+// where it agrees with the allocation's format, and neither beside a normal fixed allocation,
+// whose format and functional id (functional_ta) are its own. A diag the reader refused is
 // check_diag_shape's to say.
 fn check_diag_lowered(s System) []Issue {
 	mut issues := []Issue{}
 	for n in s.nodes {
-		if n.view.isotp_conns.len != 1 || n.view.isotp_conns[0].ids_stated
-			|| n.view.isotp_conns[0].lowered || n.diag.errs.len > 0 {
+		if n.view.isotp_conns.len != 1 || n.view.isotp_conns[0].ids_stated || n.diag.errs.len > 0 {
 			continue
 		}
-		issues << Issue{
-			severity: .error
-			req:      'REQ-TOPO-014'
-			msg:      'node "${n.name}": its [isotp] states no ids, and it has no diag allocation for sysgen to lower into it — give the node a `diag` in system.toml, or state the ids in its [isotp]'
+		c := n.view.isotp_conns[0]
+		mut errs := []string{}
+		if !c.lowered {
+			errs << 'its [isotp] states no ids, and it has no diag allocation for sysgen to lower into it — give the node a `diag` in system.toml, or state the ids in its [isotp]'
+		} else if n.diag.fixed {
+			if c.functional_stated {
+				errs << 'its [isotp] states functional_id beside its normal fixed diag allocation, whose functional id derives from functional_ta — state functional_ta in its diag'
+			}
+			if c.ext_stated {
+				errs << 'its [isotp] states ext beside its normal fixed diag allocation, whose ids are 29-bit by their addressing — drop ext'
+			}
+		} else {
+			fmt := if n.diag.ext { '29-bit' } else { '11-bit' }
+			if c.ext_stated && c.ext_authored != n.diag.ext {
+				errs << 'its [isotp] ext = ${c.ext_authored}, but its diag allocation is ${fmt} — an ext beside the allocation it takes must agree with it'
+			}
+			if c.functional_stated {
+				f := c.functional_id
+				widest := if n.diag.ext { isotp.ext_id_max } else { isotp.std_id_max }
+				if f > widest {
+					errs << 'its [isotp] functional_id 0x${f.hex()} is wider than its diag allocation\'s ${fmt} format'
+				} else if f == n.diag.req || f == n.diag.rsp {
+					errs << 'its [isotp] functional_id ${id_text(f, n.diag.ext)} is also its diag allocation\'s physical req / rsp'
+				}
+			}
+		}
+		for e in errs {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-014'
+				msg:      'node "${n.name}": ${e}'
+			}
 		}
 	}
 	return issues

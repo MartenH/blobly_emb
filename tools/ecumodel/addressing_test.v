@@ -186,6 +186,42 @@ fn test_a_diag_allocation_is_read_by_the_same_rule() {
 	assert eh == ['node "n" diag ta must be an integer']
 }
 
+// an allocation states both ids or neither: one alone is refused once, by the reader every user
+// of a diag reads it through (a lowering would write the missing one as id 0)
+fn test_a_diag_allocation_with_one_id_is_refused() {
+	a, ea := diag_of('req = 0x7A0
+')
+	assert ea == ['node "n" diag gives req without rsp — an allocation states both ids, or neither']
+	assert a.rx == 0x7A0 && a.tx == 0 // the id read, kept for the collision checks
+	_, eb := diag_of('rsp = 0x18DAF110
+ext = true
+')
+	assert eb == ['node "n" diag gives rsp without req — an allocation states both ids, or neither']
+	// an [isotp] requires both already: said once, by the missing id's own refusal
+	_, ec := isotp_of('rx_id = 0x7A0
+')
+	assert ec.len == 1 && has(ec, 'needs tx_id'), ec.str()
+}
+
+// what counts as stating a connection's ids, for a dissolved node's [isotp] that takes its diag
+// allocation: its physical addressing — never its functional id or ext, which it may state beside
+// the allocation (sysmodel holds them to it)
+fn test_a_functional_id_and_ext_are_not_a_statement_of_the_physical_ids() {
+	stated := fn (src string) bool {
+		doc := toml.parse_text('[isotp]
+bus = "can0"
+' + src) or { panic(err) }
+		return states_ids(isotp_keys, doc.to_any().as_map()['isotp'] or { panic('no [isotp]') }.as_map())
+	}
+	assert !stated('bs = 8')
+	assert !stated('functional_id = 0x7DF')
+	assert !stated('ext = true\nfunctional_id = 0x18DB33F1')
+	for key in ['rx_id = 0x7A0', 'tx_id = 0x7A8', 'addressing = "normal_fixed"', 'sa = 0x10', 'ta = 0xF1',
+		'functional_ta = 0x33'] {
+		assert stated(key), key
+	}
+}
+
 fn test_a_routes_ids_follow_its_ext() {
 	route := fn (body string) []string {
 		doc := toml.parse_text('[doip]\naddress = "192.168.0.2"\nlogical_address = 0x10\n\n[[doip.route]]\nnode = "zone"\nlogical = 0x07C0\nbus = "can1"\n' +

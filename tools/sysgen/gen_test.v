@@ -518,6 +518,22 @@ fn test_the_diag_allocation_is_lowered_into_an_isotp_that_states_no_ids() {
 		}
 	}
 	assert lower_isotp(ext, '[isotp]\nbus = "can0"')!.contains('rx_id = 0x18DA10F1\ntx_id = 0x18DAF110\next = true\nbus')
+	// an ext and a functional_id the [isotp] states beside the allocation stay as authored: ext
+	// written once
+	kept := sysmodel.Node{
+		...ext
+		view: sysmodel.NodeView{
+			isotp_conns: [sysmodel.IsotpConn{
+				...lowered
+				functional_stated: true
+				ext_stated:        true
+				ext_authored:      true
+			}]
+		}
+	}
+	both := lower_isotp(kept, '[isotp]\nbus = "can0"\next = true\nfunctional_id = 0x18DB33F1')!
+	assert both.count('ext = true') == 1, both
+	assert both.contains('tx_id = 0x18DAF110\nbus = "can0"\next = true\nfunctional_id = 0x18DB33F1'), both
 	fixed := sysmodel.Node{
 		...std
 		diag: sysmodel.Diag{

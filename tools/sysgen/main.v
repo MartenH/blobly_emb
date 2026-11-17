@@ -938,7 +938,8 @@ fn subnet_lines(node sysmodel.Node, mask_key string, gw_key string) []string {
 // lower_isotp: a node's authored internals with its diag allocation lowered into its [isotp] when
 // that states no ids (sysmodel lower_diag marked it `lowered`) — the keys the allocation states,
 // written under the table's header: req / rsp as rx_id / tx_id with `ext` where 29-bit, or normal
-// fixed addressing's addressing / sa / ta / functional_ta (REQ-TOPO-014). The text is unchanged
+// fixed addressing's addressing / sa / ta / functional_ta (REQ-TOPO-014); a functional_id and an
+// ext the [isotp] states beside the allocation stay as authored. The text is unchanged
 // for every other node. The authored [isotp] keeps its other keys (bus, bs, max_message, ...): the
 // table is the node's, and a generated one beside it would be a second table of one name.
 fn lower_isotp(node sysmodel.Node, authored string) !string {
@@ -957,7 +958,9 @@ fn lower_isotp(node sysmodel.Node, authored string) !string {
 	} else {
 		keys << 'rx_id = 0x${d.req.hex().to_upper()}'
 		keys << 'tx_id = 0x${d.rsp.hex().to_upper()}'
-		if d.ext {
+		// an ext the [isotp] states is kept as authored (syscheck holds it to the allocation's
+		// format), as its functional_id is: a key written twice is a TOML error
+		if d.ext && !node.view.isotp_conns[0].ext_stated {
 			keys << 'ext = true'
 		}
 	}

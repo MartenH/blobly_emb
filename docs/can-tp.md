@@ -88,11 +88,15 @@ A value outside its range is refused when the node is generated, never narrowed
 (REQ-CAN-TP-040, REQ-CAN-TP-041) — one reader states those rules for `[isotp]`, a system node's
 `diag` and a gateway's `[[doip.route]]` alike (`tools/ecumodel` `diag_ids`). On a node of a
 dissolved system ([multi-node.md](multi-node.md)) the node's `diag` in system.toml is the
-allocation its server serves on: an `[isotp]` that states no ids at all (no `rx_id`, `tx_id`,
-`functional_id`, `ext`, `addressing`, `sa`, `ta` or `functional_ta`) takes them from it — sysgen
-writes the allocation's keys under the `[isotp]` header of the generated node; a `diag` on normal
-addressing states no functional id, so a node answering one states its ids — and one that states
-them must state the allocation's, format and functional id included (REQ-TOPO-014). Generation also refuses a `max_message` smaller than the longest
+allocation its server serves on: an `[isotp]` that states no physical ids (no `rx_id`, `tx_id`,
+`addressing`, `sa`, `ta` or `functional_ta`) takes them from it — sysgen writes the allocation's keys
+under the `[isotp]` header of the generated node. A `diag` on normal addressing states no functional
+id, so such an `[isotp]` may state its own `functional_id` beside the allocation it takes, read in the
+allocation's format (not wider than it, and not one of its physical ids), and an `ext` only where it
+agrees with the allocation's format; beside a `diag` on normal fixed addressing it states neither,
+the allocation's `functional_ta` being its functional id. One that states its physical ids must state
+the allocation's, format and functional id included (REQ-TOPO-014); a `diag` giving one of `req` /
+`rsp` without the other is refused (REQ-TOPO-013), never lowered. Generation also refuses a `max_message` smaller than the longest
 message the configuration says the server must exchange whole — a DID's 0x22 answer and 0x2E
 request, the DTC list (0x19 02 / 0A), a DTC's snapshot (0x19 04) or extended data (0x19 06), and on a
 `[boot]` node the bootloader's 66-byte 0x29 proof — naming that message (REQ-CAN-TP-022). A read of
@@ -277,7 +281,9 @@ serves no functional requests.
   only filter. Hardware filter lists would gate every frame a node receives and are not used yet.
   Keeping the width in both directions, on a CAN-FD frame too, is the driver's REQ-CAN-DRV-010:
   the SocketCAN backend's encoding is tested on host (`driver/can/can_test.v`, through a socket
-  pair), the FDCAN backends await a 29-bit node on silicon.
+  pair), and the register-level FDCAN backend exchanged 29-bit frames on H723 silicon
+  (`isotp-29bit-silicon`: zone_a on normal fixed addressing at TX_DL 64, §5); the ST HAL backend and
+  a classic-bus 29-bit run are not verified yet.
 - **0 is no functional id**, in either format: a 29-bit functional id of 0 cannot be configured. With
   normal fixed addressing an absent `functional_ta` means none (a derived `0x18DB…` id is never 0).
 - **The AUTOSAR CanIf backend** (`driver/can/can_canif.c`) maps (id, ext) pairs to PDUs: a 29-bit
@@ -337,6 +343,10 @@ over 520 both ways against it, and against domain at the default, and exchanges 
 zone_a directly and through sysnode's route;
 [`boot_handoff.lua`](../examples/system_full/test/boot_handoff.lua) checks each CAN bootloader's
 0x29 challenge on the wire at its node's TX_DL (one 48-byte frame behind the escape on zone_a, a
-first frame of 8 on the classic bus). Nothing runs 29-bit ISO-TP on a
-wire yet: every example and bench suite uses 11-bit ids, so 29-bit and normal fixed addressing are
-verified by the unit and generation tests above, not on the bus.
+first frame of 8 on the classic bus). 29-bit and normal fixed addressing ran on silicon once, by
+hand: zone_a generated temporarily on normal fixed addressing (sa 0x10, ta 0xF1, functional_ta
+0x33), its application and bootloader answering a CANsub on the derived 29-bit ids, an 11-bit request
+of the same number unanswered (`isotp-29bit-silicon` in
+[`requirements/verifications.toml`](../requirements/verifications.toml)). Every committed example and
+bench suite uses 11-bit ids, so that run is not repeated by `make hwtest`; 29-bit and normal fixed
+addressing are otherwise verified by the unit and generation tests above.

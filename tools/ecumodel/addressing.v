@@ -70,11 +70,16 @@ pub:
 	functional_ta u8
 }
 
-// states_ids: whether table `m` states any of a connection's addressing — an id, its format, or
-// normal fixed addressing's keys. An ecu.toml [isotp] of a dissolved node that states none takes
-// its node's diag allocation, which sysgen lowers into it (REQ-TOPO-014).
+// states_ids: whether table `m` states a connection's PHYSICAL addressing — its request or
+// response id, its addressing, or normal fixed addressing's keys. An ecu.toml [isotp] of a
+// dissolved node that states none takes its node's diag allocation, which sysgen lowers into it
+// (REQ-TOPO-014). A functional id and `ext` do not count: a normal-addressing allocation has no
+// functional id, so the node states its own beside the allocation it takes (in the allocation's
+// format), and an `ext` stated with it must agree with the allocation's format — sysmodel's
+// check_diag_lowered holds both, and refuses either beside a normal fixed one, whose format and
+// functional id are its own.
 pub fn states_ids(k AddrKeys, m map[string]toml.Any) bool {
-	for key in [k.rx, k.tx, k.functional, 'ext', 'addressing', 'sa', 'ta', 'functional_ta'] {
+	for key in [k.rx, k.tx, 'addressing', 'sa', 'ta', 'functional_ta'] {
 		if key != '' && key in m {
 			return true
 		}
@@ -142,6 +147,12 @@ pub fn diag_ids(s cfgschema.Schema, k AddrKeys, m map[string]toml.Any, what stri
 		if key in m {
 			errs << '${what} ${key} is for addressing = "normal_fixed" — normal addressing states ${k.rx} and ${k.tx}'
 		}
+	}
+	// an allocation (no id required) states both ids or neither: one alone would be lowered with
+	// the other as id 0
+	if !k.required && (k.rx in m) != (k.tx in m) {
+		given, missing := if k.rx in m { k.rx, k.tx } else { k.tx, k.rx }
+		errs << '${what} gives ${given} without ${missing} — an allocation states both ids, or neither'
 	}
 	mut ext := false
 	if v := m['ext'] {

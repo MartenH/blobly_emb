@@ -4657,3 +4657,27 @@ form = "compute"
 	}
 	assert s.unknown_keys == []
 }
+
+// REQ-TOPO-002: a named [nm].alive resolves through the DBC of the bus the node's config names —
+// by the rule its frames are placed by (node_can_bus): a node on edge alone calls edge can0, and
+// its alive message is edge's, never that of compute, the system bus whose interface is can0
+fn test_named_alive_resolves_on_the_nodes_own_bus() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_lalive_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'edge.dbc'), 'VERSION ""\n\nBU_: a\n\nBO_ 1297 AliveMsg: 8 a\n SG_ Alive : 0|8@1+ (1,0) [0|255] "" a\n') or {
+		panic(err)
+	}
+	os.write_file(os.join_path(dir, 'node_a.toml'), '[bus.can0]\n[telemetry]\nbus = "can0"\n[target]\nkind    = "threadx"\ntick_ms = 1\n[nm]\nnode  = 0x11\nalive = "AliveMsg"\npeers = [0x500, 0x53F]\n[isotp]\nbus   = "can0"\nrx_id = 0x101\ntx_id = 0x102\n') or {
+		panic(err)
+	}
+	os.write_file(os.join_path(dir, 'system.toml'), '[bus.compute]\ninterface = "can0"\n\n[bus.edge]\ninterface = "can1"\ndbc = "edge.dbc"\n\n[[node]]\nname = "a"\necu = "node_a.toml"\nbuses = ["edge"]\nnm = 0x11\ntrace = 1\n') or {
+		panic(err)
+	}
+	mut sys := parse_system(os.join_path(dir, 'system.toml')) or { panic(err) }
+	load_errs := sys.load_nodes()
+	assert load_errs.len == 0, load_errs.str()
+	assert sys.nodes[0].view.alive == 0x511, '0x${sys.nodes[0].view.alive.hex()}'
+}

@@ -263,6 +263,10 @@ fn frame_errs(s System) []string {
 	return errors_of(check_telemetry_frames(s))
 }
 
+fn frame_warns(s System) []string {
+	return check_telemetry_frames(s).filter(it.severity == .warning).map(it.msg)
+}
+
 // REQ-TOPO-002 on the bus: a 29-bit diagnostic id is sent whole (never "exceeds 0x7ff"), never
 // meets the 11-bit module frames, and meets a DBC frame only when that one is extended too
 fn test_a_29_bit_connection_is_held_to_the_frames_on_its_bus_in_its_format() {
@@ -342,9 +346,9 @@ fn test_a_diag_only_nodes_ids_are_held_to_the_frames_on_its_bus() {
 		}
 	}
 	assert frame_errs(framed(dir, ext, '')) == []
-	// its request id held to every DBC frame on its bus, in its format — whoever sends it, a node
-	// of the system or not (here nobody the system builds produces Std7E0), and said once when
-	// another node produces it
+	// its request id on a DBC frame of its bus, in its format: refused where a node of the system
+	// transmits that frame (said once, as the production on its request id); one no node
+	// transmits is the request frame a tester sends, which a DBC documents — said, not refused
 	on_req := Node{
 		...std
 		diag: Diag{
@@ -352,10 +356,13 @@ fn test_a_diag_only_nodes_ids_are_held_to_the_frames_on_its_bus() {
 			rsp: 0x7A8
 		}
 	}
-	for produced in ['', 'StdSig'] {
-		r := frame_errs(framed(dir, on_req, produced))
-		assert r == ['node "a": diag req (rx) id 0x7e0 is DBC application frame "Std7E0" on bus "compute" — its payloads would reach the diagnostic server as requests'], r.str()
-	}
+	tester := framed(dir, on_req, '')
+	assert frame_errs(tester) == []
+	assert frame_warns(tester) == ['node "a": diag req (rx) id 0x7e0 is DBC frame "Std7E0" on bus "compute", which no node of the system transmits or receives — read as the request frame a tester sends; a node transmitting or receiving it would be refused']
+	node := framed(dir, on_req, 'StdSig')
+	r := frame_errs(node)
+	assert r == ['bus "compute": application frame "Std7E0" 0x7e0 produced by "b" collides with diag req (rx) id of "a" — application traffic would be misrouted into that module / contend for the id'], r.str()
+	assert frame_warns(node) == []
 	assert frame_errs(framed(dir, Node{ ...on_req, diag: Diag{ ...on_req.diag, ext: true } }, 'StdSig')) == []
 	// on two CAN buses with no [isotp]: its diagnostic bus cannot be told, nothing is placed
 	mut two := framed(dir, std, '')
@@ -439,7 +446,7 @@ fn test_a_diag_only_nodes_functional_id_is_reserved_on_its_bus() {
 		diag:  d
 	}
 	e := frame_errs(framed(dir, only, 'FuncSig'))
-	assert e == ['node "a": diag functional (rx) id 0x18db33f2 (29-bit) is DBC application frame "FuncAlias" on bus "compute" — its payloads would reach the diagnostic server as requests'], e.str()
+	assert e == ['bus "compute": application frame "FuncAlias" 0x18db33f2 (29-bit) produced by "b" collides with diag functional (rx) id of "a" — application traffic would be misrouted into that module / contend for the id'], e.str()
 	// without a functional id stated, nothing of its is on 0x18DB33F2
 	assert frame_errs(framed(dir, Node{ ...only, diag: Diag{ ...d, functional: 0 } }, 'FuncSig')) == []
 	// a node whose [isotp] states the same functional id is refused alike
@@ -457,7 +464,7 @@ fn test_a_diag_only_nodes_functional_id_is_reserved_on_its_bus() {
 		}
 	}
 	c := frame_errs(framed(dir, conn, 'FuncSig'))
-	assert c == ['node "a": isotp functional (rx) id 0x18db33f2 (29-bit) is DBC application frame "FuncAlias" on bus "compute" — its payloads would reach the diagnostic server as requests'], c.str()
+	assert c == ['bus "compute": application frame "FuncAlias" 0x18db33f2 (29-bit) produced by "b" collides with isotp functional (rx) id of "a" — application traffic would be misrouted into that module / contend for the id'], c.str()
 }
 
 // REQ-TOPO-002 in a DISSOLVED system: a node's signals are declared in system.toml, not in its
@@ -557,9 +564,9 @@ fn test_a_single_bus_nodes_diagnostic_frames_are_on_its_own_bus() {
 			]
 		}
 	}
-	on_edge := frame_errs(mk('empty.dbc', 'bus.dbc'))
-	assert on_edge.len == 1 && on_edge[0].contains('isotp rx (rx) id 0x18db33f2 (29-bit) is DBC application frame "FuncAlias" on bus "edge"'), on_edge.str()
-	assert frame_errs(mk('bus.dbc', 'empty.dbc')) == []
+	on_edge := frame_warns(mk('empty.dbc', 'bus.dbc'))
+	assert on_edge.len == 1 && on_edge[0].contains('isotp rx (rx) id 0x18db33f2 (29-bit) is DBC frame "FuncAlias" on bus "edge"'), on_edge.str()
+	assert frame_warns(mk('bus.dbc', 'empty.dbc')) == []
 }
 
 // route_on_edge: gateway "gw" (compute + edge) with one authored [[doip.route]] to "zone" on edge,
@@ -849,8 +856,8 @@ fn test_a_dissolved_nodes_isotp_takes_its_diag_allocation() {
 	assert !stated.nodes[0].view.isotp_conns[0].lowered
 	assert stated.nodes[0].view.isotp_conns[0].rx_id == 0x7A1
 	assert validate_system_gen(stated).filter(it.req == 'REQ-TOPO-014').len == 1
-	// `ext` alone is a statement too: nothing is lowered under it
-	assert partial(dir, '{ req = 0x7A0, rsp = 0x7A8 }', 'ext = true').nodes[0].view.isotp_conns[0].ids_stated
+	// `ext` alone is no statement of the ids: the allocation is lowered under it
+	assert partial(dir, '{ req = 0x18DA10F1, rsp = 0x18DAF110, ext = true }', 'ext = true').nodes[0].view.isotp_conns[0].lowered
 	// no allocation to take
 	bare := partial(dir, '', 'bs = 8')
 	e := validate_system_gen(bare).filter(it.req == 'REQ-TOPO-014')
@@ -858,4 +865,311 @@ fn test_a_dissolved_nodes_isotp_takes_its_diag_allocation() {
 	// a refused diag is said once, by its shape check
 	refused := partial(dir, '{ addressing = "normal_fixed", ta = 0xF1 }', '')
 	assert validate_system_gen(refused).filter(it.req == 'REQ-TOPO-014') == []
+}
+
+// REQ-TOPO-014: an allocation stating one id of its two is refused once (REQ-TOPO-013, by the
+// reader) and never lowered — the missing id would be written as id 0
+fn test_a_half_diag_allocation_is_never_lowered() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_diag_half_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	for diag in ['{ req = 0x7A0 }', '{ rsp = 0x7A8 }'] {
+		s := partial(dir, diag, 'bs = 8')
+		c := s.nodes[0].view.isotp_conns[0]
+		assert !c.lowered && c.rx_id == 0 && c.tx_id == 0, diag
+		e := errors_of(validate_system_gen(s)).filter(it.contains('allocation states both ids'))
+		assert e.len == 1, '${diag}: ${e}'
+		assert validate_system_gen(s).filter(it.req == 'REQ-TOPO-014') == [], diag
+	}
+}
+
+// REQ-TOPO-014: a dissolved node's [isotp] takes its allocation and keeps a functional id of its
+// own beside it (a normal-addressing allocation states none), in the allocation's format; an ext
+// beside it must agree with the allocation's format, and neither is taken beside a normal fixed
+// allocation, whose format and functional id are its own
+fn test_a_dissolved_nodes_isotp_keeps_its_functional_id_beside_the_allocation() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_diag_lower_func_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	topo14 := fn (s System) []string {
+		return validate_system_gen(s).filter(it.req == 'REQ-TOPO-014').map(it.msg)
+	}
+	std := partial(dir, '{ req = 0x7A0, rsp = 0x7A8 }', 'functional_id = 0x7DF')
+	c := std.nodes[0].view.isotp_conns[0]
+	assert c.lowered && c.rx_id == 0x7A0 && c.tx_id == 0x7A8 && c.functional_id == 0x7DF && !c.ext
+	assert topo14(std) == []
+	ext := partial(dir, '{ req = 0x18DA10F1, rsp = 0x18DAF110, ext = true }',
+		'ext = true\nfunctional_id = 0x18DB33F1')
+	x := ext.nodes[0].view.isotp_conns[0]
+	assert x.lowered && x.ext && x.functional_id == 0x18DB33F1
+	assert topo14(ext) == []
+	// a 29-bit functional id in the allocation's 29-bit format, ext left to the allocation
+	assert topo14(partial(dir, '{ req = 0x18DA10F1, rsp = 0x18DAF110, ext = true }',
+		'functional_id = 0x18DB33F1')) == []
+	// refused: an ext the allocation contradicts, a functional id wider than its format or one of
+	// its physical ids, and either beside a normal fixed allocation
+	for pair in [
+		['{ req = 0x7A0, rsp = 0x7A8 }', 'ext = true'],
+		['{ req = 0x18DA10F1, rsp = 0x18DAF110, ext = true }', 'ext = false'],
+		['{ req = 0x7A0, rsp = 0x7A8, ext = false }', 'functional_id = 0x18DB33F1'],
+		['{ req = 0x7A0, rsp = 0x7A8 }', 'functional_id = 0x7A8'],
+		['{ addressing = "normal_fixed", sa = 0x10, ta = 0xF1 }', 'functional_id = 0x18DB33F1'],
+		['{ addressing = "normal_fixed", sa = 0x10, ta = 0xF1, functional_ta = 0x33 }', 'ext = true'],
+	] {
+		diag, body := pair[0], pair[1]
+		e := topo14(partial(dir, diag, body))
+		assert e.len == 1, '${diag} / ${body}: ${e}'
+	}
+}
+
+// REQ-TOPO-002: a node's NM alive id is placed on its bus by the rule its other frames are
+// (node_can_bus): a node on edge alone, whose config calls edge can0, has its alive id on edge —
+// held to the frames there, and never to compute's, the system bus whose interface is can0
+fn test_an_nm_alive_id_is_placed_on_the_nodes_own_bus() {
+	mk := fn (tel_bus string) []string {
+		s := System{
+			buses: [Bus{
+				name:      'compute'
+				interface: 'can0'
+				kind:      'can'
+			}, Bus{
+				name:      'edge'
+				interface: 'can1'
+				kind:      'can'
+			}]
+			nodes: [
+				Node{
+					name:  'zone'
+					buses: ['edge']
+					view:  NodeView{
+						has_nm:     true
+						nm_enabled: true
+						has_alive:  true
+						alive:      0x701
+						nm_bus:     'can0'
+					}
+				},
+				Node{
+					name:  'tel'
+					buses: [tel_bus]
+					view:  NodeView{
+						has_telemetry: true
+						telem_bus:     'can0'
+						telem_id:      0x701
+					}
+				},
+			]
+		}
+		return frame_errs(s)
+	}
+	on_edge := mk('edge')
+	assert on_edge == ['bus "edge": telemetry id 0x701 of "tel" collides with the NM alive id of "zone" — these are single-writer per bus'], on_edge.str()
+	assert mk('compute') == []
+}
+
+// REQ-TOPO-002: a production on a frame is said once per reservation it lands on — the
+// reservation already said as the DBC frame it aliases is not said again, another node's
+// reservation of that frame is
+fn test_each_reservation_a_production_lands_on_is_said_once() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_diag_reserved_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// a's telemetry on the DBC frame Std7E0 (0x7E0), which b produces; c's shell input on it too
+	mut s := framed(dir, Node{
+		name:  'a'
+		buses: ['compute']
+		view:  NodeView{
+			has_telemetry: true
+			telem_bus:     'can0'
+			telem_id:      0x7E0
+		}
+	}, 'StdSig')
+	s.nodes << Node{
+		name:  'c'
+		buses: ['compute']
+		view:  NodeView{
+			comm_thread_on: true
+			shell_on:       true
+			telem_bus:      'can0'
+			shell_in_id:    0x7E0
+			shell_fc_id:    0x7E2
+			shell_out_id:   0x7E3
+		}
+	}
+	e := frame_errs(s)
+	assert e.any(it.contains('telemetry id 0x7e0 aliases DBC application frame "Std7E0"')), e.str()
+	assert e.any(it == 'bus "compute": application frame "Std7E0" 0x7e0 produced by "b" collides with shell in (rx) id of "c" — application traffic would be misrouted into that module / contend for the id'), e.str()
+	assert !e.any(it.contains('produced by "b" collides with the telemetry id of "a"')), e.str()
+	assert e.filter(it.contains('produced by "b"')).len == 1, e.str()
+}
+
+// REQ-TOPO-002: an NM peer range is held to the DBC frames of the bus the node runs NM on, placed
+// by the same rule (node_can_bus) — edge's for a node on edge alone that calls it can0
+fn test_an_nm_peer_range_is_held_to_the_nodes_own_bus() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_diag_peers_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.mkdir_all(dir) or { panic(err) }
+	os.write_file(os.join_path(dir, 'bus.dbc'), fmt_dbc) or { panic(err) }
+	mk := fn [dir] (compute_dbc string, edge_dbc string) []string {
+		s := System{
+			dir:   dir
+			buses: [Bus{
+				name:      'compute'
+				interface: 'can0'
+				kind:      'can'
+				dbc:       compute_dbc
+			}, Bus{
+				name:      'edge'
+				interface: 'can1'
+				kind:      'can'
+				dbc:       edge_dbc
+			}]
+			nodes: [
+				Node{
+					name:  'zone'
+					buses: ['edge']
+					view:  NodeView{
+						has_nm:     true
+						nm_enabled: true
+						nm_bus:     'can0'
+						peers_lo:   0x7D0
+						peers_hi:   0x7EF
+					}
+				},
+			]
+		}
+		return frame_errs(s).filter(it.contains('NM peer range'))
+	}
+	on_edge := mk('', 'bus.dbc')
+	assert on_edge.len == 1 && on_edge[0].contains('bus "edge": DBC application frame "Std7E0"'), on_edge.str()
+	assert mk('bus.dbc', '') == []
+}
+
+// two_bus_nm: buses compute (can0) and edge (can1); nodes z1 and z2 on edge alone, running NM on
+// what each calls `nm_bus`, with the peer ranges given
+fn two_bus_nm(nm_bus string, lo2 u32, hi2 u32) System {
+	z := fn [nm_bus] (name string, lo u32, hi u32) Node {
+		return Node{
+			name:  name
+			buses: ['edge']
+			view:  NodeView{
+				has_nm:     true
+				nm_enabled: true
+				nm_bus:     nm_bus
+				peers_lo:   lo
+				peers_hi:   hi
+			}
+		}
+	}
+	return System{
+		buses: [Bus{
+			name:      'compute'
+			interface: 'can0'
+			kind:      'can'
+		}, Bus{
+			name:      'edge'
+			interface: 'can1'
+			kind:      'can'
+		}]
+		nodes: [z('z1', 0x500, 0x53F), z('z2', lo2, hi2)]
+	}
+}
+
+// @verifies REQ-TOPO-004
+// a node's NM cluster is the bus its NM runs on, placed as its frames are (node_can_bus): two
+// nodes on edge alone that call it can0 are edge's cluster, by either name
+fn test_an_nm_cluster_is_placed_on_the_nodes_own_bus() {
+	for name in ['can0', 'can1'] {
+		e := errors_of(check_nm_cluster_coherence(two_bus_nm(name, 0x600, 0x63F)))
+		assert e == ['bus "edge": NM cluster range mismatch — "z1" has [0x500,0x53f] but "z2" has [0x600,0x63f]'], '${name}: ${e}'
+		assert errors_of(check_nm_cluster_coherence(two_bus_nm(name, 0x500, 0x53F))) == []
+	}
+}
+
+// REQ-TOPO-002: a module frame in the node's own NM peer range is refused when it rides the NM
+// bus, the two named either way — its local can0 and the system's can1 are one bus
+fn test_a_module_frame_on_the_nm_bus_is_held_to_the_peer_range_by_either_name() {
+	mut s := two_bus_nm('can1', 0x500, 0x53F)
+	s.nodes = [Node{
+		...s.nodes[0]
+		view: NodeView{
+			...s.nodes[0].view
+			has_telemetry: true
+			telem_bus:     'can0'
+			telem_id:      0x510
+		}
+	}]
+	e := frame_errs(s)
+	assert e == ['node "z1": telemetry id 0x510 falls in the NM peer range [0x500,0x53f] on bus "edge"'], e.str()
+}
+
+// REQ-TOPO-002: two connections of one node sharing a functional id are one reservation of that
+// frame, said once when a production lands on it
+fn test_one_nodes_reservation_is_said_once_however_many_connections_share_it() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_diag_samefunc_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	conn := fn (rx u32, tx u32) IsotpConn {
+		return IsotpConn{
+			iface:         'can0'
+			rx_id:         rx
+			tx_id:         tx
+			functional_id: 0x7E0
+		}
+	}
+	a := Node{
+		name:  'a'
+		buses: ['compute']
+		view:  NodeView{
+			isotp_conns: [conn(0x700, 0x708), conn(0x701, 0x709)]
+		}
+	}
+	e := frame_errs(framed(dir, a, 'StdSig'))
+	assert e == ['bus "compute": application frame "Std7E0" 0x7e0 produced by "b" collides with isotp functional (rx) id of "a" — application traffic would be misrouted into that module / contend for the id'], e.str()
+	w := frame_warns(framed(dir, a, ''))
+	assert w.len == 1, w.str()
+}
+
+// REQ-TOPO-002: a DBC frame on a node's request id that a node of the system RECEIVES is
+// application traffic — refused, its payloads reaching the server as requests; one a gateway's
+// route sends is held to the route checks, not said to be a tester's
+fn test_a_request_id_on_a_received_or_routed_frame_is_not_a_testers() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_diag_received_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	on_req := Node{
+		name:  'a'
+		buses: ['compute']
+		diag:  Diag{
+			req: 0x7E0
+			rsp: 0x7A8
+		}
+	}
+	mut s := framed(dir, on_req, '')
+	s.nodes << Node{
+		name:  'c'
+		buses: ['compute']
+		view:  NodeView{
+			consumes: {
+				'can0': ['StdSig']
+			}
+		}
+	}
+	assert frame_errs(s) == ['node "a": diag req (rx) id 0x7e0 is DBC application frame "Std7E0" on bus "compute", which "c" receives — its payloads would reach the diagnostic server as requests']
+	assert frame_warns(s) == []
+	mut r := framed(dir, on_req, '')
+	r.routes << Route{
+		gateway: 'g'
+		signal:  'StdSig'
+		from:    'other'
+		to:      'compute'
+	}
+	assert frame_warns(r) == [], frame_warns(r).str()
 }
