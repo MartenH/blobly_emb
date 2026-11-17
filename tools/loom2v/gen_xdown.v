@@ -502,12 +502,12 @@ fn xdown_pub_fns(m Model) []string {
 	return g
 }
 
-// xdown_lean_pub: the comm thread's lean-decode publish of `dbc_id` to the satellite, '' when no
+// xdown_lean_pub: the comm thread's lean-decode publish of the frame (`dbc_id`, `dbc_ext`) to the satellite, '' when no
 // lean down channel is carried by that frame.
-fn xdown_lean_pub(m Model, dbc_id int) string {
+fn xdown_lean_pub(m Model, dbc_id int, dbc_ext bool) string {
 	for sname in m.xdown_names {
 		si := m.sig_of[sname] or { continue }
-		if (m.xdown_lean[sname] or { false }) && si.dbc_id == dbc_id {
+		if (m.xdown_lean[sname] or { false }) && si.dbc_id == dbc_id && si.dbc_ext == dbc_ext {
 			return 'C.xcore_opub_n(u32(${m.xdown_off[sname] or { 0 }}), &g_rx_last) // ${sname} -> the satellite'
 		}
 	}

@@ -374,8 +374,9 @@ fn test_owner_writers_pack_and_publish_the_lean_one_publishes_the_decode() {
 	assert g.contains('\tl[1] = v.inv')
 	assert g.contains('\tC.xcore_opub_n(u32(0), &l[0])')
 	assert !g.contains('xdown_pub_cmd') // lean: the comm thread publishes its decode directly
-	assert xdown_lean_pub(m, 0x124) == 'C.xcore_opub_n(u32(96), &g_rx_last) // Cmd -> the satellite'
-	assert xdown_lean_pub(m, 0x125) == ''
+	assert xdown_lean_pub(m, 0x124, false) == 'C.xcore_opub_n(u32(96), &g_rx_last) // Cmd -> the satellite'
+	assert xdown_lean_pub(m, 0x125, false) == ''
+	assert xdown_lean_pub(m, 0x124, true) == '', 'the extended frame of the same number is another frame'
 }
 
 fn test_satellite_read_is_gated_and_keeps_the_port_default() {

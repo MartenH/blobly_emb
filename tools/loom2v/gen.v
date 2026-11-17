@@ -385,6 +385,11 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool, eth string) (m
 			si.dbc_id = dbc_id_of(db, si.dbc_msg) or { 0 }
 			si.dbc_dlc = dbc_dlc_of(db, si.dbc_msg) or { 8 }
 			si.dbc_ext = dbc_ext_of(db, si.dbc_msg) or { false }
+			if !si.dbc_ext && si.dbc_id > 0x7ff {
+				panic('loom2v: signal "${sname}": DBC message "${si.dbc_msg}" has the standard id ' +
+					'0x${si.dbc_id.hex()}, which does not fit 11 bits — a 29-bit id is marked extended in the ' +
+					'DBC (CAN_EFF_FLAG on its BO_ id) (REQ-COM-012)')
+			}
 			si.dbc_trivial = dbc_signal_trivial(db, sname) or { false }
 			mut fwidths := []int{}
 			for f in si.fields {
@@ -3066,8 +3071,8 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					if s.dbc_msg in rx_checked {
 						continue // checked: rx_target_arms below
 					}
-					if s.rx && !rx_ids_seen[s.dbc_id] {
-						rx_ids_seen[s.dbc_id] = true
+					if s.rx && !rx_ids_seen[frame_id_key(s.dbc_id, s.dbc_ext)] {
+						rx_ids_seen[frame_id_key(s.dbc_id, s.dbc_ext)] = true
 						rx_sigs << s
 					}
 				}
@@ -3229,8 +3234,8 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 							glue << '\t\t\tif rx.id == u32(0x${si.dbc_id.hex()}) && rx.len == ${si.dbc_dlc} && rx.ext == ${si.dbc_ext} { // ${si.dbc_msg}'
 							glue << '\t\t\t\tg_rx_count++'
 							glue << '\t\t\t\tg_rx_last = u32(rx.data[0]) | (u32(rx.data[1]) << 8) | (u32(rx.data[2]) << 16) | (u32(rx.data[3]) << 24)'
-							if idx := msg_ioc_idx[si.dbc_id] {
-								// This message carries an FB-read signal (keyed by DBC id, so it fires even when
+							if idx := msg_ioc_idx[frame_id_key(si.dbc_id, si.dbc_ext)] {
+								// This message carries an FB-read signal (keyed by its frame, id and width, so it fires even when
 								// the de-duped representative is a different, un-read signal): publish the decoded
 								// value (byte-0 scalar) into its IOC cell so the app thread picks it up wait-free
 								// — while 0x28 has reception on.
@@ -3244,7 +3249,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 							}
 							// a satellite FB reads it: the same decoded value to its owner->satellite
 							// channel, under the same reception gate (gen_xdown.v)
-							dpub := xdown_lean_pub(m, si.dbc_id)
+							dpub := xdown_lean_pub(m, si.dbc_id, si.dbc_ext)
 							if dpub != '' {
 								if m.isotp_conns.len > 0 {
 									glue << '\t\t\t\tif st.rxg.on {'
@@ -3345,6 +3350,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\t\tmut tf := can.Frame{'
 					glue << '\t\t\t\tid:  u32(0x${si.dbc_id.hex()})'
 					glue << '\t\t\t\tlen: ${si.dbc_dlc}'
+					if si.dbc_ext {
+						glue << '\t\t\t\text: true // an extended (29-bit) DBC message'
+					}
 					glue << '\t\t\t}'
 					// until the FB's first publish the cell holds no value, only its zero: the frame
 					// goes out at its initial payload, and nothing is encoded or counted
@@ -4651,7 +4659,7 @@ fn main() {
 	// ioc_idx maps each such signal to its pool cell; visible to the comm emitter + handler glue.
 	mut ioc_idx := map[string]int{}
 	mut tx_cells := map[string]bool{} // the cells the comm thread reads to transmit: a live DID's source
-	mut msg_ioc_idx := map[int]int{} // DBC id -> its (single) rx-read signal's IOC cell
+	mut msg_ioc_idx := map[int]int{} // frame_id_key(DBC id, width) -> its (single) rx-read signal's IOC cell
 	if comm_thread_on {
 		// LAYOUT-IDENTICAL routes forward on the target (raw copy + id remap, emitted in the
 		// comm loop below); routes needing a decode/re-encode transcode are still
@@ -4721,10 +4729,6 @@ fn main() {
 					panic('loom2v: [target] kind="threadx" comm thread: TX signal "${sname}" is not a plain ' +
 						'unsigned little-endian 32-bit value at bit 0 (factor 1, offset 0); other layouts ' +
 						'need the DBC codec on target — not generated yet')
-				}
-				if si.dbc_ext || si.dbc_id > 0x7ff {
-					panic('loom2v: [target] kind="threadx" comm thread: TX signal "${sname}" DBC message is ' +
-						'extended (29-bit) — the classic FDCAN backend sends 11-bit frames; use a standard id')
 				}
 				if si.bus != m.telem.bus {
 					panic('loom2v: [target] kind="threadx" comm thread: TX signal "${sname}" is on bus ' +
@@ -4799,11 +4803,6 @@ fn main() {
 					'"${si.bus}", but the comm thread owns only [telemetry].bus "${m.telem.bus}" — a per-bus ' +
 					'comm owner is not generated yet (phase 6b-2 lean cut = one bus)')
 			}
-			if si.dbc_ext || si.dbc_id > 0x7ff {
-				panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" DBC message is ' +
-					'extended (29-bit${if si.dbc_ext { ' — the EFF flag is set' } else { '' }}), but the ' +
-					'classic FDCAN backend delivers only 11-bit standard frames — use a standard id')
-			}
 			// a frame the COM receive rule checks crosses to its FBs whole, through the byte IOC
 			// (gen_rx_target.v) — none of the lean copy's limits below apply to it
 			if si.dbc_msg in rx_checked {
@@ -4841,9 +4840,9 @@ fn main() {
 				// channel instead (gen_xdown.v), published beside this cell from the same decode
 				if (m.fb_reads_owner[sname] or { 0 }) > 0 {
 					ioc_idx[sname] = ioc_idx.len
-					// Key the publish off the READ signal's DBC id, not the de-duped rx_sigs
+					// Key the publish off the READ signal's frame (id and width), not the de-duped rx_sigs
 					// representative (which may be an un-read signal that happens to sort first).
-					msg_ioc_idx[si.dbc_id] = ioc_idx[sname]
+					msg_ioc_idx[frame_id_key(si.dbc_id, si.dbc_ext)] = ioc_idx[sname]
 				}
 			}
 		}
@@ -5264,6 +5263,12 @@ fn dbc_dlc_of(db candb.Database, key string) ?int {
 		}
 	}
 	return none
+}
+
+// frame_id_key is a frame's identity as one map key: its id and whether it is extended, since a
+// standard and an extended frame with the same number are two frames on the wire
+fn frame_id_key(id int, ext bool) int {
+	return if ext { id | (1 << 32) } else { id }
 }
 
 // dbc_id_of returns the CAN id of the message whose snake-name is `key`.
