@@ -117,12 +117,12 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-031 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-005 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-019 | QM | test | verified | uds_test.v (pass) |
-| REQ-DIAG-100 | QM | test | verified | io_control_test.v (pass), io_control_test.v (pass) |
+| REQ-DIAG-100 | QM | test | verified | io-control-silicon (approved), io_control_test.v (pass), io_control_test.v (pass) |
 | REQ-DIAG-101 | QM | test | verified | io_control_test.v (pass) |
-| REQ-DIAG-102 | QM | test | verified | io_control_test.v (pass) |
-| REQ-DIAG-103 | QM | test | verified | io_control_test.v (pass), io_control_test.v (pass) |
+| REQ-DIAG-102 | QM | test | verified | io-control-silicon (approved), io_control_test.v (pass) |
+| REQ-DIAG-103 | QM | test | verified | io-control-silicon (approved), io_control_test.v (pass), io_control_test.v (pass) |
 | REQ-DIAG-104 | QM | test | verified | io_control_test.v (pass) |
-| REQ-DIAG-105 | QM | test | verified | io_control_test.v (pass), io_control_test.v (pass) |
+| REQ-DIAG-105 | QM | test | verified | io-control-silicon (approved), io_control_test.v (pass), io_control_test.v (pass) |
 | REQ-DIAG-106 | QM | test | verified | io_control_test.v (pass), io_control_test.v (pass) |
 | REQ-DIAG-107 | QM | test | verified | io_control_test.v (pass) |
 | REQ-DIAG-008 | QM | test | verified | uds-on-target-reset (approved), uds_test.v (pass) |
@@ -451,12 +451,12 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-031 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-005 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-019 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-DIAG-100 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-100 | | | | | | | | | | | | | | | | | ✓ | | ✓ | | | |
 | REQ-DIAG-101 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-DIAG-102 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-DIAG-103 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-102 | | | | | | | | | | | | | | | | | ✓ | | ✓ | | | |
+| REQ-DIAG-103 | | | | | | | | | | | | | | | | | ✓ | | ✓ | | | |
 | REQ-DIAG-104 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-DIAG-105 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-105 | | | | | | | | | | | | | | | | | ✓ | | ✓ | | | |
 | REQ-DIAG-106 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-107 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-008 | | | | | | | | | | | | | | | | | ✓ | | ✓ | | | |
