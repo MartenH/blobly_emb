@@ -9,6 +9,11 @@
 -- uds-on-target-security, uds-on-target-reset), not
 -- tagged here: a bench
 -- script never runs in trace-check, so a tag would only ever read pending.
+-- The 0x27 failed-key count outlives a reset AND a power cycle (the NvM journal, docs/diagnostics.md
+-- §3.1, written before the answer reporting it): each wrong-key test ends with the right key
+-- after its delay, so a completed run leaves nothing counted. A run aborted mid-test leaves its
+-- count stored, and the next start (an ECUReset, a flash, a power cycle) answers the first seed
+-- 0x37 for security_delay_ms (3 s) — wait it out before re-running.
 
 local function diag()
   return uds.open("compute", { tx = 0x7B0, rx = 0x7B8 })
@@ -161,8 +166,8 @@ test("domain: ECUReset is answered, then the node restarts", function()
   check.nrc(0x31, function() d:write_did(0x0101, "\x01") end) -- the default session again
 end)
 
--- the failed-key count survives the node's own reset (the keep cell, boards/common/diag_board.c):
--- a reset between guesses buys nothing
+-- the failed-key count survives the node's own reset (kept in the NvM journal, comm/uds
+-- sa_store.v — written before each 0x35 leaves): a reset between guesses buys nothing
 test("domain: wrong keys are still counted after a reset", function()
   local d = diag()
   d:session(0x03)
@@ -182,7 +187,7 @@ test("domain: wrong keys are still counted after a reset", function()
   d:session(0x01)
 end)
 
--- nor does a reset DURING a lockout: the lockout is kept (its count already zeroed), and runs on
+-- nor does a reset DURING a lockout: the count at the limit is the lockout, and it runs on
 test("domain: a lockout runs on through a reset", function()
   local d = diag()
   d:session(0x03)
@@ -197,6 +202,34 @@ test("domain: a lockout runs on through a reset", function()
   sleep_ms(3200)
   d:tester_present()
   d:security_access(0x01)
+  d:session(0x01)
+end)
+
+-- nor a reset after a lockout has ENDED: the count since the last correct key is still at the
+-- limit in the journal, so the restart runs the full delay again, and after it the level has its
+-- attempts again (two wrong keys answered 0x35, not 0x36) until the right key clears the count
+test("domain: a reset after an ended lockout costs the delay", function()
+  local d = diag()
+  d:session(0x03)
+  local wrong = function(seed) return seed end
+  check.nrc(0x35, function() d:security_access(0x01, wrong) end)
+  check.nrc(0x35, function() d:security_access(0x01, wrong) end)
+  check.nrc(0x36, function() d:security_access(0x01, wrong) end)
+  sleep_ms(3200) -- the lockout ends
+  d:tester_present()
+  d:raw("\x11\x01")
+  sleep_ms(2000)
+  d:session(0x03)
+  check.nrc(0x37, function() d:raw("\x27\x01") end) -- the saturated count armed the delay from boot
+  sleep_ms(3200)
+  d:tester_present()
+  check.nrc(0x35, function() d:security_access(0x01, wrong) end) -- the attempts again
+  check.nrc(0x35, function() d:security_access(0x01, wrong) end)
+  d:security_access(0x01) -- the right key clears the count
+  d:raw("\x11\x01")
+  sleep_ms(2000)
+  d:session(0x03)
+  d:security_access(0x01) -- and the next restart does not wait
   d:session(0x01)
 end)
 

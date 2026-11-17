@@ -163,7 +163,8 @@
         "resets_per_day": {"type": "integer", "minimum": 0, "maximum": 1000000, "default": 24, "description": "ECUResets (0x11) Default: 24."},
         "clears_per_day": {"type": "integer", "minimum": 0, "maximum": 1000000, "default": 24, "description": "ClearDiagnosticInformation (0x14) Default: 24."},
         "setting_changes_per_day": {"type": "integer", "minimum": 0, "maximum": 1000000, "default": 24, "description": "ControlDTCSetting (0x85) changes Default: 24."},
-        "codings_per_day": {"type": "integer", "minimum": 0, "maximum": 1000000, "default": 24, "description": "accepted 0x2E codings of a [[param]] Default: 24."}
+        "codings_per_day": {"type": "integer", "minimum": 0, "maximum": 1000000, "default": 24, "description": "accepted 0x2E codings of a [[param]] Default: 24."},
+        "unlocks_per_day": {"type": "integer", "minimum": 0, "maximum": 1000000, "default": 24, "description": "correct-key SecurityAccess (0x27) unlocks a day, all levels: the 0x27 failed-key state is written at most security_attempts times per level until a correct key, and once more by it; only where the node performs 0x27 Default: 24."}
       },
       "additionalProperties": false
     },

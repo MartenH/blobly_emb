@@ -1543,6 +1543,7 @@ mut:
 	fault_snap_ids  []u16
 	fault_snap_ids_b []u16 // each fault's second snapshot block (persist.v A / B)
 	fault_grace_us  u64 // the cycle-end barrier: twice the longest period of a fault-testing handler
+	sa_block_id     u16 // the 0x27 failed-key state's journal block (derive_sa_nvm; 0 = none)
 	bulk      []BulkPoolCfg
 	fb_reads    map[string]int      // signal -> how many FB handlers read it
 	fb_reads_owner map[string]int   // signal -> how many FBs on THIS image read it (owner cells are for them)
@@ -3251,8 +3252,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 						.persist {
 							// after the pass's last consume, so a DTC persisted now has its snapshot
 							glue << fault_capture_lines(m, 'g_fmem', 'g_diag', '\t\t')
-							glue << fault_target_persist(m, ioc_idx)
-							glue << param_sleep_lines(m, ioc_idx)
+							glue << fault_target_persist(m)
+							glue << sa_target_persist(m)
+							// a write any of them made in bus sleep: ONE choreography for the pass
+							glue << nvm_sleep_write_lines(m, ioc_idx)
 						}
 					}
 					if glue.len == at + 1 {
@@ -3443,7 +3446,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << '// tx_application_define above). main.v does the board bring-up then calls this —'
 			glue << '// referencing it also forces this module (incl. tx_application_define) to link.'
 			glue << nvm_flash_wrappers(m)
-			glue << fault_store_fns(m)
+			glue << nvm_store_fns(m)
 			glue << param_fns(m, ioc_idx)
 			glue << 'pub fn boot() {'
 			if has_satellite(m) {
@@ -4230,9 +4233,11 @@ fn main() {
 	// (rebound to the existing locals so it stays unchanged). (Step (a): parse -> model.)
 	mut m := build_model(doc, dbc)
 	m.nvm_names, m.nvm_ids = derive_nvm(mut m, doc)
+	m.sa_block_id = derive_sa_nvm(m)
 	m.fault_status_id, m.fault_snap_ids, m.fault_snap_ids_b = derive_fault_nvm(m)
 	validate_params(mut m, doc)
 	derive_param_nvm(mut m)
+	validate_sa_target(m)
 	check_journal_capacity(m)
 	m.fault_grace_us = fault_grace_us(m, doc)
 	wear_report_lines := check_journal_wear(m, doc)
@@ -5960,27 +5965,16 @@ fn fault_target_pass(m Model) []string {
 
 // fault_target_persist: what the memory changed this pass, written to the journal — after the
 // operation cycle's step, before the NvM service's sleep-edge flush. A write made while the bus
-// sleeps re-runs the whole flush choreography, so the journal's clean marker never sits below a
-// record it does not cover (REQ-NVM-014's rule, the persisted signals' own).
-fn fault_target_persist(m Model, ioc_idx map[string]int) []string {
+// sleeps re-runs the whole flush choreography (nvm_sleep_write_lines, after it), so the journal's
+// clean marker never sits below a record it does not cover (REQ-NVM-014's rule, the persisted
+// signals' own).
+fn fault_target_persist(m Model) []string {
 	if !fault_persist_on(m) {
 		return []string{}
 	}
 	// never an erase here: on a node without NM the journal erases only at boot, before the kernel
 	// (nvm_boot_lines), and one with NM only in its sleep edges' choreography
-	mut g := ['\t\tg_fmem.persist(t1, false) // what changed: unwritten snapshots, the status image, tombstones']
-	if m.nm.on && m.params.len > 0 {
-		// a parameter coded this pass too: ONE choreography for both writers
-		g << '\t\tparam_wrote := g_param.take_wrote()'
-		g << '\t\tif (g_fmem.wrote > 0 || param_wrote) && g_nm.state() == .bus_sleep {'
-		g << nvm_flush_choreo(m, ioc_idx, '\t\t\t', false)
-		g << '\t\t}'
-	} else if m.nm.on {
-		g << '\t\tif g_fmem.wrote > 0 && g_nm.state() == .bus_sleep {'
-		g << nvm_flush_choreo(m, ioc_idx, '\t\t\t', false)
-		g << '\t\t}'
-	}
-	return g
+	return ['\t\tg_fmem.persist(t1, false) // what changed: unwritten snapshots, the status image, tombstones']
 }
 
 // fault_target_consume: every fault-owning FB's reports read and consumed, and the clear

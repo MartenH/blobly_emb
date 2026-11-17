@@ -14,7 +14,8 @@
 #   * no busyRepeatRequest (0x21): a request that arrives while an answer is in flight is
 #     dropped (REQ-DIAG-037); no responsePending (0x78) in an application (REQ-DIAG-062);
 #   * no memorySelection byte on 0x14 (a 4-byte request only); no power-up delay on 0x27 (the
-#     failed-key count surviving a reset, REQ-DIAG-033, does that job);
+#     failed-key count surviving a reset and a power cycle, REQ-DIAG-033 and REQ-DIAG-065, does
+#     that job);
 #   * one diagnostic server per node, whichever transport a request arrives on.
 #
 # Status: a requirement whose linked verifications all pass is `agreed` (gated by
@@ -270,7 +271,7 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-DIAG-032"
 title = "Wrong keys and lockout"
-text = "A wrong key shall be refused with invalidKey (0x35); the configured number of wrong keys for a level shall be refused with exceededNumberOfAttempts (0x36) and start the lockout delay, during which a seed request is refused with requiredTimeDelayNotExpired (0x37); wrong keys shall be counted per level."
+text = "A wrong key shall be refused with invalidKey (0x35); the configured number of wrong keys for a level shall be refused with exceededNumberOfAttempts (0x36) and start that level's lockout delay, during which a seed request of that level is refused with requiredTimeDelayNotExpired (0x37); wrong keys and the delay shall be per level, so a level's lockout delays no other level's seed."
 status = "agreed"
 method = "test"
 asil = "QM"
@@ -279,7 +280,43 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-DIAG-033"
 title = "Wrong keys survive a reset"
-text = "The count of wrong keys, and a lockout in progress, shall be kept across an ECU reset, so that a reset grants no fresh attempts."
+text = "The count of wrong keys shall be kept across an ECU reset, so that a reset grants no attempts beyond the configured limit per lockout delay: a reset after a wrong key of a level counted since that level's last correct key shall cost the full lockout delay, a count below the limit shall carry over as it is, and after the delay of a count at the limit the level shall have its attempts again, as after a start-up restoring that count. On a target the count is kept in the persistence journal (REQ-DIAG-065), and the flush before the reset retries a write the journal refused, and may erase the sector a compaction left behind to take the count across the reset; a journal that refuses every write (it failed to mount, or holds more blocks than this firmware pools) keeps the count in RAM only, as it keeps no fault memory or coding."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-065"
+title = "Wrong keys survive a power cycle"
+text = "On a target, each level's count of wrong keys since its last correct key shall be kept in the persistence journal across a power cycle and any reset, and restored before the first request is served: a stored count below the configured attempts shall carry over and cost the lockout delay as after an ECU reset; a count at or above them shall cost the full lockout delay from start-up, after which the level has its attempts again as after any lockout, so that while the journal takes the state no reset or power cycle grants more than the configured attempts per lockout delay; such a count stays stored, costing the delay at every start-up, until a correct key of that level. The delay is that level's: it refuses that level's seed request (0x37), not another level's. A stored count of a level the firmware does not serve shall cost no delay, not be restored, and be dropped from the journal by the first write after the start-up. A start-up with nothing counted, or with a stored record of another layout, shall impose no delay."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-066"
+title = "SecurityAccess on a target declares its storage"
+text = "Generation shall refuse a target node that performs SecurityAccess — a security level named by a data identifier's gate, by a service table row or by the programming handoff row — without a persistence journal, naming the reason; the host bridge, which has no power cycle, keeps the count in RAM."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-067"
+title = "The SecurityAccess state is written only when it changes"
+text = "The persisted SecurityAccess state shall be written only when it changes — a wrong key of a level whose count is below the configured attempts (the count raised), and a correct key of a level with a count (the count cleared) — and never by a correct key with nothing counted, a wrong key at the limit, a lockout's end, a start-up or an ECU reset, so that no flush before an ECU reset or the programming handoff is needed to keep it current. Each change shall be written before the answer that reports it is sent on CAN, by one append that never erases (REQ-DIAG-062). A write the journal refuses shall change no answer of the server, and shall be retried after the system write floor and at once by every flush until the journal holds the state; a journal another writer filled holds the changes in RAM until the flush before an ECU reset or, with NM, a sleep edge erases it, and a power cut or a reset the server did not perform meanwhile restores the state last written."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-068"
+title = "Wrong keys write the journal a bounded number of times"
+text = "The persisted SecurityAccess state shall be written at most the configured attempts times per level between two correct keys of that level, plus once by a correct key that follows a wrong one, however many wrong keys a tester sends and however often the ECU is reset or powered off, so that a tester without the key writes at most the configured attempts records per level until an authorised unlock and can neither fill the persistence journal for its other writers (generation refuses a sector that cannot hold those writes beside the live set and its rewrite) nor wear it beyond what the wear check proved (REQ-NVM-010); no write budget is needed, and retrying a write the journal refused is not a further write."
 status = "agreed"
 method = "test"
 asil = "QM"

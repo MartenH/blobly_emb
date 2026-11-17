@@ -422,8 +422,14 @@ would be a second copy of the per-service gate inside `comm/uds`.
 **What an unauthenticated network tester can still do** is deny diagnostics, not change ECU
 state. 0x10 is open: it can move the SHARED session, which relocks the bus tester's unlock (every
 session entry relocks). And 0x27 is open: its failed-key count and lockout are the SERVER's, and
-kept through a reset (`kept_security`), so a network tester sending wrong keys locks the bus
-tester out of 0x27 too for the lockout delay. Neither is preventable by a session gate — the
+kept through a reset and a power cycle (in the journal), so a network tester sending wrong keys
+locks the bus tester out of 0x27 too for the lockout delay. Its wrong keys cannot fill the
+journal, though: the state is written only when it changes — a wrong key below the limit, a correct
+key clearing a count — so at most `security_attempts` times per level until a correct key, and the
+fault memory and the codings keep their room however many wrong keys come (docs/nvm.md, "The 0x27
+failed-key state"). Nor can it drive the journal's other writers: on a `[doip]` node 0x14, 0x85
+and a parameter's 0x2E need a level, from either transport. Neither the session move nor the
+lockout is preventable by a session gate — the
 attempt is the authentication — only by authenticating before the request is served, at
 activation. Not built: that authenticated routing activation (the OEM-specific field, or 0xE0
 central security) — it would authenticate the CONNECTION, while ISO 14229's 0x27 / 0x29

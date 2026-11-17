@@ -239,8 +239,22 @@ pub mut:
 	session_epoch u32
 	sa_seed         [seed_len]u8
 	sa_failed       [max_security_level]u8 // wrong keys per level: one level's unlock never clears another's
-	sa_delay_until  u64
-	sa_arm_delay    bool // start the delay at the next tick (boot / reset: the clock is not known yet)
+	// wrong keys per level since its last correct key, rising to the attempt limit and no further
+	// (sa_failed restarts when a lockout starts; this does not): what the journal holds (sa_store.v)
+	sa_since        [max_security_level]u8
+	// per level: when its lockout delay ends, and the levels whose delay starts at the next tick
+	// (bit L-1; a start-up or a reset, whose clock is not known yet). A level's wrong keys cost that
+	// level's delay only, so a level nobody unlocks never delays another's seed.
+	sa_delay_until [max_security_level]u64
+	sa_arm         u8
+	// The 0x27 state's persistence (sa_store.v): the journal seam (nil put = RAM only, the host),
+	// the record last stored and whether the store is known to hold it, when a refused write is
+	// retried, and whether a pass wrote since take_sa_wrote last asked.
+	sa_store      SecurityStore
+	sa_stored     [sa_record_len]u8
+	sa_has_stored bool
+	sa_retry_at   u64
+	sa_wrote      bool
 	// The service table: nservices == 0 is the DEFAULT table — every service the owner wired, in
 	// its default sessions, with no service-level security (the behaviour before the table existed);
 	// otherwise exactly services[0 .. nservices].
@@ -264,53 +278,40 @@ pub fn (mut s Server) init(resp_cap int) {
 }
 
 
-// kept_len: the bytes of SecurityAccess state an owner that restarts the MCU carries across its
-// own reset — the failed-key count of each level, and whether a lockout is running.
-pub const kept_len = max_security_level + 1
-
-// kept_security is what must survive the owner's reset: a reset between guesses must buy nothing,
-// and a lockout that is running — whose count the server has already zeroed — must still run.
-pub fn (s &Server) kept_security() [kept_len]u8 {
-	mut k := [kept_len]u8{}
+// sa_restart: what a restart makes of the 0x27 counts — a reset (reset_state) and a start-up
+// (restore_persisted_security, sa_store.v) alike, ONE rule so the host bridge and a target agree:
+// per served level with a wrong key counted since its last correct key, the delay is armed (the
+// full delay, from the next tick: the clock that timed a running one is not trusted across it), and
+// the level's lockout count is that count below the attempt limit, or 0 at or above it — after the
+// delay of a saturated count the level has its attempts again, as after any lockout. The delay is
+// that level's: another level's seed is not delayed. A level with nothing counted, or not served,
+// arms nothing. A loop over the levels: the target has no heap.
+fn (mut s Server) sa_restart() {
+	limit := s.sa_max_attempts()
 	for i in 0 .. max_security_level {
-		k[i] = s.sa_failed[i]
-	}
-	k[max_security_level] = if s.sa_arm_delay || s.now_us < s.sa_delay_until { u8(1) } else { u8(0) }
-	return k
-}
-
-// any_sa_failed: whether any level has wrong-key attempts counting. A loop, not `.any()`: V3
-// copies a fixed array into a heap-allocated one to call it, and the target has no heap.
-fn (s &Server) any_sa_failed() bool {
-	for n in s.sa_failed {
-		if n > 0 {
-			return true
+		if s.sa_since[i] == 0 || s.security_levels & (u8(1) << i) == 0 {
+			continue
 		}
+		s.sa_failed[i] = if s.sa_since[i] < limit { s.sa_since[i] } else { u8(0) }
+		s.sa_arm |= u8(1) << i
 	}
-	return false
-}
-
-// restore_security takes back what kept_security kept, at boot, after init: the counts, and the
-// lockout delay armed — from boot, since the clock that timed it did not survive — whenever a
-// lockout was running or any count is non-zero. The same rule reset_state applies.
-pub fn (mut s Server) restore_security(k [kept_len]u8) {
-	for i in 0 .. max_security_level {
-		s.sa_failed[i] = k[i]
-	}
-	s.sa_arm_delay = k[max_security_level] != 0 || s.any_sa_failed()
 }
 
 // reset_state returns the diagnostic state to power-on: default session, security locked,
-// communication enabled, no pending reset. DIDs are untouched. The 0x27 failed-key count and a
-// running lockout SURVIVE it: a reset between guesses must not buy fresh attempts, so a reset
-// with wrong keys already counted costs the lockout delay — and a clean reset costs nothing.
-// (Across a power cycle the count is lost until the target persists it — not built yet, docs/diagnostics.md §5.)
+// communication enabled, no pending reset. DIDs are untouched. The 0x27 failed-key counts SURVIVE
+// it: a reset between guesses must not buy fresh attempts, so a reset with a wrong key of a level
+// counted since that level's last correct key costs the full lockout delay (one after an ended
+// lockout too, and one during a lockout restarts it), by the rule a start-up follows (sa_restart) —
+// and a clean reset costs nothing.
+// (Across the MCU's restart — an ECUReset, any other reset, a power cycle — a target keeps them in
+// the NvM journal: sa_store.v, docs/diagnostics.md §3.1. The host bridge has no power cycle.)
 pub fn (mut s Server) reset_state() {
 	s.session = session_default
 	s.unlocked = 0
 	s.sa_level = 0
 	s.session_epoch++
-	s.sa_arm_delay = s.any_sa_failed()
+	s.sa_arm = 0
+	s.sa_restart()
 	s.normal_tx_off = false
 	s.normal_rx_off = false
 	s.restore_dtc_setting()
@@ -323,9 +324,13 @@ pub fn (mut s Server) reset_state() {
 // S3 returns to default (ISO 14229-2). Call once per owner pass, before handling requests.
 pub fn (mut s Server) tick(now_us u64) {
 	s.now_us = now_us
-	if s.sa_arm_delay {
-		s.sa_arm_delay = false
-		s.sa_delay_until = now_us + s.sa_delay()
+	if s.sa_arm != 0 {
+		for i in 0 .. max_security_level {
+			if s.sa_arm & (u8(1) << i) != 0 {
+				s.sa_delay_until[i] = now_us + s.sa_delay()
+			}
+		}
+		s.sa_arm = 0
 	}
 	if s.session == session_default || s.session == 0 || !s.rx_seen {
 		return
@@ -705,14 +710,22 @@ fn (s &Server) sa_delay() u64 {
 }
 
 fn (s &Server) sa_max_attempts() u8 {
-	return if s.sa_attempts == 0 { default_sa_attempts } else { s.sa_attempts }
+	return attempts_of(s.sa_attempts)
+}
+
+// attempts_of: the attempt limit a configured `security_attempts` gives (0 = the default) — the one
+// rule, which the generator's wear check multiplies by too
+pub fn attempts_of(configured u8) u8 {
+	return if configured == 0 { default_sa_attempts } else { configured }
 }
 
 // security_access (0x27). requestSeed (odd subfunction 2L-1) hands out a fresh seed for level L —
 // all zeros when L is already unlocked (ISO 14229-1) — and sendKey (2L) checks a key against the
 // OUTSTANDING seed of that same level, once: a wrong key spends the seed. After sa_attempts wrong
 // keys the answer is exceededNumberOfAttempts and no seed is issued until the lockout delay has
-// passed (requiredTimeDelayNotExpired); a reset with wrong keys counted costs the delay too (reset_state).
+// passed (requiredTimeDelayNotExpired); a reset with a wrong key counted since the level's last
+// correct key costs the delay too (reset_state). On a target the count is in the journal before the
+// answer reporting it is pumped (sa_store.v); a write the journal refuses changes no answer.
 // requestSeed always answers, since the seed IS the answer; sendKey honours the suppress bit.
 fn (mut s Server) security_access(req &u8, req_len int, resp &u8) int {
 	if req_len < 2 {
@@ -730,8 +743,9 @@ fn (mut s Server) security_access(req &u8, req_len int, resp &u8) int {
 }
 
 fn (mut s Server) request_seed(level u8, sub u8, resp &u8) int {
-	// an optional securityAccessDataRecord after the subfunction is accepted and ignored
-	if s.sa_arm_delay || s.now_us < s.sa_delay_until {
+	// an optional securityAccessDataRecord after the subfunction is accepted and ignored; the
+	// delay refused here is this level's (its lockout, or one a start-up or reset armed for it)
+	if s.sa_arm & (u8(1) << (level - 1)) != 0 || s.now_us < s.sa_delay_until[level - 1] {
 		return negative(resp, 0x27, nrc_time_delay_not_expired)
 	}
 	s.sa_level = 0
@@ -778,15 +792,19 @@ fn (mut s Server) send_key(level u8, req &u8, req_len int, resp &u8) int {
 	}
 	s.sa_level = 0 // one key per seed
 	if !s.security.key_ok(s.security.ctx, level, &s.sa_seed[0], unsafe { req + 2 }, seed_len) {
+		if s.sa_since[level - 1] < s.sa_max_attempts() {
+			s.sa_since[level - 1]++
+		}
 		s.sa_failed[level - 1]++
 		if s.sa_failed[level - 1] >= s.sa_max_attempts() {
 			s.sa_failed[level - 1] = 0
-			s.sa_delay_until = s.now_us + s.sa_delay()
+			s.sa_delay_until[level - 1] = s.now_us + s.sa_delay()
 			return negative(resp, 0x27, nrc_exceeded_attempts)
 		}
 		return negative(resp, 0x27, nrc_invalid_key)
 	}
 	s.sa_failed[level - 1] = 0
+	s.sa_since[level - 1] = 0
 	s.unlocked = level
 	if unsafe { req[1] } & 0x80 != 0 {
 		return 0

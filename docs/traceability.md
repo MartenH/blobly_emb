@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 296 | 203 | 30 | 63 | 0 |
+| 300 | 207 | 30 | 63 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -110,7 +110,11 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-019 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-008 | QM | test | verified | uds-on-target-reset (approved), uds_test.v (pass) |
 | REQ-DIAG-032 | QM | test | verified | uds_test.v (pass) |
-| REQ-DIAG-033 | QM | test | verified | uds-on-target-reset (approved), uds_test.v (pass) |
+| REQ-DIAG-033 | QM | test | verified | sa_persist_test.v (pass), uds-on-target-journal (approved), uds_test.v (pass) |
+| REQ-DIAG-065 | QM | test | verified | sa_persist_test.v (pass), sa_store_test.v (pass) |
+| REQ-DIAG-066 | QM | test | verified | diag_target_test.v (pass) |
+| REQ-DIAG-067 | QM | test | verified | diag_target_test.v (pass), sa_persist_test.v (pass), sa_store_test.v (pass) |
+| REQ-DIAG-068 | QM | test | verified | diag_target_test.v (pass), sa_persist_test.v (pass), sa_store_test.v (pass) |
 | REQ-DIAG-034 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-035 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-036 | QM | test | verified | uds_test.v (pass) |
@@ -412,6 +416,10 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-008 | | | | | | | | | | | | | | | | | ✓ | | ✓ | | | |
 | REQ-DIAG-032 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-033 | | | | | | | | | | | | | | | | | ✓ | | ✓ | | | |
+| REQ-DIAG-065 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-066 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-067 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-068 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-034 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-035 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-036 | | | | | | | | | | | | | | | | | | | ✓ | | | |
