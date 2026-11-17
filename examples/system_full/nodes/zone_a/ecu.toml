@@ -214,8 +214,9 @@ stmin_ms      = 0
 # the longest diagnostic message either way: the most a first frame states without the escape (the
 # default is 520). The one node that opts in, so the larger size runs end to end: its bootloader's
 # TransferData blocks follow it (4066 bytes, 4064 of data), and a multi-DID read answers whole up to
-# it. sysnode, the gateway that routes to it over DoIP, is at 4095 too, so routed messages and the
-# routed reprogramming carry the same 4064-byte blocks.
+# it. Routed through sysnode, whose maximum stays 520, messages are carried only up to that (syscheck
+# says so): a longer answer comes back responseTooLong, and sysnode lowers the bootloader's offered
+# block to 520, so zone_a is still reprogrammed through it, in smaller blocks.
 max_message   = 4095
 
 # 18 bytes: the read answer is multi-frame

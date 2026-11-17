@@ -352,6 +352,15 @@ fn test_an_empty_or_oversized_request_is_refused() {
 	assert r.accept(0, &req[0], req.len, 1, 1, 1, u64(0)) == .too_large
 }
 
+// A tester without the gateway's unlock learns nothing of a route (REQ-NET-020), its size included:
+// an oversized request is locked out like any other, and too_large only once the unlock is held.
+fn test_a_locked_tester_is_refused_before_the_size_is_judged() {
+	mut r := new_router()
+	big := []u8{len: isotp.default_message + 1}
+	assert r.accept(0, &big[0], big.len, 1, 1, 0, u64(0)) == .locked
+	assert r.accept(0, &big[0], big.len, 1, 2, 1, u64(0)) == .too_large
+}
+
 fn test_the_table_holds_each_address_once() {
 	mut r := new_router()
 	assert !r.add(Route{

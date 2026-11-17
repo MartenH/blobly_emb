@@ -183,7 +183,7 @@ fn serve_loop() {
 	}
 	for {
 		now := C.board_now_us()
-		net_pass(now) // the network's reports and its request, if this node serves DoIP
+		net_pass(now, lay) // the network's reports and its request, if this node serves DoIP
 		// the bus side is comm/diag's, the application's own: intake, the busy guard, the answer
 		// pumped with a refusal aborting it, S3 held while an exchange is in flight
 		mut due := false

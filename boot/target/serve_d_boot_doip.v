@@ -1,6 +1,7 @@
 module main
 
 import boot
+import boot.bufs
 import comm.doip
 import driver.doipnet
 
@@ -81,13 +82,12 @@ fn net_serves() bool {
 }
 
 // net_pass: the network's share of a pass — the listener coming up (a session handed off over DoIP
-// starts its S3 then), then the mailbox
-fn net_pass(now u64) {
+// starts its S3 then), then the mailbox — in `lay`, the buffer block's layout, fixed at entry
+fn net_pass(now u64, lay bufs.Layout) {
 	if !g_net_ready && C.doip_net_ready() != 0 {
 		g_net_ready = true
 		g_prog.net_up(now)
 	}
-	lay := buffers()
 	doipnet.serve_mailbox(mut g_prog, region(lay.net_req), region(lay.net_resp))
 	if doipnet.take_push_sent() {
 		g_prog.push_sent() // the routine's pushed response has itself been acknowledged

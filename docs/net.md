@@ -529,8 +529,10 @@ OWN maximum message length (its `[isotp] max_message`, which sizes its router's 
 
 syscheck refuses a gateway's own `[[doip.route]]` whose `max_message` is not its node's, and warns of
 a routed node whose `max_message` is larger than its gateway's (REQ-CAN-TP-023) — the other way
-round nothing is lost, the route carrying the node's maximum. system_full's sysnode is at 4095, like
-zone_a, the node it routes to, so zone_a's 4066-byte blocks reach it through the gateway too.
+round nothing is lost, the route carrying the node's maximum:
+system_full's zone_a, at 4095 behind sysnode at 520, is such a node — its messages longer than 520
+bytes, and its bootloader's 4066-byte blocks, are for a tester on its own bus; through sysnode it is
+reprogrammed in blocks of 520.
 
 **Access (REQ-NET-020).** Routing changes state on nodes that otherwise no network tester could
 reach, so a tester is routed only while it holds the gateway's own security level

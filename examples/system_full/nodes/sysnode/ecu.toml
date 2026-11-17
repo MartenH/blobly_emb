@@ -66,9 +66,6 @@ tx_id         = 0x7A8
 functional_id = 0x7DF
 bs            = 8
 stmin_ms      = 0
-# 4095 like zone_a, the node it routes to: a gateway forwards a routed message only up to its own
-# maximum (and each route's), so zone_a's 4064-byte blocks reach it through here (docs/can-tp.md)
-max_message   = 4095
 
 # The H735-DK's 4.3" touch LCD as the gateway's local status screen: one more ThreadX thread, below
 # every other one, that owns the LCD, the touch panel and LVGL (boards/h735dk/display.c). The screen

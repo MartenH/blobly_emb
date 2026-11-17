@@ -39,8 +39,6 @@ pub mut:
 	// the MCU once its controller has sent the answer. Otherwise the diagnostic state returns to
 	// power-on here, which is all a host bridge can do.
 	owner_resets bool
-	// the longest message the connection exchanges: each buffer's size and the link's capacities
-	max_message int
 mut:
 	req  &u8 = unsafe { nil }
 	resp &u8 = unsafe { nil }
@@ -95,7 +93,6 @@ pub fn (mut c Connection) init(rx_id u32, tx_id u32, functional_id u32, bs u8, s
 	c.link.init_defaults()
 	c.req = req
 	c.resp = resp
-	c.max_message = max_message
 	c.link.bind_rx(req, max_message)
 	c.link.bind_tx(resp, max_message)
 	c.server.init(c.link.tx_cap)

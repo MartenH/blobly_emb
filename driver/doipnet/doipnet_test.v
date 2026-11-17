@@ -88,6 +88,8 @@ fn echo(_ voidptr, req &u8, n int, _ bool, resp &u8, _ int) int {
 
 // the sizes of an entity at the default maximum message length
 const max_uds = 520
+// spelled out because a fixed array's size must be a constant expression; held to doip.msg_len /
+// resp_len by test_the_buffer_sizes_are_the_entitys
 const max_msg = doip.header_len + 4 + max_uds
 const max_resp = doip.header_len + 5 + doip.header_len + 4 + max_uds
 
@@ -389,3 +391,9 @@ fn test_a_routed_answer_past_the_entitys_limit_is_not_framed() {
 	assert routed(mut f, mut s, 0x07C0, 4, unsafe { &ans[0] }, max_uds, &out[0])
 	assert f.sent.len == 1 && f.sent[0][12..] == ans[..max_uds]
 }
+
+fn test_the_buffer_sizes_are_the_entitys() {
+	assert max_msg == doip.msg_len(max_uds)
+	assert max_resp == doip.resp_len(max_uds)
+}
+

@@ -270,9 +270,6 @@ pub fn (mut r Router) accept(idx int, req &u8, n int, conn u32, ticket u32, unlo
 	if n < 1 || r.link.tx_cap < 1 {
 		return .refused // empty, or an unbound router
 	}
-	if n > r.route_max(idx) {
-		return .too_large // the target would refuse its first frame (FC.OVFLW) and answer nothing
-	}
 	if r.granted && r.bound && r.grant_conn != conn {
 		r.granted = false // a new connection: its tester authenticates for itself
 		r.bound = false
@@ -284,6 +281,11 @@ pub fn (mut r Router) accept(idx int, req &u8, n int, conn u32, ticket u32, unlo
 	if !r.bound {
 		r.bound = true
 		r.grant_conn = conn
+	}
+	// after the lock (REQ-NET-020): a tester without the gateway's unlock learns nothing of a route,
+	// its size included; and still before anything of the exchange in flight is touched
+	if n > r.route_max(idx) {
+		return .too_large // the target would refuse its first frame (FC.OVFLW) and answer nothing
 	}
 	if r.active >= 0 && r.sending {
 		return .busy
@@ -379,11 +381,13 @@ pub fn (mut r Router) on_frame(bus u8, f &can.Frame, now u64) bool {
 	// it was not waiting for, a reserved PCI, a truncated or out-of-sequence frame move nothing. Our
 	// own sends count in pump.
 	before := r.link.progress
-	owed := r.link.fc_ovflw
+	oversize := oversize_first_frame(f, r.link.rx_cap)
 	if diag.take_frame(mut r.link, now, f) {
 		r.collect(now)
 	}
-	if !owed && r.link.fc_ovflw && !r.ending {
+	// judged from the frame, not from an OVFLW becoming owed: one already owed (a late oversize first
+	// frame of an earlier request) must not hide this one's
+	if oversize && !r.ending {
 		// the answer's first frame announced more than the gateway carries: refused in the target's
 		// name when it answers the request in flight — a late one to an earlier request is not
 		// this one's, as in collect
@@ -640,3 +644,14 @@ fn (mut r Router) end_exchange() {
 	r.link.abort_tx()
 	r.link.abort_rx() // a reception in progress belongs to the exchange that ended
 }
+
+// oversize_first_frame: `f` is a first frame announcing more than `cap` bytes, or the escape first
+// frame (FF_DL 0, a 32-bit length past 4095) — what the link refuses with FC.OVFLW
+fn oversize_first_frame(f &can.Frame, cap int) bool {
+	if f.len < 2 || f.data[0] >> 4 != 1 {
+		return false
+	}
+	total := (int(f.data[0] & 0x0F) << 8) | int(f.data[1])
+	return total == 0 || total > cap
+}
+
