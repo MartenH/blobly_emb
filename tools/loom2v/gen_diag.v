@@ -508,8 +508,22 @@ fn validate_did_rows(m Model) {
 			if row.security != 0 && acc.security != 0 && row.security != acc.security {
 				panic('loom2v: [[did]] 0x${d.id.hex()} ${acc.what} needs security ${acc.security}, but [uds] services 0x${acc.sid.hex()} needs ${row.security} — one unlock cannot satisfy both')
 			}
+			// judged on the gate the server enforces: a level the row gives it needs the extended
+			// session among those both allow, as one of its own does (parse_did_access)
+			eff, level := access_gate(acc.sessions, acc.security, row)
+			if level != 0 && eff != 0 && eff & uds.in_extended == 0 {
+				panic('loom2v: [[did]] 0x${d.id.hex()} ${acc.what} needs security ${level} but the sessions it is accepted in (its own and [uds] services 0x${acc.sid.hex()}\'s) leave out the extended session, the only one an application server unlocks in — entering another relocks it, so it could never be opened')
+			}
 		}
 	}
+}
+
+// access_gate: the gate the server enforces for a DID access whose own gate is (`sessions`,
+// `security`) behind its service's `row` — its sessions within the row's (0 = every session), and
+// its level, else the row's
+fn access_gate(sessions u8, security u8, row SvcCfg) (u8, u8) {
+	level := if security != 0 { security } else { row.security }
+	return sess_and(sessions, row.sessions), level
 }
 
 // DidAccess is one [[did]] access (read / write / control) as the service that carries it sees it

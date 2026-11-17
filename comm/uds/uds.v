@@ -331,7 +331,8 @@ fn (mut s Server) sa_restart() {
 
 // reset_state returns the diagnostic state to power-on: default session, security locked,
 // communication enabled, no pending reset, every routine asked to stop and none accepted (an owed
-// answer then answered 0x22, stop_routines). DIDs are untouched. The 0x27 failed-key counts SURVIVE
+// answer then answered 0x22, stop_routines), and every input/output control returned to the ECU
+// (io_control.v). DIDs are untouched. The 0x27 failed-key counts SURVIVE
 // it: a reset between guesses must not buy fresh attempts, so a reset with a wrong key of a level
 // counted since that level's last correct key costs the full lockout delay (one after an ended
 // lockout too, and one during a lockout restarts it), by the rule a start-up follows (sa_restart) —
@@ -355,7 +356,7 @@ pub fn (mut s Server) reset_state() {
 	s.reset_req = 0
 	s.last_rx_us = 0
 	s.rx_seen = false
-	s.io_return_all() // every input/output control back to the ECU
+	s.io_return_where(0, false, session_default) // every input/output control back to the ECU
 }
 
 // tick advances the server's clock and applies S3: a non-default session with no request for
@@ -567,7 +568,7 @@ fn (mut s Server) enter_session(session u8) {
 		s.normal_rx_off = false
 		s.restore_dtc_setting()
 	}
-	s.io_session_entered(session) // the controls this entry's relock or session ends
+	s.io_return_where(0, false, session) // the controls this entry's relock or session ends
 }
 
 // restore_dtc_setting turns DTC setting back on when a session ends (explicitly, by S3, or by a
@@ -864,8 +865,7 @@ fn (mut s Server) send_key(level u8, req &u8, req_len int, resp &u8) int {
 	s.sa_since[level - 1] = 0
 	s.unlocked = level
 	// the level unlocked before is relocked: its controls are returned, its routines asked to stop
-	s.io_unlocked(level)
-	s.stop_relocked_routines(level, true)
+	s.end_levels(level, true)
 	if unsafe { req[1] } & 0x80 != 0 {
 		return 0
 	}

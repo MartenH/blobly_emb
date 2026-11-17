@@ -179,6 +179,7 @@ node has a `[[routine]]` (below).
 | a level on a row not allowed in extended; a 0x27 row without extended | an application server unlocks only in extended |
 | a table without 0x27 while a level is gated, without 0x22 while a DID exists, without 0x2E while one is writable, without 0x2F while one has a `control` | the gate would be unreachable |
 | a DID gate or control sharing no session with its service's row (the default table's 0x2F row included), or naming another level than the row | one unlock cannot satisfy both |
+| a DID gate or control whose level — its own, else its row's — leaves out extended among the sessions both allow | an application server unlocks only in extended, and entering another session relocks |
 | more than 16 rows (`uds.max_services`) | fixed table |
 
 **The handoff's row**, `"0x10 02" = { sessions = [...], security = N }`, only with `[boot]`: the one
@@ -402,7 +403,8 @@ the first `results_out`, 02's none.
 - **A relock without a session entry** — another level unlocked (0x27 holds one), or a DoIP tester's
   unlock ending with its connection while the bus keeps the session — asks every running routine
   gated on the relocked level to stop, as it returns that level's controls (0x2F, below): what a
-  level gated lasts while that level stays unlocked.
+  level gated lasts while that level stays unlocked. A routine's level is its own, else its 0x31
+  row's — a routine gated through its row is stopped too.
 - **Fixed record sizes**, raw bytes; a record over 32 bytes is not built — and a `uds.Routine`
   configured with one anyway is never served (0x31), so no answer reads past its cell.
 - **An FB that stops running** (a hung thread) cannot wedge the server: each start times out and asks
@@ -692,7 +694,8 @@ period never taken as less than 50 ms (an interrupt-driven handler has none), so
   kept until the DTC is cleared, ages out, heals before confirming, or is displaced.
 - **Fixed shape**: each DID at its declared size, zero-filled while nothing has published it.
 - **No side door**: a `freeze` DID must be readable in every session 0x19 is served in, behind no
-  0x27 level but 0x19's own. Also refused: a DID that is not the node's, one named twice, more than 4.
+  0x27 level but 0x19's own — judged on the gate 0x22 enforces, the DID's own `read` within the
+  `[uds] services` 0x22 row. Also refused: a DID that is not the node's, one named twice, more than 4.
 - **Fits the transport**: generation refuses an `[isotp] max_message` (520 by default) that cannot
   hold the 0x19 02 / 0A list, a fault's 0x19 04 snapshot or its 0x19 06 extended data
   (REQ-CAN-TP-022, [can-tp.md](can-tp.md) §2).

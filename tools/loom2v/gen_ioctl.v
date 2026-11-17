@@ -98,11 +98,10 @@ fn sess_and(a u8, b u8) u8 {
 }
 
 // io_gate: the gate the server enforces for DID d's control — its sessions within the 0x2F row's
-// (the default table's or a configured one), and its level, else the row's
+// (the default table's or a configured one), and its level, else the row's (access_gate)
 fn io_gate(m Model, d DidCfg) (u8, u8) {
 	row, _ := svc_row(m, 0x2F)
-	level := if d.control_security != 0 { d.control_security } else { row.security }
-	return sess_and(d.control_sessions, row.sessions), level
+	return access_gate(d.control_sessions, d.control_security, row)
 }
 
 // IoBounds: a controlled signal's range and default as values of its field
@@ -273,8 +272,7 @@ fn validate_io_controls(m Model) {
 		io_bounds(si) or { panic('loom2v: ${h}: "${d.signal}" ${err}') }
 		// the 0x6F answer carries the value, and 00 is always accepted: a control gate weaker than
 		// the read's would read through a 0x22 refusal
-		rs := sess_and(d.read_sessions, r22.sessions)
-		rl := if d.read_security != 0 { d.read_security } else { r22.security }
+		rs, rl := access_gate(d.read_sessions, d.read_security, r22)
 		cs, cl := io_gate(m, d)
 		if rs != 0 && cs & ~rs != 0 {
 			panic('loom2v: ${h} is accepted in a session the DID\'s read refuses — its answer carries the value 0x22 would not show; narrow `session`')

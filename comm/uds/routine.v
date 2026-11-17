@@ -202,10 +202,11 @@ fn (mut s Server) stop_routines() {
 	}
 }
 
-// stop_relocked_routines: a security level was relocked without a session entry — every routine
-// gated on it that its FB may still be running is asked to stop, as its controls are returned
-// (io_control.v): level `level` relocked (`others` false), or every level but `level` (`others`
-// true: a key unlocked `level`, and 0x27 holds one). No answer can be owed for such a routine: a key
+// stop_relocked_routines: end_levels' share for the routines (io_control.v) — every routine gated on
+// a level the relock ends (relock_ends: `level`, or every level but `level` when `others`) that its
+// FB may still be running is asked to stop, as the controls are returned. A routine's `security` is
+// its EFFECTIVE level, its own else its 0x31 service row's (generation, gen_routine.v routine_gate),
+// so a routine gated through the row is stopped too. No answer can be owed for such a routine: a key
 // is dropped while an answer is owed, and the network tester whose unlock ends had its own owed
 // answer abandoned first (comm/diag remote_dropped).
 fn (mut s Server) stop_relocked_routines(level u8, others bool) {
@@ -213,9 +214,7 @@ fn (mut s Server) stop_relocked_routines(level u8, others bool) {
 		if i >= max_routines {
 			break
 		}
-		sec := s.routines[i].security
-		hit := if others { sec != 0 && sec != level } else { level != 0 && sec == level }
-		if hit && s.routines[i].may_run() {
+		if relock_ends(s.routines[i].security, level, others) && s.routines[i].may_run() {
 			s.ask_stop(i)
 		}
 	}

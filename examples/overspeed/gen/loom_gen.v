@@ -198,17 +198,17 @@ mut:
 }
 
 fn diag_refresh_diag(mut srv uds.Server) {
-	mut vehicle_speed_did := sig.VehicleSpeed{}
-	if osal.ioc_acquire2(vehicle_speed_ch, &vehicle_speed_did, u8(sizeof(vehicle_speed_did))) {
-		srv.dids[1].data[0] = u8(vehicle_speed_did.kph >> 8)
-		srv.dids[1].data[1] = u8(vehicle_speed_did.kph)
+	mut v_1 := sig.VehicleSpeed{} // VehicleSpeed
+	if osal.ioc_acquire2(vehicle_speed_ch, &v_1, u8(sizeof(v_1))) {
+		srv.dids[1].data[0] = u8(v_1.kph >> 8)
+		srv.dids[1].data[1] = u8(v_1.kph)
 		srv.dids[1].len = 2
 	}
-	mut warn_lamp_did := sig.WarnLamp{}
-	warn_lamp_have := osal.ioc_acquire2(warn_lamp_ch, &warn_lamp_did, u8(sizeof(warn_lamp_did)))
-	srv.io_note(0, if warn_lamp_did.on { i64(1) } else { i64(0) }, warn_lamp_have)
-	warn_lamp_pub := srv.io_published(0)
-	srv.dids[6].data[0] = if warn_lamp_pub != 0 { u8(1) } else { u8(0) }
+	mut v_6 := sig.WarnLamp{} // WarnLamp
+	v_6_have := osal.ioc_acquire2(warn_lamp_ch, &v_6, u8(sizeof(v_6)))
+	srv.io_note(0, if v_6.on { i64(1) } else { i64(0) }, v_6_have)
+	v_6_pub := srv.io_published(0)
+	srv.dids[6].data[0] = if v_6_pub != 0 { u8(1) } else { u8(0) }
 	srv.dids[6].len = 1
 }
 

@@ -1641,17 +1641,20 @@ fn did_refresh_fn(m Model, tp string) []string {
 		}
 		si := m.sig_of[did.signal] or { continue }
 		f := snake(did.signal)
-		out << '\tmut ${f}_did := sig.${did.signal}{}'
+		// the locals are named by the DID's index, as the target's (diag_target_fns): several live
+		// DIDs may read one signal
+		v := 'v_${idx}'
+		out << '\tmut ${v} := sig.${did.signal}{} // ${did.signal}'
 		if k := io_index(m, did.signal) {
 			// a controlled signal: the FB's value noted for 0x2F 02, and the DID reads what is
 			// published — the control's value, the FB's, or the initial value before its first
-			out << '\t${f}_have := osal.${acquire_fn(si.transport)}(${f}_ch, &${f}_did, u8(sizeof(${f}_did)))'
-			out << '\tsrv.io_note(${k}, ${as_i64(si.val_type, '${f}_did.${si.val_field}', false)}, ${f}_have)'
-			out << did_io_encode_lines(idx, k, f, si.val_type)
+			out << '\t${v}_have := osal.${acquire_fn(si.transport)}(${f}_ch, &${v}, u8(sizeof(${v})))'
+			out << '\tsrv.io_note(${k}, ${as_i64(si.val_type, '${v}.${si.val_field}', false)}, ${v}_have)'
+			out << did_io_encode_lines(idx, k, v, si.val_type)
 			continue
 		}
-		out << '\tif osal.${acquire_fn(si.transport)}(${f}_ch, &${f}_did, u8(sizeof(${f}_did))) {'
-		out << did_encode_lines(idx, '${f}_did.${si.val_field}', si.val_type, '\t\t')
+		out << '\tif osal.${acquire_fn(si.transport)}(${f}_ch, &${v}, u8(sizeof(${v}))) {'
+		out << did_encode_lines(idx, '${v}.${si.val_field}', si.val_type, '\t\t')
 		out << '\t}'
 	}
 	out << '}'

@@ -189,65 +189,51 @@ pub fn (mut s Server) io_note(i int, fb i64, have bool) {
 	s.ios[i].fb_have = have
 }
 
-// relocked: security level `level` was relocked without a session entry (comm/diag: the network
-// tester that held it disconnected) — what it gated ends: every control gated on it is returned and
-// every routine gated on it asked to stop. 0 relocks nothing.
-pub fn (mut s Server) relocked(level u8) {
-	s.io_relocked(level)
-	s.stop_relocked_routines(level, false)
+// relock: security level `level` ends without a session entry (comm/diag: the network tester that
+// held it disconnected) — the unlock is cleared where it is that level, every control gated on it is
+// returned and every routine gated on it asked to stop. 0 relocks nothing. The one way an unlock is
+// dropped outside a session entry, so nothing it gated outlives it.
+pub fn (mut s Server) relock(level u8) {
+	s.end_levels(level, false)
 }
 
-// io_relocked: relocked's share for the controls — every control gated on `level` is returned
-fn (mut s Server) io_relocked(level u8) {
-	if level == 0 {
-		return
+// end_levels: the gates a relock ends (relock_ends) — level `level` (`others` false), or every level
+// but `level` (`others` true: a key unlocked `level`, and 0x27 holds one): the unlock where it is
+// one of them, every control gated on one returned, every routine gated on one asked to stop
+fn (mut s Server) end_levels(level u8, others bool) {
+	if relock_ends(s.unlocked, level, others) {
+		s.unlocked = 0
 	}
+	s.io_return_where(level, others, 0)
+	s.stop_relocked_routines(level, others)
+}
+
+// relock_ends: whether a gate needing level `sec` (0 = none) ends when level `level` is relocked
+// (`others` false; 0 relocks nothing) or every level but `level` is (`others` true) — the one rule
+// for the unlock, the controls and the routines
+fn relock_ends(sec u8, level u8, others bool) bool {
+	return if others { sec != 0 && sec != level } else { level != 0 && sec == level }
+}
+
+// io_ends: whether control `c` goes back to the ECU — on a session entry (`session` != 0) a return
+// to default returns every control, and any other entry, re-entering the active session included,
+// relocks security, so a control that needs a level is returned, and so is one whose sessions leave
+// out the new session; else (`session` 0) when a relock ends its level (relock_ends)
+fn io_ends(c &IoControl, level u8, others bool, session u8) bool {
+	if session != 0 {
+		return session == session_default || c.security != 0 || !in_mask(c.sessions, session)
+	}
+	return relock_ends(c.security, level, others)
+}
+
+// io_return_where: every control io_ends names back to the ECU — a relock (end_levels), a session
+// entry (enter_session), a reset (reset_state, as a return to the default session)
+fn (mut s Server) io_return_where(level u8, others bool, session u8) {
 	for i in 0 .. s.nio {
 		if i >= max_ios {
 			break
 		}
-		if s.ios[i].security == level {
-			s.ios[i].held = 0
-		}
-	}
-}
-
-// io_return_all: every control back to the ECU (a reset, a return to the default session).
-fn (mut s Server) io_return_all() {
-	for i in 0 .. s.nio {
-		if i >= max_ios {
-			break
-		}
-		s.ios[i].held = 0
-	}
-}
-
-// io_session_entered: a session entry (enter_session). A return to default returns every control;
-// any other entry, re-entering the active session included, relocks security, so a control that
-// needs a level is returned, and so is one whose sessions leave out the new session.
-fn (mut s Server) io_session_entered(session u8) {
-	if session == session_default {
-		s.io_return_all()
-		return
-	}
-	for i in 0 .. s.nio {
-		if i >= max_ios {
-			break
-		}
-		if s.ios[i].security != 0 || !in_mask(s.ios[i].sessions, session) {
-			s.ios[i].held = 0
-		}
-	}
-}
-
-// io_unlocked: a correct key unlocked `level`, relocking whatever level was unlocked before (0x27
-// holds one) — a control gated on another level is returned.
-fn (mut s Server) io_unlocked(level u8) {
-	for i in 0 .. s.nio {
-		if i >= max_ios {
-			break
-		}
-		if s.ios[i].security != 0 && s.ios[i].security != level {
+		if io_ends(&s.ios[i], level, others, session) {
 			s.ios[i].held = 0
 		}
 	}

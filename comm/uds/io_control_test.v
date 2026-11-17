@@ -397,19 +397,47 @@ fn test_a_relock_returns_the_controls_it_gated() {
 	g1, _ := s.io_held(1)
 	g0, _ := s.io_held(0)
 	assert !g1 && g0
-	// relocked
+	// relock: the unlock cleared where it is that level, its controls returned
 	io_unlock(mut s, 1)
 	io_set(mut s, 0x0201, 100)
-	s.relocked(0)
+	s.relock(0)
 	r1, _ := s.io_held(1)
-	assert r1
-	s.relocked(2)
+	assert r1 && s.unlocked == 1
+	s.relock(2)
 	r2, _ := s.io_held(1)
-	assert r2
-	s.relocked(1)
+	assert r2 && s.unlocked == 1, 'another level\'s relock dropped the unlock'
+	s.relock(1)
 	r3, _ := s.io_held(1)
 	r4, _ := s.io_held(0)
 	assert !r3 && r4
+	assert s.unlocked == 0, 'the relock left the level unlocked'
+	assert io_set(mut s, 0x0201, 100) == [u8(0x7F), 0x2F, 0x33]
+}
+
+// the one rule a relock and a session entry return controls by (io_ends, relock_ends): a level, every
+// other level, a session entry relocking security, a return to default
+fn test_which_controls_a_gate_change_returns() {
+	gated := IoControl{
+		sessions: in_extended | in_safety
+		security: 1
+	}
+	open := IoControl{
+		sessions: in_extended
+	}
+	// a relock of level 1, of 0 (nothing), of 2
+	assert io_ends(&gated, 1, false, 0) && !io_ends(&open, 1, false, 0)
+	assert !io_ends(&gated, 0, false, 0) && !io_ends(&gated, 2, false, 0)
+	// every level but 2 (a key unlocked 2), every level but 1
+	assert io_ends(&gated, 2, true, 0) && !io_ends(&open, 2, true, 0)
+	assert !io_ends(&gated, 1, true, 0)
+	// a session entry: a gated control always, an open one where the session leaves it out
+	assert io_ends(&gated, 0, false, session_extended)
+	assert !io_ends(&open, 0, false, session_extended) && io_ends(&open, 0, false, session_safety)
+	// a return to default returns even a control its sessions would keep
+	assert io_ends(&IoControl{ sessions: in_default | in_extended }, 0, false, session_default)
+	// the unlock and the routines read the same rule
+	assert relock_ends(1, 1, false) && !relock_ends(0, 0, false) && !relock_ends(2, 1, false)
+	assert relock_ends(2, 1, true) && !relock_ends(1, 1, true) && !relock_ends(0, 1, true)
 }
 
 // REQ-DIAG-107: a functional 0x2F is neither answered nor acted on, and keeps the session alive

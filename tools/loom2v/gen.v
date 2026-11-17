@@ -5878,10 +5878,11 @@ fn fault_entries(m Model) int {
 // validate_fault_snapshots: every owner's snapshot rules. A snapshot names declared [[did]]s,
 // each at most once, at most fault.max_freeze of them, none empty. And it is no side door around
 // DID access (docs/diagnostics.md §6): 0x19 04 hands out what the DIDs hold under 0x19's own
-// gate, so each DID must be readable in every session 0x19 is served in, behind no 0x27 level but
-// the one 0x19's row itself demands.
+// gate, so each DID must be readable — by the gate 0x22 enforces, its own within 0x22's row — in
+// every session 0x19 is served in, behind no 0x27 level but the one 0x19's row itself demands.
 fn validate_fault_snapshots(m Model) {
 	row, _ := svc_row(m, 0x19)
+	r22, _ := svc_row(m, 0x22)
 	// a 0 mask is every session — every one an application server enters (never programming)
 	app := uds.in_default | uds.in_extended | uds.in_safety
 	served := if row.sessions == 0 { app } else { row.sessions & app }
@@ -5904,12 +5905,14 @@ fn validate_fault_snapshots(m Model) {
 			if d.len == 0 {
 				panic('loom2v: [[fault]] "${f.name}": freeze DID 0x${id.hex()} is not a [[did]] of this node — a snapshot is read from the diagnostic server\'s own DIDs')
 			}
-			readable := if d[0].read_sessions == 0 { app } else { d[0].read_sessions }
+			// judged on the gate 0x22 enforces: the DID's own within 0x22's row (access_gate)
+			sessions, level := access_gate(d[0].read_sessions, d[0].read_security, r22)
+			readable := if sessions == 0 { app } else { sessions }
 			if readable & served != served {
 				panic('loom2v: [[fault]] "${f.name}": freeze DID 0x${id.hex()} is not readable in every session 0x19 is served in — 0x19 04 would hand it out where 0x22 refuses it')
 			}
-			if d[0].read_security != 0 && d[0].read_security != row.security {
-				panic('loom2v: [[fault]] "${f.name}": freeze DID 0x${id.hex()} is read behind 0x27 level ${d[0].read_security}, which 0x19 does not demand — 0x19 04 would hand it out without the unlock')
+			if level != 0 && level != row.security {
+				panic('loom2v: [[fault]] "${f.name}": freeze DID 0x${id.hex()} is read behind 0x27 level ${level}, which 0x19 does not demand — 0x19 04 would hand it out without the unlock')
 			}
 		}
 		for i, n in fault_freeze_lens(m, f) {

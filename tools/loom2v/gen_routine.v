@@ -238,14 +238,13 @@ fn validate_routines(m Model, doc toml.Doc) map[string]string {
 		}
 		// the gates: its own and the 0x31 row's, which a request passes both of — so what decides is
 		// their intersection, the sessions it can actually be started in, and either's level
-		eff := routine_sessions(r, row)
+		eff, level := routine_gate(r, row)
 		if eff == 0 {
 			panic('loom2v: ${h}: its sessions share none with [uds] services 0x31 — it could never be reached (REQ-DIAG-087)')
 		}
 		if row.security != 0 && r.security != 0 && int(row.security) != r.security {
 			panic('loom2v: ${h} needs security ${r.security}, but [uds] services 0x31 needs ${row.security} — one unlock cannot satisfy both (REQ-DIAG-087)')
 		}
-		level := if r.security != 0 { r.security } else { int(row.security) }
 		if eff & uds.in_default != 0 && level == 0 {
 			panic('loom2v: ${h} can be started from the default session with no 0x27 level — a stray request on a quiet bus must not run a routine; leave the default session out (of the routine or its [uds] services 0x31 row) or name a security level (REQ-DIAG-087)')
 		}
@@ -286,13 +285,17 @@ fn validate_routines(m Model, doc toml.Doc) map[string]string {
 	return fbs
 }
 
-// routine_sessions: the sessions routine r can actually be started in — its own, narrowed by the
-// 0x31 service row's (0 = every session, on either side)
-fn routine_sessions(r RoutineCfg, row SvcCfg) u8 {
+// routine_gate: the gate a start of routine r passes — the sessions it can actually be started in,
+// its own narrowed by the 0x31 service row's (0 = every session, on either side), and the level it
+// needs, its own else the row's (io_gate's rule for a control). The level is the routine's
+// `security` on the server (routine_config_lines), so a relock of a level a routine is gated on
+// through its row stops it too (comm/uds stop_relocked_routines).
+fn routine_gate(r RoutineCfg, row SvcCfg) (u8, int) {
 	all := uds.in_default | uds.in_extended | uds.in_safety
 	own := if r.sessions == 0 { all } else { r.sessions }
 	rs := if row.sessions == 0 { all } else { row.sessions }
-	return own & rs
+	level := if r.security != 0 { r.security } else { int(row.security) }
+	return own & rs, level
 }
 
 // routine_enterable: the sessions a tester can bring the server into — default (power-on), and
@@ -450,12 +453,14 @@ fn routine_write_lines(m Model, r RoutineCfg) []string {
 // routine_config_lines: the routines configured on server `srv` (conn_init_lines)
 fn routine_config_lines(m Model, srv string) []string {
 	mut g := []string{}
+	row, _ := svc_row(m, 0x31)
 	for i, r in m.routines {
+		_, level := routine_gate(r, row)
 		g << '\t${srv}.routines[${i}] = uds.Routine{ // "${r.name}" (docs/diagnostics.md §3.1)'
 		g << '\t\tid:          u16(0x${r.id:04X})'
 		g << '\t\tsessions:    u8(0x${r.sessions.hex()})'
-		if r.security != 0 {
-			g << '\t\tsecurity:    u8(${r.security})'
+		if level != 0 {
+			g << '\t\tsecurity:    u8(${level})'
 		}
 		if r.async {
 			g << '\t\tasync:       true'

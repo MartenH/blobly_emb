@@ -667,14 +667,14 @@ fn test_a_relock_asks_the_routines_it_gated_to_stop() {
 	assert rcall(mut s, rq(0x01, rid_async, [])) == pending_78
 	fb.dispatch(mut s, 1, .running, 0, [])
 	assert step(mut s, 256)[0] == 0x71
-	s.relocked(0)
-	s.relocked(2)
+	s.relock(0)
+	s.relock(2)
 	assert fb.dispatch(mut s, 1, .none, 0, []) == .none
-	s.relocked(1)
+	s.relock(1)
 	assert fb.dispatch(mut s, 1, .stopped, 0, []) == .stop
 	assert rcall(mut s, rq(0x01, rid_sync, [u8(1)])) == pending_78
 	fb_sync.dispatch(mut s, 0, .running, 0, [])
-	s.relocked(1)
+	s.relock(1)
 	assert fb_sync.dispatch(mut s, 0, .none, 0, []) == .none, 'an ungated routine was stopped'
 }
 

@@ -232,8 +232,8 @@ fn test_the_host_bridge_substitutes_before_its_encode() {
 		'if osal.ioc_acquire2(warn_lamp_ch, &warn_lamp, u8(sizeof(warn_lamp))) || warn_lamp_io_on {',
 		'warn_lamp.on = warn_lamp_io_v != 0',
 		'lamp_frame_warn_lamp_set(mut tx_lamp_frame.data, if warn_lamp.on {', 'tx_lamp_frame_any = true'])
-	assert g.contains('srv.io_note(0, if warn_lamp_did.on { i64(1) } else { i64(0) }, warn_lamp_have)')
-	assert g.contains('srv.dids[6].data[0] = if warn_lamp_pub != 0 { u8(1) } else { u8(0) }')
+	assert g.contains('srv.io_note(0, if v_6.on { i64(1) } else { i64(0) }, v_6_have)')
+	assert g.contains('srv.dids[6].data[0] = if v_6_pub != 0 { u8(1) } else { u8(0) }')
 	assert g.contains('st.conn_diag.server.ios[0] = uds.IoControl{')
 	assert !g.contains('io_ok'), 'the host bridge has no conditions seam'
 	// the committed glue is this one (CI's freshness gate holds it there)
@@ -311,6 +311,17 @@ fn test_a_control_the_server_cannot_apply_is_refused() {
 	io_refused(io_target('row_level', io_nvm + '\n[uds]\n' + rows('"0x27" = {}\n"0x2F" = { security = 2 }') + io_conn +
 		io_did('0xF1A0', 'Workload', 'control = { parameters = ["short_term_adjustment"], security = 1 }')),
 		'control needs security 1, but [uds] services 0x2f needs 2')
+	// judged on the gate the server enforces: the 0x2F row's level is the control's, and 0x27
+	// unlocks only in extended, which the control's own session leaves out
+	row_safety := '"0x27" = {}\n"0x2F" = { sessions = ["extended", "safety"], security = 1 }'
+	io_refused(io_target('row_level_safety', io_nvm + '\n[uds]\n' + rows(row_safety) + io_conn +
+		io_did('0xF1A0', 'Workload', 'control = { parameters = ["short_term_adjustment"], session = ["safety"] }')),
+		'control needs security 1 but the sessions it is accepted in (its own and [uds] services 0x2f\'s) leave out the extended session')
+	// the same rule for every DID access: a read the 0x22 row gates
+	read_row := '\n[uds.services]\n"0x10" = {}\n"0x22" = { sessions = ["extended", "safety"], security = 1 }\n"0x27" = {}\n"0x3E" = {}\n'
+	io_refused(io_target('read_row_level', io_nvm + '\n[uds]\n' + read_row + io_conn +
+		'\n[[did]]\nid     = 0xF1A1\nsignal = "Workload"\nread   = { session = ["safety"] }\n'),
+		'read needs security 1 but the sessions it is accepted in')
 	io_refused(io_target('no_row', '\n[uds]\n' + rows('') + io_conn + io_did('0xF1A0', 'Workload',
 		io_params)), 'leaves out 0x2f — nothing could control it')
 	io_refused(io_target('row_no_control', '\n[uds]\n' + rows('"0x2F" = {}') + io_conn), 'no [[did]] declares a `control`')
@@ -391,8 +402,9 @@ fn test_a_signed_control_on_the_target() {
 		'(f64(i32(xcore_m4_temp_pub))'])
 }
 
-// io_overspeed: examples/overspeed with BrakeLost made a signed i16 under a control, generated and
-// BUILT in a scratch directory (the host bridge's integer and signed paths, compiled) — its glue
+// io_overspeed: examples/overspeed with BrakeLost made a signed i16 under a control, a second live
+// DID on it and on VehicleSpeed, generated and BUILT in a scratch directory (the host bridge's
+// integer and signed paths, and a refresh reading one signal into two DIDs, compiled) — its glue
 fn io_overspeed_signed() string {
 	repo := @VMODROOT
 	ex := io_example('overspeed')
@@ -413,7 +425,8 @@ fn io_overspeed_signed() string {
 		os.write_file(os.join_path(tmp, 'app', f), src) or { panic(err) }
 	}
 	cfg := io_replace(os.read_file(os.join_path(ex, 'ecu.toml')) or { panic(err) }, 'name = "BrakeLost"\nfields = { count = "u16" }',
-		'name = "BrakeLost"\nfields = { count = "i16" }') + io_did('0xF1B1', 'BrakeLost', io_params)
+		'name = "BrakeLost"\nfields = { count = "i16" }') + io_did('0xF1B1', 'BrakeLost', io_params) +
+		io_did('0xF1B2', 'BrakeLost', '') + io_did('0xF1A1', 'VehicleSpeed', '')
 	ecu := os.join_path(tmp, 'ecu.toml')
 	os.write_file(ecu, cfg) or { panic(err) }
 	dbc_src := io_replace(os.read_file(os.join_path(ex, 'bus.dbc')) or { panic(err) }, 'SG_ BrakeLost : 8|16@1+ (1,0) [0|65535] "" Tester',
@@ -440,11 +453,17 @@ fn io_overspeed_signed() string {
 }
 
 // a signed integer field on the host bridge: the table's sign, the refresh noting the typed field,
-// the field written back as its own type before the encode — and the whole node compiles
+// the field written back as its own type before the encode — and the whole node compiles, with two
+// live DIDs on the controlled signal, each reading the published value (REQ-DIAG-103), and two on
+// an uncontrolled one
 fn test_a_signed_control_on_the_host_bridge_builds() {
 	g := io_overspeed_signed()
+	for want in ['v_8_pub := srv.io_published(1)', 'srv.dids[8].data[0] = u8(v_8_pub >> 8)',
+		'if osal.ioc_acquire2(vehicle_speed_ch, &v_9, u8(sizeof(v_9))) {'] {
+		assert g.contains(want), 'missing: ${want}'
+	}
 	for want in ['st.conn_diag.server.ios[1] = uds.IoControl{', 'signed:   true', 'lo:       i64(-100)',
-		'hi:       i64(100)', 'srv.io_note(1, i64(brake_lost_did.count), brake_lost_have)'] {
+		'hi:       i64(100)', 'srv.io_note(1, i64(v_7.count), v_7_have)'] {
 		assert g.contains(want), 'missing: ${want}'
 	}
 	io_in_order(g, ['brake_lost_io_on, brake_lost_io_v := st.conn_diag.server.io_held(1)',
