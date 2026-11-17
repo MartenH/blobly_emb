@@ -343,6 +343,17 @@ fn sa_levels(m Model) u8 {
 	return mask
 }
 
+// sa_level_count: how many 0x27 levels the node serves
+fn sa_level_count(m Model) int {
+	mut n := 0
+	for i in 0 .. uds.max_security_level {
+		if sa_levels(m) & (u8(1) << i) != 0 {
+			n++
+		}
+	}
+	return n
+}
+
 // svc_listed: the server answers `sid` if this build performs it — the default table answers
 // everything built
 fn svc_listed(m Model, sid u8) bool {

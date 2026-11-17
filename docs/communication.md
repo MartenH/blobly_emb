@@ -277,8 +277,8 @@ functional request must not send withheld. The plan these belong to is
 `0x27` (extended or programming session, physical requests only) unlocks the levels the `[[did]]`
 gates name: requestSeed `27 2L-1` returns a 4-byte seed, sendKey `27 2L` checks the key
 against that one seed, which a wrong key spends. After `security_attempts` wrong keys
-(default 3) the answer is `0x36` and no seed is issued for `security_delay_ms` (default
-10 s, `0x37`). Each level's wrong keys since its last correct key survive an ECU reset, so a
+(default 3) the answer is `0x36` and no seed of that level is issued for `security_delay_ms`
+(default 10 s, `0x37`; another level's seed is not delayed). Each level's wrong keys since its last correct key survive an ECU reset, so a
 reset after a wrong key costs the delay too, while a reset after a correct key or a boot unlocks at
 once; on a target they survive a power cycle as well, kept in the node's NvM journal (one record,
 written only when it changes, before the answer reporting it is sent — at most `security_attempts`

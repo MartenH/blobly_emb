@@ -3,8 +3,8 @@ module uds
 // @verifies REQ-DIAG-065 REQ-DIAG-067 REQ-DIAG-068
 // (the 0x27 state's record — each level's wrong keys since its last correct key, saturating at the
 //  configured limit: restored at start-up as after a reset, a saturated count as a lockout from
-//  boot, a record of another layout restoring nothing, a count of an unserved level arming the
-//  delay once and dropped by the first pass; written only when it changes — a wrong key below the
+//  boot, each delay its level's, a record of another layout restoring nothing, a count of an
+//  unserved level arming nothing and dropped by the first pass; written only when it changes — a wrong key below the
 //  limit, a correct key clearing a count — so at most the attempts per level between correct keys plus one per correct
 //  key, whatever the resets, power cycles, refused and unconfirmed writes; a refused write changing
 //  no answer and retried until the store holds the record; a pass's write reported for the NM sleep
@@ -125,8 +125,13 @@ fn sp_store_with(rec []u8) SpStore {
 }
 
 fn sp_seed_answers(mut s Server) u8 {
+	return sp_seed_answer_of(mut s, 1)
+}
+
+// sp_seed_answer_of: level's seed requested in extended; 0 = a seed, else the NRC
+fn sp_seed_answer_of(mut s Server, level u8) u8 {
 	sp_call(mut s, [u8(0x10), 0x03])
-	r := sp_call(mut s, [u8(0x27), 0x01])
+	r := sp_call(mut s, [u8(0x27), 2 * level - 1])
 	return if r[0] == 0x67 { u8(0) } else { r[2] }
 }
 
@@ -224,10 +229,11 @@ fn test_a_restored_state_runs_as_after_a_reset() {
 	mut l := sp_server(mut g, 7_000_000)
 	l.persist_security(false)
 	assert g.puts == 0, 'a start-up over a saturated count wrote'
-	assert sp_seed_answers(mut l) == 0x37, 'a saturated count did not run the delay'
+	assert sp_seed_answer_of(mut l, 2) == 0x37, 'a saturated count did not run the delay'
+	assert sp_seed_answers(mut l) == 0, "level 2's count delayed level 1"
 	l.tick(7_999_999)
 	l.persist_security(false)
-	assert sp_seed_answers(mut l) == 0x37
+	assert sp_seed_answer_of(mut l, 2) == 0x37
 	l.tick(8_000_000)
 	l.persist_security(false)
 	assert g.puts == 0, 'the delay end wrote'
@@ -326,26 +332,53 @@ fn test_a_record_of_another_layout_restores_nothing() {
 	}
 }
 
-// REQ-DIAG-065: a count of a level this firmware no longer serves arms the delay at start-up, as
-// every stored count does, but is not restored (its correct key is refused, so nothing could clear
-// it in RAM); the first pass writes the record without it, so the next start-up is clean.
-fn test_a_count_of_a_level_no_longer_served_costs_one_start_up() {
+// REQ-DIAG-065: a count of a level this firmware no longer serves is not restored and arms nothing
+// (its seed is refused 0x12, so there is nothing to delay); the first pass writes the record without
+// it, once, and the next start-up finds nothing.
+fn test_a_count_of_a_level_no_longer_served_is_dropped_and_arms_nothing() {
 	mut f := sp_store_with(sp_record([u8(0), 0, 0, 0, 3]))
 	mut s := sp_server(mut f, 1_000_000)
 	assert s.sa_since[4] == 0 && s.sa_failed[4] == 0, 'an unserved level kept its count'
-	assert sp_seed_answers(mut s) == 0x37, 'a stored count did not arm the delay'
+	assert sp_seed_answers(mut s) == 0, 'an unserved count delayed a served level'
 	s.persist_security(false)
 	assert f.puts == 1 && sp_held(&f) == sp_record([]u8{}), 'the unserved count was not dropped'
 	s.persist_security(false)
 	assert f.puts == 1, 'the dropped record was written again'
-	s.tick(2_000_000)
-	assert sp_key(mut s, 1, true) == [u8(0x67), 0x02]
-	s.persist_security(false)
-	assert f.puts == 1, 'an unlock with nothing served counted wrote'
 	s = sp_server(mut f, 3_000_000)
-	assert sp_seed_answers(mut s) == 0, 'a start-up after the drop waited'
 	s.persist_security(false)
 	assert f.puts == 1, 'a clean start-up wrote'
+}
+
+// REQ-DIAG-065 / REQ-DIAG-033: a delay is its level's. A saturated count of level 2 restored at
+// start-up delays level 2's seed and not level 1's; a lockout of level 1 does not delay level 2's
+// seed; a reset with level 2 counted delays level 2 alone.
+fn test_a_delay_is_the_level_s_own() {
+	mut f := sp_store_with(sp_record([u8(0), 3]))
+	mut s := sp_server(mut f, 1_000_000)
+	sp_call(mut s, [u8(0x10), 0x03])
+	assert sp_call(mut s, [u8(0x27), 0x03]) == [u8(0x7F), 0x27, 0x37], 'level 2 restored no delay'
+	assert sp_key(mut s, 1, true) == [u8(0x67), 0x02], 'level 2 delayed level 1'
+	s.tick(1_500_000) // level 1's lockout will end at 2.5 s, level 2's delay at 2 s
+	assert sp_key(mut s, 1, false) == [u8(0x7F), 0x27, 0x35]
+	assert sp_key(mut s, 1, false) == [u8(0x7F), 0x27, 0x35]
+	assert sp_key(mut s, 1, false) == [u8(0x7F), 0x27, 0x36]
+	assert sp_call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x37]
+	s.tick(2_100_000) // level 2's delay over, level 1's lockout still running
+	assert sp_call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x37]
+	assert sp_key(mut s, 2, true) == [u8(0x67), 0x04], 'level 1 delayed level 2'
+	assert sp_key(mut s, 2, false) == [u8(0x7F), 0x27, 0x35]
+	s.tick(3_200_000)
+	s.reset_state() // level 2 counted, level 1 saturated: both delayed, each by its own count
+	s.tick(3_300_000)
+	assert sp_call(mut s, [u8(0x10), 0x03])[0] == 0x50
+	assert sp_call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x37]
+	assert sp_call(mut s, [u8(0x27), 0x03]) == [u8(0x7F), 0x27, 0x37]
+	s.tick(4_400_000)
+	assert sp_key(mut s, 1, true) == [u8(0x67), 0x02]
+	s.reset_state() // only level 2 counted now
+	s.tick(4_500_000)
+	assert sp_key(mut s, 1, true) == [u8(0x67), 0x02], 'a reset with level 2 counted delayed level 1'
+	assert sp_call(mut s, [u8(0x27), 0x03]) == [u8(0x7F), 0x27, 0x37]
 }
 
 // REQ-DIAG-065: a count above the limit (an update that lowered security_attempts) restores
@@ -506,9 +539,21 @@ fn test_an_unconfirmed_write_is_written_again() {
 }
 
 // sp_stored_counts: whether the store holds a record of this layout counting a served level (1, 2).
-fn sp_stored_counts(f &SpStore) bool {
+// sp_stored_count: whether the store holds a non-zero count of level i + 1 in this layout
+fn sp_stored_count(f &SpStore, i int) bool {
 	return f.len == sa_record_len && f.cell[0] == sa_record_format
-		&& f.cell[1] == u8(max_security_level) && (f.cell[2] != 0 || f.cell[3] != 0)
+		&& f.cell[1] == u8(max_security_level) && f.cell[2 + i] != 0
+}
+
+// sp_delays_follow: after a restart at `now`, each of levels 1 and 2 has its full delay armed exactly
+// when the store held a count of that level — its own delay, not the other's
+fn sp_delays_follow(s &Server, counted [2]bool, now u64) bool {
+	for i in 0 .. 2 {
+		if (s.sa_delay_until[i] == now + 1_000_000) != counted[i] {
+			return false
+		}
+	}
+	return true
 }
 
 fn sp_next(x u32) u32 {
@@ -523,7 +568,7 @@ fn sp_next(x u32) u32 {
 // writes and flushes, at the default limit and at 5 and 1: the store accepts no more writes than the
 // record changed (outside a restart), at most (attempts + 1) per correct key plus attempts per level
 // — no budget, no special flush; whenever a pass reports the state stored, the store holds the
-// record in RAM; and a restart arms the delay exactly when the store holds a count of a served level.
+// record in RAM; and a restart arms a level's delay exactly when the store holds a count of it.
 fn test_writes_stay_within_the_attempts_and_one_per_unlock() {
 	mut rng := u32(0xC0FF_EE11)
 	for limit in [u8(0), 5, 1] {
@@ -561,18 +606,18 @@ fn test_writes_stay_within_the_attempts_and_one_per_unlock() {
 						// an ECUReset the server answers and the owner performs: its flush, the restart
 						assert sp_call(mut s, [u8(0x11), 0x01]) == [u8(0x51), 0x01]
 						s.persist_security(true)
-						counted := sp_stored_counts(&f)
+						counted := [sp_stored_count(&f, 0), sp_stored_count(&f, 1)]!
 						now += 1000
 						s = sp_server_n(mut f, now, limit)
 						restarted = true
-						assert (s.sa_delay_until == now + 1_000_000) == counted, '${at}: ECUReset over ${sp_held(&f)}'
+						assert sp_delays_follow(&s, counted, now), '${at}: ECUReset over ${sp_held(&f)}'
 					}
 					8 {
-						counted := sp_stored_counts(&f)
+						counted := [sp_stored_count(&f, 0), sp_stored_count(&f, 1)]!
 						now += 1000
 						s = sp_server_n(mut f, now, limit) // a power cycle
 						restarted = true
-						assert (s.sa_delay_until == now + 1_000_000) == counted, '${at}: power cycle over ${sp_held(&f)}'
+						assert sp_delays_follow(&s, counted, now), '${at}: power cycle over ${sp_held(&f)}'
 					}
 					else {
 						k := (r >> 12) % 4
@@ -603,7 +648,7 @@ fn test_writes_stay_within_the_attempts_and_one_per_unlock() {
 // REQ-DIAG-068 / REQ-DIAG-065: a tester without the key — wrong keys to both levels, lockouts
 // waited out, resets, power cycles and a journal refusing and taking writes between them, for ever,
 // at the default limit and at 5 — writes at most the attempts per level, and once the store holds a
-// count every power cycle costs the delay (nothing but a correct key clears it).
+// count every power cycle costs that level's delay (nothing but a correct key clears it).
 fn test_wrong_keys_alone_write_at_most_the_attempts_per_level() {
 	mut rng := u32(0x5EED_0068)
 	for limit in [u8(0), 5] {
@@ -636,10 +681,11 @@ fn test_wrong_keys_alone_write_at_most_the_attempts_per_level() {
 					}
 				}
 				else {
-					counted := sp_stored_counts(&f)
+					counted := [sp_stored_count(&f, 0), sp_stored_count(&f, 1)]!
 					now += 1000
 					s = sp_server_n(mut f, now, limit)
-					if counted {
+					assert sp_delays_follow(&s, counted, now), 'a power cycle over ${sp_held(&f)}'
+					if counted[0] {
 						assert sp_seed_answers(mut s) == 0x37, 'a power cycle over a stored count bought fresh attempts'
 						delays++
 					}

@@ -568,12 +568,12 @@ before the loop, so before the first request.
   ECU reset; c ≥ `security_attempts` is a lockout: the full delay from boot, after which the level
   has its attempts again — the count kept as stored, never clamped (so a start-up writes nothing) —
   and it stays stored, costing the delay at every start-up, until that level's correct key. The
-  delay refuses every level's seed (0x37). So no reset or power cycle grants more than
-  `security_attempts` keys per lockout delay while the journal takes the state (a full one: below).
-  A count of a level the firmware no longer serves arms the delay at start-up as any stored count
-  does, but is not restored, since its correct key is refused and nothing could clear it in RAM; the
-  first pass writes the record without it (one write per such firmware update), so it costs one
-  start-up's delay. A count above the limit (an update that lowered `security_attempts`) reads as saturated.
+  delay is the level's own: 0x37 to its seed, never to another level's. So no reset or power cycle
+  grants more than `security_attempts` keys per level per lockout delay while the journal takes the
+  state (a full one: below). A count of a level the firmware no longer serves is not restored and
+  arms nothing (its seed is refused 0x12, and its correct key, so nothing could clear it); the first
+  pass writes the record without it (one write per such firmware update). A count above the limit
+  (an update that lowered `security_attempts`) reads as saturated.
 - **A full journal — never an erase for the write.** The write runs in the pass that served the key,
   before the answer is pumped, so it is one append and never an erase (REQ-DIAG-062): an erase there
   would hold the 0x35 / 0x36 for 1–2 s on a single-bank H723/H735, and on the H755 stall the CM4

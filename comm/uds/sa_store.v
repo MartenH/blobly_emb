@@ -30,8 +30,8 @@ module uds
 // after the pass's requests, so a count is in the journal before the 0x35 / 0x36 reporting it is
 // pumped onto CAN; the journal is then current after every accepted write, and an ECUReset or the
 // programming handoff needs no special flush. The price is stated: a count at the limit stays stored
-// until that level's correct key, so every start-up meanwhile runs the full delay — what waiting
-// would have cost, never more.
+// until that level's correct key, so every start-up meanwhile runs that level's full delay — what
+// waiting would have cost, never more, and never a delay of another level's seed.
 //
 // A write the journal refuses changes no answer: the key was judged, and the count in RAM counts. It
 // is retried after `retry_us`, and at once by every flush, until the store holds the record. Nothing
@@ -88,12 +88,12 @@ fn (s &Server) sa_same(r [sa_record_len]u8) bool {
 // from boot, since the clock that timed it did not survive — as after an ECU reset; a count at or
 // above the limit is a lockout: the full delay from boot, after which the level has its attempts
 // again; either way the count since the last correct key is kept as stored, never clamped, so the
-// record in RAM is what flash holds and a start-up writes nothing; 0 is a clean boot. A non-zero
-// count of a level this firmware no longer serves arms the delay too (as any stored count does) but
-// is not restored: its correct key is refused, so nothing could clear it in RAM. The first pass then
-// writes the record without it (one write per such firmware update), so it costs one start-up's
-// delay, never one at every start-up. An absent record, or one of another length or header, restores
-// nothing. The record of what WAS restored becomes the last stored one.
+// record in RAM is what flash holds and a start-up writes nothing; 0 is a clean boot. Each delay is
+// its level's. A non-zero count of a level this firmware no longer serves is not restored and arms
+// nothing (its seed is refused 0x12, so there is nothing to delay, and its correct key is refused,
+// so nothing could clear it): the first pass writes the record without it, one write per such
+// firmware update. An absent record, or one of another length or header, restores nothing. The
+// record of what WAS restored becomes the last stored one.
 pub fn (mut s Server) restore_persisted_security() {
 	mut unserved := false
 	if s.sa_store.get != unsafe { nil } {
@@ -104,7 +104,6 @@ pub fn (mut s Server) restore_persisted_security() {
 				if s.security_levels & (u8(1) << i) != 0 {
 					s.sa_since[i] = b[2 + i]
 				} else if b[2 + i] != 0 {
-					s.sa_arm_delay = true
 					unserved = true
 				}
 			}

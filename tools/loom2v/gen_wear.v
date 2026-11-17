@@ -101,13 +101,8 @@ fn journal_wear(m Model, doc toml.Doc) Wear {
 	// wrong keys a tester sends — so attempts + 1 per unlock, plus the `attempts` per level a tester
 	// may leave counted after the last one (once over the lifetime: nothing but a correct key clears
 	// them, and they saturate)
-	sa_attempts := if m.uds.security_attempts > 0 { m.uds.security_attempts } else { int(uds.default_sa_attempts) }
-	mut sa_nlevels := 0
-	for i in 0 .. uds.max_security_level {
-		if sa_levels(m) & (u8(1) << i) != 0 {
-			sa_nlevels++
-		}
-	}
+	sa_attempts := int(uds.attempts_of(u8(m.uds.security_attempts)))
+	sa_nlevels := sa_level_count(m)
 	life_hours := if m.nvm.min_years > 0 { f64(m.nvm.min_years) * hours_per_year } else { hours_per_year }
 	sa_writes := if sa {
 		f64(a.unlocks) / 24.0 * f64(sa_attempts + 1) + f64(sa_nlevels * sa_attempts) / life_hours

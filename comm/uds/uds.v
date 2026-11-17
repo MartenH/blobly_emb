@@ -242,8 +242,11 @@ pub mut:
 	// wrong keys per level since its last correct key, rising to the attempt limit and no further
 	// (sa_failed restarts when a lockout starts; this does not): what the journal holds (sa_store.v)
 	sa_since        [max_security_level]u8
-	sa_delay_until  u64
-	sa_arm_delay    bool // start the delay at the next tick (boot / reset: the clock is not known yet)
+	// per level: when its lockout delay ends, and the levels whose delay starts at the next tick
+	// (bit L-1; a start-up or a reset, whose clock is not known yet). A level's wrong keys cost that
+	// level's delay only, so a level nobody unlocks never delays another's seed.
+	sa_delay_until [max_security_level]u64
+	sa_arm         u8
 	// The 0x27 state's persistence (sa_store.v): the journal seam (nil put = RAM only, the host),
 	// the record last stored and whether the store is known to hold it, when a refused write is
 	// retried, and whether a pass wrote since take_sa_wrote last asked.
@@ -280,10 +283,9 @@ pub fn (mut s Server) init(resp_cap int) {
 // per served level with a wrong key counted since its last correct key, the delay is armed (the
 // full delay, from the next tick: the clock that timed a running one is not trusted across it), and
 // the level's lockout count is that count below the attempt limit, or 0 at or above it — after the
-// delay of a saturated count the level has its attempts again, as after any lockout. A level with
-// nothing counted, or not served, arms nothing here (a start-up arms the delay for a stored count of
-// a level no longer served as well, without restoring it). A loop over the levels: the target has no
-// heap.
+// delay of a saturated count the level has its attempts again, as after any lockout. The delay is
+// that level's: another level's seed is not delayed. A level with nothing counted, or not served,
+// arms nothing. A loop over the levels: the target has no heap.
 fn (mut s Server) sa_restart() {
 	limit := s.sa_max_attempts()
 	for i in 0 .. max_security_level {
@@ -291,7 +293,7 @@ fn (mut s Server) sa_restart() {
 			continue
 		}
 		s.sa_failed[i] = if s.sa_since[i] < limit { s.sa_since[i] } else { u8(0) }
-		s.sa_arm_delay = true
+		s.sa_arm |= u8(1) << i
 	}
 }
 
@@ -308,7 +310,7 @@ pub fn (mut s Server) reset_state() {
 	s.unlocked = 0
 	s.sa_level = 0
 	s.session_epoch++
-	s.sa_arm_delay = false
+	s.sa_arm = 0
 	s.sa_restart()
 	s.normal_tx_off = false
 	s.normal_rx_off = false
@@ -322,9 +324,13 @@ pub fn (mut s Server) reset_state() {
 // S3 returns to default (ISO 14229-2). Call once per owner pass, before handling requests.
 pub fn (mut s Server) tick(now_us u64) {
 	s.now_us = now_us
-	if s.sa_arm_delay {
-		s.sa_arm_delay = false
-		s.sa_delay_until = now_us + s.sa_delay()
+	if s.sa_arm != 0 {
+		for i in 0 .. max_security_level {
+			if s.sa_arm & (u8(1) << i) != 0 {
+				s.sa_delay_until[i] = now_us + s.sa_delay()
+			}
+		}
+		s.sa_arm = 0
 	}
 	if s.session == session_default || s.session == 0 || !s.rx_seen {
 		return
@@ -704,7 +710,13 @@ fn (s &Server) sa_delay() u64 {
 }
 
 fn (s &Server) sa_max_attempts() u8 {
-	return if s.sa_attempts == 0 { default_sa_attempts } else { s.sa_attempts }
+	return attempts_of(s.sa_attempts)
+}
+
+// attempts_of: the attempt limit a configured `security_attempts` gives (0 = the default) — the one
+// rule, which the generator's wear check multiplies by too
+pub fn attempts_of(configured u8) u8 {
+	return if configured == 0 { default_sa_attempts } else { configured }
 }
 
 // security_access (0x27). requestSeed (odd subfunction 2L-1) hands out a fresh seed for level L —
@@ -731,8 +743,9 @@ fn (mut s Server) security_access(req &u8, req_len int, resp &u8) int {
 }
 
 fn (mut s Server) request_seed(level u8, sub u8, resp &u8) int {
-	// an optional securityAccessDataRecord after the subfunction is accepted and ignored
-	if s.sa_arm_delay || s.now_us < s.sa_delay_until {
+	// an optional securityAccessDataRecord after the subfunction is accepted and ignored; the
+	// delay refused here is this level's (its lockout, or one a start-up or reset armed for it)
+	if s.sa_arm & (u8(1) << (level - 1)) != 0 || s.now_us < s.sa_delay_until[level - 1] {
 		return negative(resp, 0x27, nrc_time_delay_not_expired)
 	}
 	s.sa_level = 0
@@ -785,7 +798,7 @@ fn (mut s Server) send_key(level u8, req &u8, req_len int, resp &u8) int {
 		s.sa_failed[level - 1]++
 		if s.sa_failed[level - 1] >= s.sa_max_attempts() {
 			s.sa_failed[level - 1] = 0
-			s.sa_delay_until = s.now_us + s.sa_delay()
+			s.sa_delay_until[level - 1] = s.now_us + s.sa_delay()
 			return negative(resp, 0x27, nrc_exceeded_attempts)
 		}
 		return negative(resp, 0x27, nrc_invalid_key)

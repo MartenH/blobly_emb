@@ -690,7 +690,8 @@ fn test_boot_imposes_no_lockout() {
 }
 
 // REQ-DIAG-032: failures are counted per level — unlocking a level whose key is known must not
-// reset the count of wrong keys for another (codex #296: brute force through a known level).
+// reset the count of wrong keys for another (codex #296: brute force through a known level) — and
+// a level's lockout delays only its own seed.
 fn test_failed_keys_are_counted_per_level() {
 	mut s := secured()
 	s.security_levels = 0x03 // levels 1 and 2
@@ -704,6 +705,12 @@ fn test_failed_keys_are_counted_per_level() {
 			assert send_key(mut s, key_for(r[2..])) == [u8(0x67), 0x02]
 		}
 	}
+	// and the delay is per level: level 2's lockout refuses its own seed, not level 1's
+	assert call(mut s, [u8(0x27), 0x03]) == [u8(0x7F), 0x27, nrc_time_delay_not_expired]
+	call(mut s, [u8(0x10), 0x03])
+	r := call(mut s, [u8(0x27), 0x01])
+	assert r[0] == 0x67, "level 2's lockout delayed level 1's seed"
+	assert send_key(mut s, key_for(r[2..])) == [u8(0x67), 0x02]
 }
 
 // REQ-DIAG-023: a session transition relocks and voids an outstanding seed.
