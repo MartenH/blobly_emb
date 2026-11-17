@@ -19,6 +19,20 @@ fn test_the_did_and_service_gates_share_the_session_names() {
 	assert cfgschema.ecu.key('uds_service', 'sessions').choices == cfgschema.session_names()
 }
 
+// a 0x2F control offers exactly the sessions generation accepts for it — not default (ISO runs 0x2F
+// outside it) nor programming (the bootloader's) — each a session the server knows; its parameters
+// are the ones the generator maps
+fn test_a_controls_sessions_and_parameters_are_the_ones_generation_takes() {
+	choices := cfgschema.ecu.key('did_control', 'session').choices
+	assert choices == ['extended', 'safety']
+	for name in choices {
+		assert name in cfgschema.session_names()
+		session_bit(name) or { assert false, 'control session "${name}" is not a session the server knows' }
+	}
+	assert cfgschema.ecu.key('did_control', 'session').def == '["extended"]'
+	assert cfgschema.ecu.key('did_control', 'parameters').choices == io_param_bits.keys()
+}
+
 // a default the generator applies must be the one the schema documents
 fn test_the_generator_defaults_are_the_schemas() {
 	assert cfgschema.ecu.key('fault', 'priority').default_int() == default_fault_priority

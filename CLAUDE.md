@@ -40,7 +40,9 @@ comm/   comms stack: com (tx modes; encode_raw, the ONE send encode — emitted 
         bridge and the ThreadX comm thread both run, emitted by tools/loom2v/gen_rx.v), e2e (AUTOSAR E2E
         Profile 1), secoc (AES-CMAC), isotp (15765-2: a link holds no buffer — its owner binds them, sized by the node's `[isotp] max_message`, 8..4095, default 520; it transmits at the node's `[isotp] tx_dl` — 8, or a CAN-FD length up to 64 on an fd bus — and receives any frame length; N_Bs / N_Cr / N_Ar; ids by normal addressing, 11-bit or 29-bit with `ext`, or normal fixed addressing — `sa` / `ta`, `addressing.v` `fixed_id` — read by ONE reader, `tools/ecumodel` `diag_ids`, for `[isotp]` and a system node's `diag` alike — a dissolved node's `[isotp]` that states no physical ids takes its `diag`, which sysgen lowers into it (a `functional_id`, and an `ext` agreeing with the allocation, may be stated beside a normal-addressing one), and one that states them must equal it (REQ-TOPO-014); a `diag` with one of `req` / `rsp` is refused; the format is part of the id everywhere; run on silicon once (zone_a, `isotp-29bit-silicon`); no extended or mixed addressing, no hardware acceptance filters; docs/can-tp.md), uds (14229 — it
         serves 0x31 `[[routine]]`s, each run by an FB through two cells, and answers responsePending
-        0x78 while one runs: routine.v, pending.v, docs/diagnostics.md §3.1), nm,
+        0x78 while one runs: routine.v, pending.v; and 0x2F on a live `[[did]]` with a `control`, the
+        tester's value replacing the FB's where the owner encodes the signal: io_control.v;
+        docs/diagnostics.md §3.1), nm,
         fault (debounce + fault memory behind 0x19/0x14/0x85; snapshots, extended data, displacement
         and its persistence in the NvM journal — entry.v, persist.v), param (variant coding: read-only
         FB inputs coded with 0x2E on a bound DID, one NvM journal record each, docs/diagnostics.md §3.4),

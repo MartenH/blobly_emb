@@ -19,3 +19,23 @@ fn test_security_levels_come_from_the_did_gates() {
 		write_security: 1
 	}]) == 0b1000_0101
 }
+
+// a level a control names is served too (REQ-DIAG-066's sources): bit L-1, as a gate's
+fn test_a_control_names_a_level_the_server_serves() {
+	assert security_levels([DidCfg{
+		id:               1
+		signal:           'X'
+		control_params:   0x0F
+		control_sessions: 0x04
+		control_security: 2
+	}]) == 0b10
+	mut m := Model{}
+	m.dids = [DidCfg{
+		id:               1
+		signal:           'X'
+		control_params:   0x09
+		control_sessions: 0x04
+		control_security: 3
+	}]
+	assert sa_levels(m) == 0b100
+}

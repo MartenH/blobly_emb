@@ -209,6 +209,15 @@ id    = 0xF1AC
 bytes = "00"                    # writable only in extended AND with security level 1
 write = { session = ["extended"], security = 1 }
 
+# live, and CONTROLLED (0x2F, docs/diagnostics.md §3.1): a tester overrides the warning lamp this
+# node sends in LampFrame — where the bridge encodes the frame, never inside LampController, which
+# keeps computing it. 00 returns control, 01 resets it to its initial value (off), 02 freezes what
+# is sent now, 03 sets it; in the extended session (the service's default), no 0x27 level.
+[[did]]
+id      = 0xF1B0
+signal  = "WarnLamp"
+control = { parameters = ["reset_to_default", "freeze_current_state", "short_term_adjustment"] }
+
 # --- Faults (docs/diagnostics.md §3.3) --------------------------------------
 # EngineMonitor reports the test result each dispatch; the Loom debounces it on the ctrl thread,
 # and the fault memory on the diagnostic bridge keeps the DTC status (0x19 / 0x14 / 0x85).

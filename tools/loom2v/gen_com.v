@@ -943,7 +943,19 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					'f64(${fld}.${si.val_field})'
 				}
 				glue << '\tmut ${fld} := sig.${sname}{}'
-				glue << '\tif osal.${acquire_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld}))) {'
+				if k := io_index(m, sname) {
+					// a 0x2F control (gen_ioctl.v): the tester's value in place of the FB's, written
+					// over what was acquired before the encode — the FB never sees it. Asked of the
+					// server in place, with no local of its own: this scope's locals are the signals'
+					// snake names, and a DBC signal may be named like any identifier
+					srv := 'st.conn_${snake(conns[0].name)}.server'
+					glue << '\tif osal.${acquire_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld}))) || ${srv}.io_on(${k}) { // 0x2F'
+					glue << '\t\tif ${srv}.io_on(${k}) {'
+					glue << '\t\t\t${fld}.${si.val_field} = ${io_field_of(si.val_type, '${srv}.io_published(${k})')}'
+					glue << '\t\t}'
+				} else {
+					glue << '\tif osal.${acquire_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld}))) {'
+				}
 				glue << '\t\tif ${si.dbc_msg}_${snake(sname)}_set(mut tx_${msg}.data, ${phys}) {'
 				glue << '\t\t\ttx_${msg}_sat++'
 				glue << '\t\t}'
@@ -1631,22 +1643,33 @@ fn did_refresh_fn(m Model, tp string) []string {
 		}
 		si := m.sig_of[did.signal] or { continue }
 		f := snake(did.signal)
-		out << '\tmut ${f}_did := sig.${did.signal}{}'
-		out << '\tif osal.${acquire_fn(si.transport)}(${f}_ch, &${f}_did, u8(sizeof(${f}_did))) {'
-		out << did_encode_lines(idx, '${f}_did.${si.val_field}', si.val_type, '\t\t')
+		// the locals are named by the DID's index, as the target's (diag_target_fns): several live
+		// DIDs may read one signal
+		v := 'v_${idx}'
+		out << '\tmut ${v} := sig.${did.signal}{} // ${did.signal}'
+		if k := io_index(m, did.signal) {
+			// a controlled signal: the FB's value noted for 0x2F 02, and the DID reads what is
+			// published — the control's value, the FB's, or the initial value before its first
+			out << '\t${v}_have := osal.${acquire_fn(si.transport)}(${f}_ch, &${v}, u8(sizeof(${v})))'
+			out << '\tsrv.io_note(${k}, ${as_i64(si.val_type, '${v}.${si.val_field}', false)}, ${v}_have)'
+			out << did_io_encode_lines(idx, k, v, si.val_type)
+			continue
+		}
+		out << '\tif osal.${acquire_fn(si.transport)}(${f}_ch, &${v}, u8(sizeof(${v}))) {'
+		out << did_encode_lines(idx, '${v}.${si.val_field}', si.val_type, '\t\t')
 		out << '\t}'
 	}
 	out << '}'
 	return out
 }
 
-// security_levels: the [[did]] gates' share of the 0x27 levels a server serves — every level some
-// read or write gate names (bit L-1 for level L). The server serves sa_levels (gen_diag.v): these
-// plus the levels [uds] service rows name.
+// security_levels: the [[did]]s' share of the 0x27 levels a server serves — every level some read
+// or write gate, or a control, names (bit L-1 for level L). The server serves sa_levels
+// (gen_diag.v): these plus the levels [uds] service rows name.
 fn security_levels(dids []DidCfg) u8 {
 	mut mask := u8(0)
 	for d in dids {
-		for l in [d.read_security, d.write_security] {
+		for l in [d.read_security, d.write_security, d.control_security] {
 			if l != 0 {
 				mask |= u8(1) << (l - 1)
 			}

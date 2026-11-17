@@ -333,13 +333,16 @@ fn diag_unbuilt(m Model, sid u8) string {
 				'' // the host bridge and the ThreadX comm thread, each routine run by its FB
 			}
 		}
+		0x2F {
+			if io_controls(m).len == 0 { 'no [[did]] declares a `control`' } else { '' }
+		}
 		else {
 			'comm/uds does not implement it'
 		}
 	}
 }
 
-// sa_levels: the 0x27 levels the server serves — every level a [[did]] gate, a [[routine]] or a
+// sa_levels: the 0x27 levels the server serves — every level a [[did]] gate or control, a [[routine]] or a
 // service row names (bit L-1 for level L). A level nothing is gated on is not offered: unlocking it opens nothing.
 fn sa_levels(m Model) u8 {
 	mut mask := security_levels(m.dids) | routine_levels(m.routines)
@@ -438,6 +441,7 @@ fn validate_uds(m Model) {
 		panic('loom2v: [uds] configures security_attempts / security_delay_ms / security_key, but no [[did]] gate or service row names a security level — there is nothing to unlock')
 	}
 	if !u.table {
+		validate_did_rows(m) // the default table's rows: 0x2F runs in extended only
 		return
 	}
 	for r in u.services {
@@ -478,12 +482,18 @@ fn validate_uds(m Model) {
 	if sa_levels(m) != 0 && !svc_listed(m, 0x27) {
 		panic('loom2v: [uds] services leaves out 0x27, but a [[did]] gate or service row needs a security level — nothing could unlock it')
 	}
-	// a DID is reached through its service's row too: both gates must be satisfiable at once —
-	// a session they share, and one level (0x27 unlocks exactly one, and both compare exactly)
+	validate_did_rows(m)
+}
+
+// validate_did_rows: a DID is reached through its service's row too — the default table's
+// included, whose 0x2F row runs in extended only: both gates must be satisfiable at once — a
+// session they share, and one level (0x27 unlocks exactly one, and both compare exactly)
+fn validate_did_rows(m Model) {
 	for d in m.dids {
 		for acc in [
 			DidAccess{'read', 0x22, true, d.read_sessions, d.read_security},
 			DidAccess{'write', 0x2E, d.writable, d.write_sessions, d.write_security},
+			DidAccess{'control', 0x2F, d.control_params != 0, d.control_sessions, d.control_security},
 		] {
 			if !acc.used {
 				continue
@@ -498,11 +508,25 @@ fn validate_uds(m Model) {
 			if row.security != 0 && acc.security != 0 && row.security != acc.security {
 				panic('loom2v: [[did]] 0x${d.id.hex()} ${acc.what} needs security ${acc.security}, but [uds] services 0x${acc.sid.hex()} needs ${row.security} — one unlock cannot satisfy both')
 			}
+			// judged on the gate the server enforces: a level the row gives it needs the extended
+			// session among those both allow, as one of its own does (parse_did_access)
+			eff, level := access_gate(acc.sessions, acc.security, row)
+			if level != 0 && eff != 0 && eff & uds.in_extended == 0 {
+				panic('loom2v: [[did]] 0x${d.id.hex()} ${acc.what} needs security ${level} but the sessions it is accepted in (its own and [uds] services 0x${acc.sid.hex()}\'s) leave out the extended session, the only one an application server unlocks in — entering another relocks it, so it could never be opened')
+			}
 		}
 	}
 }
 
-// DidAccess is one [[did]] access (read / write) as the service that carries it sees it
+// access_gate: the gate the server enforces for a DID access whose own gate is (`sessions`,
+// `security`) behind its service's `row` — its sessions within the row's (0 = every session), and
+// its level, else the row's
+fn access_gate(sessions u8, security u8, row SvcCfg) (u8, u8) {
+	level := if security != 0 { security } else { row.security }
+	return sess_and(sessions, row.sessions), level
+}
+
+// DidAccess is one [[did]] access (read / write / control) as the service that carries it sees it
 struct DidAccess {
 	what     string
 	sid      u8
@@ -621,6 +645,7 @@ fn conn_init_lines(m Model, c IsotpConn, conn string) []string {
 	}
 	g << '\t${srv}.ndid = ${m.dids.len}'
 	g << routine_config_lines(m, srv)
+	g << io_init_lines(m, srv) // 0x2F's controls (gen_ioctl.v)
 	return g
 }
 
@@ -675,7 +700,7 @@ fn diag_target_fns(m Model, ioc_idx map[string]int) []string {
 		}
 		si := m.sig_of[did.signal] or { panic('loom2v: [[did]] 0x${did.id.hex()}: no signal "${did.signal}"') }
 		if off := m.xcore_xw_off[did.signal] {
-			g << did_xup_read_lines(idx, si, did.signal, off)
+			g << did_xup_read_lines(m, idx, si, did.signal, off)
 			continue
 		}
 		cell := ioc_idx[did.signal] or {
@@ -684,6 +709,14 @@ fn diag_target_fns(m Model, ioc_idx map[string]int) []string {
 		v := 'v_${idx}'
 		g << '\tmut ${v} := u32(0)'
 		g << '\tmut ${v}_b := u32(0)'
+		if k := io_index(m, did.signal) {
+			// a controlled signal: the FB's value noted for 0x2F 02, and the DID reads what is
+			// published — the control's value, the FB's, or the initial value before its first
+			g << '\t${v}_ever := C.ioc_get_ever(${cell}, &${v}, &${v}_b) != 0 // ${did.signal}'
+			g << '\tsrv.io_note(${k}, ${as_i64(si.val_type, v, true)}, ${v}_ever)'
+			g << did_io_encode_lines(idx, k, v, si.val_type)
+			continue
+		}
 		g << '\tC.ioc_get(${cell}, &${v}, &${v}_b) // ${did.signal}'
 		g << did_encode_lines(idx, if si.val_type == 'bool' { '${v} != 0' } else { v }, si.val_type, '\t')
 	}
@@ -694,13 +727,33 @@ fn diag_target_fns(m Model, ioc_idx map[string]int) []string {
 // did_xup_read_lines: DID `idx` from satellite signal `sname`'s up channel — the newest value
 // behind the layout gate, the last one while nothing newer came, zero until the first (as an owner
 // FB's cell reads before its first publish)
-fn did_xup_read_lines(idx int, si SigInfo, sname string, off int) []string {
+fn did_xup_read_lines(m Model, idx int, si SigInfo, sname string, off int) []string {
 	r := 'g_didx_${snake(sname)}'
+	// lanes from [1]: [0] is the reader's seq
+	lane := 1 + field_lane(si, si.val_field)
 	mut g := ['\tif C.xcore_layout_ok() != 0 { // ${sname}: an FB on the satellite writes it']
+	if k := io_index(m, sname) {
+		// a controlled signal: whether a value ever came, latched, for 0x2F's notes; the DID reads
+		// what is published (did_io_encode_lines)
+		g << '\t\tif C.xcore_poll_n(u32(${off}), ${sig_lanes(si)}, &${r}[0], &${r}[1]) != 0 {'
+		g << '\t\t\t${r}_ever = true'
+		g << '\t\t}'
+		g << '\t}'
+		g << '\tsrv.io_note(${k}, ${as_i64(si.val_type, '${r}[${lane}]', true)}, ${r}_ever)'
+		g << did_io_encode_lines(idx, k, 'v_${idx}', si.val_type)
+		return g
+	}
 	g << '\t\tC.xcore_poll_n(u32(${off}), ${sig_lanes(si)}, &${r}[0], &${r}[1])'
 	g << '\t}'
-	// lanes from [1]: [0] is the reader's seq
-	g << did_encode_lines(idx, lane_value(si.val_type, r, 1 + field_lane(si, si.val_field)), si.val_type,
+	g << did_encode_lines(idx, lane_value(si.val_type, r, lane), si.val_type, '\t')
+	return g
+}
+
+// did_io_encode_lines: DID `idx` of a controlled signal (control `k`) reads what is published
+// (comm/uds io_published) — both owners' refreshes
+fn did_io_encode_lines(idx int, k int, v string, val_type string) []string {
+	mut g := ['\t${v}_pub := srv.io_published(${k})']
+	g << did_encode_lines(idx, if val_type == 'bool' { '${v}_pub != 0' } else { '${v}_pub' }, val_type,
 		'\t')
 	return g
 }
@@ -769,12 +822,13 @@ fn sa_persist_on(m Model) bool {
 	return sa_target_on(m) && m.nvm.on
 }
 
-// validate_sa_target refuses a target node that performs 0x27 without [nvm] (REQ-DIAG-066): its
+// validate_sa_target refuses a target node that performs 0x27 without [nvm] (REQ-DIAG-066) — a level
+// a [[did]] gate or control, a service row or the handoff row names: its
 // failed-key counts and a running lockout must survive a power cycle, or one between guesses buys
 // fresh attempts. The host bridge has no power cycle and keeps them in RAM.
 fn validate_sa_target(m Model) {
 	if sa_target_on(m) && !m.nvm.on {
-		panic('loom2v: a security level on the target (a [[did]] gate, a [uds] services row or the "0x10 02" handoff) needs [nvm] — the 0x27 failed-key counts and a running lockout are kept in the NvM journal across resets and power loss, so a power cycle between guesses buys nothing (docs/diagnostics.md §3.1); declare the storage')
+		panic('loom2v: a security level on the target (a [[did]] gate or control, a [uds] services row or the "0x10 02" handoff) needs [nvm] — the 0x27 failed-key counts and a running lockout are kept in the NvM journal across resets and power loss, so a power cycle between guesses buys nothing (docs/diagnostics.md §3.1); declare the storage')
 	}
 }
 
@@ -869,6 +923,9 @@ fn diag_target_globals(m Model) []string {
 	for sname in did_xup_sigs(m) {
 		si := m.sig_of[sname] or { continue }
 		g << '\tg_didx_${snake(sname)} [${sig_lanes(si) + 1}]u32 // ${sname}\'s up channel, the live DIDs\' reader: seq, lanes (xcore_poll_n)'
+		if _ := io_index(m, sname) {
+			g << '\tg_didx_${snake(sname)}_ever bool // a value has come from it (0x2F\'s notes)'
+		}
 	}
 	return g
 }
@@ -902,6 +959,9 @@ fn diag_target_init(m Model) []string {
 	}
 	if m.dids.any(it.signal != '') {
 		g << '\tg_diag.refresh = diag_refresh_${snake(m.isotp_conns[0].name)}'
+	}
+	if io_controls(m).len > 0 {
+		g << '\tg_diag.server.io_ok = diag_io_ok_v // 0x2F: the board\'s weak conditions seam'
 	}
 	if m.boot.on {
 		g << boot_target_init(m)

@@ -293,6 +293,17 @@ fn test_snapshot_declarations_are_checked() {
 			'fail = 3, pass = 3 }\nfreeze = [0xF190]') + '\n[fault_memory]\nentries = ${entries}\n')
 		assert code != 0 && out.contains(msg), out
 	}
+	// judged on the gate 0x22 enforces: a level or a session its row adds is the DID's too
+	for name, c in {
+		'row_locked': ['"0x22" = { security = 1 }', 'which 0x19 does not demand']
+		'row_narrow': ['"0x22" = { sessions = ["extended"] }', 'is not readable in every session 0x19 is served in']
+	} {
+		table := '\n[uds.services]\n"0x10" = {}\n"0x19" = {}\n"0x27" = {}\n${c[0]}\n"0x3E" = {}\n'
+		rc, ro, _, _ := ft_generate('snap_${name}', same, ft_conn + did + ft_fault.replace('fail = 3, pass = 3 }',
+			'fail = 3, pass = 3 }\nfreeze = [0xF190]') + table)
+		assert rc != 0, '${name}: accepted'
+		assert ro.contains(c[1]), '${name}: ${ro}'
+	}
 	code, out, _, _ := ft_generate('entries_nosnap', same, ft_conn + ft_fault + '\n[fault_memory]\nentries = 1\n')
 	assert code != 0 && out.contains('no [[fault]] declares a snapshot'), out
 	// a journal too small for the fault memory and its rewrite headroom

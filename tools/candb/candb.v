@@ -503,7 +503,7 @@ fn whole_literal(t string) ?big.Integer {
 }
 
 // steps_of: a raw bit pattern of an `n`-bit signal as the integer it means (sign-extended if signed).
-fn steps_of(raw u64, signed bool, n int) big.Integer {
+pub fn steps_of(raw u64, signed bool, n int) big.Integer {
 	if signed && raw & (u64(1) << (n - 1)) != 0 {
 		ext := if n == 64 { raw } else { raw | ~((u64(1) << n) - 1) }
 		return big.integer_from_i64(i64(ext))
@@ -512,25 +512,53 @@ fn steps_of(raw u64, signed bool, n int) big.Integer {
 }
 
 // Ratio is an exact rational num / den (den > 0).
-struct Ratio {
+pub struct Ratio {
+pub:
 	num big.Integer
 	den big.Integer
 }
 
-fn (r Ratio) floor() big.Integer {
+pub fn (r Ratio) floor() big.Integer {
 	if !(r.num < big.zero_int) {
 		return r.num / r.den
 	}
 	return ((r.num.neg() + r.den - big.one_int) / r.den).neg()
 }
 
-fn (r Ratio) ceil() big.Integer {
+pub fn (r Ratio) ceil() big.Integer {
 	return Ratio{r.num.neg(), r.den}.floor().neg()
+}
+
+// whole: whether the ratio is an integer
+pub fn (r Ratio) whole() bool {
+	return r.floor() * r.den == r.num
+}
+
+// below / above: whether the ratio is less / greater than the integer v
+pub fn (r Ratio) below(v big.Integer) bool {
+	return r.num < v * r.den
+}
+
+pub fn (r Ratio) above(v big.Integer) bool {
+	return v * r.den < r.num
+}
+
+// phys_steps: raw step k as a physical value, k * factor + offset, EXACTLY — each operand taken as
+// the shortest decimal that is that f64, as raw_steps takes them (its inverse).
+pub fn phys_steps(k big.Integer, offset f64, factor f64) Ratio {
+	mo, eo := dec_of(offset)
+	mf, ef := dec_of(factor)
+	e := if ef < eo { ef } else { eo }
+	num := k * mf * pow10(ef - e) + mo * pow10(eo - e) // k * factor + offset = num * 10^e
+	if e >= 0 {
+		return Ratio{num * pow10(e), big.one_int}
+	}
+	return Ratio{num, pow10(-e)}
 }
 
 // raw_steps: (phys - offset) / factor EXACTLY, each operand taken as the shortest decimal that is
 // that f64 — the number the DBC wrote (655.35, 0.01), not its binary neighbour.
-fn raw_steps(phys f64, offset f64, factor f64) Ratio {
+pub fn raw_steps(phys f64, offset f64, factor f64) Ratio {
 	mv, ev := dec_of(phys)
 	mo, eo := dec_of(offset)
 	mf, ef := dec_of(factor)

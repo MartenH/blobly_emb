@@ -229,6 +229,17 @@ the FB never calls a service API.
   sysview reads no `[[routine]]` yet, so its simulated zone_a answers every 0x31 with 0x11 where the
   board serves it — `tests/diag_described.lua`'s `31 01 FF 00 → 0x11` and sysview's "the format has
   no RoutineControl" are stale until then; docs/diagnostics.md §5)
+- 🧭 **U2b input/output control in the application** — *built:* InputOutputControlByIdentifier (0x2F)
+  on a live signal's `[[did]]` with a `control` (parameters 01/02/03 opt-in, 00 for every control; a
+  session and level gate no weaker than the DID's read): the tester's value replaces the FB's where
+  the node encodes the signal into its CAN frame, on the thread serving the server — no FB sees it
+  (comm/uds io_control.v, tools/loom2v/gen_ioctl.v); returned on a session entry, a reset and a
+  relock, which also stops the routines its level gated; a target's `diag_io_ok` seam may refuse
+  with 0x22. domain controls VehicleSpeed and a CM4 signal (bench suite `test/ioctl_domain.lua`),
+  overspeed controls WarnLamp (`test/ioctl.lua`, vcan). Left: a control of a multi-field signal
+  (controlEnableMask), the application seam on the host bridge, and blobly_net simulating it (its
+  sysview ignores `control`, so its simulated domain answers every 0x2F with 0x11 where the board
+  serves it; docs/diagnostics.md §5)
 
 ## Drivers & IO
 

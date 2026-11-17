@@ -493,7 +493,7 @@ A local screen: one more ThreadX thread (boards/<board>/display.c, docs/display.
 
 ### `[[did]]`
 
-A data identifier the server reads (0x22) and may write (0x2E). Its value is ONE of: `ascii` / `bytes` (a constant), `signal` (live), `param` (a coded [[param]]), `param_status`, `tx_saturations`.
+A data identifier the server reads (0x22) and may write (0x2E). Its value is ONE of: `ascii` / `bytes` (a constant), `signal` (live), `param` (a coded [[param]]), `param_status`, `tx_saturations`. A live signal's DID may also carry a `control` (0x2F).
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
@@ -507,6 +507,7 @@ A data identifier the server reads (0x22) and may write (0x2E). Its value is ONE
 | `tx_saturations` | boolean |  | `false` |  | the count of sent values saturated to their DBC range since start (u32 BE) |
 | `read` | table → [`[[did]] read/write`](#ecu-did-access) |  | — |  | the 0x22 gate; absent = every session, no security |
 | `write` | table → [`[[did]] read/write`](#ecu-did-access) |  | — |  | the 0x2E gate (makes the DID writable; a record of exactly its size); absent = every session, no security |
+| `control` | table → [`[[did]] control`](#ecu-did-control) |  | — |  | 0x2F InputOutputControlByIdentifier on the `signal` this DID reads: a tester's value replaces the signal where the node encodes it into its frame (docs/diagnostics.md §3.1); absent = no control |
 
 <a id="ecu-did-access"></a>
 
@@ -518,6 +519,18 @@ The sessions and the 0x27 level an access needs.
 |---|---|---|---|---|---|
 | `session` | array of strings |  | — | `"default"`, `"extended"`, `"programming"`, `"safety"` | the sessions it is allowed in; absent = every session |
 | `security` | integer |  | `0` | 0..8 | the 0x27 level that must be unlocked (0 = none) |
+
+<a id="ecu-did-control"></a>
+
+### `[[did]] control`
+
+An input/output control (0x2F) of the output signal a live DID reads: the parameters served beside returnControlToECU, and the gate.
+
+| key | type | required | default | allowed | description |
+|---|---|---|---|---|---|
+| `parameters` | array of strings | yes | — | `"reset_to_default"`, `"freeze_current_state"`, `"short_term_adjustment"` | the control parameters served besides returnControlToECU (always served): reset to the signal's initial value, freeze the value published now, a value of the tester's |
+| `session` | array of strings |  | `["extended"]` | `"extended"`, `"safety"` | the sessions it is accepted in (never default or programming) |
+| `security` | integer |  | `0` | 0..8 | the 0x27 level that must be unlocked; 0 = the [uds] services 0x2F row's level (none if the row names none). The control is returned when that level is relocked |
 
 <a id="ecu-fault"></a>
 

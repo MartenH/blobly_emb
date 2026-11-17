@@ -202,6 +202,24 @@ fn (mut s Server) stop_routines() {
 	}
 }
 
+// stop_relocked_routines: end_levels' share for the routines (io_control.v) — every routine gated on
+// a level the relock ends (relock_ends: `level`, or every level but `level` when `others`) that its
+// FB may still be running is asked to stop, as the controls are returned. A routine's `security` is
+// its EFFECTIVE level, its own else its 0x31 service row's (generation, gen_routine.v routine_gate),
+// so a routine gated through the row is stopped too. No answer can be owed for such a routine: a key
+// is dropped while an answer is owed, and the network tester whose unlock ends had its own owed
+// answer abandoned first (comm/diag remote_dropped).
+fn (mut s Server) stop_relocked_routines(level u8, others bool) {
+	for i in 0 .. s.nroutines {
+		if i >= max_routines {
+			break
+		}
+		if relock_ends(s.routines[i].security, level, others) && s.routines[i].may_run() {
+			s.ask_stop(i)
+		}
+	}
+}
+
 // find_routine: the routine of identifier `id` the server serves (-1 = none) — one whose record
 // sizes do not fit its cells is none (sizes_ok)
 fn (s &Server) find_routine(id u16) int {

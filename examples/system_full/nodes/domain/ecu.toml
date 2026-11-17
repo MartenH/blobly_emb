@@ -161,10 +161,17 @@ ascii = "BLOBLY-DOMAIN-H755"
 id    = 0xF189
 ascii = "system_full"
 
-# live: what this node transmits (u32, big-endian) — its own outputs, read from the comm thread's cells
+# live: what this node transmits (u32, big-endian) — its own outputs, read from the comm thread's cells.
+# 0xF1A0 is CONTROLLED too (0x2F, docs/diagnostics.md §3.1): a tester's value replaces what
+# VehSpeedFrame (0x120) carries where the comm thread encodes the frame, never inside PowertrainCtrl,
+# which keeps computing its own. In the extended session (the service's default), no 0x27 level; a
+# value outside compute.dbc's [0|250] is answered 0x31, so no override reads as implausible on zone_a.
+# (blobly_net's simulated domain, read from this file, does not serve these yet: it answers every
+# 0x2F with 0x11 — docs/diagnostics.md §5.)
 [[did]]
-id     = 0xF1A0
-signal = "VehicleSpeed"
+id      = 0xF1A0
+signal  = "VehicleSpeed"
+control = { parameters = ["reset_to_default", "freeze_current_state", "short_term_adjustment"] }
 
 [[did]]
 id     = 0xF1A1
@@ -195,10 +202,13 @@ param = "DynLedCap"
 write = { session = ["extended"], security = 1 }
 
 # live: a value an FB on the CM4 writes (REQ-PLACE-009) — DynamicsModel's DynKeptOut, which the comm
-# thread reads from its up channel (and sends as DynKeptFrame); frozen by DynCmdRejected's snapshot
+# thread reads from its up channel (and sends as DynKeptFrame); frozen by DynCmdRejected's snapshot.
+# CONTROLLED too (0x2F): the override is applied where the comm thread sends DynKeptFrame (0x12C)
+# from the CM4's lanes — never on the CM4, and never in the persisted DynKept.
 [[did]]
-id     = 0xF1A2
-signal = "DynKeptOut"
+id      = 0xF1A2
+signal  = "DynKeptOut"
+control = { parameters = ["reset_to_default", "freeze_current_state", "short_term_adjustment"] }
 
 # Persistence storage ([nvm], docs/nvm.md): the journal engine over a sector pair the node's comm
 # glue maps (nvm_map_* -> boards flash driver). Two persisted signals: DriveMode (the CM7's) and

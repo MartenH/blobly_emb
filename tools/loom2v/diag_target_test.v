@@ -526,7 +526,7 @@ fn test_a_service_table_is_generated_for_both_owners() {
 	assert glue.contains('g_diag.server.security_levels = u8(0x01)'), 'the row\'s level is served'
 	assert glue.contains('import comm.uds')
 	// the host bridge: the same rows, and what only it performs (0x28, the fault memory's services;
-	// overspeed's routine, 0x31)
+	// overspeed's routine, 0x31; 0x2F, which overspeed's WarnLamp control needs a row for)
 	hc, ho, hg := generate_host('table', same, '
 [uds.services]
 "0x10" = {}
@@ -535,14 +535,16 @@ fn test_a_service_table_is_generated_for_both_owners() {
 "0x27" = {}
 "0x22" = {}
 "0x2E" = {}
+"0x2F" = {}
 "0x31" = {}
 ')
 	assert hc == 0, ho
 	for want in ['st.conn_diag.server.services[0] = uds.Service{sid: 0x10}',
 		'st.conn_diag.server.services[1] = uds.Service{sid: 0x19}',
 		'st.conn_diag.server.services[4] = uds.Service{sid: 0x28, sessions: 0x04}',
-		'st.conn_diag.server.services[6] = uds.Service{sid: 0x31}',
-		'st.conn_diag.server.nservices = 7'] {
+		'st.conn_diag.server.services[6] = uds.Service{sid: 0x2f}',
+		'st.conn_diag.server.services[7] = uds.Service{sid: 0x31}',
+		'st.conn_diag.server.nservices = 8'] {
 		assert hg.contains(want), 'missing: ${want}'
 	}
 }
@@ -559,7 +561,7 @@ fn test_a_service_table_the_build_cannot_honour_is_refused() {
 		'clear':          [ok + '"0x14" = {}', 'no fault memory']
 		'dtc_setting':    [ok + '"0x85" = {}', 'no fault memory']
 		'no_seam':        [ok + '"0x27" = {}', 'nothing to unlock']
-		'unknown':        [ok + '"0x2F" = {}', 'comm/uds does not implement it']
+		'unknown':        [ok + '"0x23" = {}', 'comm/uds does not implement it']
 		'no_routine':     [ok + '"0x31" = {}', 'the node has no [[routine]]']
 		'programming':    [ok + '"0x11" = { sessions = ["programming"] }', 'programming session']
 		'iso_session':    ['+"0x10" = {}\n"0x2E" = {}\n"0x27" = { sessions = ["default", "extended"] }', 'only in a non-default one']

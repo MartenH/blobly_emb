@@ -198,12 +198,18 @@ mut:
 }
 
 fn diag_refresh_diag(mut srv uds.Server) {
-	mut vehicle_speed_did := sig.VehicleSpeed{}
-	if osal.ioc_acquire2(vehicle_speed_ch, &vehicle_speed_did, u8(sizeof(vehicle_speed_did))) {
-		srv.dids[1].data[0] = u8(vehicle_speed_did.kph >> 8)
-		srv.dids[1].data[1] = u8(vehicle_speed_did.kph)
+	mut v_1 := sig.VehicleSpeed{} // VehicleSpeed
+	if osal.ioc_acquire2(vehicle_speed_ch, &v_1, u8(sizeof(v_1))) {
+		srv.dids[1].data[0] = u8(v_1.kph >> 8)
+		srv.dids[1].data[1] = u8(v_1.kph)
 		srv.dids[1].len = 2
 	}
+	mut v_6 := sig.WarnLamp{} // WarnLamp
+	v_6_have := osal.ioc_acquire2(warn_lamp_ch, &v_6, u8(sizeof(v_6)))
+	srv.io_note(0, if v_6.on { i64(1) } else { i64(0) }, v_6_have)
+	v_6_pub := srv.io_published(0)
+	srv.dids[6].data[0] = if v_6_pub != 0 { u8(1) } else { u8(0) }
+	srv.dids[6].len = 1
 }
 
 fn io_can0_10ms(ctx voidptr) {
@@ -398,7 +404,10 @@ fn io_can0_10ms(ctx voidptr) {
 	mut tx_lamp_frame_any := false
 	mut tx_lamp_frame_sat := u32(0) // values com.encode_raw saturated
 	mut warn_lamp := sig.WarnLamp{}
-	if osal.ioc_acquire2(warn_lamp_ch, &warn_lamp, u8(sizeof(warn_lamp))) {
+	if osal.ioc_acquire2(warn_lamp_ch, &warn_lamp, u8(sizeof(warn_lamp))) || st.conn_diag.server.io_on(0) { // 0x2F
+		if st.conn_diag.server.io_on(0) {
+			warn_lamp.on = st.conn_diag.server.io_published(0) != 0
+		}
 		if lamp_frame_warn_lamp_set(mut tx_lamp_frame.data, if warn_lamp.on { f64(1) } else { f64(0) }) {
 			tx_lamp_frame_sat++
 		}
@@ -592,7 +601,10 @@ pub fn partition_can0(ch can.Channel) {
 	}
 	st.conn_diag.server.dids[5].data[0] = u8(0x00)
 	st.conn_diag.server.dids[5].len = 1
-	st.conn_diag.server.ndid = 6
+	st.conn_diag.server.dids[6] = uds.Did{
+		id: u16(0xf1b0)
+	}
+	st.conn_diag.server.ndid = 7
 	st.conn_diag.server.routines[0] = uds.Routine{ // "SelfCheck" (docs/diagnostics.md §3.1)
 		id:          u16(0x0201)
 		sessions:    u8(0x04)
@@ -603,6 +615,16 @@ pub fn partition_can0(ch can.Channel) {
 		timeout_us:  u64(10000) * 1000
 	}
 	st.conn_diag.server.nroutines = 1
+	st.conn_diag.server.ios[0] = uds.IoControl{ // 0x2F on WarnLamp
+		did:      u16(0xf1b0)
+		width:    1
+		lo:       i64(0)
+		hi:       i64(1)
+		dflt:     i64(0)
+		params:   u8(0x0f)
+		sessions: u8(0x04)
+	}
+	st.conn_diag.server.nio = 1
 	st.conn_diag.refresh = diag_refresh_diag
 	st.conn_diag.server.security = st.sa_diag.ops(u32(osal.now_us()))
 	st.conn_diag.server.security_levels = u8(0x01)

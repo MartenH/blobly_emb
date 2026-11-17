@@ -47,7 +47,7 @@ fn ecu_diag_tables() []Table {
 			k('max_message', .int).d('${isotp.default_message}').range(isotp.min_message, isotp.message_limit).doc('its [isotp] max_message: the gateway refuses a longer routed request at once (diagnostic NACK 0x04) rather than forward one the node would refuse on its bus (REQ-CAN-TP-023); sysgen writes it when the node\'s is not the default'),
 			k('tx_dl', .int).d('8').one_of_ints(tx_dls()).doc('its [isotp] tx_dl: the frame length the gateway sends to it with (${tx_dl_list()}; above 8 only on a CAN-FD bus); sysgen writes it when the node\'s is not 8, and syscheck refuses an authored route whose tx_dl is not its node\'s (REQ-CAN-TP-026)'),
 		]),
-		tbl('did', '[[did]]', 'A data identifier the server reads (0x22) and may write (0x2E). Its value is ONE of: `ascii` / `bytes` (a constant), `signal` (live), `param` (a coded [[param]]), `param_status`, `tx_saturations`.', [
+		tbl('did', '[[did]]', 'A data identifier the server reads (0x22) and may write (0x2E). Its value is ONE of: `ascii` / `bytes` (a constant), `signal` (live), `param` (a coded [[param]]), `param_status`, `tx_saturations`. A live signal\'s DID may also carry a `control` (0x2F).', [
 			req('id', .int).range(0, 0xFFFF).hex().doc('the 16-bit data identifier (0 is skipped)'),
 			k('ascii', .str).doc('a constant value as an ASCII string (at most ${uds.max_did_data} bytes)'),
 			k('bytes', .str).doc('a constant value as space-separated hex bytes (at most ${uds.max_did_data})'),
@@ -58,6 +58,12 @@ fn ecu_diag_tables() []Table {
 			k('tx_saturations', .boolean).d('false').doc('the count of sent values saturated to their DBC range since start (u32 BE)'),
 			sub('read', .tbl, 'did_access').doc('the 0x22 gate; absent = every session, no security'),
 			sub('write', .tbl, 'did_access').doc('the 0x2E gate (makes the DID writable; a record of exactly its size); absent = every session, no security'),
+			sub('control', .tbl, 'did_control').doc('0x2F InputOutputControlByIdentifier on the `signal` this DID reads: a tester\'s value replaces the signal where the node encodes it into its frame (docs/diagnostics.md §3.1); absent = no control'),
+		]),
+		tbl('did_control', '[[did]] control', 'An input/output control (0x2F) of the output signal a live DID reads: the parameters served beside returnControlToECU, and the gate.', [
+			req('parameters', .str_arr).one_of(['reset_to_default', 'freeze_current_state', 'short_term_adjustment']).doc('the control parameters served besides returnControlToECU (always served): reset to the signal\'s initial value, freeze the value published now, a value of the tester\'s'),
+			k('session', .str_arr).d('["extended"]').one_of(['extended', 'safety']).doc('the sessions it is accepted in (never default or programming)'),
+			k('security', .int).d('0').range(0, uds.max_security_level).doc('the 0x27 level that must be unlocked; 0 = the [uds] services 0x2F row\'s level (none if the row names none). The control is returned when that level is relocked'),
 		]),
 		tbl('did_access', '[[did]] read/write', 'The sessions and the 0x27 level an access needs.', [
 			k('session', .str_arr).one_of(session_names()).doc('the sessions it is allowed in; absent = every session'),

@@ -16,7 +16,14 @@
  *   diag_sa_key_ok — NOT HERE, deliberately. The OEM's node glue supplies it; a node that gates a
  *                    DID and has none fails to LINK, naming the symbol. blobly_net's public
  *                    reference key is opted into by name (`[uds] security_key = "reference"`)
- *                    and is then comm/uds's own, in V — never a silent default in an image. */
+ *                    and is then comm/uds's own, in V — never a silent default in an image.
+ *
+ * InputOutputControlByIdentifier (0x2F, docs/diagnostics.md §3.1 "Input/output control"):
+ *   diag_io_ok     — the application's conditions for a control: 0 answers conditionsNotCorrect
+ *                    (0x22) and nothing changes (e.g. the vehicle is moving). Asked for
+ *                    resetToDefault, freezeCurrentState and shortTermAdjustment, never for
+ *                    returnControlToECU. WEAK, accepting (diag_io_ok.h): a node states its
+ *                    conditions by defining it in its own glue (target_ext.c). */
 #include <stdint.h>
 
 #define RCC_CR_R       (*(volatile uint32_t *)0x58024400u)
@@ -132,6 +139,11 @@ __attribute__((weak)) int diag_sa_seed(uint8_t *out, int n) {
 	}
 	return 0;
 }
+
+/* --- InputOutputControlByIdentifier (0x2F) ------------------------------------------------- */
+
+/* diag_io_ok: weak and accepting — its own header, so a host test runs this very default */
+#include "diag_io_ok.h"
 
 /* --- ECUReset (0x11) ---------------------------------------------------------------------- */
 

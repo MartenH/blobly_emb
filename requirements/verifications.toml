@@ -846,6 +846,24 @@ verifies = ["REQ-DIAG-080", "REQ-DIAG-082", "REQ-DIAG-083", "REQ-DIAG-084", "REQ
 approved_by = "Claude (coding agent) on Marten Hildell's bench — system_full zone_a, domain, sysnode vs CANsub.4"
 date = "2026-11-17"
 
+# InputOutputControlByIdentifier on silicon: system_full flashed from one build, domain (H755)
+# controlling VehicleSpeed (0xF1A0, sent by its CM7) and DynKeptOut (0xF1A2, a CM4 value the CM7
+# sends). ioctl_domain.lua 10/10 over the CANsub: refused in the default session and every malformed
+# request by its NRC; 03 set the value VehSpeedFrame (0x120) carried and the DID read it; 02 froze
+# what was sent, 01 reset it to the initial value, 00 gave the FB's back; a return to default, S3,
+# an ECUReset each returned control and re-entering extended kept an ungated one; the CM4 value
+# overridden, frozen and reset where the CM7 sends it; a functional 0x2F ignored. Regression on the
+# same images: diag_domain.lua 15/15, xcore_domain.lua 14/14, diag_nodes.lua 11/11,
+# routine_zone_a.lua 10/11 (its routed leg needs the bench Ethernet segment, not connected). Host:
+# overspeed's ioctl.lua on vcan0 (the integration run 58 + 7).
+[[review]]
+id = "io-control-silicon"
+method = "review"
+context = "h755/threadx"
+verifies = ["REQ-DIAG-100", "REQ-DIAG-102", "REQ-DIAG-103", "REQ-DIAG-105"]
+approved_by = "Claude (coding agent) on Marten Hildell's bench — system_full domain, zone_a, sysnode vs CANsub.4"
+date = "2026-11-17"
+
 # The 0x27 state in the NvM journal on silicon (U3a, the keep cell removed): all three system_full CAN
 # nodes flashed from one build of the reworked rule (each level's wrong keys since its last correct
 # key, saturating, written only when it changes; a delay per level) — domain (H755, both banks),

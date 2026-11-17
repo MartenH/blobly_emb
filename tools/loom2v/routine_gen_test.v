@@ -317,6 +317,10 @@ fn test_the_doip_push() {
 	assert in_order(g.glue, ['doipnet.serve_mailbox(mut g_diag', 'if doipnet.take_push_sent() {',
 		'g_diag.push_sent()', 'push_n := g_diag.push_step(&g_diag_push[0], doipnet.push_max)',
 		'g_diag.pushed(doipnet.push_resp(&g_diag_push[0], push_n))']), g.glue
+	// the routine's own gate names no level; its 0x31 row's (1) is its effective one, which the server
+	// holds as the routine's, so a relock of level 1 asks it to stop (comm/uds stop_relocked_routines)
+	assert in_order(g.glue, ['g_diag.server.routines[0] = uds.Routine{', 'sessions:    u8(0x04)',
+		'security:    u8(1)', 'g_diag.server.nroutines = 1']), g.glue
 	none_ := rt_target('doip_none', rt_conn + rt_doip.replace('"0x31" = { sessions = ["extended"], security = 1 }\n',
 		'').replace('"0x27" = {}\n', ''))
 	assert none_.code == 0, none_.out

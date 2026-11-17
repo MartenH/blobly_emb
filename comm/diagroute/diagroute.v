@@ -110,7 +110,8 @@ pub enum Verdict {
 // the sub-function (0x10, 0x11, 0x19, 0x27, 0x28, 0x29, 0x31, 0x3E, 0x85; its suppress bit aside:
 // a suppressed request still owes the answer after a responsePending), then RoutineControl's
 // routine identifier, the DTC (and the record) of a ReadDTCInformation 04 / 06, a data identifier (0x2E; 0x22: ANY of the requested ones — a server skips a
-// DID it does not serve and answers with the next), TransferData's block sequence counter (0x36)
+// DID it does not serve and answers with the next), an InputOutputControl's DID and control
+// parameter (0x2F), TransferData's block sequence counter (0x36)
 // — so a late answer to an earlier request of the same service is told apart wherever the protocol
 // can tell it.
 fn answers(a &u8, n int, req &u8, rn int, full int) bool {
@@ -163,6 +164,9 @@ fn answers(a &u8, n int, req &u8, rn int, full int) bool {
 		}
 		if sid == 0x2E {
 			return n >= 3 && rn >= 3 && a[1] == req[1] && a[2] == req[2]
+		}
+		if sid == 0x2F { // the DID and the control parameter (not a sub-function: no suppress bit)
+			return n >= 4 && rn >= 4 && a[1] == req[1] && a[2] == req[2] && a[3] == req[3]
 		}
 		if sid == 0x36 {
 			return n >= 2 && rn >= 2 && a[1] == req[1]
