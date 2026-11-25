@@ -481,7 +481,9 @@ profiles `comm/e2e` implements; `PROFILE_01` and `autosar_p01` read as P01, `PRO
 `autosar_p05` as P05), `E2EDataId`, and
 `E2ETimeout` (ms, E2E's own sender-loss timeout for a receiver; 0 means none, and a sender
 ignores it). blobly_net reads and writes the same attributes and its `cmd/arxml2dbc` exports
-them, so both tools take one contract from one file. `tools/ecumodel`'s `resolve_frame_e2e` is
+them, so both tools take one contract from one file. One gap remains: `cmd/arxml2dbc` still
+exports Profile 1 only, so an ARXML PROFILE_05 frame reaches a node's DBC unprotected until
+blobly_net#707 lands; write its `[[frame]].e2e` table by hand meanwhile. `tools/ecumodel`'s `resolve_frame_e2e` is
 the one resolution: a `[[frame]].e2e` field, `timeout_ms` included, is an override, and one that
 contradicts the DBC is refused unless the table says `deviates_from_dbc = true`; a field it
 leaves out is the DBC's (the profile included). For P01 the CRC signal must be 8 bits on a byte

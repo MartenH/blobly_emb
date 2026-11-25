@@ -22,7 +22,13 @@ fn overspeed_with(name string, edit fn (string) string) (int, string, string) {
 }
 
 fn overspeed_with_dbc(name string, edit fn (string) string, edit_dbc fn (string) string) (int, string, string) {
-	ex := os.join_path(@VMODROOT, 'examples', 'overspeed')
+	return example_with_dbc('overspeed', name, edit, edit_dbc)
+}
+
+// example_with_dbc generates examples/<example> with its ecu.toml and bus.dbc edited, in a
+// scratch directory.
+fn example_with_dbc(example string, name string, edit fn (string) string, edit_dbc fn (string) string) (int, string, string) {
+	ex := os.join_path(@VMODROOT, 'examples', example)
 	tmp := os.join_path(os.temp_dir(), 'e2e_dbc_${name}_${os.getpid()}')
 	os.mkdir_all(tmp) or { panic(err) }
 	defer {
@@ -205,4 +211,51 @@ fn test_a_profile_5_frame_composes_with_secoc() {
 	meth1, args1 := m.frames.e2e_call('brake', 'check', true)
 	assert meth1 == 'check_ex' && args1 == '3, 4, 1, 1, 6, 2'
 	assert m.frames.e2e_bits('brake') == [[24, 32], [32, 36]]
+}
+
+// p05_secured_lamp puts LampFrame on Profile 5 (header at byte 1) and SecOC (freshness at
+// `fresh`, a 2-byte MAC at byte 6).
+fn p05_secured_lamp(fresh int) fn (string) string {
+	return fn [fresh] (src string) string {
+		return src.replace('e2e  = { data_id = 0x10, crc_pos = 1, counter_pos = 2 }',
+			'e2e  = { profile = "P05", data_id = 0x10, crc_pos = 1, counter_pos = 3 }\n' +
+			'secoc = { key = "10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f", data_id = 0x21, fresh_pos = ${fresh}, mac_pos = 6, mac_len = 2 }')
+	}
+}
+
+// p05_dst_frame puts gw_e2e's DstFrame on Profile 5 with its header at byte `crc`.
+fn p05_dst_frame(crc int) fn (string) string {
+	return fn [crc] (src string) string {
+		return src.replace('e2e  = { data_id = 0x2A, crc_pos = 6, counter_pos = 7 }',
+			'e2e  = { profile = "P05", data_id = 0x2A, crc_pos = ${crc}, counter_pos = ${crc + 2} }')
+	}
+}
+
+// REQ-E2E-004 in the generator: Profile 5's CRC is two bytes, so a SecOC freshness byte on the
+// CRC's high byte collides, where under Profile 1's one-byte CRC the same position is free
+fn test_a_profile_5_crc_high_byte_is_not_free_for_secoc() {
+	dbc := fn (dbc string) string {
+		return dbc.replace('BO_ 272 LampFrame: 3 SUT', 'BO_ 272 LampFrame: 8 SUT')
+	}
+	code, out, _ := overspeed_with_dbc('p05secoc', p05_secured_lamp(2), dbc)
+	assert code != 0
+	assert out.contains('e2e+secoc lamp_frame: crc_pos=1/counter_pos=3 collide with fresh_pos=2/mac@6+2'), out
+	// off the header, the same frame composes, the CRC leaving SecOC's bytes out
+	code2, out2, glue2 := overspeed_with_dbc('p05secocok', p05_secured_lamp(5), dbc)
+	assert code2 == 0, out2
+	assert glue2.contains('protect_p05_ex(&tx_lamp_frame.data[0], int(lamp_frame_dlc), u16(0x10), 1, 5, 1, 6, 2)'), glue2
+}
+
+// a routed signal may not sit on Profile 5's CRC high byte: the destination producer stamps the
+// two CRC bytes after composing the routed value (examples/gw_e2e, Speed in DstFrame's bytes 1-2)
+fn test_a_routed_signal_on_a_profile_5_crc_is_refused() {
+	same := fn (dbc string) string {
+		return dbc
+	}
+	code, out, _ := example_with_dbc('gw_e2e', 'p05route', p05_dst_frame(0), same)
+	assert code != 0
+	assert out.contains('route: signal "Speed" occupies the E2E CRC bytes of destination frame "DstFrame"'), out
+	code2, out2, glue2 := example_with_dbc('gw_e2e', 'p05routeok', p05_dst_frame(5), same)
+	assert code2 == 0, out2
+	assert glue2.contains('protect_p05('), glue2
 }

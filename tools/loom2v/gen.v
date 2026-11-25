@@ -222,7 +222,9 @@ fn (f FrameCfg) e2e_bits(frame string) [][]int {
 // e2e_call is the comm/e2e call that stamps (`op` = 'protect') or checks ('check') a frame, as
 // the method and the arguments after the Data ID: Profile 1's CRC and counter bytes, Profile 5's
 // header offset (its CRC's byte); with `secoc`, the _ex form and SecOC's freshness/MAC windows
-// left out of the CRC (REQ-E2E-004). ONE spelling for every call site.
+// left out of the CRC (REQ-E2E-004). ONE spelling for every CAN frame's call site; the SOME/IP
+// trailer is Profile 1 only (tools/ecumodel's validate_someip refuses another) and is spelled in
+// gen_com.v's eth paths.
 fn (f FrameCfg) e2e_call(frame string, op string, secoc bool) (string, string) {
 	mut meth := op
 	mut args := if f.e2e_p05(frame) {

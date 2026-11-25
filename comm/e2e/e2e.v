@@ -19,8 +19,9 @@ module e2e
 //
 // On a frame composed with SecOC (REQ-E2E-004, the _ex forms), the freshness/MAC windows are
 // excluded from either CRC too, a composition rule beyond the profiles themselves. Both profiles
-// are pinned by vectors from an independent implementation (autosar-e2e) in e2e_test.v, the same
-// ones blobly_net's autosar_p01 and autosar_p05 are pinned by.
+// are pinned by vectors from an independent implementation (autosar-e2e), Profile 1 in
+// e2e_test.v and Profile 5 in p05_test.v, the same ones blobly_net's autosar_p01 and
+// autosar_p05 are pinned by.
 
 // p01_counter_span: a Profile 1 counter runs 0..14, then wraps to 0.
 const p01_counter_span = 15
