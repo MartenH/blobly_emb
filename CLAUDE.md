@@ -206,8 +206,10 @@ feature branch runs only `guard`, so a green tick there is the identity check, N
 gate. Open the PR to get one.
 
 ci.yml's two jobs (`test`, `cross`) run on **`ubuntu-24.04`**, pinned rather than `ubuntu-latest`: 24.04 is the supported
-floor, and when `ubuntu-latest` became 26.04 (2026-11) its gcc 14 and arm-none-eabi 14.2 broke the
-build under every open PR at once. Moving to a newer image is its own PR.
+floor, and when `ubuntu-latest` became 26.04 (2026-11) it broke the build under every open PR at
+once — gcc 14 refused a missing prototype (#438), and GNU make 4.4.1 exported `app_deps_check.sh`'s
+command-line `c_archive` into `$(shell)`, where it stopped make (#439; `tools.mk` now `unexport`s its
+recipe macros). Moving to a newer image is its own PR.
 
 It runs more than the four you would run by hand: host unit tests (the image code's through
 `make coverage-check`, then `v -cc cc -nocache -enable-globals test tools`), `make lint`,
