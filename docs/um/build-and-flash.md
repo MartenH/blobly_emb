@@ -114,6 +114,14 @@ BLOBLY_NET=../blobly_net VERSION=8 examples/system_full/test/boot_bench.sh zone_
 refuses (valid mark last) — the board sits in programming mode and a plain re-run of
 `cmd/flash` recovers it ([../bootloader.md](../bootloader.md) bench log).
 
+The bench must have ONE tester on the nodes' diagnostic ids: ISO-TP's normal addressing has no
+room for two, and another tester's Single Frame aborts the multi-frame request an ECU is
+receiving (ISO 15765-2) and puts its answer where the flasher awaits a Flow Control — `ISO-TP:
+expected Flow Control, got 0x04` (emb#407: blobly_gw's `otad` reads F181/F190/F195 from every node
+on compute at each server poll; stop it for the bench). `boot_bench.sh` records the buses to
+`examples/system_full/test/build/boot_bench.log` (`BOOT_RECORD`, empty for none) and its last test
+fails, naming the frames, when anything but this run sent on a node's request id.
+
 The standalone example `h755_threadx` keeps `make APP_LINK=boot` (an image for the app slot)
 and its `boot` shell command (the request cell, then a reset); the boot that
 serves it is a `[boot]` node's on the same board.

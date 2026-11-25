@@ -11,7 +11,12 @@
 #
 #   BLOBLY_NET=/path/to/blobly_net examples/system_full/test/boot_bench.sh [domain sysnode zone_a]
 #
-# Env: VERSION (default: seconds since 2026-01-01, so every run is new). Exit: the suite's.
+# Env: VERSION (default: seconds since 2026-01-01, so every run is new); BOOT_RECORD (default
+# test/build/boot_bench.log; empty: none): the CAN buses recorded through the run, and a last test
+# that no other tester sent on the nodes' request ids meanwhile — ONE tester per id pair, so stop
+# anything else that diagnoses these nodes (blobly_gw's otad reads them at every server poll, 120 s
+# on the bench; emb#407).
+# Exit: the suite's.
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 sys=$(dirname "$here")
@@ -29,5 +34,10 @@ for n in "${nodes[@]}"; do
 	make -C "$sys/nodes/$node" image SW_VERSION="$VERSION" >/dev/null || { echo "FAIL $n: make image"; exit 1; }
 done
 list=$(IFS=,; echo "${nodes[*]}")
-BOOT_PHASE=flash BOOT_NODES=$list BOOT_VERSION=$VERSION v -enable-globals \
+rec=${BOOT_RECORD-$here/build/boot_bench.log}
+if [ -n "$rec" ]; then
+	case $rec in /*) ;; *) rec=$PWD/$rec ;; esac # the suite resolves a relative path from the script
+	mkdir -p "$(dirname "$rec")"
+fi
+BOOT_RECORD=$rec BOOT_PHASE=flash BOOT_NODES=$list BOOT_VERSION=$VERSION v -enable-globals \
 	run "$BLOBLY_NET/cmd/script/run.v" "$here/boot_handoff.lua"
