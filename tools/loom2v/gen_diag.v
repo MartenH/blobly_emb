@@ -1,7 +1,12 @@
 module main
 
 import toml
+import boot
+import boot.bufs
+import comm.fault
 import comm.uds
+import comm.udsauth
+import tools.doipcfg
 
 // The diagnostic server's wiring (comm/diag.Connection). What the server does in a pass is the
 // module's; what is emitted here is only how an owner configures it and where it calls it — the
@@ -20,6 +25,14 @@ mut:
 	// the 0x27 key on a target: 'reference' = blobly_net's public bench key, opted into by name;
 	// '' = the OEM's diag_sa_key_ok, which the node's glue must supply (no default is linked)
 	security_key string
+	// how a level is unlocked: 'seed_key' (0x27, the default) or 'authentication' (0x29)
+	access string
+	// access = 'authentication': per level, the tester's Ed25519 public key (32 bytes), and whether
+	// the file named it "reference" (the dev tester key — a bench key, REQ-NET-012)
+	auth_keys map[int][]u8
+	auth_ref  map[int]bool
+	// some auth_keys entry names the dev tester key (doipcfg.auth_reference, syscheck's reading too)
+	auth_bench bool
 	// `services` declared: the server answers exactly `services`. Absent = the default table —
 	// every service this build performs (diag_unbuilt), in its default sessions.
 	table    bool
@@ -29,6 +42,16 @@ mut:
 	handoff_row      bool
 	handoff_sessions u8 // uds.in_* mask; 0 = uds.default_handoff_sessions
 	handoff_security u8
+}
+
+// auth: the node unlocks by Authentication (0x29) rather than SecurityAccess (0x27)
+fn (u UdsCfg) auth() bool {
+	return u.access == 'authentication'
+}
+
+// auth_reference: an auth key names the dev tester key (a bench key over the network, REQ-NET-012)
+fn (u UdsCfg) auth_reference() bool {
+	return u.auth_bench
 }
 
 // BootCfg is [boot]: the node runs behind the bootloader (docs/bootloader.md), so its server's
@@ -73,19 +96,75 @@ fn parse_boot(doc toml.Doc) BootCfg {
 fn boot_key(bm map[string]toml.Any, key string) []u8 {
 	h := (bm[key] or {
 		panic('loom2v: [boot] needs `${key}` — the PUBLIC key (64 hex characters) the bootloader verifies with (examples/keys/README.md)')
-	}).string().trim_space().to_lower()
-	if h.len != 64 || !h.bytes().all(it.is_hex_digit()) {
-		panic('loom2v: [boot] ${key} must be 64 hex characters (a 32-byte Ed25519 public key), got "${h}"')
-	}
-	mut out := []u8{}
-	for i := 0; i < 64; i += 2 {
-		out << u8(h[i..i + 2].parse_uint(16, 8) or { 0 })
-	}
+	}).string()
+	out := hex_key(h) or { panic('loom2v: [boot] ${key} ${err}') }
 	// boot.Prog reads an all-zero key as "no check" (unsigned images, no 0x29): never generated
 	if out.all(it == 0) {
 		panic('loom2v: [boot] ${key} is all zeros — the bootloader would take that as "no check" (boot.Prog); name the real public key')
 	}
+	why := doipcfg.key_refusal(fix_key(out))
+	if why != '' {
+		panic('loom2v: [boot] ${key} ${why}')
+	}
 	return out
+}
+
+// hex_key: an Ed25519 public key written as 64 hex characters — the one rule [boot]'s keys and
+// [uds] auth_keys share (doipcfg.key_bytes, the bench-key comparison's decoding too)
+fn hex_key(text string) ![]u8 {
+	k := doipcfg.key_bytes(text) or {
+		return error('must be 64 hex characters (a 32-byte Ed25519 public key), got "${text.trim_space().to_lower()}"')
+	}
+	return k[..].clone()
+}
+
+fn fix_key(key []u8) [32]u8 {
+	mut fixed := [32]u8{}
+	for i in 0 .. 32 {
+		fixed[i] = key[i]
+	}
+	return fixed
+}
+
+// parse_auth_keys: [uds] auth_keys — level ("1".."8") -> "reference" or 64 hex (the dev tester key's
+// own hex is the bench key too: doipcfg.names_bench_key); a key all zeros, not a curve point or of
+// small order is refused (doipcfg.key_refusal). Which levels need one is validate_uds's.
+fn parse_auth_keys(v toml.Any) (map[int][]u8, map[int]bool) {
+	if v !is map[string]toml.Any {
+		panic('loom2v: [uds] auth_keys must be a table, level = "<key>" (e.g. auth_keys = { "1" = "reference" })')
+	}
+	mut keys := map[int][]u8{}
+	mut refs := map[int]bool{}
+	for lk, kv in v.as_map() {
+		level := if lk.len == 1 && lk[0] >= `1` && lk[0] <= `0` + u8(uds.max_security_level) {
+			int(lk[0] - `0`)
+		} else {
+			0
+		}
+		if level == 0 {
+			panic('loom2v: [uds] auth_keys "${lk}" is not a security level — write "1".."${uds.max_security_level}"')
+		}
+		if kv !is string {
+			panic('loom2v: [uds] auth_keys "${lk}" must be a string: "reference" or 64 hex characters')
+		}
+		text := kv.string()
+		if doipcfg.names_bench_key(kv) {
+			keys[level] = udsauth.reference_key[..].clone()
+			refs[level] = true
+			continue
+		}
+		key := hex_key(text) or { panic('loom2v: [uds] auth_keys "${lk}" ${err}, or "reference"') }
+		if key.all(it == 0) {
+			panic('loom2v: [uds] auth_keys "${lk}" is all zeros — it verifies nothing; name the tester\'s public key')
+		}
+		why := doipcfg.key_refusal(fix_key(key))
+		if why != '' {
+			panic('loom2v: [uds] auth_keys "${lk}" ${why}')
+		}
+		keys[level] = key
+		refs[level] = false
+	}
+	return keys, refs
 }
 
 // boot_gen_h: gen/boot_gen.h — what the node's bootloader (boot/target/main.v, through
@@ -105,8 +184,14 @@ fn boot_gen_h(m Model, can_idx string, fd bool) []string {
 		'#define BOOT_CAN_FD ${if fd { 1 } else { 0 }} /* its frame format, as the application opens it */',
 		'#define BOOT_RX_ID 0x${c.rx_id.hex()}u',
 		'#define BOOT_TX_ID 0x${c.tx_id.hex()}u',
+		'#define BOOT_EXT ${int(c.ext)} /* [isotp] ext or normal_fixed: BOOT_RX_ID / BOOT_TX_ID are 29-bit */',
 		'#define BOOT_BS ${c.bs}u',
 		'#define BOOT_STMIN ${c.stmin}u',
+		'#define BOOT_TX_DL ${c.tx_dl}u /* [isotp] tx_dl: the frame length it answers with (above 8 only with BOOT_CAN_FD) */',
+		// the node's maximum message length and the one block every message buffer is carved from
+		// (boot.bufs: the image lays it out by the same function) — REQ-BOOT-020
+		'#define BOOT_MAX_MESSAGE ${c.max_message}u /* [isotp] max_message: the TransferData block follows it */',
+		'#define BOOT_BUF_LEN ${bufs.layout(c.max_message, m.doip.on).total}u /* boot.bufs layout */',
 		'#define BOOT_IMAGE_KEY ${hexes(m.boot.image_key)}',
 		'#define BOOT_SESSION_KEY ${hexes(m.boot.session_key)}',
 	]
@@ -182,7 +267,21 @@ fn parse_uds(doc toml.Doc) UdsCfg {
 		security_attempts: int((um['security_attempts'] or { toml.Any(0) }).int())
 		security_delay_ms: int((um['security_delay_ms'] or { toml.Any(0) }).int())
 		security_key:      (um['security_key'] or { toml.Any('') }).string()
+		access:            (um['access'] or { toml.Any('seed_key') }).string()
 		table:             'services' in um
+	}
+	if c.access !in schema_key('uds', 'access').choices {
+		panic('loom2v: [uds] access "${c.access}" — "seed_key" (0x27 SecurityAccess, the default) or "authentication" (0x29)')
+	}
+	if akv := um['auth_keys'] {
+		if !c.auth() {
+			panic('loom2v: [uds] auth_keys are the keys 0x29 Authentication verifies with, but access is "${c.access}" — set access = "authentication", or drop auth_keys')
+		}
+		c.auth_keys, c.auth_ref = parse_auth_keys(akv)
+		c.auth_bench = doipcfg.auth_reference(akv)
+	}
+	if c.auth() && c.security_key != '' {
+		panic('loom2v: [uds] security_key is the 0x27 key, but access = "authentication" unlocks with 0x29 — drop security_key (the keys are auth_keys)')
 	}
 	if c.s3_ms < 0 {
 		panic('loom2v: [uds] s3_ms ${c.s3_ms} is negative (0 = the default ${uds.default_s3_us / 1000} ms)')
@@ -309,11 +408,34 @@ fn diag_unbuilt(m Model, sid u8) string {
 			if m.faults.len == 0 { 'the node has no fault memory (no [[fault]])' } else { '' }
 		}
 		0x27 {
-			if sa_levels(m) == 0 {
+			if m.uds.auth() {
+				'the node unlocks by Authentication ([uds] access = "authentication"), so 0x27 is not served'
+			} else if sa_levels(m) == 0 {
 				'no [[did]] gate or service row names a security level, so there is nothing to unlock'
 			} else {
 				''
 			}
+		}
+		0x29 {
+			if !m.uds.auth() {
+				'the node unlocks by SecurityAccess (0x27); 0x29 is served only with [uds] access = "authentication"'
+			} else if sa_levels(m) == 0 {
+				'no [[did]] gate or service row names a security level, so there is nothing to unlock'
+			} else {
+				''
+			}
+		}
+		0x31 {
+			if m.target.on && !m.target.threadx {
+				'a bare-metal target runs no FB beside the server that could serve a routine'
+			} else if m.routines.len == 0 {
+				'the node has no [[routine]]'
+			} else {
+				'' // the host bridge and the ThreadX comm thread, each routine run by its FB
+			}
+		}
+		0x2F {
+			if io_controls(m).len == 0 { 'no [[did]] declares a `control`' } else { '' }
 		}
 		else {
 			'comm/uds does not implement it'
@@ -321,10 +443,20 @@ fn diag_unbuilt(m Model, sid u8) string {
 	}
 }
 
-// sa_levels: the 0x27 levels the server serves — every level a [[did]] gate or a service row
-// names (bit L-1 for level L). A level nothing is gated on is not offered: unlocking it opens nothing.
+// auth_on: the node's server unlocks by 0x29 Authentication — a level to unlock, on a connection
+fn auth_on(m Model) bool {
+	return m.uds.auth() && m.isotp_conns.len > 0 && sa_levels(m) != 0
+}
+
+// unlock_sid: the service a tester unlocks this node's levels with
+fn unlock_sid(m Model) u8 {
+	return if m.uds.auth() { u8(0x29) } else { u8(0x27) }
+}
+
+// sa_levels: the 0x27 (or 0x29) levels the server serves — every level a [[did]] gate or control, a [[routine]] or a
+// service row names (bit L-1 for level L). A level nothing is gated on is not offered: unlocking it opens nothing.
 fn sa_levels(m Model) u8 {
-	mut mask := security_levels(m.dids)
+	mut mask := security_levels(m.dids) | routine_levels(m.routines)
 	for r in m.uds.services {
 		if r.security != 0 {
 			mask |= u8(1) << (r.security - 1)
@@ -334,6 +466,17 @@ fn sa_levels(m Model) u8 {
 		mask |= u8(1) << (m.uds.handoff_security - 1)
 	}
 	return mask
+}
+
+// sa_level_count: how many 0x27 levels the node serves
+fn sa_level_count(m Model) int {
+	mut n := 0
+	for i in 0 .. uds.max_security_level {
+		if sa_levels(m) & (u8(1) << i) != 0 {
+			n++
+		}
+	}
+	return n
 }
 
 // svc_listed: the server answers `sid` if this build performs it — the default table answers
@@ -365,6 +508,9 @@ fn validate_boot(m Model) {
 	}
 	if fdcan_index(m.isotp_conns[0].bus) == '' {
 		panic('loom2v: [boot]: the [isotp] bus "${m.isotp_conns[0].bus}" names no single FDCAN index 0..2 — the bootloader opens it by that index, as the comm thread does')
+	}
+	if m.isotp_conns[0].max_message < boot.min_message {
+		panic('loom2v: [isotp] max_message = ${m.isotp_conns[0].max_message} is too short for the [boot] node\'s bootloader: its 0x29 proof request is ${boot.min_message} bytes (REQ-CAN-TP-022)')
 	}
 	mask := handoff_sessions(m)
 	if mask & uds.in_programming != 0 {
@@ -405,7 +551,9 @@ fn validate_uds(m Model) {
 	if sa_levels(m) == 0 && (u.security_attempts != 0 || u.security_delay_ms != 0 || u.security_key != '') {
 		panic('loom2v: [uds] configures security_attempts / security_delay_ms / security_key, but no [[did]] gate or service row names a security level — there is nothing to unlock')
 	}
+	validate_auth(m)
 	if !u.table {
+		validate_did_rows(m) // the default table's rows: 0x2F runs in extended only
 		return
 	}
 	for r in u.services {
@@ -417,6 +565,10 @@ fn validate_uds(m Model) {
 		if r.sessions & uds.in_programming != 0 {
 			panic('loom2v: [uds] services ${h} names the programming session — an application server refuses it (programming is the bootloader\'s)')
 		}
+		if r.sid == 0x29 && r.sessions & uds.in_default != 0 {
+			// ISO 14229-1 allows Authentication in the default session; this server does not
+			panic('loom2v: [uds] services 0x29 names the default session — ISO 14229-1 allows Authentication there, but this server serves it only in a non-default session, like 0x27 (REQ-DIAG-121, docs/diagnostics.md §3.1): every session entry relocks, so a level unlocked in the default session is gone by the extended session every gate needs; drop "default"')
+		}
 		if uds.default_sessions(r.sid) != 0 && r.sessions & uds.in_default != 0 {
 			panic('loom2v: [uds] services ${h} names the default session, but ISO 14229-1 runs it only in a non-default one')
 		}
@@ -427,15 +579,15 @@ fn validate_uds(m Model) {
 		if !svc_listed(m, 0x10) && mask != 0 && mask & uds.in_default == 0 {
 			panic('loom2v: [uds] services ${h} runs only outside the default session, but the table leaves out 0x10 — it could never be reached')
 		}
-		// 0x27 unlocks in extended (an application refuses programming) and every session entry
-		// relocks: a 0x27 kept out of extended unlocks nothing any gate (always extended) can use
-		if r.sid == 0x27 && mask & uds.in_extended == 0 {
-			panic('loom2v: [uds] services 0x27 leaves out the extended session — an unlock elsewhere is relocked by the session change every gate needs')
+		// 0x27 / 0x29 unlock in extended (an application refuses programming) and every session entry
+		// relocks: one kept out of extended unlocks nothing any gate (always extended) can use
+		if r.sid in [u8(0x27), 0x29] && mask & uds.in_extended == 0 {
+			panic('loom2v: [uds] services ${h} leaves out the extended session — an unlock elsewhere is relocked by the session change every gate needs')
 		}
 		if r.security == 0 {
 			continue
 		}
-		if r.sid in [u8(0x10), 0x27, 0x3E] {
+		if r.sid in [u8(0x10), 0x27, 0x29, 0x3E] {
 			panic('loom2v: [uds] services ${h} cannot need a security level — it is how a tester reaches, unlocks or keeps the session')
 		}
 		if mask != 0 && mask & uds.in_extended == 0 {
@@ -443,15 +595,21 @@ fn validate_uds(m Model) {
 		}
 	}
 	// what the table leaves out must not strand what the rest of the config declares
-	if sa_levels(m) != 0 && !svc_listed(m, 0x27) {
-		panic('loom2v: [uds] services leaves out 0x27, but a [[did]] gate or service row needs a security level — nothing could unlock it')
+	if sa_levels(m) != 0 && !svc_listed(m, unlock_sid(m)) {
+		panic('loom2v: [uds] services leaves out 0x${unlock_sid(m).hex()}, but a [[did]] gate or service row needs a security level — nothing could unlock it')
 	}
-	// a DID is reached through its service's row too: both gates must be satisfiable at once —
-	// a session they share, and one level (0x27 unlocks exactly one, and both compare exactly)
+	validate_did_rows(m)
+}
+
+// validate_did_rows: a DID is reached through its service's row too — the default table's
+// included, whose 0x2F row runs in extended only: both gates must be satisfiable at once — a
+// session they share, and one level (0x27 unlocks exactly one, and both compare exactly)
+fn validate_did_rows(m Model) {
 	for d in m.dids {
 		for acc in [
 			DidAccess{'read', 0x22, true, d.read_sessions, d.read_security},
 			DidAccess{'write', 0x2E, d.writable, d.write_sessions, d.write_security},
+			DidAccess{'control', 0x2F, d.control_params != 0, d.control_sessions, d.control_security},
 		] {
 			if !acc.used {
 				continue
@@ -466,11 +624,56 @@ fn validate_uds(m Model) {
 			if row.security != 0 && acc.security != 0 && row.security != acc.security {
 				panic('loom2v: [[did]] 0x${d.id.hex()} ${acc.what} needs security ${acc.security}, but [uds] services 0x${acc.sid.hex()} needs ${row.security} — one unlock cannot satisfy both')
 			}
+			// judged on the gate the server enforces: a level the row gives it needs the extended
+			// session among those both allow, as one of its own does (parse_did_access)
+			eff, level := access_gate(acc.sessions, acc.security, row)
+			if level != 0 && eff != 0 && eff & uds.in_extended == 0 {
+				panic('loom2v: [[did]] 0x${d.id.hex()} ${acc.what} needs security ${level} but the sessions it is accepted in (its own and [uds] services 0x${acc.sid.hex()}\'s) leave out the extended session, the only one an application server unlocks in — entering another relocks it, so it could never be opened')
+			}
 		}
 	}
 }
 
-// DidAccess is one [[did]] access (read / write) as the service that carries it sees it
+// access_gate: the gate the server enforces for a DID access whose own gate is (`sessions`,
+// `security`) behind its service's `row` — its sessions within the row's (0 = every session), and
+// its level, else the row's
+fn access_gate(sessions u8, security u8, row SvcCfg) (u8, u8) {
+	level := if security != 0 { security } else { row.security }
+	return sess_and(sessions, row.sessions), level
+}
+
+// validate_auth refuses an access = "authentication" whose keys do not match the levels it serves
+// (REQ-DIAG-120, REQ-DIAG-126): a served level with no key could never be unlocked, a key for a level
+// nothing gates opens nothing, and a key equal to the bootloader's image key gives the field key
+// the power to sign firmware.
+fn validate_auth(m Model) {
+	u := m.uds
+	if !u.auth() {
+		return
+	}
+	levels := sa_levels(m)
+	if levels == 0 {
+		panic('loom2v: [uds] access = "authentication", but no [[did]] gate or service row names a security level — there is nothing to unlock')
+	}
+	for l in 1 .. uds.max_security_level + 1 {
+		gated := levels & (u8(1) << (l - 1)) != 0
+		if gated && l !in u.auth_keys {
+			panic('loom2v: [uds] access = "authentication": security level ${l} is gated but auth_keys has no key for it — give "${l}" = "<64 hex>" (or "reference")')
+		}
+		if !gated && l in u.auth_keys {
+			panic('loom2v: [uds] auth_keys "${l}": no [[did]] gate or service row names security level ${l} — the key would unlock nothing')
+		}
+	}
+	if m.boot.on {
+		for l, k in u.auth_keys {
+			if k == m.boot.image_key {
+				panic('loom2v: [uds] auth_keys "${l}" is the [boot] image_key — the release (image) key and a tester key must differ, or a tester\'s key signs firmware')
+			}
+		}
+	}
+}
+
+// DidAccess is one [[did]] access (read / write / control) as the service that carries it sees it
 struct DidAccess {
 	what     string
 	sid      u8
@@ -506,7 +709,17 @@ fn svc_row(m Model, sid u8) (SvcCfg, bool) {
 fn conn_init_lines(m Model, c IsotpConn, conn string) []string {
 	srv := '${conn}.server'
 	mut g := []string{}
-	g << '\t${conn}.init(u32(0x${c.rx_id.hex()}), u32(0x${c.tx_id.hex()}), u32(0x${c.functional_id.hex()}), ${c.bs}, ${c.stmin})'
+	// the request and response buffers are the owner's, max_message bytes each: `<conn>_req` /
+	// `<conn>_resp` beside the connection (diag_target_globals, the host bridge state)
+	g << '\t${conn}.init(u32(0x${c.rx_id.hex()}), u32(0x${c.tx_id.hex()}), u32(0x${c.functional_id.hex()}), ${c.bs}, ${c.stmin}, &${conn}_req[0], &${conn}_resp[0], ${c.max_message})'
+	if c.tx_dl != 8 {
+		// its channel is opened CAN-FD: read_tx_dl refused the rest (REQ-CAN-TP-026)
+		g << '\t${conn}.link.tx_dl = ${c.tx_dl} // [isotp] tx_dl: CAN-FD frames of up to ${c.tx_dl} bytes'
+	}
+	if c.ext {
+		// emitted only when set: an 11-bit node's generated code stays as it was
+		g << '\t${conn}.ext = true // [isotp]: 29-bit identifiers (REQ-CAN-TP-040/041)'
+	}
 	g << '\t${srv}.no_programming = true // programming is the bootloader\'s'
 	if m.boot.on {
 		// [boot]: 0x10 02 is answered and handed to the owner (reset_into_boot) — behind its own
@@ -578,6 +791,8 @@ fn conn_init_lines(m Model, c IsotpConn, conn string) []string {
 		}
 	}
 	g << '\t${srv}.ndid = ${m.dids.len}'
+	g << routine_config_lines(m, srv)
+	g << io_init_lines(m, srv) // 0x2F's controls (gen_ioctl.v)
 	return g
 }
 
@@ -632,7 +847,7 @@ fn diag_target_fns(m Model, ioc_idx map[string]int) []string {
 		}
 		si := m.sig_of[did.signal] or { panic('loom2v: [[did]] 0x${did.id.hex()}: no signal "${did.signal}"') }
 		if off := m.xcore_xw_off[did.signal] {
-			g << did_xup_read_lines(idx, si, did.signal, off)
+			g << did_xup_read_lines(m, idx, si, did.signal, off)
 			continue
 		}
 		cell := ioc_idx[did.signal] or {
@@ -641,6 +856,14 @@ fn diag_target_fns(m Model, ioc_idx map[string]int) []string {
 		v := 'v_${idx}'
 		g << '\tmut ${v} := u32(0)'
 		g << '\tmut ${v}_b := u32(0)'
+		if k := io_index(m, did.signal) {
+			// a controlled signal: the FB's value noted for 0x2F 02, and the DID reads what is
+			// published — the control's value, the FB's, or the initial value before its first
+			g << '\t${v}_ever := C.ioc_get_ever(${cell}, &${v}, &${v}_b) != 0 // ${did.signal}'
+			g << '\tsrv.io_note(${k}, ${as_i64(si.val_type, v, true)}, ${v}_ever)'
+			g << did_io_encode_lines(idx, k, v, si.val_type)
+			continue
+		}
 		g << '\tC.ioc_get(${cell}, &${v}, &${v}_b) // ${did.signal}'
 		g << did_encode_lines(idx, if si.val_type == 'bool' { '${v} != 0' } else { v }, si.val_type, '\t')
 	}
@@ -651,13 +874,33 @@ fn diag_target_fns(m Model, ioc_idx map[string]int) []string {
 // did_xup_read_lines: DID `idx` from satellite signal `sname`'s up channel — the newest value
 // behind the layout gate, the last one while nothing newer came, zero until the first (as an owner
 // FB's cell reads before its first publish)
-fn did_xup_read_lines(idx int, si SigInfo, sname string, off int) []string {
+fn did_xup_read_lines(m Model, idx int, si SigInfo, sname string, off int) []string {
 	r := 'g_didx_${snake(sname)}'
+	// lanes from [1]: [0] is the reader's seq
+	lane := 1 + field_lane(si, si.val_field)
 	mut g := ['\tif C.xcore_layout_ok() != 0 { // ${sname}: an FB on the satellite writes it']
+	if k := io_index(m, sname) {
+		// a controlled signal: whether a value ever came, latched, for 0x2F's notes; the DID reads
+		// what is published (did_io_encode_lines)
+		g << '\t\tif C.xcore_poll_n(u32(${off}), ${sig_lanes(si)}, &${r}[0], &${r}[1]) != 0 {'
+		g << '\t\t\t${r}_ever = true'
+		g << '\t\t}'
+		g << '\t}'
+		g << '\tsrv.io_note(${k}, ${as_i64(si.val_type, '${r}[${lane}]', true)}, ${r}_ever)'
+		g << did_io_encode_lines(idx, k, 'v_${idx}', si.val_type)
+		return g
+	}
 	g << '\t\tC.xcore_poll_n(u32(${off}), ${sig_lanes(si)}, &${r}[0], &${r}[1])'
 	g << '\t}'
-	// lanes from [1]: [0] is the reader's seq
-	g << did_encode_lines(idx, lane_value(si.val_type, r, 1 + field_lane(si, si.val_field)), si.val_type,
+	g << did_encode_lines(idx, lane_value(si.val_type, r, lane), si.val_type, '\t')
+	return g
+}
+
+// did_io_encode_lines: DID `idx` of a controlled signal (control `k`) reads what is published
+// (comm/uds io_published) — both owners' refreshes
+fn did_io_encode_lines(idx int, k int, v string, val_type string) []string {
+	mut g := ['\t${v}_pub := srv.io_published(${k})']
+	g << did_encode_lines(idx, if val_type == 'bool' { '${v}_pub != 0' } else { '${v}_pub' }, val_type,
 		'\t')
 	return g
 }
@@ -671,12 +914,27 @@ fn did_encode_lines(idx int, expr string, val_type string, ind string) []string 
 // security_init_lines: 0x27 on `srv`, serving exactly the levels a gate names (sa_levels), with the
 // server's attempt limit and lockout delay — every owner's; only the key seam differs
 // (`ops`: the host's reference key object, the target's board C seam).
-fn security_init_lines(m Model, srv string, ops string) []string {
+// `keys` holds the node's udsauth.Keys on an authenticating node (auth_on): each level's public
+// key set, and the server's 0x29 seam pointed at it.
+fn security_init_lines(m Model, srv string, ops string, keys string) []string {
 	levels := sa_levels(m) // validate_uds vetted the settings
 	if levels == 0 {
 		return []string{}
 	}
 	mut g := ['\t${srv}.security = ${ops}', '\t${srv}.security_levels = u8(0x${levels.hex()})']
+	if auth_on(m) {
+		mut ls := m.uds.auth_keys.keys()
+		ls.sort()
+		for l in ls {
+			if m.uds.auth_ref[l] {
+				g << '\t${keys}.set(${l}, &udsauth.reference_key[0]) // level ${l}: the dev tester key ("reference")'
+				continue
+			}
+			g << '\tauth_key_${l} := [' + m.uds.auth_keys[l].map('u8(0x${it.hex()})').join(', ') + ']!'
+			g << '\t${keys}.set(${l}, &auth_key_${l}[0]) // level ${l}: [uds] auth_keys'
+		}
+		g << '\t${srv}.auth = ${keys}.ops() // 0x29 Authentication: 0x27 is not served'
+	}
 	if m.uds.security_attempts != 0 {
 		g << '\t${srv}.sa_attempts = u8(${m.uds.security_attempts})'
 	}
@@ -694,6 +952,7 @@ fn diag_target_sa_fns(m Model) []string {
 	if m.isotp_conns.len == 0 || sa_levels(m) == 0 {
 		return []string{}
 	}
+	// the seed (or, on an authenticating node, the 0x29 challenge) is the board's TRNG
 	mut g := [
 		'',
 		'fn C.diag_sa_init() int',
@@ -703,7 +962,7 @@ fn diag_target_sa_fns(m Model) []string {
 		'\treturn C.diag_sa_seed(out, n) != 0',
 		'}',
 	]
-	if m.uds.security_key != 'reference' {
+	if m.uds.security_key != 'reference' && !m.uds.auth() {
 		g << ''
 		g << 'fn C.diag_sa_key_ok(u8, &u8, &u8, int) int'
 		g << ''
@@ -714,9 +973,44 @@ fn diag_target_sa_fns(m Model) []string {
 	return g
 }
 
+// sa_target_on: a ThreadX node that performs 0x27 — a security level named by a [[did]] gate, a
+// [uds] services row or the "0x10 02" handoff row (sa_levels), served on its comm thread's
+// diagnostic connection. Its failed-key state is kept in the NvM journal (validate_sa_target).
+fn sa_target_on(m Model) bool {
+	return m.target.threadx && m.isotp_conns.len > 0 && sa_levels(m) != 0
+}
+
+// sa_persist_on: the image keeps its 0x27 failed-key state in the journal (comm/uds sa_store.v).
+fn sa_persist_on(m Model) bool {
+	return sa_target_on(m) && m.nvm.on
+}
+
+// validate_sa_target refuses a target node that performs 0x27 without [nvm] (REQ-DIAG-066) — a level
+// a [[did]] gate or control, a service row or the handoff row names: its
+// failed-key counts and a running lockout must survive a power cycle, or one between guesses buys
+// fresh attempts. The host bridge has no power cycle and keeps them in RAM.
+fn validate_sa_target(m Model) {
+	if sa_target_on(m) && !m.nvm.on {
+		panic('loom2v: a security level on the target (a [[did]] gate or control, a [uds] services row or the "0x10 02" handoff) needs [nvm] — the 0x27 failed-key (or 0x29 failed-proof) counts and a running lockout are kept in the NvM journal across resets and power loss, so a power cycle between guesses buys nothing (docs/diagnostics.md §3.1); declare the storage')
+	}
+}
+
+// sa_target_persist: the 0x27 state this pass changed, written — after every request of the pass
+// was served (DoIP's in .remote, CAN's in the drain), and before the pass pumps the CAN answer, so a
+// count is in the journal before the 0x35 / 0x36 reporting it leaves (REQ-DIAG-067). One append,
+// never an erase (REQ-DIAG-062): a write a full journal refuses changes no answer and waits in RAM,
+// retried, until the flush before an ECUReset (with NM also a sleep edge) erases and takes it; a
+// power cut or a reset the server did not perform meanwhile restores the record last accepted.
+fn sa_target_persist(m Model) []string {
+	if !sa_persist_on(m) {
+		return []string{}
+	}
+	return ['\t\tg_diag.server.persist_security(false) // the 0x27 state this pass changed, before its answer is pumped']
+}
+
 // diag_target_reset: an answered ECUReset, performed — once the answer is not only out of the link
 // but on the wire (the controller's Tx FIFO empty, bounded so a dead bus cannot hold the reset
-// off: REQ-BOOT-012), with the 0x27 failed-key counts kept across it.
+// off: REQ-BOOT-012), the journal flushed first (the 0x27 failed-key state with it).
 fn diag_target_reset(m Model, ioc_idx map[string]int) []string {
 	if m.isotp_conns.len == 0 {
 		return []string{}
@@ -750,10 +1044,6 @@ fn diag_target_reset(m Model, ioc_idx map[string]int) []string {
 		g << '\t\t\t\tcontinue'
 		g << '\t\t\t}'
 	}
-	if sa_levels(m) != 0 {
-		g << '\t\t\tdiag_keep_now := g_diag.server.kept_security()'
-		g << '\t\t\tC.diag_keep_save(&diag_keep_now[0], uds.kept_len)'
-	}
 	if m.boot.on {
 		// the handoff: the request cell makes the bootloader stay and serve the programming session,
 		// held by the transport the handoff was asked over (a DoIP tester reconnects to it)
@@ -766,7 +1056,7 @@ fn diag_target_reset(m Model, ioc_idx map[string]int) []string {
 	return g
 }
 
-// diag_target_c_decls: the board's reset and keep cell (boards/common/diag_board.c).
+// diag_target_c_decls: the board's reset (boards/common/diag_board.c).
 fn diag_target_c_decls(m Model) []string {
 	if m.isotp_conns.len == 0 {
 		return []string{}
@@ -779,23 +1069,29 @@ fn diag_target_c_decls(m Model) []string {
 		g << 'fn C.boot_handoff_ok() int'
 		g << 'fn C.boot_image_version() u32'
 	}
-	if sa_levels(m) != 0 {
-		g << 'fn C.diag_keep_save(&u8, int)'
-		g << 'fn C.diag_keep_load(&u8, int) int'
-	}
 	return g
 }
 
-// diag_target_globals: the connection lives in __global (its link and buffers are ~2 KB — too
-// much for the comm thread's stack), bss-zero until diag_target_init.
+// diag_target_globals: the connection and its request and response buffers (the node's
+// max_message each) live in __global — too much for the comm thread's stack — bss-zero until
+// diag_target_init.
 fn diag_target_globals(m Model) []string {
 	if m.isotp_conns.len == 0 {
 		return []string{}
 	}
-	mut g := ['\tg_diag diag.Connection // the diagnostic server on its ISO-TP connection (bss)']
+	mm := m.isotp_conns[0].max_message
+	mut g := ['\tg_diag diag.Connection // the diagnostic server on its ISO-TP connection (bss)',
+		'\tg_diag_req [${mm}]u8 // its request buffer: [isotp] max_message',
+		'\tg_diag_resp [${mm}]u8 // its response buffer']
+	if auth_on(m) {
+		g << '\tg_auth_keys udsauth.Keys // the 0x29 public keys per level (bss, set in diag_target_init)'
+	}
 	for sname in did_xup_sigs(m) {
 		si := m.sig_of[sname] or { continue }
 		g << '\tg_didx_${snake(sname)} [${sig_lanes(si) + 1}]u32 // ${sname}\'s up channel, the live DIDs\' reader: seq, lanes (xcore_poll_n)'
+		if _ := io_index(m, sname) {
+			g << '\tg_didx_${snake(sname)}_ever bool // a value has come from it (0x2F\'s notes)'
+		}
 	}
 	return g
 }
@@ -814,9 +1110,10 @@ fn did_xup_sigs(m Model) []string {
 
 // diag_target_init: configured before the loop. ECUReset is served and performed by the comm
 // thread (diag_target_reset); CommunicationControl stays unserved (diag_unbuilt): nothing on the
-// target gates its frames on it yet. The 0x27 failed-key counts a previous ECUReset kept are
-// restored, and a non-zero count arms the lockout delay from boot — a reset between guesses buys
-// nothing.
+// target gates its frames on it yet. The 0x27 failed-key state is wired to the NvM journal (which
+// boot() mounted before the kernel) and restored from it before the first request: a non-zero count
+// since a level's last correct key arms the delay from boot — neither a reset nor a power cycle
+// between guesses buys anything (REQ-DIAG-033, REQ-DIAG-065).
 fn diag_target_init(m Model) []string {
 	if m.isotp_conns.len == 0 {
 		return []string{}
@@ -829,18 +1126,33 @@ fn diag_target_init(m Model) []string {
 	if m.dids.any(it.signal != '') {
 		g << '\tg_diag.refresh = diag_refresh_${snake(m.isotp_conns[0].name)}'
 	}
+	if io_controls(m).len > 0 {
+		g << '\tg_diag.server.io_ok = diag_io_ok_v // 0x2F: the board\'s weak conditions seam'
+	}
 	if m.boot.on {
 		g << boot_target_init(m)
 	}
 	if sa_levels(m) != 0 {
-		key := if m.uds.security_key == 'reference' { 'uds.reference_key_ok' } else { 'diag_sa_key_v' }
 		// the RNG's clock is set up here, once, before the loop — never inside a request
 		g << '\tC.diag_sa_init() // 0 = no RNG: every seed request is then refused'
-		g << security_init_lines(m, 'g_diag.server', 'uds.SecurityOps{\n\t\tseed:   diag_sa_seed_v\n\t\tkey_ok: ${key}\n\t}')
-		g << '\tmut diag_kept := [uds.kept_len]u8{}'
-		g << '\tif C.diag_keep_load(&diag_kept[0], uds.kept_len) != 0 {'
-		g << '\t\tg_diag.server.restore_security(diag_kept) // a lockout or a count runs on from boot'
-		g << '\t}'
+		if auth_on(m) {
+			// the TRNG draws the 0x29 challenge; there is no key to compare
+			g << security_init_lines(m, 'g_diag.server', 'uds.SecurityOps{\n\t\tseed: diag_sa_seed_v\n\t}',
+				'g_auth_keys')
+		} else {
+			key := if m.uds.security_key == 'reference' { 'uds.reference_key_ok' } else { 'diag_sa_key_v' }
+			g << security_init_lines(m, 'g_diag.server', 'uds.SecurityOps{\n\t\tseed:   diag_sa_seed_v\n\t\tkey_ok: ${key}\n\t}',
+				'')
+		}
+		if sa_persist_on(m) {
+			g << '\tg_diag.server.sa_store = uds.SecurityStore{'
+			g << '\t\tput:      nvm_store_put'
+			g << '\t\tget:      nvm_store_get'
+			g << '\t\tid:       u16(0x${m.sa_block_id.hex()}) // the 0x27 state\'s fixed block'
+			g << '\t\tretry_us: u64(${m.nvm.min_write_ms}) * 1000 // a refused write waits the system floor'
+			g << '\t}'
+			g << '\tg_diag.server.restore_persisted_security() // a count runs on from boot'
+		}
 	}
 	return g
 }
@@ -938,4 +1250,78 @@ fn diag_target_produce(m Model) []string {
 		return ['\t\tif nm_up {', '\t\t\tg_diag.pump(t1, mut ch)', '\t\t}']
 	}
 	return ['\t\tg_diag.pump(t1, mut ch)']
+}
+
+// diag_did_answer_len: the bytes DID d's record is answered at — its did_len, or the saturation
+// count's u32
+fn diag_did_answer_len(m Model, d DidCfg) int {
+	return if d.tx_saturations { 4 } else { did_len(m, d) }
+}
+
+// diag_message_need: the longest message the node's diagnostic server must send or receive whole
+// that its configuration determines, and which message that is — a DID's 0x22 answer (and the
+// 0x2E request writing it, the same length), the DTC list (0x19 02 / 0A), a DTC's snapshot (0x19
+// 04) and extended data (0x19 06). The lengths come from the helpers beside the writers (comm/uds,
+// comm/fault), pinned against their bytes there. A multi-DID 0x22 is not here: it is bounded at run
+// time, answered responseTooLong past the maximum. (The bootloader's 0x29 proof is validate_boot's.)
+fn diag_message_need(m Model) (int, string) {
+	mut need := 0
+	mut what := ''
+	for d in m.dids {
+		n := uds.did_answer_len(diag_did_answer_len(m, d))
+		if n > need {
+			need = n
+			what = '[[did]] 0x${d.id.hex()}\'s 0x22 answer' + if d.writable { ' and 0x2E request' } else { '' }
+		}
+	}
+	if auth_on(m) {
+		// the 0x29 messages exchanged whole: the 06 proof request (88 bytes) is the longest — the 05
+		// answer carrying the challenge is 55, the 06 answer 21
+		if uds.auth_proof_req_len > need {
+			need = uds.auth_proof_req_len
+			what = 'the 0x29 proof request (Authentication, [uds] access = "authentication")'
+		}
+	}
+	if m.faults.len > 0 {
+		n := uds.dtc_list_len(m.faults.len)
+		if n > need {
+			need = n
+			what = 'the DTC list (0x19 02 / 0A) of ${m.faults.len} [[fault]]s'
+		}
+		for f in m.faults {
+			if f.freeze.len == 0 {
+				continue
+			}
+			lens := fault_freeze_lens(m, f)
+			mut data := 0
+			for l in lens {
+				data += l
+			}
+			sn := uds.snapshot_answer_len(fault.snapshot_body_len(lens.len, data))
+			if sn > need {
+				need = sn
+				what = '[[fault]] "${f.name}"\'s snapshot (0x19 04)'
+			}
+		}
+		en := fault.extended_answer_len()
+		if en > need {
+			need = en
+			what = 'a DTC\'s extended data (0x19 06)'
+		}
+	}
+	return need, what
+}
+
+// validate_max_message: the node's maximum message length holds every message its server must
+// exchange whole (REQ-CAN-TP-022) — refused, naming the message, rather than answered
+// responseTooLong or refused with FC.OVFLW at run time.
+fn validate_max_message(m Model) {
+	if m.isotp_conns.len == 0 {
+		return
+	}
+	mm := m.isotp_conns[0].max_message
+	need, what := diag_message_need(m)
+	if need > mm {
+		panic('loom2v: [isotp] max_message = ${mm} cannot hold ${what}: ${need} bytes (REQ-CAN-TP-022)')
+	}
 }

@@ -26,6 +26,9 @@ int  blob_ioc_read(int idx, unsigned char *dst, unsigned char max_len); /* 1=val
  * never spin (e.g. hard-real-time) rather than the seqlock's rare retry. */
 void blob_ioc_pub(int idx, const unsigned char *src, unsigned char len);
 int  blob_ioc_acq(int idx, unsigned char *dst, unsigned char max_len); /* 1=value, 0=none yet */
+/* Like blob_ioc_acq, but 1 only when it consumed a buffer the writer published since this reader's
+ * previous acquire (and the value is not empty); 0 when it served the last good value again. */
+int  blob_ioc_acq_fresh(int idx, unsigned char *dst, unsigned char max_len);
 
 /* IOC variant 3: DOUBLE BUFFER (2x memory). Wait-free both sides, but tear-free
  * only when the reader keeps up (read latency < write interval) — the common
@@ -34,5 +37,11 @@ int  blob_ioc_acq(int idx, unsigned char *dst, unsigned char max_len); /* 1=valu
  * a HW-semaphore- or DMA-backed double buffer. */
 void blob_ioc_pub2(int idx, const unsigned char *src, unsigned char len);
 int  blob_ioc_acq2(int idx, unsigned char *dst, unsigned char max_len);
+
+#ifdef BLOBLY_THREADX
+/* The ThreadX backend (osal_threadx.c): start a core's entry, and sleep through the scheduler. */
+int  blob_tx_start_core(int core_id, void (*entry)(int, void *), void *arg);
+void blob_tx_sleep_us(unsigned long long us);
+#endif
 
 #endif

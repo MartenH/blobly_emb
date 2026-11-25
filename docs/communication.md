@@ -43,7 +43,10 @@ RX monitoring, and the router + ISO-TP sit beneath it.
 
 ## 1. COM — signal ⇄ PDU, with transmission modes
 
-The DBC gives the *layout*; COM config gives the *behavior* per PDU (frame). A new
+The DBC gives the *layout*; COM config gives the *behavior* per PDU (frame). A message's id is
+11-bit, or 29-bit where its `BO_` id carries the extended flag (bit 31): the host bridge and the
+ThreadX comm thread both send it in that format and receive it only in that format, a standard and
+an extended frame of one number being two frames. A new
 `[[frame]]` section maps a DBC message to its COM treatment:
 
 ```toml
@@ -163,6 +166,25 @@ signal no route fills, and a frame route forwards its payload as it is.) A targe
 (`ioc_get_ever`): until then the cell holds the slot's zero, which is not a value. An initial value
 is never counted as a saturation.
 
+### A value under input/output control
+
+Where a `[[did]]` declares a `control` (0x2F, [diagnostics.md](diagnostics.md) §3.1) and a tester
+holds it, the producer that encodes the signal substitutes the tester's value for the FB's before
+the encode: the host bridge's per-message encode (the field written over what was acquired, before
+its `_set`), the target's local producer (after `ioc_get_ever`, the value `lane_encode_lines`
+encodes), and a satellite's frame (in `xcore_produce_drain`, the value lane of its wide channel,
+in the frame alone — the latched lanes stay the satellite's). `tx_send_lines` and `pdu_init_lines`
+stay the one place a frame is built. This runs on the thread that serves the diagnostic server —
+the comm thread, or the `[isotp]` bus's bridge — which also holds the control, so nothing crosses a
+thread; the FB keeps writing its cell or channel and never sees the override. While a control is
+active the frame goes out with its value even before the FB's first publish. The value is inside
+the DBC range and on its grid (generation takes the control's bounds from it and refuses a scaling
+that leaves a whole value between two raw steps, field values at raw steps its f64 conversion could round to a neighbour, and a
+multiplexed signal or a multiplexor, whose page the encoder does not set), so `encode_raw` never
+saturates nor rounds it and
+`tx_saturations` never counts it; E2E and SecOC stamp the frame after the substitution, and a
+control set or returned is a payload change, so an on-change or mixed frame goes out at once.
+
 This replaces the bridge's unconditional 10 ms send: each PDU runs its own little
 TX state machine (last-sent timestamp, change detection, repeat counter), all
 generated as a static per-PDU table + a shared stepping routine (no-alloc).
@@ -194,9 +216,10 @@ extension; today a route is one source → one destination.)*
 
 ## 3. ISO-TP — segmented transport (ISO 15765-2)
 
-For PDUs larger than one frame (UDS payloads up to 4095 B classic, more on FD).
-`[isotp]` is the node's ONE connection — the transport of its diagnostic server, `[uds]`
-(§4); it carries only ISO 15765-2's settings:
+For PDUs larger than one frame: UDS requests and answers up to the connection's maximum message
+length, `max_message` (8–4095 bytes, 520 when not configured). `[isotp]` is the
+node's ONE connection — the transport of its diagnostic server, `[uds]` (§4); it carries only
+ISO 15765-2's settings:
 
 ```toml
 [isotp]
@@ -204,26 +227,25 @@ bus    = "can0"
 rx_id  = 0x101      # Request   (DBC)
 tx_id  = 0x102      # Response  (DBC)
 functional_id = 0x7DF   # optional: functional requests (single frame)
-bs      = 8         # flow-control block size
+bs      = 0         # flow-control block size (0 = the whole message)
 stmin_ms = 0        # min separation time we request
+max_message = 520   # optional: the longest message either way (8..4095)
 ```
 
-State machine per connection:
+The ids above are normal addressing on 11-bit ids; `ext = true` makes them 29-bit, and
+`addressing = "normal_fixed"` states the node's address `sa` and the tester's `ta` in their place,
+from which the 29-bit ids `0x18DA<sa><ta>` (requests) and `0x18DA<ta><sa>` (answers) derive.
 
-- **SF** (Single Frame): payload ≤ 7 B (classic) / ≤ 62 B (FD).
-- **FF + CF**: First Frame starts a multi-frame transfer; Consecutive Frames carry
-  the rest with a 4-bit sequence number.
-- **FC** (Flow Control): receiver sends CTS / WAIT / OVFLW with its block size and
-  STmin; sender paces CFs accordingly.
-- **Timers**: N_As/N_Ar (frame tx/rx), N_Bs/N_Cr (FC/CF wait), N_Cs — timeouts abort
-  the transfer.
+What is implemented — normal addressing on 11- or 29-bit ids and normal fixed addressing (not
+extended or mixed addressing), 8-byte frames by default and CAN-FD frames up to 64 bytes per
+`[isotp] tx_dl` (any length received; every frame a CAN-FD frame on an FD bus), single, first,
+consecutive and flow-control frames, N_Bs / N_Cr / N_Ar / WFTmax — and how it
+behaves where the standard leaves the choice, is [can-tp.md](can-tp.md); the requirements are
+[requirements/can-tp.toml](../requirements/can-tp.toml).
 
-That is the protocol; what `comm/isotp` implements of it, one behaviour per requirement, and
-what it deliberately does not (CAN FD frame formats, addressing other than normal 11-bit, a
-configurable padding byte), is [requirements/tp.toml](../requirements/tp.toml).
-
-No-alloc: exactly one fixed `[max_len]u8` reassembly buffer and one TX buffer per
-connection, sized at build time. ISO-TP delivers a reassembled PDU up to **UDS**
+No-alloc: the link holds no buffer of its own — its owner gives it one reassembly and one
+transmit buffer of `max_message` bytes, generated storage sized at build time, so a node pays only
+for the maximum it configures. ISO-TP delivers a reassembled PDU up to **UDS**
 (below), and blobly_net’s `uds` module drives it in the integration tests (the DBC
 already carries `Request`/`Response`).
 
@@ -233,16 +255,18 @@ A table-driven, no-alloc `Server` — the node's one, configured by `[uds]` — 
 transports (`[isotp]` on CAN, `[doip]` on a ThreadX target's Ethernet). The owner
 hands it a reassembled request and ships the response it builds. Services:
 `0x10` DiagnosticSessionControl, `0x11` ECUReset, `0x22` ReadDataByIdentifier
-(several DIDs per request), `0x27` SecurityAccess, `0x28` CommunicationControl, `0x2E`
+(several DIDs per request), `0x27` SecurityAccess — or `0x29` Authentication on a node with
+`[uds] access = "authentication"`, which then answers `0x27` with 0x11 — `0x28` CommunicationControl, `0x2E`
 WriteDataByIdentifier (on a parameter's DID through `comm/param`: validated, durable before the
-answer — [diagnostics.md](diagnostics.md) §3.4), `0x3E` TesterPresent, and — where a fault memory is injected (`comm/fault`,
+answer — [diagnostics.md](diagnostics.md) §3.4), `0x2F` InputOutputControlByIdentifier (on a live
+DID with a `control`: the output overridden where it is encoded, above), `0x3E` TesterPresent, and — where a fault memory is injected (`comm/fault`,
 generated from `[[fault]]` in R4b) — `0x19` 01/02/0A, `0x14` and `0x85`; anything else →
 `0x7F sid 0x11`.
 Negative responses follow ISO 14229-1's evaluation order.
 
 Which of those a node answers is its **service table**, `[uds] services` — absent, the
 default set above; present, exactly its rows, each optionally narrowed to `sessions` and
-gated on a 0x27 `security` level (0x7F / 0x33 in ISO 14229-1's order). Generation refuses a
+gated on a `security` level, unlocked by 0x27 or 0x29 (0x7F / 0x33 in ISO 14229-1's order). Generation refuses a
 row the build does not perform, so a table never claims a service that does nothing
 ([diagnostics.md](diagnostics.md) §3.1):
 
@@ -283,11 +307,17 @@ functional request must not send withheld. The plan these belong to is
 `0x27` (extended or programming session, physical requests only) unlocks the levels the `[[did]]`
 gates name: requestSeed `27 2L-1` returns a 4-byte seed, sendKey `27 2L` checks the key
 against that one seed, which a wrong key spends. After `security_attempts` wrong keys
-(default 3) the answer is `0x36` and no seed is issued for `security_delay_ms` (default
-10 s, `0x37`). The failed-key count survives an ECU reset, so a reset between guesses costs
-the delay too, while a clean reset or a boot unlocks at once (persisting the count across
-power cycles is the target's, rung R2). Seeds and keys come
-from an injected `uds.SecurityOps`, so the stack fixes no key algorithm; the generated host
+(default 3) the answer is `0x36` and no seed of that level is issued for `security_delay_ms`
+(default 10 s, `0x37`; another level's seed is not delayed). Each level's wrong keys since its last correct key survive an ECU reset, so a
+reset after a wrong key costs the delay too, while a reset after a correct key or a boot unlocks at
+once; on a target they survive a power cycle as well, kept in the node's NvM journal (one record,
+written only when it changes, before the answer reporting it is sent — at most `security_attempts`
+writes per level until a correct key, so a stream of wrong keys cannot fill the journal — a node
+that performs 0x27, or 0x29, must declare `[nvm]`, [diagnostics.md](diagnostics.md) §3.1). Seeds and keys come
+from an injected `uds.SecurityOps`, so the stack fixes no key algorithm; a node with
+`[uds] access = "authentication"` unlocks the same levels with `0x29` instead (ISO's ACR with
+Ed25519 against per-level public keys, `comm/udsauth`; [diagnostics.md](diagnostics.md) §3.1
+"Authentication (0x29)"), and 0x27 is not served there; the generated host
 bridge injects `uds.ReferenceSecurity`, blobly_net's reference key (each seed byte XOR
 0xFF) — a SIM key, not a secret. A target image injects the board's (with UDS on the
 target, rung R2).
@@ -308,7 +338,7 @@ id = 0xF1AB; bytes = "00"; write = { session = ["extended"] }   # gated write
 
 `read` / `write` take `{ session = [...], security = N }`: the sessions the access is
 allowed in (default / extended / programming / safety; absent = every session) and the
-0x27 level it needs (1..8; absent = none). A DID not allowed in
+security level it needs (1..8, unlocked by 0x27 or 0x29; absent = none). A DID not allowed in
 the active session is answered as unsupported (`0x31`). A server holds at most 16 DIDs of
 at most 32 bytes each, checked at generation.
 
@@ -353,8 +383,8 @@ owns the fault memory (`comm/fault`), keeps each DTC's ISO 14229-1 status throug
 FB's thread as a new generation in a control cell, so its debounce restarts. On a ThreadX target
 (R6's first step) the ThreadX comm thread owns the memory and the two cells ride the byte IOC; there
 the operation cycle is NM's wake -> bus sleep, or `[fault_memory] cycle = "power"`; the memory is
-persisted in the node's NvM journal with snapshots and extended data (R6b), and signal-status faults
-(below) run there too (R5) — docs/diagnostics.md.
+persisted in the node's NvM journal with snapshots and extended data, and signal-status faults
+(below) run there too — docs/diagnostics.md §3.3.
 
 A fault can also be raised by a received signal's **status** — no FB code, the diagnostic bridge
 (on a ThreadX target, the comm thread) is the detector:

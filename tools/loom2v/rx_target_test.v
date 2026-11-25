@@ -5,7 +5,7 @@ import os
 import tools.sysmodel
 import tools.candb
 
-// The ThreadX comm thread's receive path (docs/diagnostics.md R5): a frame with a deadline, E2E or a
+// The ThreadX comm thread's receive path (docs/diagnostics.md §3.2): a frame with a deadline, E2E or a
 // signal status is checked on the comm thread by the host bridge's own templates (gen_rx.v) and
 // com.RxMonitor, its signals cross to the FBs whole through the byte IOC, a signal-status fault is
 // debounced there, and 0x28 and NM's sleep gate it. Runs the real generator on
@@ -90,6 +90,17 @@ fn rt_one_thread(src string) string {
 // rt_generate runs loom2v on the one-thread fixture with `edit` applied to its ecu.toml and `extra`
 // appended, and `e2e` on CmdFrame in the DBC; returns the exit code, the output and the glue.
 fn rt_generate(name string, edit fn(string) string, extra string, e2e bool) (int, string, string) {
+	return rt_generate_dbc(name, edit, extra, fn [e2e] (dbc string) string {
+		return if e2e {
+			dbc.replace('BO_ 291 CmdFrame: 4 Tester\n SG_ Command : 0|32@1+ (1,0) [0|4294967295] "" SUT', rt_e2e_frame) + rt_e2e_attrs
+		} else {
+			dbc
+		}
+	})
+}
+
+// rt_generate_dbc is rt_generate with the fixture's DBC passed through `dbc_edit`
+fn rt_generate_dbc(name string, edit fn(string) string, extra string, dbc_edit fn (string) string) (int, string, string) {
 	tmp := os.join_path(os.temp_dir(), 'rx_target_${name}_${os.getpid()}')
 	defer {
 		os.rmdir_all(tmp) or {}
@@ -98,10 +109,7 @@ fn rt_generate(name string, edit fn(string) string, extra string, e2e bool) (int
 	src := os.read_file(os.join_path(rt_fixture, 'ecu.toml')) or { panic(err) }
 	ecu := os.join_path(tmp, 'ecu.toml')
 	os.write_file(ecu, edit(rt_one_thread(src)) + extra) or { panic(err) }
-	mut dbc := os.read_file(os.join_path(rt_fixture, 'bus.dbc')) or { panic(err) }
-	if e2e {
-		dbc = dbc.replace('BO_ 291 CmdFrame: 4 Tester\n SG_ Command : 0|32@1+ (1,0) [0|4294967295] "" SUT', rt_e2e_frame) + rt_e2e_attrs
-	}
+	dbc := dbc_edit(os.read_file(os.join_path(rt_fixture, 'bus.dbc')) or { panic(err) })
 	dbcp := os.join_path(tmp, 'bus.dbc')
 	os.write_file(dbcp, dbc) or { panic(err) }
 	glue := os.join_path(tmp, 'gen.v')
@@ -531,4 +539,60 @@ fn test_the_target_refuses_what_it_cannot_hold_to_a_range() {
 	c2, o2 := rt_generate_raw('tx_badrange', src, dbc)
 	assert c2 != 0
 	assert o2.contains('sent signal "Workload": range [10.0|5.0] has its minimum above its maximum'), o2
+}
+
+// @verifies REQ-COM-012
+// A 29-bit DBC frame on the ThreadX comm thread: the FDCAN backend sends and receives extended ids
+// (XTD), so the comm thread receives CmdFrame by its id AND width and transmits WorkloadFrame as an
+// extended frame. The DBC marks a 29-bit id with CAN_EFF_FLAG (bit 31) on its BO_ id.
+fn test_the_comm_thread_sends_and_receives_29_bit_dbc_frames() {
+	code, out, glue := rt_generate_dbc('ext', fn (src string) string {
+		return src
+	}, rt_conn, fn (dbc string) string {
+		return dbc.replace('BO_ 291 CmdFrame:', 'BO_ 2566853172 CmdFrame:').replace('BO_ 512 WorkloadFrame:',
+			'BO_ 2566870648 WorkloadFrame:')
+	})
+	assert code == 0, out
+	assert glue.contains('if rx.id == u32(0x18ff1234) && rx.len == 4 && rx.ext == true {'), glue
+	assert glue.contains('\t\t\t\tid:  u32(0x18ff5678)\n\t\t\t\tlen: 4\n\t\t\t\text: true'), glue
+}
+
+// a standard frame keeps its generated code as it was: no width line, and its receive arm says false
+fn test_a_standard_frame_is_sent_without_a_width() {
+	code, out, glue := rt_generate('std', fn (src string) string {
+		return src
+	}, rt_conn, false)
+	assert code == 0, out
+	assert glue.contains('\t\t\t\tid:  u32(0x200)\n\t\t\t\tlen: 4\n\t\t\t}'), glue
+	assert glue.contains('if rx.id == u32(0x123) && rx.len == 4 && rx.ext == false {'), glue
+}
+
+// a standard id that does not fit 11 bits is a malformed DBC id: refused rather than sent truncated
+fn test_a_standard_id_past_11_bits_is_refused() {
+	code, out, _ := rt_generate_dbc('stdbig', fn (src string) string {
+		return src
+	}, rt_conn, fn (dbc string) string {
+		return dbc.replace('BO_ 512 WorkloadFrame:', 'BO_ 4096 WorkloadFrame:')
+	})
+	assert code != 0
+	assert out.contains('has the standard id 0x1000, which does not fit 11 bits'), out
+}
+
+// @verifies REQ-COM-012
+// A standard and an extended message with the same number are two frames: each gets its own
+// receive arm and its own cell, where a receive keyed by number alone folded them into one and
+// received only the first.
+fn test_a_standard_and_an_extended_frame_of_one_number_are_two_frames() {
+	code, out, glue := rt_generate_dbc('samenum', fn (src string) string {
+		return src.replace('reads     = ["Command", "LoadCmd"]', 'reads     = ["Command", "LoadCmd", "CommandX"]') +
+			'\n[[signal]]\nname = "CommandX"\nfields = { code = "u32" }\nfrom = "can0"\nto   = "app"\ntransport = "double"\n'
+	}, rt_conn, fn (dbc string) string {
+		return dbc + '\nBO_ 2147483939 CmdFrameX: 4 Tester\n SG_ CommandX : 0|32@1+ (1,0) [0|4294967295] "" SUT\n'
+	})
+	assert code == 0, out
+	std_arm := glue.all_after('if rx.id == u32(0x123) && rx.len == 4 && rx.ext == false {').all_before('\n\t\t\t}')
+	ext_arm := glue.all_after('if rx.id == u32(0x123) && rx.len == 4 && rx.ext == true {').all_before('\n\t\t\t}')
+	assert std_arm.contains('C.ioc_pub('), glue
+	assert ext_arm.contains('C.ioc_pub('), glue
+	assert std_arm.all_after('C.ioc_pub(').all_before(',') != ext_arm.all_after('C.ioc_pub(').all_before(','), 'one cell for two frames'
 }

@@ -1,6 +1,7 @@
 module boot
 
 import bcrypto
+import comm.isotp
 import rand
 
 // the target's rule for when a DoIP answer counts as sent (acknowledged), driven by the model walk
@@ -86,7 +87,7 @@ fn new_prog(mut f TestFlash) Prog {
 		app_base: t_base
 		app_size: t_size
 	}
-	p.init()
+	p.init(isotp.default_message)
 	p.rng = fake_rng // 0x29 challenge source
 	p.image_key = image_pubkey() // verifies the firmware signature
 	p.session_key = tester_pubkey() // verifies the 0x29 proof
@@ -1325,4 +1326,55 @@ fn test_a_lost_answer_is_sent_again_then_given_up() {
 	q.step(1, unsafe { &resp[0] })
 	q.work_left()
 	assert q.work == 0 && !q.work_due(via_bus)
+}
+
+// erased, unlocked and asked for a download of the whole window: the 0x34 answer
+fn download_at(m int) (Prog, []u8) {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	p.init(m)
+	unlock(mut p)
+	er := [u8(0x31), 0x01, 0xFF, 0x00, u8(t_base >> 24), u8(t_base >> 16), u8(t_base >> 8),
+		u8(t_base), u8(t_size >> 24), u8(t_size >> 16), u8(t_size >> 8), u8(t_size)]
+	assert ask(mut p, er)[0] == 0x71
+	dl := [u8(0x34), 0x00, 0x44, u8(t_base >> 24), u8(t_base >> 16), u8(t_base >> 8), u8(t_base),
+		u8(t_size >> 24), u8(t_size >> 16), u8(t_size >> 8), u8(t_size)]
+	dr := ask(mut p, dl)
+	return p, dr
+}
+
+// a TransferData of `n` data bytes as block `blk`
+fn block_of(blk u8, n int) []u8 {
+	mut req := []u8{len: 2 + n, init: u8(index)}
+	req[0] = 0x36
+	req[1] = blk
+	return req
+}
+
+// @verifies REQ-BOOT-020
+// the block the bootloader advertises is the longest its connection's maximum message holds in
+// whole program units, and a longer TransferData is refused with 0x13
+fn test_the_block_length_follows_the_connections_maximum() {
+	assert block_data_for(isotp.default_message) == 512
+	assert block_data_for(isotp.message_limit) == 4064
+	assert block_data_for(min_message) == 64
+	assert block_data_for(34) == 32 && block_data_for(33) == 0
+	wants := {
+		isotp.default_message: [u8(0x74), 0x20, 0x02, 0x02]
+		isotp.message_limit:   [u8(0x74), 0x20, 0x0F, 0xE2]
+		min_message:           [u8(0x74), 0x20, 0x00, 0x42]
+	}
+	for m, want in wants {
+		mut p, dr := download_at(m)
+		assert dr == want, 'max_message ${m}'
+		block := block_data_for(m)
+		assert ask(mut p, block_of(1, block + 1)) == [u8(0x7F), 0x36, 0x13], 'max_message ${m}'
+		assert ask(mut p, block_of(1, block)) == [u8(0x76), 0x01], 'max_message ${m}'
+	}
+}
+
+// a connection too short for one program unit per block downloads nothing: 0x34 is refused
+fn test_no_download_when_no_block_fits() {
+	_, dr := download_at(33)
+	assert dr == [u8(0x7F), 0x34, 0x22]
 }

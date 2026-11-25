@@ -6,6 +6,15 @@
 # SYSTEM's — and this file adds the on-target bits. The one FB is GwHealth: the uptime it publishes
 # on tel.
 
+# The NvM journal (docs/nvm.md): it keeps each level's 0x27 failed-key count across a power cycle
+# (docs/diagnostics.md §3.1 — a node that performs 0x27 must declare it). Sectors 6 + 7 of the H735's
+# single bank (boards/h735dk/bootmap.h), outside the boot and application regions; an NM node, so the
+# sector a compaction leaves behind is erased at a sleep edge or in the flush after an ECUReset, never
+# at run time for a write.
+[nvm]
+min_write_ms   = 1000
+sector_records = 4096
+
 [target]
 kind    = "threadx"
 tick_ms = 1

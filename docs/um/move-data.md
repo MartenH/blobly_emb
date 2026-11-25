@@ -27,11 +27,11 @@ cell."* Sending bulk as a signal is the mistake this page exists to prevent.
 | **core → core**, bulk | `xcore.h` dtrace-style cell: shared-window owner buffer + req/ack handshake | RAM-bound (trace uses 2 KB) | ❌ **hand-written**; planned generated form = the loan/publish ring below |
 | ECU → ECU, one frame | CAN frame (`driver/can`) | 8 B classic / **64 B** FD | ✅ derived |
 | ECU → ECU, a PDU | COM (`comm/com`) | **64 B** (`com.max_pdu`) | ✅ derived |
-| ECU → ECU, bulk | ISO-TP (`comm/isotp`) — host/sim, and a `threadx` target's comm thread (constant and own-output DIDs there so far) | **520 B** (`isotp.max_payload`) | ✅ config |
+| ECU → ECU, bulk | ISO-TP (`comm/isotp`) — host/sim, and a `threadx` target's comm thread (constant and own-output DIDs there so far) | the node's **`[isotp] max_message`**: 8–4095 B, **520 B** by default | ✅ config |
 | ECU → ECU, firmware | UDS `0x34`/`0x36`×N/`0x37` over **ISO-TP**, or over **DoIP** on a `[doip]` node (its bootloader is its DoIP entity too) | image-sized, block-paced | ✅ bootloader |
 | Ethernet event | SOME/IP notification (`comm/someip`) over UDP — **NetX Duo** on target, POSIX socket on host | **64 B** | ✅ config |
 | Ethernet RPC reply | SOME/IP response, same UDP path | **1024 B** (`max_rpc`) | ✅ config |
-| Ethernet diagnostics | DoIP (`comm/doip`) over **NetX TCP** — a module + service thread, not an app path | 256 B *frame* (`doip.max_msg`, header-inclusive) → **244 B** usable UDS data (8 B DoIP header + 4 B addresses); a bigger message is rejected and the stream closed | ✅ `[doip]` in `ecu.toml` (a ThreadX node): the node's one UDS server over TCP as well as ISO-TP |
+| Ethernet diagnostics | DoIP (`comm/doip`) over **NetX TCP** — a module + service thread, not an app path | the node's `[isotp] max_message` of UDS data (520 B by default) — a frame of `doip.msg_len` of it (8 B DoIP header + 4 B addresses); a bigger message is rejected (generic NACK 0x02) and discarded, the connection kept | ✅ `[doip]` in `ecu.toml` (a ThreadX node): the node's one UDS server over TCP as well as ISO-TP |
 
 ### Coming from AUTOSAR COM? The numbers you're used to
 
@@ -43,7 +43,7 @@ map one-to-one, because both stacks ultimately bow to the same frames:
 | signal in a CAN I-PDU | 8 B (classic L-PDU) | same — 8 B classic frame |
 | signal in a CAN FD I-PDU | up to 64 B | same — `com.max_pdu` = 64 B, and it is the ceiling for *every* signal path |
 | large `ComSignalLength` byte-arrays (`UINT8_N`/`UINT8_DYN`) — FlexRay-sized L-PDUs (~254 B) **or** a COM signal carried over a TP | any I-PDU, incl. TP-backed | **not a signal here.** No FlexRay (its niche moved to CAN FD / Ethernet), and a COM-signal-over-TP maps to the *bulk* side: ISO-TP / the bootloader block transfer today, the loan/publish ring next — "signal" never exceeds one PDU |
-| **CanTp** (ISO-TP) message | 4095 B (2³²−1 with the 2016 escape) | **520 B** (`isotp.max_payload`) — a deliberate no-alloc cap sized to the largest real message; raise it consciously, every link's buffer grows |
+| **CanTp** (ISO-TP) message | 4095 B (2³²−1 with the 2016 escape) | the node's `[isotp] max_message`, 8–4095 B (no escape), **520 B** by default — configured per node, and only that node's buffers grow |
 | **LdCom** — a payload passed whole, no signal packing | transparent, TP-segmented | the gap this page keeps pointing at: modules own links today; the loan/publish **bulk ring** is the planned equivalent ([../bulk-transport.md](../bulk-transport.md)) |
 | **OS IOC** cross-core | size is whatever the generator is configured to emit | derived — mechanism AND generator shipped (`xioc_n` + the loom2v lane derivation, REQ-INV-006): a cross-core signal carries up to 16 u32 lanes, both directions. Placement-independence holds **FB to FB** for every lane type up to 16 lanes, and **satellite→bus** within the bus encode's types; it does not hold for more than 16 narrow fields (legal on one core, but packing several fields into one lane is not done), nor for the reverse move of a bus-bound signal (a multi-field producer relocating ONTO the owner core), which rejects loudly until the local/remote encode paths unify. Silicon: tear re-run at wide widths bench-queued, the owner → satellite direction bench-pending |
 | **SecOC / E2E** on a protected PDU | in-PDU protection fields at profile-defined positions | same — `[[frame]].e2e` / `.secoc` with explicit `crc_pos`/`counter_pos`/`fresh_pos`/`mac_pos` (not necessarily trailing bytes), re-protected on gateway re-encode |
@@ -55,12 +55,14 @@ Two deliberate differences worth internalising rather than fighting:
   byte-array signals as big as the biggest bus allows, which is how 254 B FlexRay-era
   signals ended up in configs that outlived FlexRay. Here "signal" *means* "fits one PDU";
   bigger is bulk, and the build fails loudly instead of packing it anyway.
-- **The ISO-TP cap is smaller on purpose.** 4095 B reassembly buffers per connection are
-  real RAM on a no-alloc target; 520 B holds the largest message this system actually
-  sends. Every dependent buffer (each link, the shell response, both bootloaders'
-  request/response) **derives from `isotp.max_payload`**, so raising it grows them all
-  together — it cannot orphan a hard-coded buffer. It is still a sizing decision: every
-  link's RAM grows with it.
+- **The ISO-TP maximum is the node's, and small by default.** 4095 B reassembly buffers per
+  connection are real RAM on a no-alloc target, so a link holds no buffer of its own: its owner
+  gives it one, sized by the node's `[isotp] max_message` (520 B unless configured). Everything
+  that follows the diagnostic connection — its request and response buffers, the server's response
+  capacity, the node's DoIP limit, a gateway's routed messages, the bootloader's buffers and blocks —
+  is sized by that one number, generated, so a node pays only for what it configures and nothing is
+  a hard-coded copy. The shell response and the trace dump keep their own fixed 520 B: they are not
+  the diagnostic connection.
 
 Transports are **derived, never configured** — you declare a `[[signal]]`'s endpoints and
 the generator picks the mechanism from where they sit. See
@@ -223,8 +225,8 @@ you plan around it:
 
 A **new bulk consumer** therefore owns its *own* `isotp.Link` inside a ComModule.
 `comm/trace` and `comm/shell` are the module-owned-link examples — but note both are
-**outbound** streamers (their FC handlers feed a send in flight; neither ever calls
-`take()`). For the complete **inbound** consume-and-dispatch loop, read
+**outbound** streamers (their FC handlers pass only flow control frames to a send in flight, and
+drop anything else on the id; neither binds a receive buffer or ever calls `take()`). For the complete **inbound** consume-and-dispatch loop, read
 `comm/diag` (`Connection.on_frame` → `serve`: `take` → handle → `send` → `produce`) or the three
 bootloader loops (`examples/boot_sim` and the target boot manager `boot/target/main.v` —
 each runs the full loop into `boot.Prog.handle`, and
@@ -245,30 +247,35 @@ into the module's frame loop, four obligations:
 - **drain tx** — `l.poll(now, mut pdu)` under the channel's readiness gate, sending each
   frame it yields. This is also how the RECEIVING side emits its flow-control frames —
   a consumer that never polls stalls its peer's multi-frame send.
+- **buffers** — `l.bind_rx(buf, cap)` and `l.bind_tx(buf, cap)` give the link its receive and
+  transmit buffers; `cap` is the longest message it takes in and sends (at most 4095). A link
+  that is never bound sends nothing and refuses every first frame.
 - **send** — `l.send(src, len)`; returns **`false`** if a transfer is already in flight or
-  `len` exceeds the cap. *Check the return* — a dropped message is otherwise invisible.
+  `len` exceeds the transmit capacity. *Check the return* — a dropped message is otherwise
+  invisible.
 - **receive** — `l.take(dst)` copies out one fully reassembled message and returns its
-  length, or `0` if none is ready. **`dst` must hold `isotp.max_payload` (520) bytes** —
-  `take` copies whatever arrived through the raw pointer without a capacity check, so a
-  smaller buffer is an out-of-bounds write waiting for a large message.
+  length, or `0` if none is ready. **`dst` must hold the link's receive capacity** (or be its
+  receive buffer) — `take` copies whatever arrived through the raw pointer without a capacity
+  check, so a smaller buffer is an out-of-bounds write waiting for a large message.
 
 And one mandatory line: call **`l.init_defaults()`** before first use. The N_Bs and
 **N_Cr** timeouts and the WAIT-frame cap live there; a zero-valued link waits forever on
 a lost flow control or a stalled receive. (On target there is no `_vinit`, so nothing runs it for you — the generated
 bridge and both production modules call it explicitly.)
 
-**The cap is 520 B** (`isotp.max_payload`), sized to hold the largest thing the system
-sends today (one trace dump block: 8 B header + 64 records × 8 B). Raising it grows *every*
-link's buffer, so it is a deliberate ceiling. For anything image-sized use the bootloader's
-block transfer instead — it acks per block and lets ISO-TP flow control pace it.
+**The cap is the capacity you bind** — on a node's diagnostic connection its `[isotp]
+max_message` (8–4095 B, 520 B by default: `isotp.min_message`, `isotp.message_limit`,
+`isotp.default_message`), on the shell and the trace their own 520 B (one trace dump block: 8 B
+header + 64 records × 8 B). For anything image-sized use the bootloader's block transfer instead —
+it acks per block, its block follows the connection's maximum, and ISO-TP flow control paces it.
 
 **Both directions fail loudly:**
 
 - **Sending too much** — `send()` returns `false` and transmits nothing.
-- **Being *asked* to receive too much** — a FirstFrame declaring more than `max_payload`
-  (or an escape FirstFrame, any length above 4095) starts no reassembly and is answered at
+- **Being *asked* to receive too much** — a FirstFrame declaring more than the receive
+  capacity (or an escape FirstFrame, any length above 4095) starts no reassembly and is answered at
   once with an OVFLW flow control, so the peer fails immediately instead of timing out
-  (REQ-TP-015). An OVFLW we *receive* aborts our transmission the same way.
+  (REQ-CAN-TP-015). An OVFLW we *receive* aborts our transmission the same way.
 
 ### On Ethernet — SOME/IP over UDP
 

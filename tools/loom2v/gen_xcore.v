@@ -216,7 +216,21 @@ fn xcore_produce_drain(m Model) []string {
 		}
 		g << '\t\t\t\txcore_${n}_have = true'
 		g << '\t\t\t}'
-		g << lane_send_lines(si, lanes, 'xcore_${n}_have', '\t\t\t')
+		if k := io_index(m, sname) {
+			// a 0x2F control (gen_ioctl.v) of the satellite's value, applied where this thread sends
+			// it: the value lane of its wide channel replaced in the frame alone — the latched lanes
+			// stay the satellite's, so last-good retention never repeats an override
+			if !si.wide {
+				panic('loom2v: internal: controlled satellite signal "${sname}" does not ride a wide channel')
+			}
+			j := field_lane(si, si.val_field)
+			g << '\t\t\txcore_${n}_io_on, xcore_${n}_io_v := g_diag.server.io_held(${k}) // 0x2F'
+			g << '\t\t\txcore_${n}_pub := if xcore_${n}_io_on { u32(xcore_${n}_io_v) } else { ${lanes[j]} }'
+			lanes[j] = 'xcore_${n}_pub'
+			g << lane_send_lines(si, lanes, 'xcore_${n}_have || xcore_${n}_io_on', '\t\t\t')
+		} else {
+			g << lane_send_lines(si, lanes, 'xcore_${n}_have', '\t\t\t')
+		}
 		g << '\t\t}'
 	}
 	return g
@@ -332,7 +346,8 @@ fn xcore_manifest(m Model) []string {
 // into bytes 4j..4j+3 (lane_encode_lines: the one send encode) — sent, and its saturations counted
 // once the channel accepts it.
 fn lane_send_lines(si SigInfo, lanes []string, have string, ind string) []string {
-	mut g := ['${ind}xcore_txf.id = u32(0x${si.dbc_id.hex()})', '${ind}xcore_txf.len = ${si.dbc_dlc}']
+	mut g := ['${ind}xcore_txf.id = u32(0x${si.dbc_id.hex()})', '${ind}xcore_txf.len = ${si.dbc_dlc}',
+		'${ind}xcore_txf.ext = ${si.dbc_ext}']
 	mut enc := []string{}
 	for j, lane in lanes {
 		enc << lane_encode_lines(si, j, si.fields[j].typ, lane, 'xcore_txf', 'xcore_sat', ind + '\t')

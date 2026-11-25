@@ -1,6 +1,7 @@
 module main
 
 import boot
+import boot.bufs
 import comm.doip
 import driver.doipnet
 
@@ -21,16 +22,15 @@ fn C.boot_doip_act_types(&u8) int
 fn C.boot_doip_announce_count() int
 fn C.boot_doip_announce_ms() int
 fn C.boot_doip_net_wait_ms() u32
-fn C.doip_mb_init(&u8, &u8)
+fn C.doip_mb_init(&u8, int, &u8, int)
 fn C.doip_net_ready() int
 
+// the DoIP buffers are the block's (main.v buffers): the entity's assembly buffer, a receive chunk,
+// the response stream, and the mailbox's request and answer — all sized by the node's maximum
+// message length
 __global (
 	g_doip      doip.Server // DoIP framing on the doip thread; the server is g_prog
-	g_doip_in   [doip.max_msg]u8
-	g_doip_out  [doip.max_resp]u8
-	g_doip_req  [doip.max_msg]u8 // the mailbox: a request on its way to the serve loop
-	g_doip_resp [doip.max_uds]u8 // ... and its answer on the way back
-	g_net_ready bool            // the DoIP listener has been seen open (Prog.net_up given)
+	g_net_ready bool        // the DoIP listener has been seen open (Prog.net_up given)
 )
 
 fn serve() {
@@ -51,7 +51,10 @@ fn boot_net_init() {
 	g_doip.serve.answer = doipnet.answer // g_prog, across the mailbox
 	// a session handed off over DoIP waits this long for the listener (the node's announcements)
 	g_prog.net_wait_us = u64(C.boot_doip_net_wait_ms()) * 1000
-	C.doip_mb_init(&g_doip_req[0], &g_doip_resp[0])
+	m := C.boot_max_message()
+	lay := buffers()
+	g_doip.bind(region(lay.net_asm), m) // the UDS limit is the node's maximum message (REQ-CAN-TP-023)
+	C.doip_mb_init(region(lay.net_req), m, region(lay.net_resp), m)
 }
 
 // boot_serve: the boot thread (boot_net.c) — ThreadX's low-level init started the DWT clock
@@ -63,8 +66,9 @@ fn boot_serve() {
 // doip_run: the doip thread (driver/eth/doip_netx.c) — the announcements, then one tester at a time
 @[export: 'blobly_doip_run']
 fn doip_run() {
-	doipnet.run(mut g_doip, C.boot_doip_announce_count(), C.boot_doip_announce_ms(), &g_doip_in[0],
-		&g_doip_out[0])
+	lay := buffers()
+	doipnet.run(mut g_doip, C.boot_doip_announce_count(), C.boot_doip_announce_ms(), region(lay.net_in),
+		region(lay.net_out))
 }
 
 // doip_udp: a request on UDP 13400 (the doip-svc thread) — identification, entity status, power mode
@@ -78,13 +82,13 @@ fn net_serves() bool {
 }
 
 // net_pass: the network's share of a pass — the listener coming up (a session handed off over DoIP
-// starts its S3 then), then the mailbox
-fn net_pass(now u64) {
+// starts its S3 then), then the mailbox — in `lay`, the buffer block's layout, fixed at entry
+fn net_pass(now u64, lay bufs.Layout) {
 	if !g_net_ready && C.doip_net_ready() != 0 {
 		g_net_ready = true
 		g_prog.net_up(now)
 	}
-	doipnet.serve_mailbox(mut g_prog, &g_doip_req[0], &g_doip_resp[0])
+	doipnet.serve_mailbox(mut g_prog, region(lay.net_req), region(lay.net_resp))
 	if doipnet.take_push_sent() {
 		g_prog.push_sent() // the routine's pushed response has itself been acknowledged
 	}

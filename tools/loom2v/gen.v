@@ -23,6 +23,7 @@ import tools.ecumodel
 import tools.cfgschema
 import comm.uds
 import comm.fault
+import comm.isotp
 
 struct SigInfo {
 mut:
@@ -83,6 +84,15 @@ struct IsotpConn {
 	bs            int
 	stmin         int
 	functional_id int // 0 = no functional requests on this connection
+	// the ids are 29-bit ([isotp] ext, or normal fixed addressing: REQ-CAN-TP-040/041); the
+	// connection matches and sends them in that format (REQ-CAN-TP-042)
+	ext bool
+	// the longest message either way (REQ-CAN-TP-021): the connection's buffers, the server's
+	// response capacity, the DoIP entity's limit, the bootloader's block all follow it
+	max_message int
+	// the frame length it transmits with (REQ-CAN-TP-026): 8, or a CAN-FD length on an fd bus; the
+	// bootloader and a gateway's route to the node take it too
+	tx_dl int
 }
 
 // DidCfg is one [[did]]: constant bytes, a writable RAM cell, and/or a live signal.
@@ -98,6 +108,12 @@ struct DidCfg {
 	param          string // the [[param]] this DID codes (0x2E) and reads back (0x22); '' = none
 	param_status   bool   // the parameters' status: one byte per [[param]] (comm/param status_*)
 	tx_saturations bool   // the count of sent values com.encode_raw saturated: a u32, big-endian
+	// `control` (0x2F, gen_ioctl.v): the parameters served (bit p for parameter p, bit 0 —
+	// returnControlToECU — always; 0 = no control), its sessions (uds.in_*, extended by default)
+	// and its 0x27 level (0 = none)
+	control_params   u8
+	control_sessions u8
+	control_security u8
 }
 
 // Route is one [[route]] on a gateway. A RAW (frame) route forwards a PDU unchanged
@@ -220,6 +236,23 @@ fn schema_int(m map[string]toml.Any, ctx string, key string, def i64, what strin
 		panic('loom2v: schema row ${ctx}.${key} is not a plain range — schema_int cannot bound it')
 	}
 	return toml_int(m, key, def, k.min, k.max, what)
+}
+
+// read_tx_dl reads a tx_dl key ([isotp], or a [[doip.route]] — `ctx`) of a connection on bus `bus`:
+// its schema default (8) when absent; refused, never narrowed, unless it is one of the schema row's
+// values — the frame lengths ISO-TP transmits with (cfgschema.tx_dls, isotp.valid_dl), so ecucheck
+// and generation refuse alike — and refused above 8 on a bus that is not CAN-FD, whose channel is
+// opened classic and refuses every longer frame (REQ-CAN-TP-026).
+fn read_tx_dl(m map[string]toml.Any, ctx string, doc toml.Doc, bus string, what string) int {
+	k := schema_key(ctx, 'tx_dl')
+	v := toml_int(m, 'tx_dl', k.default_int(), min_i64, max_i64, what) // the set below judges it
+	if !k.in_range(v) { // the schema's choices are isotp.valid_dl's (cfgschema tx_dls)
+		panic('loom2v: ${what} tx_dl = ${v} is not a frame length ISO-TP transmits with — give ${cfgschema.tx_dl_list()} (REQ-CAN-TP-026)')
+	}
+	if v > 8 && !ecumodel.bus_fd(doc, bus) {
+		panic('loom2v: ${what} tx_dl = ${v} needs a CAN-FD bus, and bus "${bus}" is not one ([bus.${bus}] fd = true) — a classic frame carries 8 bytes (REQ-CAN-TP-026)')
+	}
+	return v
 }
 
 fn parse_nvm_id(name string, v int) u16 {
@@ -352,6 +385,11 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool, eth string) (m
 			si.dbc_id = dbc_id_of(db, si.dbc_msg) or { 0 }
 			si.dbc_dlc = dbc_dlc_of(db, si.dbc_msg) or { 8 }
 			si.dbc_ext = dbc_ext_of(db, si.dbc_msg) or { false }
+			if !si.dbc_ext && si.dbc_id > 0x7ff {
+				panic('loom2v: signal "${sname}": DBC message "${si.dbc_msg}" has the standard id ' +
+					'0x${si.dbc_id.hex()}, which does not fit 11 bits — a 29-bit id is marked extended in the ' +
+					'DBC (CAN_EFF_FLAG on its BO_ id) (REQ-COM-012)')
+			}
 			si.dbc_trivial = dbc_signal_trivial(db, sname) or { false }
 			mut fwidths := []int{}
 			for f in si.fields {
@@ -1042,46 +1080,40 @@ fn dbc_sig_in_frame(db candb.Database, frame_key string, signame string) ?candb.
 
 // parse_isotp parses the [isotp] connection — the node's one diagnostic server on CAN (one server
 // per node, docs/diagnostics.md, so a table and not an array: the old [[isotp]] form, and server
-// keys left in it, are refused by ecumodel.validate with the move they need).
+// keys left in it, are refused by ecumodel.validate with the move they need). Its ids are read by
+// the ONE reader of how an id is stated (ecumodel.diag_ids: normal addressing on 11- or 29-bit ids,
+// or normal fixed addressing's derived ids), which ecucheck has already run — every refusal (an id
+// wider than its format, ids beside sa / ta, a key of the wrong type, ...) is said there. Read
+// here as no walk precedes it (isotp_keys_unwalked), so a wrong type is refused rather than read.
 fn parse_isotp(doc toml.Doc) []IsotpConn {
 	iv := doc.value_opt('isotp') or { return []IsotpConn{} }
 	if iv !is map[string]toml.Any {
 		return []IsotpConn{}
 	}
 	m := iv.as_map()
-	c := IsotpConn{
-		name:          'diag'
-		bus:           (m['bus'] or { toml.Any('') }).string()
-		rx_id:         toml_int(m, 'rx_id', 0, 0, 0x1FFFFFFF, '[isotp]')
-		tx_id:         toml_int(m, 'tx_id', 0, 0, 0x1FFFFFFF, '[isotp]')
-		// both go out as one Flow Control byte (and the bootloader's as a uint8_t): a block size
-		// of 256 would wrap to 0, the whole message, and an STmin past 127 is a reserved or a
-		// microsecond code — refused here rather than narrowed (REQ-TP-020)
-		bs:            schema_int(m, 'isotp', 'bs', 0, '[isotp]')
-		stmin:         schema_int(m, 'isotp', 'stmin_ms', 0, '[isotp]')
-		functional_id: toml_int(m, 'functional_id', 0, 0, 0x1FFFFFFF, '[isotp]')
+	ids, errs := ecumodel.diag_ids(cfgschema.ecu, ecumodel.isotp_keys_unwalked, m, '[isotp]')
+	if errs.len > 0 {
+		panic('loom2v: ${errs[0]}') // unreachable after ecucheck
 	}
-	// the connection matches and sends its ids as standard frames: a wider value never matches
-	// on receive and goes out masked on transmit
-	for field, v in {
-		'rx_id': c.rx_id
-		'tx_id': c.tx_id
-	} {
-		if !schema_key('isotp', field).in_range(v) {
-			panic('loom2v: [isotp] ${field} 0x${v.hex()} must be a standard 11-bit id (<= 0x${schema_key('isotp', field).max:X})')
-		}
-	}
-	if c.functional_id != 0 {
-		// the bridge matches it as a standard frame, and it must not be the physical id
-		fk := schema_key('isotp', 'functional_id')
-		if !fk.in_range(c.functional_id) {
-			panic('loom2v: [isotp] functional_id 0x${c.functional_id.hex()} must be a standard 11-bit id (<= 0x${fk.max:X})')
-		}
-		if c.functional_id == c.rx_id || c.functional_id == c.tx_id {
-			panic('loom2v: [isotp] functional_id 0x${c.functional_id.hex()} is also the connection\'s physical rx/tx id')
-		}
-	}
-	return [c]
+	return [
+		IsotpConn{
+			name:          'diag'
+			bus:           (m['bus'] or { toml.Any('') }).string()
+			rx_id:         int(ids.rx)
+			tx_id:         int(ids.tx)
+			// both go out as one Flow Control byte (and the bootloader's as a uint8_t): a block size
+			// of 256 would wrap to 0, the whole message, and an STmin past 127 is a reserved or a
+			// microsecond code — refused here rather than narrowed (REQ-CAN-TP-020)
+			bs:            schema_int(m, 'isotp', 'bs', 0, '[isotp]')
+			stmin:         schema_int(m, 'isotp', 'stmin_ms', 0, '[isotp]')
+			functional_id: int(ids.functional)
+			ext:           ids.ext
+			// refused outside 8..4095, never narrowed (REQ-CAN-TP-021); 520 when not configured
+			max_message: schema_int(m, 'isotp', 'max_message', isotp.default_message, '[isotp]')
+			// a frame length ISO-TP transmits with, above 8 only on a CAN-FD bus (REQ-CAN-TP-026)
+			tx_dl: read_tx_dl(m, 'isotp', doc, (m['bus'] or { toml.Any('') }).string(), '[isotp]')
+		},
+	]
 }
 
 // parse_dids parses [[did]] UDS Data Identifiers: constant (ascii/bytes), writable RAM, or live signal.
@@ -1137,6 +1169,13 @@ fn parse_dids(doc toml.Doc) []DidCfg {
 		}
 		rd_s, rd_sec := parse_did_access(m, 'read', id)
 		wr_s, wr_sec := parse_did_access(m, 'write', id)
+		mut ctl_p, mut ctl_s, mut ctl_sec := u8(0), u8(0), u8(0)
+		if cv := m['control'] {
+			if (m['signal'] or { toml.Any('') }).string() == '' {
+				panic('loom2v: [[did]] 0x${id.hex()} has a `control` but no `signal` — 0x2F controls the output signal a live DID reads')
+			}
+			ctl_p, ctl_s, ctl_sec = parse_did_control(cv, id)
+		}
 		if 'write' in m && 'writable' in m && !(m['writable'] or { toml.Any(false) }).bool() {
 			panic('loom2v: [[did]] 0x${id.hex()} has writable = false AND a write = {...} gate — say which')
 		}
@@ -1161,6 +1200,9 @@ fn parse_dids(doc toml.Doc) []DidCfg {
 			write_sessions: wr_s
 			read_security:  rd_sec
 			write_security: wr_sec
+			control_params:   ctl_p
+			control_sessions: ctl_s
+			control_security: ctl_sec
 		}
 	}
 	// one id, one row: the server serves the FIRST row of an id, so a repeat would carry gates and
@@ -1491,6 +1533,8 @@ mut:
 	dids         []DidCfg
 	params       []ParamCfg // [[param]] in declaration order (gen_param.v)
 	faults       []FaultCfg // [[fault]] in declaration order = the fault memory's slot order
+	routines     []RoutineCfg // [[routine]] in declaration order = the server's table order (gen_routine.v)
+	routine_fbs  map[string]string // routine -> the FB that serves it (validate_routines)
 	fault_cycle  string     // [fault_memory] cycle = "Signal.field" (bool) or "power" — the operation cycle ('' = NM's, D3)
 	fault_entries int       // [fault_memory] entries: the snapshot entries (default: one per fault with `freeze`, at most fault.max_entries)
 	part         PartMap
@@ -1537,6 +1581,7 @@ mut:
 	fault_snap_ids  []u16
 	fault_snap_ids_b []u16 // each fault's second snapshot block (persist.v A / B)
 	fault_grace_us  u64 // the cycle-end barrier: twice the longest period of a fault-testing handler
+	sa_block_id     u16 // the 0x27 failed-key state's journal block (derive_sa_nvm; 0 = none)
 	bulk      []BulkPoolCfg
 	fb_reads    map[string]int      // signal -> how many FB handlers read it
 	fb_reads_owner map[string]int   // signal -> how many FBs on THIS image read it (owner cells are for them)
@@ -1781,6 +1826,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		dids:         parse_dids(doc)
 		params:       parse_params(doc)
 		faults:       parse_faults(doc)
+		routines:     parse_routines(doc)
 		fault_cycle:  parse_fault_cycle(doc)
 		fault_entries: parse_fault_entries(doc)
 		part:         part
@@ -1817,7 +1863,10 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	validate_signal_routes_model(m, doc)
 	validate_uds(m)
 	validate_live_dids(m)
+	validate_io_controls(m)
 	validate_faults(m, doc)
+	m.routine_fbs = validate_routines(m, doc)
+	validate_max_message(m) // after the DIDs and faults it measures are known good
 	validate_e2e_timeouts(m)
 	for sname in m.sig_names {
 		si := m.sig_of[sname] or { continue }
@@ -1839,8 +1888,8 @@ fn build_model(doc toml.Doc, dbc string) Model {
 fn validate_signal_routes_model(m Model, doc toml.Doc) {
 	mut bus_fd := map[string]bool{}
 	if bv := doc.value_opt('bus') {
-		for bname, bc in bv.as_map() {
-			bus_fd[bname] = (bc.as_map()['fd'] or { toml.Any(false) }).bool()
+		for bname, _ in bv.as_map() {
+			bus_fd[bname] = ecumodel.bus_fd(doc, bname)
 		}
 	}
 	for r in m.routes {
@@ -2468,9 +2517,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			// (the bus-index derivation is skipped entirely for a bus-less
 			// [[io.gpio]]-only node and an eth-only node — both app entries are
 			// channel-free; the eth thread opens a socket, not an FDCAN index)
-			if bc := doc.value('bus').as_map()[m.telem.bus] {
-				tx_bus_fd = (bc.as_map()['fd'] or { toml.Any(false) }).bool()
-			}
+			tx_bus_fd = ecumodel.bus_fd(doc, m.telem.bus)
 			// CAN-FD on a generated target: the fdcan backend handles FD framing (h755_canfd) and
 			// the pack/unpack paths carry up to com.max_pdu (64) bytes, so a bus.fd = true opens the
 			// channel FD (can.v flags every send from Channel.fd). The per-board data-phase timing
@@ -2548,6 +2595,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			}
 			glue << shell_cmd_fns(m, comm_thread_on)
 			glue << diag_target_fns(m, ioc_idx)
+			glue << io_target_fns(m)
 			glue << diag_target_sa_fns(m)
 			glue << diag_target_c_decls(m)
 			glue << boot_target_fns(m)
@@ -2660,6 +2708,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << trace_module_globals(m)
 			glue << shell_module_globals(m)
 			glue << diag_target_globals(m)
+			glue << routine_push_globals(m)
 			glue << fault_target_globals(m)
 			glue << rx_target_global(m)
 			glue << doip_target_globals(m)
@@ -2673,9 +2722,17 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// [nvm] — the journal put path into the real flash driver. 4 KB was
 				// measured paper-thin on the H755 bench (the v4 image faulted with PSP
 				// 40 B below the DTCM floor mid-put): 8 KB with [nvm], 4 KB without.
-				// the diagnostic server's dispatch copies its ISO-TP link / UDS server by value into
-				// several frames (~1 KB each): 8 KB with [isotp] too
-				comm_stack := if m.nvm.on || m.isotp_conns.len > 0 { 8192 } else { 4096 }
+				// the diagnostic server's dispatch copies its UDS server (~1 KB, the DID table) by
+				// value into several frames: 8 KB with [isotp] too
+				// 16 KB on a node that verifies a 0x29 proof in its comm pass: bcrypto's Ed25519
+				// verifier frames, as the bootloader's (boot/target) measured them
+				comm_stack := if auth_on(m) {
+					16384
+				} else if m.nvm.on || m.isotp_conns.len > 0 {
+					8192
+				} else {
+					4096
+				}
 				glue << '\tg_comm_stack [${comm_stack}]u8'
 				// (The load cell is the volatile C scratch in comm_glue.c, via load_pub/load_*.)
 				// Rx accounting: the comm thread counts received frames + keeps the last value, so a
@@ -3014,8 +3071,8 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					if s.dbc_msg in rx_checked {
 						continue // checked: rx_target_arms below
 					}
-					if s.rx && !rx_ids_seen[s.dbc_id] {
-						rx_ids_seen[s.dbc_id] = true
+					if s.rx && !rx_ids_seen[frame_id_key(s.dbc_id, s.dbc_ext)] {
+						rx_ids_seen[frame_id_key(s.dbc_id, s.dbc_ext)] = true
 						rx_sigs << s
 					}
 				}
@@ -3084,11 +3141,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				gw_extra := gateway_extra_buses(m)
 				for b in gw_extra {
 					bidx := fdcan_index_of(b)
-					bfd := if bc := doc.value('bus').as_map()[b] {
-						(bc.as_map()['fd'] or { toml.Any(false) }).bool()
-					} else {
-						false
-					}
+					bfd := ecumodel.bus_fd(doc, b)
 					glue << '\tmut ch_${snake(b)} := can.Channel{} // gateway route bus ${b}'
 					glue << "\tif !ch_${snake(b)}.open('${bidx}', ${bfd}) { // board must init FDCAN${bidx.int() + 1} pins for silicon"
 					glue << '\t\tfor { C._tx_thread_sleep(1000) } // dead route bus — park'
@@ -3153,6 +3206,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\t// pass: ${step}'
 					match step {
 						.housekeep {
+							glue << routine_target_results(m)
 							glue << diag_target_housekeep(m)
 						}
 						.open {
@@ -3160,6 +3214,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 						}
 						.reports {
 							glue << fault_target_pass(m)
+							glue << routine_target_pass(m)
 						}
 						.remote {
 							glue << doip_target_serve(m)
@@ -3179,8 +3234,8 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 							glue << '\t\t\tif rx.id == u32(0x${si.dbc_id.hex()}) && rx.len == ${si.dbc_dlc} && rx.ext == ${si.dbc_ext} { // ${si.dbc_msg}'
 							glue << '\t\t\t\tg_rx_count++'
 							glue << '\t\t\t\tg_rx_last = u32(rx.data[0]) | (u32(rx.data[1]) << 8) | (u32(rx.data[2]) << 16) | (u32(rx.data[3]) << 24)'
-							if idx := msg_ioc_idx[si.dbc_id] {
-								// This message carries an FB-read signal (keyed by DBC id, so it fires even when
+							if idx := msg_ioc_idx[frame_id_key(si.dbc_id, si.dbc_ext)] {
+								// This message carries an FB-read signal (keyed by its frame, id and width, so it fires even when
 								// the de-duped representative is a different, un-read signal): publish the decoded
 								// value (byte-0 scalar) into its IOC cell so the app thread picks it up wait-free
 								// — while 0x28 has reception on.
@@ -3194,7 +3249,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 							}
 							// a satellite FB reads it: the same decoded value to its owner->satellite
 							// channel, under the same reception gate (gen_xdown.v)
-							dpub := xdown_lean_pub(m, si.dbc_id)
+							dpub := xdown_lean_pub(m, si.dbc_id, si.dbc_ext)
 							if dpub != '' {
 								if m.isotp_conns.len > 0 {
 									glue << '\t\t\t\tif st.rxg.on {'
@@ -3244,8 +3299,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 						.persist {
 							// after the pass's last consume, so a DTC persisted now has its snapshot
 							glue << fault_capture_lines(m, 'g_fmem', 'g_diag', '\t\t')
-							glue << fault_target_persist(m, ioc_idx)
-							glue << param_sleep_lines(m, ioc_idx)
+							glue << fault_target_persist(m)
+							glue << sa_target_persist(m)
+							// a write any of them made in bus sleep: ONE choreography for the pass
+							glue << nvm_sleep_write_lines(m, ioc_idx)
 						}
 					}
 					if glue.len == at + 1 {
@@ -3293,11 +3350,24 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\t\tmut tf := can.Frame{'
 					glue << '\t\t\t\tid:  u32(0x${si.dbc_id.hex()})'
 					glue << '\t\t\t\tlen: ${si.dbc_dlc}'
+					if si.dbc_ext {
+						glue << '\t\t\t\text: true // an extended (29-bit) DBC message'
+					}
 					glue << '\t\t\t}'
 					// until the FB's first publish the cell holds no value, only its zero: the frame
 					// goes out at its initial payload, and nothing is encoded or counted
-					glue << tx_send_lines(si, 'tf', 'tf_sat', 'C.ioc_get_ever(${idx}, &tv_a, &tv_b) != 0',
-						lane_encode_lines(si, 0, si.val_type, 'tv_a', 'tf', 'tf_sat', '\t\t\t\t'), '\t\t\t')
+					if k := io_index(m, si.name) {
+						// a 0x2F control (gen_ioctl.v): the tester's value in place of the FB's, from
+						// boot, encoded here — the FB keeps writing its cell and never sees it
+						glue << '\t\t\ttv_io_on, tv_io_v := g_diag.server.io_held(${k}) // 0x2F'
+						mut enc := ['\t\t\t\ttv_pub := if tv_io_on { u32(tv_io_v) } else { tv_a }']
+						enc << lane_encode_lines(si, 0, si.val_type, 'tv_pub', 'tf', 'tf_sat', '\t\t\t\t')
+						glue << tx_send_lines(si, 'tf', 'tf_sat', 'C.ioc_get_ever(${idx}, &tv_a, &tv_b) != 0 || tv_io_on',
+							enc, '\t\t\t')
+					} else {
+						glue << tx_send_lines(si, 'tf', 'tf_sat', 'C.ioc_get_ever(${idx}, &tv_a, &tv_b) != 0',
+							lane_encode_lines(si, 0, si.val_type, 'tv_a', 'tf', 'tf_sat', '\t\t\t\t'), '\t\t\t')
+					}
 					glue << '\t\t}'
 				}
 				glue << trace_produce_drain(m)
@@ -3436,7 +3506,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << '// tx_application_define above). main.v does the board bring-up then calls this —'
 			glue << '// referencing it also forces this module (incl. tx_application_define) to link.'
 			glue << nvm_flash_wrappers(m)
-			glue << fault_store_fns(m)
+			glue << nvm_store_fns(m)
 			glue << param_fns(m, ioc_idx)
 			glue << 'pub fn boot() {'
 			if has_satellite(m) {
@@ -3466,6 +3536,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			}
 			glue << rx_target_boot(m)
 			glue << fault_target_boot(m)
+			glue << routine_target_boot(m)
 			if has_satellite(m) {
 				// release the satellite once every restored value is published — a parameter
 				// down its channel among them — so its FBs' first dispatch reads it, as the
@@ -3635,6 +3706,10 @@ fn fb_port_lines(m Model, cname string, hname string, reads []toml.Any, writes [
 			ports << '\t${snake(p.name)} sig.${p.name}'
 			continue
 		}
+		if rt := routine_req_of(m, r.string()) {
+			ports << routine_port_read(rt)
+			continue
+		}
 		ports << provenance(r.string(), m.sig_of)
 		// an input point's declared default becomes the port field's
 		// initial value — the FB sees it until the first real sample
@@ -3663,6 +3738,10 @@ fn fb_port_lines(m Model, cname string, hname string, reads []toml.Any, writes [
 	ports << 'pub struct ${cname}Out {'
 	ports << 'pub mut:'
 	for w in writes {
+		if rt := routine_res_of(m, w.string()) {
+			ports << routine_port_write(rt)
+			continue
+		}
 		ports << provenance(w.string(), m.sig_of)
 		ports << '\t${snake(w.string())} sig.${w.string()}'
 	}
@@ -3778,6 +3857,7 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 						glue << '\tfxr_${snake(cname)} [${fault_ctl_lanes(m, cname) + 2}]u32 // its control down channel: owner nonce, seq, lanes (xcore_down_read)'
 					}
 				}
+				glue << routine_state_fields(m, cname)
 			}
 			for sname in m.sig_names {
 				si := m.sig_of[sname] or { continue }
@@ -3830,6 +3910,10 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 				for r in reads {
 					rn := r.string()
 					si := m.sig_of[rn] or { SigInfo{} }
+					if rt := routine_req_of(m, rn) {
+						glue << routine_read_lines(m, rt) // a routine's request (gen_routine.v)
+						continue
+					}
 					if image_part != '' && xdown_fb_input(m, rn) {
 						// SATELLITE FB reads a signal produced on the owner image (owner -> satellite),
 						// whatever the owner side holds it in (a local cell, an IOC cell, a byte IOC),
@@ -3923,6 +4007,10 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 				for w in writes {
 					wn := w.string()
 					si := m.sig_of[wn] or { SigInfo{} }
+					if rt := routine_res_of(m, wn) {
+						glue << routine_write_lines(m, rt) // a routine's result (gen_routine.v)
+						continue
+					}
 					if si.local {
 						glue << '\tst.cell_${snake(wn)} = outp.${snake(wn)} // local'
 						if si.persist != '' && image_part == '' && wn in ioc_idx {
@@ -4190,11 +4278,14 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 	}
 	if m.isotp_conns.len > 0 {
 		glue << 'import comm.diag' // the diagnostic server on its ISO-TP connection
-		// the glue names uds only for [[did]]s — their tables, the live refresh, 0x27 — and for a
-		// [uds] service table
-		// a [uds] service table, and the programming handoff (uds.reset_into_boot)
-		if m.dids.len > 0 || m.uds.table || m.boot.on {
+		// the glue names uds only for [[did]]s (their tables, the live refresh, 0x27), a [uds]
+		// service table, the programming handoff (uds.reset_into_boot) and [[routine]]s (their
+		// uds.Routine table on the server, routine_config_lines)
+		if m.dids.len > 0 || m.uds.table || m.boot.on || m.routines.len > 0 {
 			glue << 'import comm.uds' // UDS diagnostic services
+		}
+		if auth_on(m) {
+			glue << 'import comm.udsauth' // 0x29 Authentication: the keys and the Ed25519 verify
 		}
 	}
 	return ports, glue
@@ -4223,9 +4314,11 @@ fn main() {
 	// (rebound to the existing locals so it stays unchanged). (Step (a): parse -> model.)
 	mut m := build_model(doc, dbc)
 	m.nvm_names, m.nvm_ids = derive_nvm(mut m, doc)
+	m.sa_block_id = derive_sa_nvm(m)
 	m.fault_status_id, m.fault_snap_ids, m.fault_snap_ids_b = derive_fault_nvm(m)
 	validate_params(mut m, doc)
 	derive_param_nvm(mut m)
+	validate_sa_target(m)
 	check_journal_capacity(m)
 	m.fault_grace_us = fault_grace_us(m, doc)
 	wear_report_lines := check_journal_wear(m, doc)
@@ -4334,6 +4427,8 @@ fn main() {
 	// [[signal]] -> the model, then emit the `sig` module.
 	mut signals := emit_signals(m.sig_of, m.sig_names, ecu)
 	signals << param_sig_structs(m)
+	routine_sig_header(m, mut signals)
+	signals << routine_sig_structs(m)
 
 	// Per-PDU COM behaviour ([[frame]]), rebound to the existing locals.
 	// m.frames is CAN-only — parse_frames skips eth frames, whose E2E trailer
@@ -4355,12 +4450,12 @@ fn main() {
 		if c.functional_id != 0 {
 			ids << ['functional_id', c.functional_id.str()]
 		}
-		diag_ids_refused(m, dbc, c.bus, '[isotp]', ids)
+		diag_ids_refused(m, dbc, c.bus, '[isotp]', c.ext, ids)
 	}
 	// a gateway's routes (REQ-NET-019): the routed node's ids are matched and sent on the route's
-	// bus, beside everything else there, by the same rule
+	// bus, in the node's format (REQ-NET-021), beside everything else there, by the same rule
 	for r in m.doip.routes {
-		diag_ids_refused(m, dbc, r.bus, '[[doip.route]] "${r.node}"', [
+		diag_ids_refused(m, dbc, r.bus, '[[doip.route]] "${r.node}"', r.ext, [
 			['tx_id', r.tx_id.str()],
 			['rx_id', r.rx_id.str()],
 		])
@@ -4564,7 +4659,7 @@ fn main() {
 	// ioc_idx maps each such signal to its pool cell; visible to the comm emitter + handler glue.
 	mut ioc_idx := map[string]int{}
 	mut tx_cells := map[string]bool{} // the cells the comm thread reads to transmit: a live DID's source
-	mut msg_ioc_idx := map[int]int{} // DBC id -> its (single) rx-read signal's IOC cell
+	mut msg_ioc_idx := map[int]int{} // frame_id_key(DBC id, width) -> its (single) rx-read signal's IOC cell
 	if comm_thread_on {
 		// LAYOUT-IDENTICAL routes forward on the target (raw copy + id remap, emitted in the
 		// comm loop below); routes needing a decode/re-encode transcode are still
@@ -4634,10 +4729,6 @@ fn main() {
 					panic('loom2v: [target] kind="threadx" comm thread: TX signal "${sname}" is not a plain ' +
 						'unsigned little-endian 32-bit value at bit 0 (factor 1, offset 0); other layouts ' +
 						'need the DBC codec on target — not generated yet')
-				}
-				if si.dbc_ext || si.dbc_id > 0x7ff {
-					panic('loom2v: [target] kind="threadx" comm thread: TX signal "${sname}" DBC message is ' +
-						'extended (29-bit) — the classic FDCAN backend sends 11-bit frames; use a standard id')
 				}
 				if si.bus != m.telem.bus {
 					panic('loom2v: [target] kind="threadx" comm thread: TX signal "${sname}" is on bus ' +
@@ -4712,11 +4803,6 @@ fn main() {
 					'"${si.bus}", but the comm thread owns only [telemetry].bus "${m.telem.bus}" — a per-bus ' +
 					'comm owner is not generated yet (phase 6b-2 lean cut = one bus)')
 			}
-			if si.dbc_ext || si.dbc_id > 0x7ff {
-				panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" DBC message is ' +
-					'extended (29-bit${if si.dbc_ext { ' — the EFF flag is set' } else { '' }}), but the ' +
-					'classic FDCAN backend delivers only 11-bit standard frames — use a standard id')
-			}
 			// a frame the COM receive rule checks crosses to its FBs whole, through the byte IOC
 			// (gen_rx_target.v) — none of the lean copy's limits below apply to it
 			if si.dbc_msg in rx_checked {
@@ -4754,9 +4840,9 @@ fn main() {
 				// channel instead (gen_xdown.v), published beside this cell from the same decode
 				if (m.fb_reads_owner[sname] or { 0 }) > 0 {
 					ioc_idx[sname] = ioc_idx.len
-					// Key the publish off the READ signal's DBC id, not the de-duped rx_sigs
+					// Key the publish off the READ signal's frame (id and width), not the de-duped rx_sigs
 					// representative (which may be an un-read signal that happens to sort first).
-					msg_ioc_idx[si.dbc_id] = ioc_idx[sname]
+					msg_ioc_idx[frame_id_key(si.dbc_id, si.dbc_ext)] = ioc_idx[sname]
 				}
 			}
 		}
@@ -5026,11 +5112,8 @@ fn main() {
 			// the node's bootloader: its config header, and the build of it (boot/boot.mk), which
 			// also links the application at the board's app slot
 			bus := m.isotp_conns[0].bus
-			fd := (doc.value('bus').as_map()[bus] or { toml.Any(map[string]toml.Any{}) }).as_map()['fd'] or {
-				toml.Any(false)
-			}
 			bpath := os.join_path(os.dir(args[5]), 'boot_gen.h')
-			os.write_file(bpath, boot_gen_h(m, fdcan_index(bus), fd.bool()).join('\n') + '\n') or {
+			os.write_file(bpath, boot_gen_h(m, fdcan_index(bus), ecumodel.bus_fd(doc, bus)).join('\n') + '\n') or {
 				panic('write ${bpath}: ${err}')
 			}
 			// the image key too, so `make image` refuses a signing seed this bootloader would reject
@@ -5107,7 +5190,8 @@ fn validate_live_dids(m Model) {
 		}
 		if d.writable || d.write_sessions != 0 || d.write_security != 0 {
 			panic('loom2v: [[did]] 0x${d.id.hex()} reads signal "${d.signal}" and is writable — a write would be ' +
-				'acknowledged and then overwritten by the next refresh; a live DID is read-only')
+				'acknowledged and then overwritten by the next refresh; a live DID is read-only (to override ' +
+				'what the node publishes, give it a `control`: 0x2F)')
 		}
 		si := m.sig_of[d.signal] or { continue }
 		if _ := did_value_width(si.val_type) {
@@ -5179,6 +5263,12 @@ fn dbc_dlc_of(db candb.Database, key string) ?int {
 		}
 	}
 	return none
+}
+
+// frame_id_key is a frame's identity as one map key: its id and whether it is extended, since a
+// standard and an extended frame with the same number are two frames on the wire
+fn frame_id_key(id int, ext bool) int {
+	return if ext { id | (1 << 32) } else { id }
 }
 
 // dbc_id_of returns the CAN id of the message whose snake-name is `key`.
@@ -5692,7 +5782,7 @@ fn validate_faults(m Model, doc toml.Doc) {
 		return
 	}
 	if m.target.on && !m.target.threadx {
-		panic('loom2v: [[fault]] on a bare-metal [target] — the fault memory runs on a ThreadX comm thread (docs/diagnostics.md R6); use kind = "threadx"')
+		panic('loom2v: [[fault]] on a bare-metal [target] — the fault memory runs on a ThreadX comm thread (docs/diagnostics.md §3.3); use kind = "threadx"')
 	}
 	if m.isotp_conns.len != 1 {
 		panic('loom2v: [[fault]] needs the node\'s diagnostic server — an [isotp] connection — to serve 0x19 / 0x14 / 0x85')
@@ -5770,18 +5860,25 @@ fn fault_freeze_lens(m Model, f FaultCfg) []int {
 		mut n := 0
 		for d in m.dids {
 			if d.id == id {
-				n = if d.signal != '' {
-					did_value_width((m.sig_of[d.signal] or { SigInfo{} }).val_type) or { 0 }
-				} else if d.param != '' || d.param_status {
-					param_did_len(m, d)
-				} else {
-					d.bytes.len
-				}
+				n = did_len(m, d)
 			}
 		}
 		out << n
 	}
 	return out
+}
+
+// did_len: the byte size of DID d's record — a constant DID's bytes, a live one's value width, a
+// parameter's or the status DID's — the size a snapshot holds it at, and (with the saturation
+// count's u32, diag_did_answer_len) the size 0x22 answers it at.
+fn did_len(m Model, d DidCfg) int {
+	return if d.signal != '' {
+		did_value_width((m.sig_of[d.signal] or { SigInfo{} }).val_type) or { 0 }
+	} else if d.param != '' || d.param_status {
+		param_did_len(m, d)
+	} else {
+		d.bytes.len
+	}
 }
 
 // fault_entries: the snapshot entries the memory holds — declared, or one per fault with a
@@ -5796,11 +5893,12 @@ fn fault_entries(m Model) int {
 
 // validate_fault_snapshots: every owner's snapshot rules. A snapshot names declared [[did]]s,
 // each at most once, at most fault.max_freeze of them, none empty. And it is no side door around
-// DID access (docs/diagnostics.md §7): 0x19 04 hands out what the DIDs hold under 0x19's own
-// gate, so each DID must be readable in every session 0x19 is served in, behind no 0x27 level but
-// the one 0x19's row itself demands.
+// DID access (docs/diagnostics.md §6): 0x19 04 hands out what the DIDs hold under 0x19's own
+// gate, so each DID must be readable — by the gate 0x22 enforces, its own within 0x22's row — in
+// every session 0x19 is served in, behind no 0x27 level but the one 0x19's row itself demands.
 fn validate_fault_snapshots(m Model) {
 	row, _ := svc_row(m, 0x19)
+	r22, _ := svc_row(m, 0x22)
 	// a 0 mask is every session — every one an application server enters (never programming)
 	app := uds.in_default | uds.in_extended | uds.in_safety
 	served := if row.sessions == 0 { app } else { row.sessions & app }
@@ -5823,12 +5921,14 @@ fn validate_fault_snapshots(m Model) {
 			if d.len == 0 {
 				panic('loom2v: [[fault]] "${f.name}": freeze DID 0x${id.hex()} is not a [[did]] of this node — a snapshot is read from the diagnostic server\'s own DIDs')
 			}
-			readable := if d[0].read_sessions == 0 { app } else { d[0].read_sessions }
+			// judged on the gate 0x22 enforces: the DID's own within 0x22's row (access_gate)
+			sessions, level := access_gate(d[0].read_sessions, d[0].read_security, r22)
+			readable := if sessions == 0 { app } else { sessions }
 			if readable & served != served {
 				panic('loom2v: [[fault]] "${f.name}": freeze DID 0x${id.hex()} is not readable in every session 0x19 is served in — 0x19 04 would hand it out where 0x22 refuses it')
 			}
-			if d[0].read_security != 0 && d[0].read_security != row.security {
-				panic('loom2v: [[fault]] "${f.name}": freeze DID 0x${id.hex()} is read behind 0x27 level ${d[0].read_security}, which 0x19 does not demand — 0x19 04 would hand it out without the unlock')
+			if level != 0 && level != row.security {
+				panic('loom2v: [[fault]] "${f.name}": freeze DID 0x${id.hex()} is read behind 0x27 level ${level}, which 0x19 does not demand — 0x19 04 would hand it out without the unlock')
 			}
 		}
 		for i, n in fault_freeze_lens(m, f) {
@@ -5850,7 +5950,7 @@ fn validate_fault_snapshots(m Model) {
 // fault_cycle_power: `[fault_memory] cycle = "power"` — the operation cycle is the power cycle: it
 // begins when the owner starts and ends with it (AUTOSAR's POWER cycle), for a node with neither NM
 // nor a cycle signal. With the memory in RAM its end is never observed: pending never clears and
-// nothing ages until the persistent memory records the shutdown (R6, docs/diagnostics.md §3.3).
+// nothing ages until the persistent memory records the shutdown (docs/diagnostics.md §3.3).
 const fault_cycle_power = 'power'
 
 // iocb_pool_n: the byte-IOC channels a ThreadX image has (boards/common/iocb.c IOCB_POOL_N),
@@ -5894,9 +5994,10 @@ fn fault_target_on(m Model) bool {
 	return m.target.threadx && m.faults.len > 0
 }
 
-// iocb_on: the image uses the byte IOC pool — its eth signals, its fault cells, or both.
+// iocb_on: the image uses the byte IOC pool — its eth signals, checked received signals, fault or
+// routine cells.
 fn iocb_on(m Model) bool {
-	return eth_thread_on(m) || fault_target_on(m) || rx_iocb_idx(m).len > 0
+	return eth_thread_on(m) || fault_target_on(m) || routine_target_on(m) || rx_iocb_idx(m).len > 0
 }
 
 // fault_target_globals: the fault memory and each fault-owning FB's two cells, comm-thread side,
@@ -5946,27 +6047,16 @@ fn fault_target_pass(m Model) []string {
 
 // fault_target_persist: what the memory changed this pass, written to the journal — after the
 // operation cycle's step, before the NvM service's sleep-edge flush. A write made while the bus
-// sleeps re-runs the whole flush choreography, so the journal's clean marker never sits below a
-// record it does not cover (REQ-NVM-014's rule, the persisted signals' own).
-fn fault_target_persist(m Model, ioc_idx map[string]int) []string {
+// sleeps re-runs the whole flush choreography (nvm_sleep_write_lines, after it), so the journal's
+// clean marker never sits below a record it does not cover (REQ-NVM-014's rule, the persisted
+// signals' own).
+fn fault_target_persist(m Model) []string {
 	if !fault_persist_on(m) {
 		return []string{}
 	}
 	// never an erase here: on a node without NM the journal erases only at boot, before the kernel
 	// (nvm_boot_lines), and one with NM only in its sleep edges' choreography
-	mut g := ['\t\tg_fmem.persist(t1, false) // what changed: unwritten snapshots, the status image, tombstones']
-	if m.nm.on && m.params.len > 0 {
-		// a parameter coded this pass too: ONE choreography for both writers
-		g << '\t\tparam_wrote := g_param.take_wrote()'
-		g << '\t\tif (g_fmem.wrote > 0 || param_wrote) && g_nm.state() == .bus_sleep {'
-		g << nvm_flush_choreo(m, ioc_idx, '\t\t\t', false)
-		g << '\t\t}'
-	} else if m.nm.on {
-		g << '\t\tif g_fmem.wrote > 0 && g_nm.state() == .bus_sleep {'
-		g << nvm_flush_choreo(m, ioc_idx, '\t\t\t', false)
-		g << '\t\t}'
-	}
-	return g
+	return ['\t\tg_fmem.persist(t1, false) // what changed: unwritten snapshots, the status image, tombstones']
 }
 
 // fault_target_consume: every fault-owning FB's reports read and consumed, and the clear
@@ -6157,15 +6247,15 @@ fn glue_build_lines(glue []string, doip bool) string {
 	return 'LOOM_GLUE_SRCS = ${srcs.join(' ')}\n'
 }
 
-// fault_build_lines: what the image links for its fault cells, for gen/loom_build.mk — the byte
-// IOC, unless the eth thread already links it (LOOM_NET_SRCS). Defined on every ThreadX image,
-// empty when unused, and every ThreadX Makefile lists it beside its BSP (pinned by
-// threadx_makefiles_test.v), so adding a [[fault]] to a node needs no Makefile edit.
+// fault_build_lines: what the image links for its fault and routine cells, for gen/loom_build.mk —
+// the byte IOC, unless the eth thread already links it (LOOM_NET_SRCS). Defined on every ThreadX
+// image, empty when unused, and every ThreadX Makefile lists it beside its BSP (pinned by
+// threadx_makefiles_test.v), so adding a [[fault]] or a [[routine]] to a node needs no Makefile edit.
 fn fault_build_lines(m Model) string {
 	if !m.target.threadx {
 		return ''
 	}
-	if !fault_target_on(m) || eth_thread_on(m) {
+	if !(fault_target_on(m) || routine_target_on(m)) || eth_thread_on(m) {
 		return 'LOOM_FAULT_SRCS :=\n' // always defined: a Makefile lists it whatever the node carries
 	}
 	return 'LOOM_FAULT_SRCS = ' + r'$(REPO)/boards/common/iocb.c' + '\n'
@@ -6349,8 +6439,10 @@ fn fdcan_index(bus string) string {
 // gateway's route) against everything else handled on its bus: an application or module frame with
 // the same id would ALSO be dispatched as a diagnostic frame (a cyclic frame whose first byte looks
 // like a single-frame PCI could switch sessions), or two producers would transmit one id. Panics with
-// the refusal; standalone images get no syscheck.
-fn diag_ids_refused(m Model, dbc string, bus string, table string, ids [][]string) {
+// the refusal; standalone images get no syscheck. An id is its number AND its format (`ext`: the
+// connection's ids are 29-bit, REQ-CAN-TP-042): only a frame of the same width collides — the
+// telemetry, trace, NM and shell frames are 11-bit, so a 29-bit id never meets them.
+fn diag_ids_refused(m Model, dbc string, bus string, table string, ext bool, ids [][]string) {
 	// only what is handled on THIS bus can collide (CAN ids are bus-local): the DBC messages
 	// its signals ride, the frames routed onto or off it, and the module frames that use it
 	mut on_bus := map[string]bool{}
@@ -6370,16 +6462,19 @@ fn diag_ids_refused(m Model, dbc string, bus string, table string, ids [][]strin
 		id := u32(e[1].int())
 		what := 'loom2v: ${table} ${field} 0x${id.hex()} is also'
 		for msg in db.messages {
-			if on_bus[snake(msg.name)] && u32(msg.id) == id && !msg.ext {
+			if on_bus[snake(msg.name)] && u32(msg.id) == id && msg.ext == ext {
 				panic('${what} DBC message "${msg.name}" on bus "${bus}"')
 			}
 		}
 		for r in m.routes {
-			// the diagnostic ids are STANDARD frames: only a standard-width route can collide
-			if (r.from_bus == bus && !r.from_ext && u32(r.from_id) == id)
-				|| (r.to_bus == bus && !r.to_ext && u32(r.to_id) == id) {
+			// only a route of the diagnostic ids' width can collide
+			if (r.from_bus == bus && r.from_ext == ext && u32(r.from_id) == id)
+				|| (r.to_bus == bus && r.to_ext == ext && u32(r.to_id) == id) {
 				panic('${what} a routed frame on bus "${bus}"')
 			}
+		}
+		if ext {
+			continue // the module frames below are 11-bit: a 29-bit id is another frame
 		}
 		if m.telem.on && m.telem.bus == bus && (id == m.telem.id || (m.telem.detail_id != 0 && id == m.telem.detail_id)) {
 			panic('${what} a [telemetry] frame id on bus "${bus}"')

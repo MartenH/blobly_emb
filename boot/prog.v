@@ -15,7 +15,23 @@ import comm.uds
 import bcrypto
 
 pub const prog_word = u32(32) // program granularity (STM32H7 flash word)
-pub const max_block_data = 512 // 0x36 payload cap advertised in the 0x34 response
+
+// min_message is the shortest maximum message length a bootloader's connection may have: the
+// longest request it must take whole, the 0x29 proof (the service and sub-function bytes and a
+// 64-byte signature).
+pub const min_message = 2 + 64
+
+// block_data_for is the TransferData data a connection of `max_message` bytes carries per block:
+// the message less the 0x36 service and block-counter bytes, in whole program units (so a block
+// programs whole flash words and leaves nothing staged between blocks) — 512 at the default 520,
+// 4064 at 4095. 0 when not even one unit fits (REQ-BOOT-020).
+pub fn block_data_for(max_message int) int {
+	w := int(prog_word)
+	if max_message - 2 < w {
+		return 0
+	}
+	return (max_message - 2) / w * w
+}
 
 // negative-response codes used here
 const nrc_incorrect_length = u8(0x13)
@@ -108,6 +124,9 @@ pub mut:
 	// tick() expires the session, idle_return_due() answers the stay-window
 	last_rx_us u64
 	heard      bool
+	// the TransferData data one block carries (block_data_for of the connection's maximum message,
+	// set by init): advertised by 0x34, a longer 0x36 refused (REQ-BOOT-020)
+	block_data int
 	// stage buffer: fills to prog_word, then programs
 	stage     [32]u8
 	stage_len u32
@@ -137,6 +156,11 @@ pub mut:
 	// (`erase_unit`, the flash sector; 0 = the whole region at once) or the image check per step,
 	// a 0x78 between steps, the routine's answer after the last. work_via: the transport that
 	// asked, which carries every response. A request meanwhile is answered busyRepeatRequest.
+	// This is the bootloader's own responsePending, not comm/uds pending.v's (the application's,
+	// for routines an FB runs): the work here runs a unit at a time on this thread behind the wire
+	// drain, a request meanwhile is answered 0x21 rather than dropped, a lost 0x78 is resent then
+	// given up with 0x72 (an erase cannot be repeated blind), this server's uds.Server is never
+	// ticked, and dispatch takes 0x31 before it. Only the announced P2/P2* are shared.
 	work      u8
 	work_via  u8
 	work_addr u32
@@ -312,14 +336,16 @@ fn (mut p Prog) dispatch(req &u8, req_len int, resp &u8) int {
 // init sets the state a freshly-booted programming service runs with. Field
 // defaults can't (a __global's initializers live in the never-called _vinit on
 // freestanding targets — the H755 bench found seed reading 0 = the
-// already-unlocked convention), so every consumer calls this first.
-pub fn (mut p Prog) init() {
+// already-unlocked convention), so every consumer calls this first, with its connection's
+// maximum message length — which sets the TransferData block it advertises and takes.
+pub fn (mut p Prog) init(max_message int) {
 	p.srv.session = 0x01 // default diagnostic session (0x29 auth stays LOCKED)
+	p.block_data = block_data_for(max_message)
 }
 
 // open_handed_off starts the server in the programming session — for a boot the application
 // entered by the 0x10 02 handoff, whose positive answer the tester already holds, so it goes on to
-// 0x29 without asking twice (docs/diagnostics.md §7). Locked, like any session entry, and timed
+// 0x29 without asking twice (docs/diagnostics.md §6). Locked, like any session entry, and timed
 // from `now`: a tester that never speaks loses it to S3 like any other, and then the stay-window
 // (REQ-BOOT-014) gives the ECU back to the application.
 // `via` is the transport the handoff was asked over, which holds the session; over the network the
@@ -720,14 +746,18 @@ fn (mut p Prog) request_download(req &u8, req_len int, resp &u8) int {
 	if !p.region_ok(addr, size) || addr % prog_word != 0 {
 		return negative(resp, 0x34, nrc_request_out_of_range)
 	}
+	if p.block_data <= 0 {
+		// the connection carries no block of a whole program unit: nothing could be transferred
+		return negative(resp, 0x34, nrc_conditions_not_correct)
+	}
 	p.downloading = true
 	p.dl_addr = addr
 	p.dl_end = addr + size
 	p.next_block = 1
 	p.stage_len = 0
 	// 0x74: lengthFormat 0x20 (2-byte), maxNumberOfBlockLength = data + the
-	// 2 service bytes of a 0x36 request.
-	mb := u16(max_block_data + 2)
+	// 2 service bytes of a 0x36 request (REQ-BOOT-020).
+	mb := u16(p.block_data + 2)
 	unsafe {
 		resp[0] = 0x74
 		resp[1] = 0x20
@@ -774,7 +804,7 @@ fn (mut p Prog) transfer_data(req &u8, req_len int, resp &u8) int {
 		return negative(resp, 0x36, nrc_wrong_block_sequence)
 	}
 	n := u32(req_len - 2)
-	if n == 0 || n > max_block_data {
+	if n == 0 || n > u32(p.block_data) {
 		return negative(resp, 0x36, nrc_incorrect_length)
 	}
 	if u64(p.dl_addr) + u64(p.stage_len) + u64(n) > u64(p.dl_end) {

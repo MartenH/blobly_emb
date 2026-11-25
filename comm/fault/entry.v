@@ -1,6 +1,6 @@
 module fault
 
-// Snapshots (freeze frames), extended data and displacement (docs/diagnostics.md §3.3, R6b).
+// Snapshots (freeze frames), extended data and displacement (docs/diagnostics.md §3.3).
 //
 // A DTC that declares `freeze` DIDs gets a SNAPSHOT at the occurrence that finds it without one.
 // What it holds is DEFINED as the declared DIDs' values AT STORAGE — read from the diagnostic
@@ -59,9 +59,35 @@ pub fn (m &Memory) snap_len(i int) int {
 
 // body_len: the record body length this slot's snapshot has: the DID count, each DID's id and data.
 pub fn (s &Slot) body_len() int {
-	mut n := 1
+	mut data := 0
 	for k in 0 .. s.nfreeze {
-		n += 2 + int(s.freeze_len[k])
+		data += int(s.freeze_len[k])
+	}
+	return snapshot_body_len(s.nfreeze, data)
+}
+
+// snapshot_body_len: a snapshot record body naming `nfreeze` DIDs whose data takes `data` bytes in
+// all — the DID count, then each DID's identifier and data. The 0x19 04 answer carrying it is
+// uds.snapshot_answer_len of this; generation sizes the node's maximum message by it.
+pub fn snapshot_body_len(nfreeze int, data int) int {
+	return 1 + 2 * nfreeze + data
+}
+
+// ext_record_len: the width of extended data record `rec` (0 = no such record).
+pub fn ext_record_len(rec u8) int {
+	return match rec {
+		0x01 { 2 }
+		0x02, 0x03 { 1 }
+		else { 0 }
+	}
+}
+
+// extended_answer_len: the 0x19 06 answer carrying every extended data record (0xFF): the DTC and
+// its status, then each record's number and data.
+pub fn extended_answer_len() int {
+	mut n := uds.dtc_records_head
+	for r in u8(1) .. ext_records + 1 {
+		n += 1 + ext_record_len(r)
 	}
 	return n
 }
@@ -242,11 +268,7 @@ pub fn (m &Memory) extended_of(i int, rec u8, out &u8, cap int) int {
 	if i < 0 || i >= m.n {
 		return 0
 	}
-	need := match rec {
-		0x01 { 2 }
-		0x02, 0x03 { 1 }
-		else { 0 }
-	}
+	need := ext_record_len(rec)
 	if need > cap {
 		return -1
 	}

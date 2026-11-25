@@ -80,7 +80,15 @@ fn test_the_display_thread_runs_below_every_other_thread() {
 
 // a DoIP node (sysnode's shape): its NetX and doip threads are created in C (doip_net_create's two
 // priorities), below the application threads — the display thread must still be below them
-const display_doip = '
+// [nvm]: a ThreadX node that performs 0x27 keeps its failed-key state in the journal, so a gated
+// config declares it (REQ-DIAG-066); with no journal writer it generates nothing
+const tt_nvm = '
+[nvm]
+min_write_ms   = 1000
+sector_records = 4096
+'
+
+const display_doip = tt_nvm + '
 [uds.services]
 "0x10" = {}
 "0x11" = { sessions = ["extended"], security = 1 }

@@ -12,6 +12,7 @@ module main
 // application's network seam serves DoIP beside the bus (serve_d_boot_doip.v, boards/common/boot_net.c).
 // Built per node by boot/boot.mk (`make boot`), which a [boot] node's gen/loom_build.mk includes.
 import boot
+import boot.bufs
 import comm.diag
 import comm.isotp
 import driver.can
@@ -32,11 +33,16 @@ fn C.boot_app_size() u32
 fn C.boot_erase_unit() u32
 fn C.boot_rx_id() u32
 fn C.boot_tx_id() u32
+fn C.boot_ext() int
 fn C.boot_can_idx() int
 fn C.boot_can_fd() int
 fn C.boot_bs() u8
 fn C.boot_stmin() u8
+fn C.boot_tx_dl() u8
 fn C.boot_keys(image &u8, session &u8)
+fn C.boot_buf() &u8
+fn C.boot_buf_len() int
+fn C.boot_max_message() int
 fn C.boot_rng(out &u8, n int) int
 fn C.bflash_erase(addr u32, size u32) int
 fn C.bflash_program(addr u32, data &u8, len u32) int
@@ -63,12 +69,21 @@ fn rng_hook(out &u8, n int) bool {
 	return C.boot_rng(out, n) != 0
 }
 
+// the message buffers: the node's maximum message length ([isotp] max_message, BOOT_MAX_MESSAGE)
+// laid out by boot.bufs over the one block boot_glue.c provides, sized by the generator from the
+// same layout (BOOT_BUF_LEN). Computed where used, never kept in a pointer global.
+fn buffers() bufs.Layout {
+	return bufs.layout(C.boot_max_message(), net_serves())
+}
+
+fn region(off int) &u8 {
+	return unsafe { C.boot_buf() + off }
+}
+
 // module-sized state stays OUT of entry frames (stack-copy discipline)
 __global (
 	g_prog boot.Prog
 	g_link isotp.Link
-	g_req  [isotp.max_payload]u8
-	g_rsp  [isotp.max_payload]u8
 	// the decision's facts the serve loop needs: entered by request, over a valid app, and — for a
 	// handoff — the transport holding the session it opens (boot.via_*; 0 = none)
 	g_requested bool
@@ -106,15 +121,32 @@ fn entry() {
 		program: fl_program
 		read:    fl_read
 	}
-	// EXPLICIT init: field defaults are _vinit work — freestanding never runs it
-	g_prog.init() // default session
+	// the buffers: a block smaller than the layout (a boot_gen.h older than this image) is never
+	// written past — parked, but flashable over SWD
+	max_message := C.boot_max_message()
+	lay := buffers()
+	if lay.total > C.boot_buf_len() || max_message < boot.min_message {
+		for {}
+	}
+	// EXPLICIT init: field defaults are _vinit work — freestanding never runs it. The block length
+	// the session advertises follows the node's maximum message (REQ-BOOT-020)
+	g_prog.init(max_message) // default session
 	// two trust anchors — image vs session, different custody (examples/keys/README.md); the
 	// node's own, from its [boot]
 	C.boot_keys(&g_prog.image_key[0], &g_prog.session_key[0])
 	g_prog.rng = rng_hook // the 0x29 challenge source (the board's TRNG)
-	g_link.init_defaults() // ISO-TP N_Bs/WFTmax — 0 would wait forever on a lost FC
-	g_link.bs = C.boot_bs() // the flow control the node's [isotp] grants
-	g_link.stmin = C.boot_stmin()
+	// ISO-TP's timers (0 would wait forever on a lost FC), the flow control the node's [isotp]
+	// grants and the frame length it answers with: its tx_dl, above 8 only on a CAN-FD bus, which
+	// BOOT_CAN_FD opens the channel in (generation refuses the rest)
+	boot.LinkCfg{
+		bs:    C.boot_bs()
+		stmin: C.boot_stmin()
+		tx_dl: C.boot_tx_dl()
+	}.configure(mut g_link)
+	// the link reassembles into the request buffer and sends from the response buffer: the server
+	// reads a request before the pass goes on and writes an answer only while the link is idle
+	g_link.bind_rx(region(lay.req), max_message)
+	g_link.bind_tx(region(lay.rsp), max_message)
 	g_prog.app_base = app_base
 	g_prog.app_size = app_size
 	g_prog.erase_unit = C.boot_erase_unit() // a sector per step, a 0x78 between (Prog.step)
@@ -144,8 +176,14 @@ fn serve_loop() {
 	if !can_ok && !net_serves() {
 		for {} // no transport, nothing to serve — parked, but flashable over SWD
 	}
+	// the node's [isotp] ids, and their format: 29-bit when the application's are (ext, or normal
+	// fixed addressing), so a tester reaches the bootloader on the ids it used for the application
 	rx_id := C.boot_rx_id()
 	tx_id := C.boot_tx_id()
+	ext := C.boot_ext() != 0
+	lay := buffers()
+	req := region(lay.req)
+	rsp := region(lay.rsp)
 	boot_t0 := C.board_now_us() // REQ-BOOT-014: the stay-window baseline
 	if g_handoff != 0 {
 		// the application answered 0x10 02 already: the tester holds a programming session, and
@@ -155,13 +193,13 @@ fn serve_loop() {
 	}
 	for {
 		now := C.board_now_us()
-		net_pass(now) // the network's reports and its request, if this node serves DoIP
+		net_pass(now, lay) // the network's reports and its request, if this node serves DoIP
 		// the bus side is comm/diag's, the application's own: intake, the busy guard, the answer
 		// pumped with a refusal aborting it, S3 held while an exchange is in flight
 		mut due := false
 		if can_ok {
-			due = diag.serve_step(mut g_prog, mut g_link, rx_id, tx_id, now, mut ch, &g_req[0],
-				&g_rsp[0], now_us)
+			due = diag.serve_step(mut g_prog, mut g_link, rx_id, tx_id, ext, now, mut ch, req,
+				rsp, now_us)
 		} else {
 			g_prog.tick(now)
 			due = g_prog.reset_due()

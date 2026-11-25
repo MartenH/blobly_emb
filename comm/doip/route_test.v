@@ -5,6 +5,24 @@ module doip
 // from that address — and the entity reports itself a gateway.
 // @verifies REQ-NET-019
 
+// the sizes of a server bound at the default maximum message length, as the tests use them
+const max_uds = 520
+const max_msg = header_len + 4 + max_uds
+const max_resp = header_len + 5 + header_len + 4 + max_uds
+
+// new_server: a server bound to an assembly buffer of its own at max_uds
+fn new_server() Server {
+	return server_at(max_uds)
+}
+
+// server_at: a server whose UDS messages are at most `m` bytes, its buffer the owner's
+fn server_at(m int) Server {
+	mut s := Server{}
+	buf := []u8{len: msg_len(m)}
+	s.bind(&buf[0], m)
+	return s
+}
+
 // a DoIP message into dst (each test file is compiled on its own: doip_test.v's helper is not here)
 fn frame(dst &u8, ptype u16, payload []u8) int {
 	unsafe {
@@ -48,7 +66,7 @@ const zone = u16(0x07C0)
 const tester = u16(0x0E00)
 
 fn gateway(mut call RouteCall) Server {
-	mut s := Server{}
+	mut s := new_server()
 	s.entity_addr = gw
 	s.uds.session = 0x01
 	s.routes[0] = 0x07B0
@@ -62,6 +80,25 @@ fn gateway(mut call RouteCall) Server {
 	s.feed(&inb[0], n, &resp[0], max_resp)
 	assert s.activated
 	return s
+}
+
+// feed_in_room: `bytes` fed the way the transport feeds them — never more than the assembly
+// buffer can still take (doipnet.pass) — and the response bytes they produce
+fn feed_in_room(mut s Server, bytes []u8, resp_max int) []u8 {
+	mut out := []u8{}
+	mut resp := []u8{len: resp_max}
+	mut at := 0
+	for at < bytes.len {
+		room := s.msg_cap() - s.buf_len
+		take := if bytes.len - at < room { bytes.len - at } else { room }
+		mut n := s.feed(unsafe { &bytes[at] }, take, unsafe { &resp[0] }, resp_max)
+		for n > 0 {
+			out << resp[..n]
+			n = s.feed(unsafe { &bytes[0] }, 0, unsafe { &resp[0] }, resp_max)
+		}
+		at += take
+	}
+	return out
 }
 
 fn diag_to(mut s Server, ta u16, uds []u8) []u8 {
@@ -198,4 +235,28 @@ fn test_a_refused_routed_request_leaves_the_forwarded_ones_ticket() {
 	assert call.ticket == 2 // offered as the next
 	assert s.ticket == 1 // ... but the latest is still the one forwarded: its answers go out
 	assert s.route_open
+}
+
+// @verifies REQ-CAN-TP-023
+// a routed request is carried up to the gateway's own maximum message, and one longer is refused
+// like any message too large for the entity: the generic NACK 0x02, the message discarded and the
+// connection kept, and nothing handed to the router
+fn test_a_routed_request_over_the_gateways_maximum_is_too_large() {
+	mut call := RouteCall{}
+	mut s := gateway(mut call)
+	mut fits := [u8(0x36), 0x01]
+	for fits.len < max_uds {
+		fits << u8(fits.len)
+	}
+	out := diag_to(mut s, zone, fits)
+	assert out.len == 8 + 5 && out[3] == 0x02 && call.calls == 1 && call.req.len == max_uds
+	mut big := fits.clone()
+	big << 0
+	mut payload := [u8(tester >> 8), u8(tester), u8(zone >> 8), u8(zone)]
+	payload << big
+	mut inb := []u8{len: header_len + payload.len}
+	n := frame(unsafe { &inb[0] }, 0x8001, payload)
+	got := feed_in_room(mut s, inb[..n], max_resp)
+	assert got.len == 9 && got[2] == 0x00 && got[3] == 0x00 && got[8] == 0x02 && !s.fatal
+	assert call.calls == 1 && s.activated
 }

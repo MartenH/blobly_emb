@@ -23,6 +23,12 @@ require_blobly_net "$BLOBLY_NET" || exit 1
 # a firmware regression. Say what it is instead.
 grep -q 'function e2e.p01_protect' "$BLOBLY_NET/blobly/script/prelude.v" 2>/dev/null || {
     echo "BLOBLY_NET=$BLOBLY_NET predates blobly_net#374 (e2e.p01_protect): update it"; exit 1; }
+# A suite that authenticates with 0x29 (diag:authenticate) needs blobly_net's ACR client: an older
+# checkout fails it with a nil method, which reads as a firmware regression.
+if grep -lq ':authenticate(' "$EX"/test/*.lua 2>/dev/null; then
+    grep -q 'function self:authenticate' "$BLOBLY_NET/blobly/script/prelude.v" 2>/dev/null || {
+        echo "BLOBLY_NET=$BLOBLY_NET has no diag:authenticate (0x29): update blobly_net"; exit 1; }
+fi
 ip link show "$IFACE" >/dev/null 2>&1 || { echo "bring up $IFACE: sudo make vcan"; exit 1; }
 
 # Run the example ECU in the background; always clean it up.

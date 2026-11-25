@@ -1,6 +1,7 @@
 module cfgschema
 
 import comm.doip
+import comm.isotp
 import comm.uds
 
 // system: system.toml — the buses, the cross-node signals and events, the routes and each node's
@@ -53,14 +54,19 @@ fn system_schema() Schema {
 				k('buses', .str_arr).d('[]').required_by_model().doc('the system buses it sits on; more than one CAN bus makes it a [[route]] gateway'),
 				k('nm', .int).range(0, 0xFF).doc('its NM node id (alive = peers lo + nm); absent = not an NM node; required for a ThreadX member of a bus with an NM cluster'),
 				k('trace', .int).doc('its trace node id, unique across the system (checked only, not generated)'),
-				sub('diag', .tbl, 'sys_diag').doc('its ISO-TP diagnostic ids, unique across the system (checked only, not generated); required with `doip`'),
+				sub('diag', .tbl, 'sys_diag').doc('its ISO-TP diagnostic ids, unique across the system by number and format: `{ req, rsp [, ext] }` or `{ addressing = "normal_fixed", sa, ta [, functional_ta] }` — sysgen lowers them into the node\'s [isotp] where that states no ids, and into a routing gateway\'s [[doip.route]]; an [isotp] that states its ids must state these (REQ-TOPO-014); required with `doip`'),
 				sub('endpoint', .tbl, 'sys_endpoint').doc('its network identity: the address SOME/IP and DoIP answer at; required on a someip bus member (a plain IP host on the segment too) and on a DoIP entity'),
 				sub('doip', .tbl, 'sys_doip').doc('the node is a DoIP entity at its endpoint address (lowered into [doip]; dissolved systems only)'),
 			]),
-			tbl('sys_diag', '[[node]] diag', '', [
-				k('req', .int).doc('the diagnostic request CAN id'),
-				k('rsp', .int).doc('the diagnostic response CAN id'),
-				k('logical', .int).hex().doc('its DoIP logical address behind a DoIP gateway that routes to it (a gateway\'s doip `routes`; 0x0001..0x0DFF or 0x1000..0x7FFF; unique among every logical address); needs `req` and `rsp`'),
+			tbl('sys_diag', '[[node]] diag', 'The node\'s diagnostic allocation, stated one of two ways (as its [isotp] states them): `req` / `rsp` (normal addressing, 11-bit or with `ext` 29-bit), or `addressing = "normal_fixed"` with `sa` / `ta`, from which the 29-bit ids derive. sysgen lowers it into the node\'s [isotp] where that states no ids (a node without an [isotp] runs no server, and gets none) and into the [[doip.route]] of a gateway that routes to it.', [
+				k('addressing', .str).d('"normal"').one_of(addressing_formats()).doc('"normal" (req / rsp) or "normal_fixed" (sa / ta: requests 0x18DA<sa><ta>, answers 0x18DA<ta><sa>)'),
+				k('req', .int).range(0, i64(isotp.ext_id_max)).hex().doc('the diagnostic request CAN id: 11-bit (0x000..0x7FF) unless ext; refused with normal_fixed'),
+				k('rsp', .int).range(0, i64(isotp.ext_id_max)).hex().doc('the diagnostic response CAN id: 11-bit unless ext; refused with normal_fixed'),
+				k('ext', .boolean).d('false').doc('req and rsp are 29-bit identifiers; refused with normal_fixed (always 29-bit)'),
+				k('sa', .int).range(0, 255).hex().doc('normal_fixed: the node\'s own address (the target address of its requests)'),
+				k('ta', .int).range(0, 255).hex().doc('normal_fixed: the tester\'s address (e.g. 0xF1); not sa'),
+				k('functional_ta', .int).range(0, 255).hex().doc('normal_fixed: the functional target address (conventionally 0x33) — functional requests on 0x18DB<functional_ta><ta>; absent = none'),
+				k('logical', .int).hex().doc('its DoIP logical address behind a DoIP gateway that routes to it (a gateway\'s doip `routes`; 0x0001..0x0DFF or 0x1000..0x7FFF; unique among every logical address); needs an allocation (req and rsp, or sa and ta)'),
 			]),
 			tbl('sys_endpoint', '[[node]] endpoint', '', [
 				k('address', .str).doc('IPv4 dotted quad; unique per segment; a DoIP node needs a host address of its subnet (not its network, broadcast or gateway address — on the default /24: not .0, .1 or .255). Exactly one of `address` / `host`; refused on a segment with a `subnet`'),
@@ -141,6 +147,6 @@ fn doip_policy_keys() []Key {
 		k('announce_count', .int).d('${doip.announce_count}').range(0, doip.announce_count_max).doc('A_DoIP_Announce_Num: vehicle announcements at start-up'),
 		k('announce_interval_ms', .int).d('${doip.announce_interval_ms}').range(doip.announce_interval_min_ms, doip.announce_interval_max_ms).doc('A_DoIP_Announce_Interval (ms); count x interval at most ${doip.announce_total_max_ms} ms'),
 		k('route_level', .int).d('${doip.route_level}').range(1, uds.max_security_level).doc('a gateway\'s: the security level of its own server a tester must have unlocked over the network before it routes to the nodes behind it (REQ-NET-020); one its [uds] serves'),
-		k('allow_bench_key', .boolean).d('false').doc('answer 0x27 with blobly_net\'s PUBLIC reference key over the network — a bench posture, opted into by name; required (true) when [uds] security_key = "reference"'),
+		k('allow_bench_key', .boolean).d('false').doc('unlock with one of blobly_net\'s PUBLIC bench keys over the network — the 0x27 reference key or the 0x29 dev tester key — a bench posture, opted into by name; required (true) when [uds] security_key = "reference" or an auth_keys entry is "reference"'),
 	]
 }

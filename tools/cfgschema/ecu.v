@@ -32,6 +32,7 @@ fn ecu_schema() Schema {
 				sub('did', .arr, 'did').doc("the server's data identifiers"),
 				sub('fault', .arr, 'fault').doc('diagnostic faults and their DTCs (docs/diagnostics.md §3.3)'),
 				sub('param', .arr, 'param').doc('coded parameters (docs/diagnostics.md §3.4)'),
+				sub('routine', .arr, 'routine').doc('RoutineControl (0x31) routines, each run by an FB (docs/diagnostics.md §3.1)'),
 				sub('fault_memory', .tbl, 'fault_memory').doc("the fault memory's operation cycle and snapshot entries"),
 				sub('route', .arr, 'route').doc('gateway routes: raw frames or decoded signals between buses'),
 				sub('io', .tbl, 'io').doc('physical IO points (docs/io.md)'),
@@ -99,6 +100,7 @@ fn ecu_schema() Schema {
 			k('clears_per_day', .int).d('24').range(0, 1_000_000).doc('ClearDiagnosticInformation (0x14)'),
 			k('setting_changes_per_day', .int).d('24').range(0, 1_000_000).doc('ControlDTCSetting (0x85) changes'),
 			k('codings_per_day', .int).d('24').range(0, 1_000_000).doc('accepted 0x2E codings of a [[param]]'),
+			k('unlocks_per_day', .int).d('24').range(0, 1_000_000).doc('correct-key unlocks a day, all levels — SecurityAccess (0x27) keys, or Authentication (0x29) proofs on an access = "authentication" node: the failed-key state (wrong keys, or failed proofs) is written at most security_attempts times per level until a correct key or proof, and once more by it; only where the node unlocks a security level'),
 		]),
 		Table{
 			ctx: 'nm'

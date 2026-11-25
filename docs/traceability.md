@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 290 | 197 | 30 | 63 | 0 |
+| 338 | 245 | 30 | 63 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -31,21 +31,56 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BOOT-014 | QM | test | verified | prog_test.v (pass) |
 | REQ-BOOT-015 | QM | analysis | uncovered | — |
 | REQ-BOOT-016 | QM | test | verified | prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass) |
-| REQ-BOOT-017 | QM | test | verified | ed25519_interop_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), sha512_test.v (pass) |
+| REQ-BOOT-017 | QM | test | verified | ed25519_interop_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), sha512_test.v (pass) |
 | REQ-BOOT-018 | QM | analysis | uncovered | — |
 | REQ-BOOT-019 | QM | test | verified | doip_mb_test.v (pass), prog_test.v (pass) |
+| REQ-BOOT-020 | QM | test | verified | bufs_test.v (pass), diag_target_test.v (pass), isotp-max-message-silicon (approved), prog_test.v (pass), step_test.v (pass) |
 | REQ-BULK-001 | QM | test | verified | bulk_test.v (pass) |
 | REQ-BULK-002 | QM | test | verified | bulk_test.v (pass) |
 | REQ-BULK-003 | QM | test | verified | bulk-ring-silicon (approved), bulk_test.v (pass) |
 | REQ-CAN-DRV-001 | QM | test | covered | h735-fdcan-hardware (approved), h755-dualcore-heartbeat (approved), h755-fdcan-hardware (approved), route.lua (pending) |
 | REQ-CAN-DRV-002 | QM | test | covered | h735-fdcan-hardware (approved), h755-fdcan-hardware (approved), route.lua (pending) |
 | REQ-CAN-DRV-003 | QM | test | verified | h735-fdcan-hardware (approved), h755-fdcan-hardware (approved) |
-| REQ-CAN-DRV-004 | QM | test | uncovered | — |
+| REQ-CAN-DRV-004 | QM | test | verified | isotp-canfd-silicon (approved) |
 | REQ-CAN-DRV-005 | QM | test | uncovered | — |
 | REQ-CAN-DRV-006 | QM | review | uncovered | — |
 | REQ-CAN-DRV-007 | QM | test | uncovered | — |
 | REQ-CAN-DRV-008 | QM | test | uncovered | — |
 | REQ-CAN-DRV-009 | QM | test | uncovered | — |
+| REQ-CAN-DRV-010 | QM | test | verified | can_test.v (pass) |
+| REQ-CAN-TP-001 | QM | test | verified | isotp_test.v (pass), isotp_test.v (pass) |
+| REQ-CAN-TP-002 | QM | test | verified | isotp_test.v (pass) |
+| REQ-CAN-TP-003 | QM | test | verified | isotp_test.v (pass) |
+| REQ-CAN-TP-004 | QM | test | verified | isotp_test.v (pass) |
+| REQ-CAN-TP-005 | QM | test | verified | isotp_test.v (pass) |
+| REQ-CAN-TP-006 | QM | test | verified | isotp_test.v (pass) |
+| REQ-CAN-TP-007 | QM | test | verified | isotp_test.v (pass) |
+| REQ-CAN-TP-008 | QM | test | verified | isotp_test.v (pass), isotp_test.v (pass) |
+| REQ-CAN-TP-009 | QM | test | verified | isotp_test.v (pass) |
+| REQ-CAN-TP-010 | QM | test | verified | isotp_test.v (pass) |
+| REQ-CAN-TP-011 | QM | test | verified | isotp_test.v (pass) |
+| REQ-CAN-TP-012 | QM | test | verified | isotp_test.v (pass) |
+| REQ-CAN-TP-013 | QM | test | verified | diag_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), step_test.v (pass) |
+| REQ-CAN-TP-014 | QM | test | verified | diag_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), step_test.v (pass) |
+| REQ-CAN-TP-015 | QM | test | verified | isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass) |
+| REQ-CAN-TP-016 | QM | test | verified | isotp_test.v (pass) |
+| REQ-CAN-TP-017 | QM | test | verified | isotp_test.v (pass) |
+| REQ-CAN-TP-018 | QM | test | verified | isotp_test.v (pass), step_test.v (pass) |
+| REQ-CAN-TP-019 | QM | test | verified | diag_test.v (pass), diag_test.v (pass), diag_test.v (pass) |
+| REQ-CAN-TP-020 | QM | test | verified | diag_target_test.v (pass) |
+| REQ-CAN-TP-021 | QM | test | verified | diag_target_test.v (pass) |
+| REQ-CAN-TP-022 | QM | test | verified | diag_target_test.v (pass), diag_target_test.v (pass), diag_target_test.v (pass), fault_target_test.v (pass), fault_target_test.v (pass), records_test.v (pass), uds_test.v (pass) |
+| REQ-CAN-TP-023 | QM | test | verified | diag_target_test.v (pass), diag_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), doip_target_test.v (pass), doip_target_test.v (pass), doip_test.v (pass), doip_test.v (pass), doip_test.v (pass), doipnet_test.v (pass), doipnet_test.v (pass), doipnet_test.v (pass), route_size_test.v (pass), route_test.v (pass), someip_test.v (pass) |
+| REQ-CAN-TP-024 | QM | test | verified | isotp_test.v (pass), module_test.v (pass), shell_test.v (pass) |
+| REQ-CAN-TP-025 | QM | test | verified | diagroute_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass) |
+| REQ-CAN-TP-026 | QM | test | verified | cfgschema_test.v (pass), diag_target_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), doip_target_test.v (pass), module_test.v (pass), multicore_dump_test.v (pass), node_gate_test.v (pass), shell_test.v (pass), someip_test.v (pass), someip_test.v (pass), step_test.v (pass) |
+| REQ-CAN-TP-027 | QM | test | verified | diag_test.v (pass), diag_test.v (pass), diagroute_test.v (pass), isotp-canfd-silicon (approved), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), step_test.v (pass) |
+| REQ-CAN-TP-028 | QM | test | verified | diag_test.v (pass), diag_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), isotp-canfd-silicon (approved), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), step_test.v (pass), step_test.v (pass) |
+| REQ-CAN-TP-029 | QM | test | verified | diag_test.v (pass), diagroute_test.v (pass), isotp_test.v (pass), isotp_test.v (pass), isotp_test.v (pass) |
+| REQ-CAN-TP-040 | QM | test | verified | addressing_test.v (pass), diag_target_test.v (pass), diag_test.v (pass), diag_test.v (pass), isotp-29bit-silicon (approved), step_test.v (pass) |
+| REQ-CAN-TP-041 | QM | test | verified | addressing_test.v (pass), addressing_test.v (pass), diag_target_test.v (pass), fb_move_test.v (pass), isotp-29bit-silicon (approved) |
+| REQ-CAN-TP-042 | QM | test | verified | diag_target_test.v (pass), diag_test.v (pass), diagroute_test.v (pass), isotp-29bit-silicon (approved), main_test.v (pass), step_test.v (pass) |
+| REQ-CAN-TP-043 | QM | test | verified | addressing_test.v (pass), diag_test.v (pass) |
 | REQ-COM-001 | QM | test | uncovered | — |
 | REQ-COM-002 | QM | test | uncovered | — |
 | REQ-COM-003 | QM | test | verified | com_test.v (pass) |
@@ -57,9 +92,10 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-009 | QM | test | verified | pass_model_test.v (pass), rxmon_test.v (pass) |
 | REQ-COM-010 | QM | test | verified | encode_test.v (pass), gen_test.v (pass), raw_range_test.v (pass), rx_target_test.v (pass), tx_saturation_test.v (pass) |
 | REQ-COM-011 | QM | test | verified | init_value_test.v (pass), pdu_init_test.v (pass) |
+| REQ-COM-012 | QM | test | verified | rx_target_test.v (pass), rx_target_test.v (pass), tx_saturation_test.v (pass), tx_saturation_test.v (pass) |
 | REQ-DIAG-001 | QM | test | verified | diag_test.v (pass), uds-on-target-domain (approved), uds-on-target-sysnode (approved), uds-on-target-zone-a (approved), uds_test.v (pass) |
 | REQ-DIAG-018 | QM | test | verified | uds_test.v (pass) |
-| REQ-DIAG-004 | QM | test | verified | uds_test.v (pass) |
+| REQ-DIAG-004 | QM | test | verified | io_control_test.v (pass), uds_test.v (pass) |
 | REQ-DIAG-020 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-026 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-006 | QM | test | verified | diag_test.v (pass), uds_test.v (pass) |
@@ -82,9 +118,21 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-031 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-005 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-019 | QM | test | verified | uds_test.v (pass) |
+| REQ-DIAG-100 | QM | test | verified | io-control-silicon (approved), io_control_test.v (pass), io_control_test.v (pass) |
+| REQ-DIAG-101 | QM | test | verified | io_control_test.v (pass) |
+| REQ-DIAG-102 | QM | test | verified | io-control-silicon (approved), io_control_test.v (pass) |
+| REQ-DIAG-103 | QM | test | verified | io-control-silicon (approved), io_control_test.v (pass), io_control_test.v (pass) |
+| REQ-DIAG-104 | QM | test | verified | io_control_test.v (pass) |
+| REQ-DIAG-105 | QM | test | verified | auth_test.v (pass), io-control-silicon (approved), io_control_test.v (pass), io_control_test.v (pass) |
+| REQ-DIAG-106 | QM | test | verified | io_control_test.v (pass), io_control_test.v (pass) |
+| REQ-DIAG-107 | QM | test | verified | io_control_test.v (pass) |
 | REQ-DIAG-008 | QM | test | verified | uds-on-target-reset (approved), uds_test.v (pass) |
-| REQ-DIAG-032 | QM | test | verified | uds_test.v (pass) |
-| REQ-DIAG-033 | QM | test | verified | uds-on-target-reset (approved), uds_test.v (pass) |
+| REQ-DIAG-032 | QM | test | verified | diag_test.v (pass), uds_test.v (pass) |
+| REQ-DIAG-033 | QM | test | verified | sa_persist_test.v (pass), uds-on-target-journal (approved), uds_test.v (pass) |
+| REQ-DIAG-065 | QM | test | verified | sa_persist_test.v (pass), sa_store_test.v (pass) |
+| REQ-DIAG-066 | QM | test | verified | diag_target_test.v (pass), diag_target_test.v (pass), io_control_test.v (pass) |
+| REQ-DIAG-067 | QM | test | verified | auth_test.v (pass), auth_test.v (pass), diag_target_test.v (pass), sa_persist_test.v (pass), sa_store_test.v (pass) |
+| REQ-DIAG-068 | QM | test | verified | diag_target_test.v (pass), sa_persist_test.v (pass), sa_store_test.v (pass) |
 | REQ-DIAG-034 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-035 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-036 | QM | test | verified | uds_test.v (pass) |
@@ -121,6 +169,22 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-059 | QM | test | verified | param_test.v (pass) |
 | REQ-DIAG-060 | QM | test | verified | param_test.v (pass) |
 | REQ-DIAG-061 | QM | test | verified | param_target_test.v (pass) |
+| REQ-DIAG-080 | QM | test | verified | routine-control-silicon (approved), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
+| REQ-DIAG-081 | QM | test | verified | routine_gen_test.v (pass), routine_gen_test.v (pass), routine_gen_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
+| REQ-DIAG-082 | QM | test | verified | routine-control-silicon (approved), routine_gen_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
+| REQ-DIAG-083 | QM | test | verified | routine-control-silicon (approved), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
+| REQ-DIAG-084 | QM | test | verified | routine-control-silicon (approved), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
+| REQ-DIAG-085 | QM | test | verified | auth_test.v (pass), io_control_test.v (pass), routine-control-silicon (approved), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass), routine_test.v (pass) |
+| REQ-DIAG-086 | QM | test | verified | diagroute_test.v (pass) |
+| REQ-DIAG-087 | QM | test | verified | model_test.v (pass), routine_gen_test.v (pass) |
+| REQ-DIAG-120 | QM | test | verified | auth_test.v (pass), diag_target_test.v (pass), diag_target_test.v (pass) |
+| REQ-DIAG-121 | QM | test | verified | auth_test.v (pass), diag_target_test.v (pass), udsauth_test.v (pass) |
+| REQ-DIAG-122 | QM | test | verified | auth_test.v (pass), auth_test.v (pass), auth_test.v (pass), doip_target_test.v (pass), udsauth_test.v (pass) |
+| REQ-DIAG-123 | QM | test | verified | auth_test.v (pass), auth_test.v (pass), auth_test.v (pass), auth_test.v (pass) |
+| REQ-DIAG-124 | QM | test | verified | auth_test.v (pass), auth_test.v (pass), auth_test.v (pass) |
+| REQ-DIAG-125 | QM | test | verified | auth_test.v (pass), auth_test.v (pass) |
+| REQ-DIAG-126 | QM | test | verified | auth_bench_key_test.v (pass), diag_target_test.v (pass), diag_target_test.v (pass), diag_target_test.v (pass), doip_target_test.v (pass), doipcfg_test.v (pass), doipcfg_test.v (pass), udsauth_test.v (pass) |
+| REQ-DIAG-127 | QM | test | verified | auth_test.v (pass), auth_test.v (pass), auth_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), udsauth_test.v (pass) |
 | REQ-E2E-001 | B | test | verified | e2e_test.v (pass) |
 | REQ-E2E-002 | B | test | verified | e2e_test.v (pass), rx_target_test.v (pass), rxmon_test.v (pass) |
 | REQ-E2E-003 | B | test | verified | e2e_test.v (pass) |
@@ -179,7 +243,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NET-009 | QM | test | uncovered | — |
 | REQ-NET-010 | QM | test | uncovered | — |
 | REQ-NET-011 | QM | test | uncovered | — |
-| REQ-NET-012 | QM | test | verified | diag_test.v (pass), doip_target_test.v (pass), sysnode-doip-hardware (approved) |
+| REQ-NET-012 | QM | test | verified | auth_bench_key_test.v (pass), auth_test.v (pass), auth_test.v (pass), diag_test.v (pass), doip_target_test.v (pass), doip_target_test.v (pass), doipcfg_test.v (pass), doipcfg_test.v (pass), doipcfg_test.v (pass), sysnode-doip-hardware (approved) |
 | REQ-NET-013 | QM | test | verified | e2e_test.v (pass) |
 | REQ-NET-014 | QM | test | uncovered | — |
 | REQ-NET-015 | QM | test | verified | e2e_test.v (pass) |
@@ -188,6 +252,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NET-018 | QM | test | uncovered | — |
 | REQ-NET-019 | QM | test | verified | diagroute_test.v (pass), doip_target_test.v (pass), doipnet_test.v (pass), route_test.v (pass), someip_test.v (pass), sysnode-doip-routing-hardware (approved) |
 | REQ-NET-020 | QM | test | verified | diag_test.v (pass), diagroute_test.v (pass), doip_mb_test.v (pass), doip_target_test.v (pass), sysnode-doip-routing-hardware (approved) |
+| REQ-NET-021 | QM | test | verified | addressing_test.v (pass), diag_format_test.v (pass), diagroute_test.v (pass), diagroute_test.v (pass), doip_target_test.v (pass), doip_target_test.v (pass), fb_move_test.v (pass), someip_test.v (pass) |
 | REQ-NM-001 | QM | test | verified | nm_test.v (pass) |
 | REQ-NM-002 | QM | test | verified | module_test.v (pass), nm_test.v (pass) |
 | REQ-NM-003 | QM | test | verified | module_test.v (pass), nm_can_test.v (pass), nm_test.v (pass) |
@@ -228,6 +293,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-PLACE-010 | QM | test | uncovered | — |
 | REQ-PLACE-011 | QM | test | uncovered | — |
 | REQ-PLACE-012 | QM | test | uncovered | — |
+| REQ-PLACE-013 | QM | test | uncovered | — |
 | REQ-SEC-001 | QM | test | verified | secoc_test.v (pass) |
 | REQ-SEC-002 | QM | test | uncovered | — |
 | REQ-SEC-003 | QM | test | uncovered | — |
@@ -270,9 +336,9 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TRACE-009 | QM | test | covered | control_test.v (pass), h755-two-core-dump (pending), multicore_dump_test.v (pass) |
 | REQ-TRACE-011 | QM | test | covered | module_test.v (pass), trace-correlation-silicon (pending), trace_test.v (pass) |
 | REQ-TOPO-001 | QM | test | verified | model_test.v (pass) |
-| REQ-TOPO-002 | QM | test | verified | model_test.v (pass) |
+| REQ-TOPO-002 | QM | test | verified | diag_format_test.v (pass), model_test.v (pass) |
 | REQ-TOPO-003 | QM | test | verified | dbc_test.v (pass), model_test.v (pass) |
-| REQ-TOPO-004 | QM | test | verified | model_test.v (pass) |
+| REQ-TOPO-004 | QM | test | verified | diag_format_test.v (pass), model_test.v (pass) |
 | REQ-TOPO-005 | QM | analysis | verified | gen_test.v (pass), node_gate_test.v (pass) |
 | REQ-TOPO-006 | QM | test | covered | gen_test.v (pass), model_test.v (pass), route_dissolution.lua (pending), route_signal.lua (pending), system-full-edge-canfd (approved) |
 | REQ-TOPO-007 | QM | test | covered | model_test.v (pass), route_extid.lua (pending), route_firewall.lua (pending) |
@@ -281,26 +347,8 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TOPO-010 | QM | analysis | covered | route_firewall.lua (pending), routes_test.v (pass) |
 | REQ-TOPO-011 | QM | test | verified | model_test.v (pass) |
 | REQ-TOPO-012 | QM | test | verified | model_test.v (pass) |
-| REQ-TP-001 | QM | test | verified | isotp_test.v (pass) |
-| REQ-TP-002 | QM | test | verified | isotp_test.v (pass) |
-| REQ-TP-003 | QM | test | verified | isotp_test.v (pass) |
-| REQ-TP-004 | QM | test | verified | isotp_test.v (pass) |
-| REQ-TP-005 | QM | test | verified | isotp_test.v (pass) |
-| REQ-TP-006 | QM | test | verified | isotp_test.v (pass) |
-| REQ-TP-007 | QM | test | verified | isotp_test.v (pass) |
-| REQ-TP-008 | QM | test | verified | isotp_test.v (pass) |
-| REQ-TP-009 | QM | test | verified | isotp_test.v (pass) |
-| REQ-TP-010 | QM | test | verified | isotp_test.v (pass) |
-| REQ-TP-011 | QM | test | verified | isotp_test.v (pass) |
-| REQ-TP-012 | QM | test | verified | isotp_test.v (pass) |
-| REQ-TP-013 | QM | test | verified | diag_test.v (pass), isotp_test.v (pass), step_test.v (pass) |
-| REQ-TP-014 | QM | test | verified | isotp_test.v (pass) |
-| REQ-TP-015 | QM | test | verified | isotp_test.v (pass) |
-| REQ-TP-016 | QM | test | verified | isotp_test.v (pass) |
-| REQ-TP-017 | QM | test | verified | isotp_test.v (pass) |
-| REQ-TP-018 | QM | test | verified | isotp_test.v (pass), step_test.v (pass) |
-| REQ-TP-019 | QM | test | verified | diag_test.v (pass) |
-| REQ-TP-020 | QM | test | verified | diag_target_test.v (pass) |
+| REQ-TOPO-013 | QM | test | verified | addressing_test.v (pass), diag_format_test.v (pass) |
+| REQ-TOPO-014 | QM | test | verified | diag_format_test.v (pass), fb_move_test.v (pass), gen_test.v (pass) |
 | REQ-WDG-001 | B | test | verified | wdg_test.v (pass) |
 | REQ-WDG-002 | B | test | verified | wdg_test.v (pass) |
 | REQ-WDG-003 | B | test | verified | wdg_test.v (pass) |
@@ -329,18 +377,53 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BOOT-017 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BOOT-018 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-BOOT-019 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-BOOT-020 | ✓ | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BULK-001 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BULK-002 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BULK-003 | | | | | | | | | | | | | | | ✓ | | | | ✓ | | | |
 | REQ-CAN-DRV-001 | | | | | | | | ✓ | | | | ✓ | | | ✓ | | | · | | | | |
 | REQ-CAN-DRV-002 | | | | | | | | ✓ | | | | ✓ | | | | | | · | | | | |
 | REQ-CAN-DRV-003 | | | | | | | | ✓ | | | | ✓ | | | | | | | | | | |
-| REQ-CAN-DRV-004 | | | | | | | | | | | | | | | | | | | | | | |
+| REQ-CAN-DRV-004 | ✓ | | | | | | | | | | | | | | | | | | | | | |
 | REQ-CAN-DRV-005 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-CAN-DRV-006 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-CAN-DRV-007 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-CAN-DRV-008 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-CAN-DRV-009 | | | | | | | | | | | | | | | | | | | | | | |
+| REQ-CAN-DRV-010 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-001 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-002 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-003 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-004 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-005 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-006 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-007 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-008 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-009 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-010 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-011 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-012 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-013 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-014 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-015 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-016 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-017 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-018 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-019 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-020 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-021 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-022 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-023 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-024 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-025 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-026 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-027 | ✓ | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-028 | ✓ | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-029 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-040 | ✓ | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-041 | ✓ | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-042 | ✓ | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-CAN-TP-043 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-COM-001 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-COM-002 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-COM-003 | | | | | | | | | | | | | | | | | | | ✓ | | | |
@@ -352,6 +435,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-009 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-COM-010 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-COM-011 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-COM-012 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-001 | ✓ | | | | | | | | ✓ | | | | | | | | ✓ | | ✓ | | | |
 | REQ-DIAG-018 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-004 | | | | | | | | | | | | | | | | | | | ✓ | | | |
@@ -377,9 +461,21 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-031 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-005 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-019 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-100 | | | | | | | | | | | | | | | | | ✓ | | ✓ | | | |
+| REQ-DIAG-101 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-102 | | | | | | | | | | | | | | | | | ✓ | | ✓ | | | |
+| REQ-DIAG-103 | | | | | | | | | | | | | | | | | ✓ | | ✓ | | | |
+| REQ-DIAG-104 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-105 | | | | | | | | | | | | | | | | | ✓ | | ✓ | | | |
+| REQ-DIAG-106 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-107 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-008 | | | | | | | | | | | | | | | | | ✓ | | ✓ | | | |
 | REQ-DIAG-032 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-033 | | | | | | | | | | | | | | | | | ✓ | | ✓ | | | |
+| REQ-DIAG-065 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-066 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-067 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-068 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-034 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-035 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-036 | | | | | | | | | | | | | | | | | | | ✓ | | | |
@@ -416,6 +512,22 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-059 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-060 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-061 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-080 | ✓ | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-081 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-082 | ✓ | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-083 | ✓ | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-084 | ✓ | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-085 | ✓ | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-086 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-087 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-120 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-121 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-122 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-123 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-124 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-125 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-126 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-127 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-E2E-001 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-E2E-002 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-E2E-003 | | | | | | | | | | | | | | | | | | | ✓ | | | |
@@ -483,6 +595,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NET-018 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-NET-019 | | | | | ✓ | | | | | | | | | | | | | | ✓ | | | |
 | REQ-NET-020 | | | | | ✓ | | | | | | | | | | | | | | ✓ | | | |
+| REQ-NET-021 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-NM-001 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-NM-002 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-NM-003 | | | | | | | | | | | | | | | | | | | ✓ | | | |
@@ -523,6 +636,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-PLACE-010 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-PLACE-011 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-PLACE-012 | | | | | | | | | | | | | | | | | | | | | | |
+| REQ-PLACE-013 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-SEC-001 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-SEC-002 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-SEC-003 | | | | | | | | | | | | | | | | | | | | | | |
@@ -576,26 +690,8 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TOPO-010 | | | | | | | | | | | | | | | | | | · | ✓ | | | |
 | REQ-TOPO-011 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-TOPO-012 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-TP-001 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-TP-002 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-TP-003 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-TP-004 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-TP-005 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-TP-006 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-TP-007 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-TP-008 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-TP-009 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-TP-010 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-TP-011 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-TP-012 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-TP-013 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-TP-014 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-TP-015 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-TP-016 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-TP-017 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-TP-018 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-TP-019 | | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-TP-020 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TOPO-013 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TOPO-014 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-WDG-001 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-WDG-002 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-WDG-003 | | | | | | | | | | | | | | | | | | | ✓ | | | |

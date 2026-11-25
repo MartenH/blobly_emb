@@ -114,3 +114,12 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "REQ-INV-007"
+
+[[req]]
+id = "REQ-PLACE-013"
+title = "A routine run by an FB on any core"
+text = "A routine (RoutineControl 0x31) shall be runnable by an FB on any core of the node, the diagnostic server staying on the platform owner."
+status = "draft"   # a gap with no test: generation refuses a routine's FB on a satellite until it is built
+method = "test"
+asil = "QM"
+derives = "REQ-INV-007"

@@ -1,7 +1,8 @@
 module diag
 
 // @verifies REQ-BOOT-003 REQ-DIAG-001 REQ-DIAG-002 REQ-DIAG-006 REQ-DIAG-007 REQ-DIAG-022 REQ-DIAG-028
-// @verifies REQ-DIAG-037 REQ-TP-013 REQ-TP-019
+// @verifies REQ-DIAG-037 REQ-CAN-TP-013 REQ-CAN-TP-019
+// @verifies REQ-CAN-TP-040 REQ-CAN-TP-042 REQ-CAN-TP-043
 import comm.isotp
 import comm.uds
 import driver.can
@@ -12,8 +13,15 @@ const fid = u32(0x7df)
 const name = 'BLOBLY-DOMAIN-0001'
 
 fn new_conn() Connection {
+	return conn_at(isotp.default_message)
+}
+
+// conn_at: a connection whose request and response buffers hold `m` bytes each, the owner's
+fn conn_at(m int) Connection {
 	mut c := Connection{}
-	c.init(rx, tx, fid, 0, 0)
+	req := []u8{len: m}
+	resp := []u8{len: m}
+	c.init(rx, tx, fid, 0, 0, &req[0], &resp[0], m)
 	c.server.dids[0] = uds.Did{
 		id: 0xF190
 	}
@@ -31,26 +39,24 @@ fn new_conn() Connection {
 fn new_tester() isotp.Link {
 	mut t := isotp.Link{}
 	t.init_defaults()
+	rxb := []u8{len: isotp.message_limit}
+	txb := []u8{len: isotp.message_limit}
+	t.bind_rx(&rxb[0], isotp.message_limit)
+	t.bind_tx(&txb[0], isotp.message_limit)
 	return t
 }
 
+// frame_of: a PDU on the wire on `id`, at its length (pdu_of, step.v, is the way back)
 fn frame_of(id u32, p isotp.Pdu) &can.Frame {
+	n := if p.len == 0 { 8 } else { p.len }
 	mut f := &can.Frame{
 		id:  id
-		len: 8
+		len: u8(n)
 	}
-	for i in 0 .. 8 {
+	for i in 0 .. n {
 		f.data[i] = p.data[i]
 	}
 	return f
-}
-
-fn pdu_of(f can.Frame) isotp.Pdu {
-	mut p := isotp.Pdu{}
-	for i in 0 .. 8 {
-		p.data[i] = f.data[i]
-	}
-	return p
 }
 
 // single frame on `id`, as a tester puts one on the wire
@@ -79,7 +85,7 @@ fn pass(mut c Connection, now u64, mut t isotp.Link) {
 	mut f := can.Frame{}
 	for c.produce(now, mut f) {
 		assert f.id == tx
-		t.on_frame(now, pdu_of(f))
+		t.on_frame(now, pdu_of(&f))
 	}
 }
 
@@ -92,7 +98,7 @@ fn exchange(mut c Connection, mut t isotp.Link, mut now &u64, req []u8) []u8 {
 		}
 		pass(mut c, *now, mut t)
 		if t.has_request() {
-			mut buf := []u8{len: isotp.max_payload}
+			mut buf := []u8{len: isotp.message_limit}
 			n := t.take(unsafe { &buf[0] })
 			return buf[..n]
 		}
@@ -134,9 +140,18 @@ fn test_a_live_did_is_refreshed_before_every_dispatch() {
 	assert out.data[..5] == [u8(0x04), 0x62, 0xF1, 0xA0, 0x42]
 }
 
+// @verifies REQ-CAN-TP-019
+// a functional single frame is served at once and dropped while the connection is busy; a frame of
+// another PCI type on the functional id — its low nibble reading as a length — is no request
 fn test_a_functional_request_is_served_on_arrival_and_dropped_while_busy() {
 	mut c := new_conn()
 	mut out := can.Frame{}
+	for pci in [u8(0x10), 0x20, 0x30] {
+		mut other := sf(fid, [u8(0x3E), 0x00]) // 02 3E 00 as 12 3E 00, 22 3E 00, 32 3E 00
+		other.data[0] |= pci
+		assert c.on_frame(0, other) == .taken, 'PCI ${pci:02X}'
+		assert c.link.idle() && !c.produce(0, mut out), 'PCI ${pci:02X}'
+	}
 	assert c.on_frame(0, sf(fid, [u8(0x3E), 0x00])) == .served
 	assert c.produce(0, mut out)
 	assert out.id == tx && out.data[..3] == [u8(0x02), 0x7E, 0x00]
@@ -148,8 +163,15 @@ fn test_a_functional_request_is_served_on_arrival_and_dropped_while_busy() {
 	assert c.on_frame(0, sf(fid, [u8(0x3E), 0x00])) == .taken
 }
 
+// the answer in flight is sent from the connection's response buffer, which the link shares (no
+// copy): a request completing meanwhile is dropped unserved, so its answer — longer than the first
+// frame, other bytes — never lands in the consecutive frames still to go
 fn test_a_request_completing_while_an_answer_is_in_flight_is_dropped() {
 	mut c := new_conn()
+	for i in 0 .. 16 {
+		c.server.dids[1].data[i] = 0xEE
+	}
+	c.server.dids[1].len = 16
 	mut t := new_tester()
 	// the multi-frame answer starts: its first frame is out, the rest waits for flow control
 	c.on_frame(0, sf(rx, [u8(0x22), 0xF1, 0x90]))
@@ -158,17 +180,18 @@ fn test_a_request_completing_while_an_answer_is_in_flight_is_dropped() {
 	assert c.produce(0, mut ff)
 	assert ff.data[0] >> 4 == 1
 	// a second request completes meanwhile: taken out of the link and discarded
-	assert c.on_frame(0, sf(rx, [u8(0x3E), 0x00])) == .request
+	assert c.on_frame(0, sf(rx, [u8(0x22), 0xF1, 0xA0])) == .request
 	c.serve()
-	t.on_frame(0, pdu_of(ff))
+	t.on_frame(0, pdu_of(&ff))
 	mut now := u64(0)
 	for _ in 0 .. 10 {
 		now += 1000
 		pass(mut c, now, mut t)
 	}
-	mut buf := []u8{len: isotp.max_payload}
+	mut buf := []u8{len: isotp.message_limit}
 	n := t.take(unsafe { &buf[0] })
 	assert buf[..3] == [u8(0x62), 0xF1, 0x90] && n == 3 + name.len
+	assert buf[3..n].bytestr() == name, 'the dropped request\'s answer wrote over the one in flight'
 	// and it is never answered later
 	for _ in 0 .. 10 {
 		now += 1000
@@ -256,9 +279,13 @@ fn test_a_link_expiring_in_the_pass_does_not_hold_s3() {
 
 fn test_frames_that_are_not_this_connections_are_left_alone() {
 	mut c := new_conn()
+	// an 11-bit connection: its numbers as 29-bit ids are other frames, physical and functional
 	mut ext := sf(rx, [u8(0x3E), 0x00])
 	ext.ext = true
 	assert c.on_frame(0, ext) == .other
+	mut fext := sf(fid, [u8(0x3E), 0x00])
+	fext.ext = true
+	assert c.on_frame(0, fext) == .other
 	assert c.on_frame(0, sf(0x123, [u8(0x3E), 0x00])) == .other
 	// a first frame on the functional id is this connection's, and no request: dropped
 	mut ff := sf(fid, [u8(0x3E), 0x00])
@@ -439,7 +466,7 @@ fn test_a_handoff_over_the_network_waits_for_its_transport() {
 }
 
 fn remote(mut c Connection, req []u8, functional bool) []u8 {
-	mut resp := [isotp.max_payload]u8{}
+	mut resp := [isotp.message_limit]u8{}
 	n := c.serve_remote(&req[0], req.len, functional, &resp[0])
 	return resp[..n].clone()
 }
@@ -703,6 +730,29 @@ fn test_seed_key_exchanges_are_per_transport() {
 		key << b ^ 0xFF
 	}
 	assert exchange(mut c, mut t, mut &now, key) == [u8(0x67), 0x02], 'the CAN challenge was replaced'
+}
+
+// @verifies REQ-DIAG-032 — a seed drawn over one transport before wrong keys over the other started
+// the level's lockout buys no key during it: 0x37, the key not judged and nothing counted, the seed
+// spent — so no transport adds a guess to a lockout window
+fn test_a_seed_drawn_before_a_lockout_buys_no_key_during_it() {
+	mut c := secured_conn()
+	mut t := new_tester()
+	mut now := u64(0)
+	exchange(mut c, mut t, mut &now, [u8(0x10), 0x03])
+	doip_seed := remote(mut c, [u8(0x27), 0x01], false)[2..].clone()
+	for want in [u8(0x35), 0x35, 0x36] {
+		exchange(mut c, mut t, mut &now, [u8(0x27), 0x01])
+		assert exchange(mut c, mut t, mut &now, [u8(0x27), 0x02, 0, 0, 0, 0]) == [u8(0x7F), 0x27,
+			want]
+	}
+	mut key := [u8(0x27), 0x02]
+	for b in doip_seed {
+		key << b ^ 0xFF
+	}
+	assert remote(mut c, key, false) == [u8(0x7F), 0x27, 0x37], 'a key was judged during the lockout'
+	assert c.server.unlocked == 0 && c.server.sa_since[0] == 3 && c.server.sa_failed[0] == 0
+	assert remote(mut c, key, false) == [u8(0x7F), 0x27, 0x24], 'the seed outlived its refusal'
 }
 
 // re-entering the session the bus is in, over the other transport, voids the bus's challenge
@@ -1039,4 +1089,297 @@ fn test_the_network_testers_unlock_is_what_a_router_reads() {
 	// gone with its connection
 	c.remote_dropped()
 	assert c.remote_unlocked() == 0
+}
+
+// @verifies REQ-CAN-TP-023
+// the server's response capacity is the connection's maximum message: sixteen full DIDs in one
+// read (545 bytes) go out whole at 4095, and draw responseTooLong at the default 520
+fn test_the_response_capacity_follows_the_maximum_message() {
+	mut req := [u8(0x22)]
+	for k in 0 .. uds.max_dids {
+		req << [u8(0x01), u8(k)]
+	}
+	for m in [isotp.default_message, isotp.message_limit] {
+		mut c := conn_at(m)
+		for k in 0 .. uds.max_dids {
+			c.server.dids[k] = uds.Did{
+				id:  u16(0x0100 + k)
+				len: u8(uds.max_did_data)
+			}
+		}
+		c.server.ndid = uds.max_dids
+		mut t := new_tester()
+		mut now := u64(0)
+		got := exchange(mut c, mut t, mut &now, req)
+		if m == isotp.default_message {
+			assert got == [u8(0x7F), 0x22, uds.nrc_response_too_long]
+		} else {
+			assert got.len == 1 + uds.max_dids * (2 + uds.max_did_data)
+			assert got[0] == 0x62 && got[got.len - 2 - uds.max_did_data] == 0x01
+		}
+	}
+}
+
+// @verifies REQ-CAN-TP-014
+// a request longer than the connection's maximum starts no reception: the tester's first frame is
+// refused with FC.OVFLW, its transmission ends, and nothing is served
+fn test_a_request_over_the_maximum_is_refused_with_overflow() {
+	mut c := conn_at(64)
+	mut t := new_tester()
+	req := []u8{len: 65, init: 0x2E}
+	assert t.send(&req[0], req.len)
+	for now in [u64(1000), 2000, 3000] {
+		pass(mut c, now, mut t)
+	}
+	assert t.tx_aborts == 1 && !t.busy()
+	assert !c.link.has_request() && c.link.idle()
+	ok := []u8{len: 64, init: 0x3E}
+	assert t.send(&ok[0], ok.len) // the maximum itself is taken
+	for now in [u64(4000), 5000, 6000] {
+		pass(mut c, now, mut t)
+	}
+	assert t.has_request() // answered (refused by the server, but carried whole)
+}
+
+// fd_sf: a single frame behind the CAN-FD escape on `id`, padded to `len` bytes
+fn fd_sf(id u32, req []u8, len int) &can.Frame {
+	mut f := &can.Frame{
+		id:  id
+		len: u8(len)
+	}
+	f.data[1] = u8(req.len)
+	for i, b in req {
+		f.data[2 + i] = b
+	}
+	return f
+}
+
+// @verifies REQ-CAN-TP-027 REQ-CAN-TP-028
+// a connection at TX_DL 64 answers in CAN-FD frames — a 20-byte answer behind the escape in 24
+// bytes, its flow control 8 — and takes a tester's 64-byte frames whole: a 200-byte request
+// reassembles and is answered
+fn test_a_connection_at_tx_dl_64_exchanges_fd_frames() {
+	mut c := new_conn()
+	c.link.tx_dl = 64
+	c.server.dids[1].len = 17 // 62 F1 A0 + 17 bytes: a 20-byte answer
+	assert c.on_frame(0, sf(rx, [u8(0x22), 0xF1, 0xA0])) == .request
+	c.serve()
+	mut f := can.Frame{}
+	assert c.produce(0, mut f)
+	assert f.len == 24 && f.data[..5] == [u8(0x00), 20, 0x62, 0xF1, 0xA0]
+	assert !c.produce(0, mut f)
+	mut t := new_tester()
+	t.tx_dl = 64
+	mut now := u64(0)
+	mut req := []u8{len: 200, init: u8(index)}
+	req[0] = 0x3E // a TesterPresent 200 bytes long: answered incorrectMessageLength once whole
+	req[1] = 0x00
+	assert exchange(mut c, mut t, mut &now, req) == [u8(0x7F), 0x3E, 0x13]
+	// the flow control it answers a 64-byte first frame with is 8 bytes
+	mut ff := &can.Frame{
+		id:  rx
+		len: 64
+	}
+	ff.data[0] = 0x10
+	ff.data[1] = 100
+	assert c.on_frame(now, ff) == .taken
+	assert c.produce(now, mut f) && f.len == 8 && f.data[..3] == [u8(0x30), 0, 0]
+}
+
+// @verifies REQ-CAN-TP-019 REQ-CAN-TP-028
+// a functional request behind the CAN-FD escape is served as on the physical id; a classic single
+// frame in a 12-byte frame — one whose second byte is a valid escape length too (8), so only the
+// escape byte refuses it, as on the physical id —, frames of 10 and 13 bytes (no CAN-FD length),
+// and one longer than the connection's maximum are not requests and leave the link untouched
+fn test_a_functional_request_in_a_can_fd_frame() {
+	mut c := new_conn()
+	mut out := can.Frame{}
+	assert c.on_frame(0, fd_sf(fid, [u8(0x3E), 0x00, 0, 0, 0, 0, 0, 0, 0, 0], 12)) == .served // 0x3E of 10 bytes
+	assert c.produce(0, mut out) && out.data[..4] == [u8(0x03), 0x7F, 0x3E, 0x13]
+	mut classic := sf(fid, [u8(0x3E), 0x00])
+	classic.len = 12
+	mut classic_esc := sf(fid, [u8(0x08), 0x3E]) // 02 08 3E 00 ..: read through the escape, 8 bytes
+	classic_esc.len = 12
+	for bad in [classic, classic_esc, fd_sf(fid, [u8(0x3E), 0x00], 10),
+		fd_sf(fid, [u8(0x3E), 0x00], 13)] {
+		assert c.on_frame(0, bad) == .taken, '${bad.len} bytes'
+		assert c.link.idle() && !c.produce(0, mut out), '${bad.len} bytes'
+	}
+	assert c.on_frame(0, fd_sf(fid, [u8(0x3E), 0x00], 12)) == .served
+	assert c.produce(0, mut out) && out.data[..3] == [u8(0x02), 0x7E, 0x00]
+	// on a connection whose maximum is 16, an escape single frame of 17 bytes is no request on either
+	// id — a single frame has no flow control to refuse it with — and one of 16 is
+	mut s := conn_at(16)
+	long := []u8{len: 17, init: if index == 0 { u8(0x3E) } else { u8(0) }}
+	assert s.on_frame(0, fd_sf(fid, long, 20)) == .taken
+	assert s.on_frame(0, fd_sf(rx, long, 20)) == .taken
+	assert s.link.idle() && !s.produce(0, mut out)
+	assert s.on_frame(0, fd_sf(fid, long[..16], 20)) == .served
+	assert s.produce(0, mut out) && out.data[..4] == [u8(0x03), 0x7F, 0x3E, 0x13]
+}
+
+// @verifies REQ-CAN-TP-029
+// a flow control the controller never takes (produce is never called: the transmit FIFO stays
+// full) holds the connection — S3 held, functional requests dropped — only until N_Ar abandons the
+// reception, 1 s after its first frame: then S3 runs from the last pass that held it, and a
+// functional TesterPresent is served
+fn test_n_ar_releases_a_connection_whose_flow_control_cannot_leave() {
+	mut c := new_conn()
+	c.server.s3_us = 5000
+	mut t := new_tester()
+	mut now := u64(0)
+	exchange(mut c, mut t, mut &now, [u8(0x10), 0x03])
+	mut ff := sf(rx, [u8(0x2E), 0xF1, 0xA0, 1, 2, 3])
+	ff.data[0] = 0x10 // a first frame of a 20-byte request: its CTS is owed
+	ff.data[1] = 20
+	start := now
+	assert c.on_frame(start, ff) == .taken
+	c.housekeep(start + 999_999)
+	assert c.server.session == uds.session_extended && !c.link.idle()
+	assert c.on_frame(start + 999_999, sf(fid, [u8(0x3E), 0x00])) == .taken // dropped: not quiet
+	c.housekeep(start + 1_000_000)
+	assert c.link.idle() && c.link.rx_aborts == 1
+	c.housekeep(start + 999_999 + 5001)
+	assert c.server.session == uds.session_default
+	assert c.on_frame(start + 1_005_000, sf(fid, [u8(0x3E), 0x00])) == .served
+}
+
+// ---- 29-bit identifiers (REQ-CAN-TP-040..043): the format is part of the id ----
+
+// a node on normal fixed addressing: its own address 0x10, the tester 0xF1, functional 0x33
+const rx29 = u32(0x18DA10F1)
+const tx29 = u32(0x18DAF110)
+const fid29 = u32(0x18DB33F1)
+
+fn conn29() Connection {
+	mut c := new_conn()
+	c.rx_id = rx29
+	c.tx_id = tx29
+	c.functional_id = fid29
+	c.ext = true
+	return c
+}
+
+// sf_on: a single frame on `id` in a format
+fn sf_on(id u32, ext bool, req []u8) &can.Frame {
+	mut f := sf(id, req)
+	f.ext = ext
+	return f
+}
+
+// pass_on: pass() on the connection's own ids and format — the tester sends on rx_id as the
+// connection's format says, and every frame the connection sends is on tx_id in that format
+fn pass_on(mut c Connection, now u64, mut t isotp.Link) {
+	c.housekeep(now)
+	mut p := isotp.Pdu{}
+	for t.poll(now, mut p) {
+		mut f := frame_of(c.rx_id, p)
+		f.ext = c.ext
+		if c.on_frame(now, f) == .request {
+			break
+		}
+	}
+	c.serve()
+	mut f := can.Frame{}
+	for c.produce(now, mut f) {
+		assert f.id == c.tx_id && f.ext == c.ext
+		t.on_frame(now, pdu_of(&f))
+	}
+}
+
+fn exchange_on(mut c Connection, mut t isotp.Link, mut now &u64, req []u8) []u8 {
+	assert t.send(&req[0], req.len)
+	for _ in 0 .. 50 {
+		unsafe {
+			*now += 1000
+		}
+		pass_on(mut c, *now, mut t)
+		if t.has_request() {
+			mut buf := []u8{len: isotp.message_limit}
+			n := t.take(unsafe { &buf[0] })
+			return buf[..n]
+		}
+	}
+	assert false, 'no answer to ${req}'
+	return []u8{}
+}
+
+fn test_a_29_bit_connection_takes_29_bit_requests_and_answers_in_29_bit() {
+	mut c := conn29()
+	// the same number as an 11-bit frame is another frame
+	assert c.on_frame(0, sf_on(rx29, false, [u8(0x3E), 0x00])) == .other
+	assert c.on_frame(0, sf_on(rx29, true, [u8(0x3E), 0x00])) == .request
+	c.serve()
+	mut f := can.Frame{}
+	assert c.produce(0, mut f)
+	assert f.ext && f.id == tx29
+	assert f.data[0] == 0x02 && f.data[1] == 0x7E && f.data[2] == 0x00
+}
+
+fn test_a_29_bit_connection_takes_29_bit_functional_requests_only() {
+	mut c := conn29()
+	assert c.on_frame(0, sf_on(fid29, false, [u8(0x3E), 0x00])) == .other
+	assert c.on_frame(0, sf_on(fid29, true, [u8(0x3E), 0x00])) == .served
+	mut f := can.Frame{}
+	assert c.produce(0, mut f) // its answer, on the physical response id
+	assert f.ext && f.id == tx29
+}
+
+// normal fixed addressing at priority 6: an id is compared whole, so the same request at priority 7
+// (0x1CDA10F1) is not this connection's
+fn test_a_normal_fixed_request_at_another_priority_is_not_served() {
+	mut c := conn29()
+	assert c.on_frame(0, sf_on(0x1CDA10F1, true, [u8(0x3E), 0x00])) == .other
+	assert c.on_frame(0, sf_on(0x1CDB33F1, true, [u8(0x3E), 0x00])) == .other
+	assert c.link.idle()
+}
+
+// a multi-frame request and answer, the tester's flow control and ours all 29-bit
+fn test_a_29_bit_connection_runs_a_multi_frame_exchange() {
+	mut c := conn29()
+	mut t := new_tester()
+	mut now := u64(0)
+	mut want := [u8(0x62), 0xF1, 0x90]
+	want << name.bytes()
+	assert exchange_on(mut c, mut t, mut &now, [u8(0x22), 0xF1, 0x90]) == want
+	// a 10-byte write request arrives as a first frame and consecutive frames: refused (no
+	// writable DID) only once it is whole, so the flow control it needed went out as 29-bit
+	got := exchange_on(mut c, mut t, mut &now, [u8(0x2E), 0xF1, 0x90, 1, 2, 3, 4, 5, 6, 7])
+	assert got.len == 3 && got[0] == 0x7F && got[1] == 0x2E
+}
+
+// 29-bit on small ids: `ext` with an id at or below 0x7FF is a 29-bit id still, never the 11-bit one
+fn test_a_29_bit_connection_on_small_ids_ignores_their_11_bit_frames() {
+	mut c := new_conn()
+	c.ext = true
+	assert c.on_frame(0, sf(rx, [u8(0x3E), 0x00])) == .other
+	assert c.on_frame(0, sf(fid, [u8(0x3E), 0x00])) == .other
+	assert c.on_frame(0, sf_on(rx, true, [u8(0x3E), 0x00])) == .request
+	c.serve()
+	mut f := can.Frame{}
+	assert c.produce(0, mut f)
+	assert f.ext && f.id == tx
+}
+
+// @verifies REQ-CAN-TP-027 REQ-CAN-TP-040
+// a 29-bit connection at TX_DL 64: the format and the frame length apply together — its 20-byte
+// answer is one 29-bit frame of 24 bytes behind the escape, and a tester's 29-bit 64-byte frames
+// reassemble into a 200-byte request that is answered on its 29-bit response id
+fn test_a_29_bit_connection_at_tx_dl_64_exchanges_fd_frames() {
+	mut c := conn29()
+	c.link.tx_dl = 64
+	c.server.dids[1].len = 17 // 62 F1 A0 + 17 bytes: a 20-byte answer
+	assert c.on_frame(0, sf_on(rx29, true, [u8(0x22), 0xF1, 0xA0])) == .request
+	c.serve()
+	mut f := can.Frame{}
+	assert c.produce(0, mut f)
+	assert f.ext && f.id == tx29 && f.len == 24
+	assert f.data[..5] == [u8(0x00), 20, 0x62, 0xF1, 0xA0]
+	mut t := new_tester()
+	t.tx_dl = 64
+	mut now := u64(0)
+	mut req := []u8{len: 200, init: u8(index)}
+	req[0] = 0x3E // a TesterPresent 200 bytes long: answered incorrectMessageLength once whole
+	req[1] = 0x00
+	assert exchange_on(mut c, mut t, mut &now, req) == [u8(0x7F), 0x3E, 0x13]
 }

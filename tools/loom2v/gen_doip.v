@@ -3,6 +3,7 @@ module main
 import toml
 import comm.diagroute
 import comm.doip
+import comm.isotp
 import tools.doipcfg
 import tools.netcfg
 
@@ -21,6 +22,12 @@ struct DoipRoute {
 	bus     string // the gateway's [bus.*] the node is on
 	tx_id   int    // the node's physical request id: what the gateway sends on
 	rx_id   int    // its response id: what the gateway receives on
+	ext     bool   // both are 29-bit identifiers (the node's 29-bit or normal fixed addressing)
+	// its [isotp] max_message: the longest request the gateway forwards to it
+	max_message int
+	// its [isotp] tx_dl: the frame length the gateway sends to it with (above 8 only on a CAN-FD
+	// route bus, REQ-CAN-TP-026)
+	tx_dl int
 }
 
 struct DoipCfg {
@@ -51,8 +58,14 @@ fn parse_doip(doc toml.Doc) DoipCfg {
 			node:    (r['node'] or { toml.Any('') }).string()
 			logical: toml_int(r, 'logical', 0, 0, 0xFFFF, '[[doip.route]]')
 			bus:     (r['bus'] or { toml.Any('') }).string()
-			tx_id:   toml_int(r, 'tx_id', 0, 0, 0x7FF, '[[doip.route]]')
-			rx_id:   toml_int(r, 'rx_id', 0, 0, 0x7FF, '[[doip.route]]')
+			// 11-bit unless ext — ecumodel.validate (route_id_errors) has refused a wider one
+			tx_id:   toml_int(r, 'tx_id', 0, 0, i64(isotp.ext_id_max), '[[doip.route]]')
+			rx_id:   toml_int(r, 'rx_id', 0, 0, i64(isotp.ext_id_max), '[[doip.route]]')
+			ext:     (r['ext'] or { toml.Any(false) }).bool()
+			max_message: schema_int(r, 'doip_route', 'max_message', isotp.default_message,
+				'[[doip.route]]')
+			tx_dl:       read_tx_dl(r, 'doip_route', doc, (r['bus'] or { toml.Any('') }).string(),
+				'[[doip.route]] "${(r['node'] or { toml.Any('') }).string()}"')
 		}
 	}
 	return DoipCfg{
@@ -131,8 +144,9 @@ fn validate_doip_routes(m Model) {
 			if c.functional_id != 0 { // 0: no functional id (no listener on 0)
 				own << c.functional_id
 			}
-			if c.bus == r.bus && (r.tx_id in own || r.rx_id in own) {
-				panic('${where}: its ids 0x${r.tx_id.hex()} / 0x${r.rx_id.hex()} are this node\'s own [isotp] ids on bus "${r.bus}"')
+			// an id is its number and its format: the same number in the other width is another frame
+			if c.bus == r.bus && c.ext == r.ext && (r.tx_id in own || r.rx_id in own) {
+				panic('${where}: its ids 0x${r.tx_id.hex()} / 0x${r.rx_id.hex()} (${id_format(r.ext)}) are this node\'s own [isotp] ids on bus "${r.bus}"')
 			}
 		}
 		// a routed exchange neither holds the network awake nor wakes it, and would transmit on a
@@ -145,8 +159,9 @@ fn validate_doip_routes(m Model) {
 	// two routes on one bus are two nodes: they must not share a diagnostic id there
 	for i, a in d.routes {
 		for b in d.routes[i + 1..] {
-			if a.bus == b.bus && (a.tx_id in [b.tx_id, b.rx_id] || a.rx_id in [b.tx_id, b.rx_id]) {
-				panic('loom2v: [[doip.route]] "${a.node}" and "${b.node}" share a diagnostic id on bus "${a.bus}" (0x${a.tx_id.hex()} / 0x${a.rx_id.hex()} and 0x${b.tx_id.hex()} / 0x${b.rx_id.hex()}) — one request would reach both')
+			if a.bus == b.bus && a.ext == b.ext
+				&& (a.tx_id in [b.tx_id, b.rx_id] || a.rx_id in [b.tx_id, b.rx_id]) {
+				panic('loom2v: [[doip.route]] "${a.node}" and "${b.node}" share a diagnostic id on bus "${a.bus}" (0x${a.tx_id.hex()} / 0x${a.rx_id.hex()} and 0x${b.tx_id.hex()} / 0x${b.rx_id.hex()}, ${id_format(a.ext)}) — one request would reach both')
 			}
 		}
 	}
@@ -156,6 +171,11 @@ fn validate_doip_routes(m Model) {
 	}
 }
 
+// id_format: how a refusal names an id's format
+fn id_format(ext bool) string {
+	return if ext { '29-bit' } else { '11-bit' }
+}
+
 // doip_route_init: on the comm thread before its loop — the router (comm/diagroute), its routes and
 // the level a tester must hold (REQ-NET-020). bs 8: the gateway drains a bus's 8-deep receive FIFO
 // every pass, so a routed node never sends it more consecutive frames in a burst than that.
@@ -163,13 +183,20 @@ fn doip_route_init(m Model) []string {
 	if !routes_on(m) {
 		return []string{}
 	}
-	mut g := ['\tg_droute.init(u8(${m.doip.policy.int_of('route_level')}), u8(8)) // REQ-NET-019/020: the gateway\'s router']
+	mut g := ['\tg_droute.init(u8(${m.doip.policy.int_of('route_level')}), u8(8), &g_droute_buf[0], ${doip_max_uds(m)}) // REQ-NET-019/020: the gateway\'s router, carrying its own max_message']
 	for r in m.doip.routes {
 		g << '\tg_droute.add(diagroute.Route{ // ${r.node}, on ${r.bus}'
 		g << '\t\tlogical: u16(0x${r.logical.hex()})'
 		g << '\t\tbus:     u8(${route_bus_index(r.bus)})'
 		g << '\t\ttx_id:   u32(0x${r.tx_id.hex()})'
 		g << '\t\trx_id:   u32(0x${r.rx_id.hex()})'
+		if r.ext {
+			g << '\t\text:     true // 29-bit identifiers: the node\'s format (REQ-NET-021)'
+		}
+		g << '\t\tmax_message: ${r.max_message} // its [isotp] max_message: a longer request is refused at once'
+		if r.tx_dl != 8 {
+			g << '\t\ttx_dl:   u8(${r.tx_dl}) // its [isotp] tx_dl: CAN-FD frames to it, on a CAN-FD bus'
+		}
 		g << '\t})'
 	}
 	return g
@@ -399,7 +426,7 @@ fn validate_doip(m Model) {
 		panic('loom2v: [doip] ${hand}')
 	}
 	// ...and the key that level is checked with must not be one anybody can compute
-	why := doipcfg.bench_key_refusal(m.uds.security_key, d.policy.allow_bench_key)
+	why := doipcfg.bench_key_refusal(m.uds.security_key, m.uds.auth_reference(), d.policy.allow_bench_key)
 	if why != '' {
 		panic('loom2v: [doip] ${why}')
 	}
@@ -419,10 +446,10 @@ fn doip_target_fns(m Model) []string {
 		'fn C.doip_net_timers(u32, u32)',
 		'fn C.doip_net_seed(u32)',
 		'fn C.doip_net_tcb(int) voidptr',
-		'fn C.doip_mb_init(&u8, &u8)',
+		'fn C.doip_mb_init(&u8, int, &u8, int)',
 	]
 	if routes_on(m) {
-		g << 'fn C.doip_rt_init(&u8, &u8)'
+		g << 'fn C.doip_rt_init(&u8, int, &u8, int)'
 	}
 	if sa_levels(m) == 0 {
 		// the TCP sequence-number seed comes from the board TRNG (declared with 0x27 otherwise)
@@ -451,23 +478,33 @@ fn doip_target_fns(m Model) []string {
 	return g
 }
 
+// doip_max_uds: the entity's UDS limit either way — the node's [isotp] max_message ([doip] needs
+// that one connection), so DoIP carries what the bus does (REQ-CAN-TP-023)
+fn doip_max_uds(m Model) int {
+	return m.isotp_conns[0].max_message
+}
+
 // doip_target_globals: the DoIP framing state and its buffers, and the mailbox's two buffers —
-// bss, sized by comm/doip's constants (the comm thread's server answers within doip.max_uds).
+// bss, sized by the node's maximum message (doip.msg_len / resp_len of it; the comm thread's
+// server answers within it).
 fn doip_target_globals(m Model) []string {
 	if !m.doip.on {
 		return []string{}
 	}
+	mu := doip_max_uds(m)
 	mut g := [
 		'\tg_doip      doip.Server // DoIP framing on the doip thread; the server is g_diag\'s',
-		'\tg_doip_in   [doip.max_msg]u8',
-		'\tg_doip_out  [doip.max_resp]u8',
-		'\tg_doip_req  [doip.max_msg]u8 // the mailbox: a request on its way to the comm thread',
-		'\tg_doip_resp [doip.max_uds]u8 // ... and its answer on the way back',
+		'\tg_doip_buf  [${doip.msg_len(mu)}]u8 // its assembly buffer: doip.msg_len([isotp] max_message ${mu})',
+		'\tg_doip_in   [${doip.msg_len(mu)}]u8',
+		'\tg_doip_out  [${doip.resp_len(mu)}]u8 // doip.resp_len',
+		'\tg_doip_req  [${mu}]u8 // the mailbox: a request on its way to the comm thread',
+		'\tg_doip_resp [${mu}]u8 // ... and its answer on the way back',
 	]
 	if routes_on(m) {
 		g << '\tg_droute   diagroute.Router // the gateway\'s routes (REQ-NET-019), on the comm thread'
-		g << '\tg_rt_req   [doip.max_uds]u8 // the route channel: a routed request on its way to it'
-		g << '\tg_rt_ans   [doip.max_uds]u8 // ... and a routed node\'s answer on the way back'
+		g << '\tg_droute_buf [${diagroute.storage_len(mu)}]u8 // its storage: diagroute.storage_len(${mu})'
+		g << '\tg_rt_req   [${mu}]u8 // the route channel: a routed request on its way to it'
+		g << '\tg_rt_ans   [${mu}]u8 // ... and a routed node\'s answer on the way back'
 	}
 	return g
 }
@@ -518,7 +555,8 @@ fn doip_target_create(m Model) []string {
 		g << '\tg_doip.n_act_types = ${p.types.len}'
 	}
 	g << '\tg_doip.serve.answer = doipnet.answer // the comm thread\'s server, across the mailbox'
-	g << '\tC.doip_mb_init(&g_doip_req[0], &g_doip_resp[0])'
+	g << '\tg_doip.bind(&g_doip_buf[0], ${doip_max_uds(m)}) // the UDS limit: [isotp] max_message'
+	g << '\tC.doip_mb_init(&g_doip_req[0], ${doip_max_uds(m)}, &g_doip_resp[0], ${doip_max_uds(m)})'
 	if routes_on(m) {
 		// a gateway: the nodes behind it, and the hook to the comm thread's router
 		for i, r in d.routes {
@@ -526,7 +564,7 @@ fn doip_target_create(m Model) []string {
 		}
 		g << '\tg_doip.n_routes = ${d.routes.len}'
 		g << '\tg_doip.serve.route = doipnet.route // the comm thread\'s router, across the route channel'
-		g << '\tC.doip_rt_init(&g_rt_req[0], &g_rt_ans[0])'
+		g << '\tC.doip_rt_init(&g_rt_req[0], ${doip_max_uds(m)}, &g_rt_ans[0], ${doip_max_uds(m)})'
 	}
 	g << '\tC.doip_net_timers(u32(${p.int_of('initial_inactivity_ms')}), u32(${p.int_of('general_inactivity_ms')})) // T_TCP_Initial / T_TCP_General_Inactivity'
 	// below every application thread (doip_net_prio): the IP thread, then the doip threads
@@ -583,7 +621,9 @@ fn doip_target_serve(m Model) []string {
 	if !m.doip.on {
 		return []string{}
 	}
-	return ['\t\tdoipnet.serve_mailbox(mut g_diag, &g_doip_req[0], &g_doip_resp[0])']
+	mut g := ['\t\tdoipnet.serve_mailbox(mut g_diag, &g_doip_req[0], &g_doip_resp[0])']
+	g << routine_push_lines(m) // an answer a routine owes the DoIP tester, pushed (gen_routine.v)
+	return g
 }
 
 // doip_reset_wait: before the MCU resets, the DoIP answers already handed to TCP leave it — bounded,

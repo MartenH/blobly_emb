@@ -96,7 +96,7 @@ thread = "front_thread"
 # SafetyMonitor receives the chassis node's protected SafetyCmd (system.toml; on the bench blobly_net
 # simulates the chassis). The comm thread checks every frame of it — the E2E CRC and counter, and E2E's own 300 ms
 # sender-loss timeout (edge.dbc) — and the FB reads the value WITH its receive status and the count of
-# frames the sequence showed missing (docs/diagnostics.md §3.2, R5). It acts on the level only while
+# frames the sequence showed missing (docs/diagnostics.md §3.2). It acts on the level only while
 # the status is ok and holds the safe level 0 otherwise, and reports what it saw on SafetyView.
 [[fb]]
 name   = "SafetyMonitor"
@@ -108,7 +108,46 @@ thread = "front_thread"
   reads     = ["SafetyCmd"]
   writes    = ["SafetyView"] # trailing comment terminates nested block (vlang/v#27684)
 
-# --- A parameter (docs/diagnostics.md §3.4, R7): variant coding ------------------------------------
+# RoutineRunner runs the two routines below (RoutineControl 0x31, docs/diagnostics.md §3.1): it reads
+# each routine's request — what the diagnostic server on the comm thread asks — and writes its result.
+# It touches no signal, so zone_a's bus behaviour is the same with or without it.
+[[fb]]
+name   = "RoutineRunner"
+thread = "front_thread"
+
+  [[fb.handler]]
+  name      = "on_50ms"
+  period_ms = 50
+  reads     = ["ActuatorSelfTestRequest", "SensorCalibrationRequest"]
+  writes    = ["ActuatorSelfTestResult", "SensorCalibrationResult"] # trailing comment terminates nested block (vlang/v#27684)
+
+# --- Routines (docs/diagnostics.md §3.1): RoutineControl 0x31, run by RoutineRunner ----------------
+# ActuatorSelfTest is SYNCHRONOUS: a start carries one option byte, the steps of 100 ms to run (two
+# dispatches each), and is answered when the test completes — after responsePending (0x78), at once
+# and every 4 s while it runs — with the dispatches counted (u16 big-endian). Option 0 is refused by
+# the FB (0x31); one that runs past timeout_ms is answered 0x22. The extended session, no level.
+# (blobly_net's simulated zone_a, read from this file, does not serve these yet: it answers every
+# 0x31 with 0x11 — docs/diagnostics.md §5.)
+[[routine]]
+id         = 0x0201
+name       = "ActuatorSelfTest"
+start_in   = 1
+start_out  = 2
+timeout_ms = 10000
+
+# SensorCalibration is ASYNCHRONOUS: a start is answered once the FB has accepted it (routineInfo 1,
+# running); 0x31 03 reads its progress (the dispatches counted, u16 big-endian), done at 100 (5 s);
+# 0x31 02 stops it. The extended session, behind 0x27 level 1 (test/routine_zone_a.lua).
+[[routine]]
+id          = 0x0202
+name        = "SensorCalibration"
+mode        = "async"
+stop        = true
+results     = true
+results_out = 2
+security    = 1
+
+# --- A parameter (docs/diagnostics.md §3.4): variant coding ------------------------------------
 # The most SteerLimiter ever puts on the wire, coded per vehicle: an In field the limiter reads like
 # any input (it cannot write it), kept in the NvM journal below, coded with 0x2E on DID 0x0110 (the
 # extended session and 0x27 level 1, as the DID says) and read back with 0x22. "reset": a coded
@@ -123,7 +162,7 @@ default = { deg = 360 }
 range   = { deg = { min = 0, max = 360 } }   # refused at 0x2E (0x31) and at restore
 apply   = "reset"
 
-# --- Faults (docs/diagnostics.md §3.3, R6): a fault memory on the TARGET ----------------------
+# --- Faults (docs/diagnostics.md §3.3): a fault memory on the TARGET ----------------------
 # SteerLimiter tests the VehicleSpeed it receives (domain -> gateway -> here) for plausibility each
 # dispatch; the Loom debounces the result on front_thread, and the fault memory on the comm thread
 # keeps the DTC status the tester reads (0x19), clears (0x14) and freezes (0x85). The domain's speed
@@ -140,7 +179,7 @@ confirm  = 1
 aging    = 3                           # three passing power cycles after the last failure age it out
 freeze   = [0xF1A0]
 
-# Signal-status faults (docs/diagnostics.md §3.3, R5): no FB tests these — the comm thread is the
+# Signal-status faults (docs/diagnostics.md §3.3): no FB tests these — the comm thread is the
 # detector, from SafetyCmd's receive status, on every publication. Debounced there (counter defaults).
 [[fault]]
 name   = "SafetyCmdTimeout"
@@ -185,8 +224,8 @@ detail_id = 0x7E5
 period_ms = 500
 
 # The diagnostic server (docs/diagnostics.md): UDS over ISO-TP on the ids system.toml allocates
-# this node (diag = { req = 0x7C0, rsp = 0x7C8 }), on the edge bus — CAN-FD, carrying classic-
-# sized ISO-TP (TX_DL = 8, which ISO 15765-2 allows on an FD bus), with the same functional id the
+# this node (diag = { req = 0x7C0, rsp = 0x7C8 }), on the edge bus — CAN-FD, carrying ISO-TP in
+# CAN-FD frames of up to 64 bytes (TX_DL = 64, [isotp] tx_dl below), with the same functional id the
 # compute nodes answer. 0x27 as on domain: a TRNG seed, and on this BENCH node the reference key.
 [uds]
 s3_ms             = 5000
@@ -211,6 +250,18 @@ tx_id         = 0x7C8
 functional_id = 0x7DF
 bs            = 8
 stmin_ms      = 0
+# the longest diagnostic message either way: the most a first frame states without the escape (the
+# default is 520). The one node that opts in, so the larger size runs end to end: its bootloader's
+# TransferData blocks follow it (4066 bytes, 4064 of data), and a multi-DID read answers whole up to
+# it. Routed through sysnode, whose maximum stays 520, messages are carried only up to that (syscheck
+# says so): a longer answer comes back responseTooLong, and sysnode lowers the bootloader's offered
+# block to 520, so zone_a is still reprogrammed through it, in smaller blocks.
+max_message   = 4095
+# the frame length it transmits with: 64-byte CAN-FD frames (single frames of up to 62 bytes behind
+# the escape, consecutive frames of 63; every other node stays at the default 8). The one node that
+# opts in, on the CAN-FD edge bus: its bootloader answers in them too, and sysnode's route sends to
+# it in them (sysgen lowers this onto the route). It receives any frame length without a setting.
+tx_dl         = 64
 
 # 18 bytes: the read answer is multi-frame
 [[did]]

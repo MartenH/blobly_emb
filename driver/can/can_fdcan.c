@@ -187,8 +187,9 @@ int blob_can_open(const char *name, int fd_mode) {
 	          ((NBRP - 1u) << FDCAN_NBTP_NBRP_Pos);
 
 	/* Accept non-matching STANDARD and EXTENDED data frames into Rx FIFO0 (ANFS/ANFE
-	 * = 0); reject REMOTE frames (RRFS/RRFE) — this backend handles classic data frames
-	 * of either id width, and recv() reports the width via BLOB_CAN_FLAG_EXT. */
+	 * = 0); reject REMOTE frames (RRFS/RRFE) — this backend handles data frames, classic
+	 * and (with FDOE) CAN-FD, of either id width, and recv() reports the width via
+	 * BLOB_CAN_FLAG_EXT (REQ-CAN-DRV-010). */
 	c->GFC = FDCAN_GFC_RRFE | FDCAN_GFC_RRFS;
 	c->SIDFC = 0;
 
@@ -357,7 +358,7 @@ int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len, int *flags) 
 	volatile uint32_t *e = ram_at(region_off(h) + gi * ELMT_WORDS);
 
 	uint32_t r0 = e[0], r1 = e[1];
-	/* Classic data frames, standard OR extended id. Drop REMOTE (RTR) frames — they are
+	/* Data frames (classic or FD), standard OR extended id. Drop REMOTE (RTR) frames — they are
 	 * obsolete and carry no payload (RTR = R0 bit 29). XTD = R0 bit 30 selects the id
 	 * width: 29-bit ext id in bits 28:0, else 11-bit std id in bits 28:18. */
 	if (r0 & 0x20000000u) {

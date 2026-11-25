@@ -303,7 +303,7 @@ Host only today. See [../communication.md](../communication.md) and
 ## Not there yet
 
 - **Parameters / variant coding** — a `[[param]]` read as an In field, written by a tester over a
-  DID and persisted (rung R7, [../diagnostics.md](../diagnostics.md)).
+  DID and persisted ([../diagnostics.md](../diagnostics.md) §3.4).
 - **Declared transforms** on a connection (clamp, unit conversion, rate limit) — for now, FB code.
 - **Event-triggered handlers** (`on_<signal>_received`) and **queued events** (every occurrence,
   not the latest value) — [../autosar-comparison.md](../autosar-comparison.md).

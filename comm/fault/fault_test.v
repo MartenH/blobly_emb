@@ -1063,7 +1063,7 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 	assert offs > 100, 'the model rarely lost power with setting off'
 }
 
-// The cycle-end barrier (docs/diagnostics.md §7): NM decides to sleep while a producer's dispatch
+// The cycle-end barrier (docs/diagnostics.md §6): NM decides to sleep while a producer's dispatch
 // has qualified a failure it has not published yet. The end waits out its grace, the owner reading
 // as usual, so that report lands in the cycle it belongs to — and in the store. Ended at once, the
 // owner would read it outside any cycle and count nothing.

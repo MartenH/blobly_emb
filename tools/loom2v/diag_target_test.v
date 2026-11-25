@@ -1,10 +1,11 @@
 module main
 
 import os
+import boot.bufs
 import tools.sysmodel
 import comm.doip as doippolicy
 
-// The diagnostic server on a ThreadX comm thread (docs/diagnostics.md R2): what the generator
+// The diagnostic server on a ThreadX comm thread (docs/diagnostics.md §3.1): what the generator
 // wires, in what order, and what it refuses until the next R2 steps. Runs the real generator on
 // testdata/threadx_node (ThreadX, NM, trace and shell on can0, no [nvm]) with a connection added —
 // a refusal is a panic, which cannot be caught in-process.
@@ -12,7 +13,7 @@ import comm.doip as doippolicy
 // the ThreadX node config these tests generate from (test input, never built)
 const fixture_dir = os.join_path(@DIR, 'testdata', 'threadx_node')
 
-const diag_conn = '
+const diag_conn = tt_nvm + '
 [isotp]
 bus           = "can0"
 rx_id         = 0x7B0
@@ -22,6 +23,14 @@ functional_id = 0x7DF
 [[did]]
 id    = 0xF190
 ascii = "BLOBLY-TEST"
+'
+
+// [nvm]: a ThreadX node that performs 0x27 keeps its failed-key state in the journal, so a gated
+// config declares it (REQ-DIAG-066); with no journal writer it generates nothing
+const tt_nvm = '
+[nvm]
+min_write_ms   = 1000
+sector_records = 4096
 '
 
 fn loom2v_bin() string {
@@ -130,7 +139,13 @@ signal = "Workload"
 
 // 0x27 on the target: the levels a DID gate names, the [uds] limits, the board's TRNG seed
 // set up once before the loop — and the OEM's key check, with no default linked, unless the
-// server opts into blobly_net's reference key by name
+// server opts into blobly_net's reference key by name. The failed-key state is wired to the NvM
+// journal at its fixed block, restored before the loop, kept through the boot's prune, and written
+// in the pass's persist step — before the pass pumps the CAN answer (REQ-DIAG-067), with no erase
+// between the request and its answer (REQ-DIAG-062); no write budget is wired, the server's rule
+// bounding its writes by itself; the RAM keep cell it replaces is gone.
+// @verifies REQ-DIAG-067 (the build half: the write before the CAN answer and never an erase there;
+// comm/uds sa_store_test.v and comm/diag sa_persist_test.v show the rules)
 fn test_a_security_gate_is_served_through_the_board_seam() {
 	gated := '
 [[did]]
@@ -147,12 +162,30 @@ write = { session = ["extended"], security = 1 }
 		'g_diag.server.security = uds.SecurityOps{', 'seed:   diag_sa_seed_v', 'key_ok: diag_sa_key_v',
 		'g_diag.server.security_levels = u8(0x01)', 'g_diag.server.sa_attempts = u8(2)',
 		'g_diag.server.sa_delay_us = u64(3000) * 1000',
-		// the failed-key counts kept across the node's own reset, saved before it
-		'if C.diag_keep_load(&diag_kept[0], uds.kept_len) != 0 {',
-		'g_diag.server.restore_security(diag_kept)', 'diag_keep_now := g_diag.server.kept_security()',
-		'C.diag_keep_save(&diag_keep_now[0], uds.kept_len)'] {
+		// the failed-key state in the journal, at its fixed block, restored before the loop
+		'g_diag.server.sa_store = uds.SecurityStore{', 'put:      nvm_store_put',
+		'get:      nvm_store_get', 'id:       u16(0x44e)',
+		'retry_us: u64(1000) * 1000',
+		'g_diag.server.restore_persisted_security()',
+		'u16(0x44e) /* the 0x27 failed-key state */'] {
 		assert glue.contains(want), 'missing: ${want}'
 	}
+	assert !glue.contains('diag_keep'), 'the RAM keep cell is still wired'
+	store := glue.all_after('g_diag.server.sa_store = uds.SecurityStore{').all_before('}')
+	assert !store.contains('token_us'), 'a write budget is wired:\n${store}'
+	// restored after the server is configured, before the loop
+	in_order(glue, ['g_diag.server.security_levels = u8(0x01)', 'g_diag.server.restore_persisted_security()',
+		'for {'])
+	// written in the persist step, before the CAN answer is pumped
+	pass_at := glue.index('// pass: persist') or { -1 }
+	put_at := glue.index('g_diag.server.persist_security(false)') or { -1 }
+	pump_at := glue.index('g_diag.pump') or { -1 }
+	assert pass_at >= 0 && put_at > pass_at && pump_at > put_at, 'persist ${pass_at}, write ${put_at}, pump ${pump_at}'
+	assert glue[pass_at..put_at].count('// pass: ') == 1, 'the write is outside the persist step'
+	// no erase between a request and its answer (REQ-DIAG-062): nothing from the persist step to
+	// the pump erases, and nothing is wired for the store to erase with
+	assert !glue[pass_at..pump_at].contains('erase_pending'), 'an erase before the answer:\n${glue[pass_at..pump_at]}'
+	assert !glue.contains('reclaim'), 'a 0x27 write erases'
 	// the bench key, by name: V's own, and no C key declared at all
 	c2, o2, g2 := generate('sec_ref', diag_conn + gated + limits + '\nsecurity_key = "reference"\n')
 	assert c2 == 0, o2
@@ -161,6 +194,104 @@ write = { session = ["extended"], security = 1 }
 	c3, o3, _ := generate('sec_bad', diag_conn + gated + limits + '\nsecurity_key = "oem"\n')
 	assert c3 != 0, 'loom2v accepted an unknown security_key'
 	assert o3.contains('the one named key is "reference"'), o3
+}
+
+// REQ-DIAG-066: a target node that performs 0x27 — a DID gate, a services row, the handoff row
+// alone — without [nvm] is refused, naming the reason; the host bridge keeps the count in RAM and
+// needs none.
+// @verifies REQ-DIAG-066
+fn test_a_target_security_gate_needs_nvm() {
+	bare := diag_conn.replace(tt_nvm, '')
+	for name, extra in {
+		'did_gate': '\n[[did]]\nid = 0xF1AC\nbytes = "00"\nwrite = { session = ["extended"], security = 1 }\n'
+		'row':      '\n[uds.services]\n"0x10" = {}\n"0x22" = {}\n"0x27" = {}\n"0x2E" = { sessions = ["extended"], security = 1 }\n"0x3E" = {}\n'
+	} {
+		code, out, _ := generate('sa_nonvm_${name}', bare + extra)
+		assert code != 0, '${name}: loom2v accepted 0x27 on the target without [nvm]'
+		assert out.contains('needs [nvm] — the 0x27 failed-key (or 0x29 failed-proof) counts and a running lockout are kept in the NvM journal'), '${name}: ${out}'
+	}
+	handoff := '\n[uds]\nsecurity_key = "reference"\n\n[uds.services]\n"0x10" = {}\n"0x10 02" = { security = 1 }\n"0x22" = {}\n"0x27" = {}\n"0x3E" = {}\n'
+	code, out, _ := generate('sa_nonvm_handoff', handoff + boot_conn.replace(tt_nvm, ''))
+	assert code != 0 && out.contains('needs [nvm]'), out
+	c2, o2, g2 := generate('sa_nvm_handoff', handoff + boot_conn)
+	assert c2 == 0, o2
+	assert g2.contains('g_diag.server.restore_persisted_security()')
+	// the host bridge (overspeed gates a DID on level 1, and has no [nvm])
+	ch, oh, gh := generate_host('sa_host', same, '')
+	assert ch == 0, oh
+	assert gh.contains('security_levels') && !gh.contains('sa_store'), 'the host bridge wired a store'
+}
+
+// A sector holds every write a tester without the key can make beside the live set and its rewrite
+// (REQ-DIAG-068): one served level at security_attempts = 255 needs 255 records more, so a 256-record
+// sector, which takes the default attempts, is refused, naming the burst (no unlocks assumed, so the
+// wear check passes and the capacity check is what refuses).
+// @verifies REQ-DIAG-068
+fn test_the_sector_holds_the_wrong_key_writes() {
+	gated := '\n[[did]]\nid = 0xF1AC\nbytes = "00"\nwrite = { session = ["extended"], security = 1 }\n'
+	small := diag_conn.replace('sector_records = 4096', 'sector_records = 256')
+	c1, o1, _ := generate('sa_burst_ok', small + gated)
+	assert c1 == 0, o1
+	many := '\n[uds]\nsecurity_attempts = 255\n\n[nvm.assume]\nunlocks_per_day = 0\n'
+	code, out, _ := generate('sa_burst', small + gated + many)
+	assert code != 0, 'loom2v accepted a sector the wrong keys alone can fill'
+	assert out.contains('255 0x27 wrong-key writes'), out
+	c3, o3, _ := generate('sa_burst_big', diag_conn + gated + many)
+	assert c3 == 0, o3
+}
+
+// The 0x27 state's block is FIXED (docs/nvm.md): nvm_hash16("uds:security") = 0x044E, never a
+// schema hash, so no firmware update moves it. A parameter on that DID is refused naming its own
+// pin (the fixed block cannot move), and so is a signal pinned onto it.
+fn test_the_security_block_is_fixed_and_kept() {
+	assert nvm_hash16(sa_block_ident) == 0x044e
+	gated := '\n[[did]]\nid = 0xF1AC\nbytes = "00"\nwrite = { session = ["extended"], security = 1 }\n'
+	param := '\n[[did]]\nid = 0x044E\nparam = "Cap"\nwrite = { session = ["extended"], security = 1 }\n' +
+		'\n[[param]]\nname = "Cap"\nfields = { v = "u8" }\ndefault = { v = 1 }\nrange = { v = { min = 0, max = 9 } }\n'
+	code, out, _ := generate_edited('sa_param_clash', fn (src string) string {
+		return src.replace('  reads     = ["LoadCmd"]\n  writes    = ["Workload"]', '  reads     = ["LoadCmd", "Cap"]\n  writes    = ["Workload"]')
+	}, diag_conn + gated + param)
+	assert code != 0, 'loom2v accepted a parameter on the 0x27 block'
+	assert out.contains('collides with the 0x27 failed-key state — pin the parameter with `nvm_id'), out
+	sig := diag_conn + gated
+	cs, os_, _ := generate_edited('sa_sig_clash', fn (src string) string {
+		return src.replace('name = "LoadCmd"\nfields = { iters = "u32" }', 'name = "LoadCmd"\nfields = { iters = "u32" }\npersist = "now"\nnvm_id = 0x044E')
+	}, sig)
+	assert cs != 0, 'loom2v accepted a signal pinned onto the 0x27 block'
+	assert os_.contains('collides with the 0x27 failed-key state') && os_.contains('pin the signal with `nvm_id'), os_
+}
+
+// On an NM node every journal writer of the pass shares ONE in-sleep choreography: with the 0x27
+// state its condition is the state's write alone, and with a parameter beside it one condition
+// covers both — one choreography a pass, never one per writer.
+fn test_one_sleep_choreography_per_pass() {
+	gated := '\n[[did]]\nid = 0xF1AC\nbytes = "00"\nwrite = { session = ["extended"], security = 1 }\n'
+	code, out, glue := generate('sa_sleep', diag_conn + gated)
+	assert code == 0, out
+	persist := glue.all_after('// pass: persist').all_before('nm_up := ')
+	assert persist.contains('sa_wrote := g_diag.server.take_sa_wrote()')
+	assert persist.contains('if sa_wrote && g_nm.state() == .bus_sleep {')
+	assert persist.count('nvm_flush_ok = g_nvm.mark_clean()') == 1, persist
+	param := '\n[[did]]\nid = 0x0130\nparam = "Cap"\nwrite = { session = ["extended"], security = 1 }\n' +
+		'\n[[param]]\nname = "Cap"\nfields = { v = "u8" }\ndefault = { v = 1 }\nrange = { v = { min = 0, max = 9 } }\n'
+	c2, o2, g2 := generate_edited('sa_sleep_param', fn (src string) string {
+		// LoadSlow reads the parameter, so the coding reaches an FB
+		return src.replace('  reads     = ["LoadCmd"]\n  writes    = ["Workload"]', '  reads     = ["LoadCmd", "Cap"]\n  writes    = ["Workload"]')
+	}, diag_conn + gated + param)
+	assert c2 == 0, o2
+	p2 := g2.all_after('// pass: persist').all_before('nm_up := ')
+	assert p2.contains('if (param_wrote || sa_wrote) && g_nm.state() == .bus_sleep {'), p2
+	assert p2.count('nvm_flush_ok = g_nvm.mark_clean()') == 1, p2
+	// the choreography flushes the 0x27 state too, and an ECUReset's does before it resets — inside
+	// its erase-recovery pass, so a full journal still takes the state across a tester's reset
+	// (REQ-DIAG-033: the answer is on the wire by then, so that erase delays no answer)
+	assert g2.contains('if !g_diag.server.persist_security(true) { // the 0x27 failed-key state')
+	reset := g2.all_after('if g_diag.reset_due() != 0 {').all_before('C.diag_sys_reset()')
+	in_order(reset, ['for nvm_pass := 0; nvm_pass < 2; nvm_pass++ {', 'if !g_diag.server.persist_security(true) {',
+		'g_nvm.erase_pending()', 'nvm_flush_ok = g_nvm.mark_clean()'])
+	// and the NM node's boot erases nothing: its quiet points are the sleep edges and that flush
+	b2 := boot_fn(g2)
+	assert b2.contains('g_nvm.prune(&keep[0]') && !b2.contains('erase_pending'), 'an NM node erases at boot:\n${b2}'
 }
 
 fn test_a_connection_off_the_comm_threads_bus_is_refused() {
@@ -192,7 +323,7 @@ fn test_a_diagnostic_id_in_the_nm_range_or_wider_than_11_bits_is_refused() {
 	assert out2.contains('tx_id 0x8100 must be a standard 11-bit id'), out2
 }
 
-// @verifies REQ-TP-020
+// @verifies REQ-CAN-TP-020
 // bs and stmin_ms each go out as one Flow Control byte, and the bootloader's as a uint8_t: a
 // block size of 256 would wrap to 0 (the whole message) and an STmin past 127 ms is a reserved or a
 // microsecond code, so both are refused rather than narrowed; the largest of each still generates
@@ -317,7 +448,7 @@ fn test_the_reset_flushes_the_journal_first() {
 	// the satellite partition's `image = "../h755_m4_app"` resolves into the scratch layout
 	code, out, g := run_in_scratch(tmp, example_dir('h755_threadx'), fn (s string) string {
 		return s
-	}, diag_conn)
+	}, diag_conn.replace(tt_nvm, ''))
 	assert code == 0, out
 	assert os.exists(os.join_path(tmp, 'h755_m4_app', 'gen')), 'the satellite image was not generated into the scratch layout'
 	steps := ['if g_diag.reset_due() != 0 {', 'diag.wire_drain(mut ch', 'nvm_flush_ok = g_nvm.mark_clean()',
@@ -394,7 +525,8 @@ fn test_a_service_table_is_generated_for_both_owners() {
 	}
 	assert glue.contains('g_diag.server.security_levels = u8(0x01)'), 'the row\'s level is served'
 	assert glue.contains('import comm.uds')
-	// the host bridge: the same rows, and what only it performs (0x28, the fault memory's services)
+	// the host bridge: the same rows, and what only it performs (0x28, the fault memory's services;
+	// overspeed's routine, 0x31; 0x2F, which overspeed's WarnLamp control needs a row for)
 	hc, ho, hg := generate_host('table', same, '
 [uds.services]
 "0x10" = {}
@@ -403,12 +535,16 @@ fn test_a_service_table_is_generated_for_both_owners() {
 "0x27" = {}
 "0x22" = {}
 "0x2E" = {}
+"0x2F" = {}
+"0x31" = {}
 ')
 	assert hc == 0, ho
 	for want in ['st.conn_diag.server.services[0] = uds.Service{sid: 0x10}',
 		'st.conn_diag.server.services[1] = uds.Service{sid: 0x19}',
 		'st.conn_diag.server.services[4] = uds.Service{sid: 0x28, sessions: 0x04}',
-		'st.conn_diag.server.nservices = 6'] {
+		'st.conn_diag.server.services[6] = uds.Service{sid: 0x2f}',
+		'st.conn_diag.server.services[7] = uds.Service{sid: 0x31}',
+		'st.conn_diag.server.nservices = 8'] {
 		assert hg.contains(want), 'missing: ${want}'
 	}
 }
@@ -425,7 +561,8 @@ fn test_a_service_table_the_build_cannot_honour_is_refused() {
 		'clear':          [ok + '"0x14" = {}', 'no fault memory']
 		'dtc_setting':    [ok + '"0x85" = {}', 'no fault memory']
 		'no_seam':        [ok + '"0x27" = {}', 'nothing to unlock']
-		'unknown':        [ok + '"0x31" = {}', 'comm/uds does not implement it']
+		'unknown':        [ok + '"0x23" = {}', 'comm/uds does not implement it']
+		'no_routine':     [ok + '"0x31" = {}', 'the node has no [[routine]]']
 		'programming':    [ok + '"0x11" = { sessions = ["programming"] }', 'programming session']
 		'iso_session':    ['+"0x10" = {}\n"0x2E" = {}\n"0x27" = { sessions = ["default", "extended"] }', 'only in a non-default one']
 		'stuck':          ['"0x10" = { sessions = ["extended"] }\n"0x22" = {}', 'no other session could ever be entered']
@@ -490,7 +627,7 @@ security_key  = "reference"
 // @verifies REQ-BOOT-003 (the build half: comm/uds and comm/diag's tests show the answer and its
 // ordering, boot/prog_test.v the bootloader opening the promised session)
 
-const boot_conn = '
+const boot_conn = tt_nvm + '
 [isotp]
 bus           = "can0"
 rx_id         = 0x7B0
@@ -505,6 +642,13 @@ ascii = "BLOBLY-TEST"
 image_key   = "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8"
 session_key = "29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7"
 '
+
+// boot_fn: the generated boot() — mount, prune, restore, up to the kernel start — as one string
+// (fault_target_test.v has its own: each test file is its own program).
+fn boot_fn(glue string) string {
+	at := glue.index('pub fn boot() {') or { return '' }
+	return glue[at..].all_before('\n}\n')
+}
 
 fn in_order(glue string, steps []string) {
 	mut at := -1
@@ -610,6 +754,9 @@ fn test_a_handoff_that_cannot_be_performed_or_reached_is_refused() {
 		'bad_key':      [boot_conn.replace('"29acbae1', '"zz'), 'must be 64 hex characters']
 		'same_keys':    [boot_conn.replace('29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7', '03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8'), 'are the same key']
 		'zero_key':     [boot_conn.replace('29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7', '0'.repeat(64)), 'all zeros']
+		// the neutral point as the image key: a forged signature (R neutral, S 0) verifies any image
+		'small_image':  [boot_conn.replace('03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8', '01' + '00'.repeat(31)), '[boot] image_key is a point of small order']
+		'small_session': [boot_conn.replace('29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7', 'ec' + 'ff'.repeat(30) + '7f'), '[boot] session_key is a point of small order']
 		'bus_index':    [boot_conn.replace('bus           = "can0"', 'bus           = "can10"'), 'names no single FDCAN index']
 	} {
 		code, out, _ := generate('boot_${name}', c[0])
@@ -707,7 +854,9 @@ gateway          = "192.168.0.254"
 		'#define BOOT_DOIP_N_ACT_TYPES 0', '#define BOOT_DOIP_INITIAL_MS 2000u',
 		'#define BOOT_DOIP_ANNOUNCE_COUNT 2', '#define BOOT_DOIP_ANNOUNCE_MS 500',
 		'#define BOOT_DOIP_NET_WAIT_MS 6000u',
-		'#define BOOT_RX_ID 0x7b0u'] {
+		'#define BOOT_RX_ID 0x7b0u', '#define BOOT_MAX_MESSAGE 520u',
+		// the block holds the DoIP buffers too: the image carves it by the same layout
+		'#define BOOT_BUF_LEN ${bufs.layout(520, true).total}u'] {
 		assert h.contains(want), '${want} missing:\n${h}'
 	}
 	mk := os.read_file(os.join_path(tmp, 'loom_build.mk')) or { panic(err) }
@@ -734,7 +883,7 @@ fn test_a_boot_node_gets_its_bootloader_config() {
 	assert code == 0, out
 	h := os.read_file(os.join_path(tmp, 'boot_gen.h')) or { panic(err) }
 	for want in ['#define BOOT_CAN_IDX 0', '#define BOOT_CAN_FD 0', '#define BOOT_RX_ID 0x7b0u',
-		'#define BOOT_TX_ID 0x7b8u', '#define BOOT_BS 8u', '#define BOOT_STMIN 2u',
+		'#define BOOT_TX_ID 0x7b8u', '#define BOOT_EXT 0 ', '#define BOOT_BS 8u', '#define BOOT_STMIN 2u',
 		'#define BOOT_IMAGE_KEY {0x03, 0xa1, 0x07,', '#define BOOT_SESSION_KEY {0x29, 0xac, 0xba,'] {
 		assert h.contains(want), '${want} missing:\n${h}'
 	}
@@ -767,8 +916,9 @@ fn test_a_boot_node_gets_its_bootloader_config() {
 	assert !(os.read_file(os.join_path(tmp2, 'loom_build.mk')) or { '' }).contains('boot.mk')
 }
 
-// an FD bus opens the bootloader in FD as it opens the application (zone_a: the edge bus is CAN-FD,
-// its ISO-TP classic-sized) — the frame format a tester sees does not change across the handoff
+// an FD bus opens the bootloader in FD as it opens the application (zone_a: the edge bus is CAN-FD)
+// — the frame format a tester sees does not change across the handoff, and the bootloader answers
+// at the node's TX_DL (BOOT_TX_DL, test_the_frame_length_is_configured_and_refused_off_a_can_fd_bus)
 fn test_a_boot_on_an_fd_bus_opens_it_in_fd() {
 	mut m := Model{}
 	m.isotp_conns = [IsotpConn{
@@ -812,4 +962,388 @@ fn test_the_network_wait_covers_every_valid_announcement_policy() {
 			}
 		}
 	}
+}
+
+// @verifies REQ-CAN-TP-021
+// [isotp] max_message is 8..4095: outside it is refused, never narrowed; the bounds generate; absent
+// it is 520 — and it sizes the connection's request and response buffers and the server's capacity
+fn test_the_maximum_message_is_configured_within_its_range() {
+	tx := 'tx_id         = 0x7B8'
+	assert diag_conn.contains(tx), 'the fixture [isotp] changed shape — update this test'
+	for i, c in [['max_message = 7', '[isotp] max_message = 0x7 is out of range (0x8..0xfff)'],
+		['max_message = 4096', '[isotp] max_message = 0x1000 is out of range (0x8..0xfff)']] {
+		code, out, _ := generate('mm_${i}', diag_conn.replace(tx, tx + '\n' + c[0]))
+		assert code != 0, 'loom2v accepted [isotp] ${c[0]}'
+		assert out.contains(c[1]), out
+	}
+	// the floor holds no 14-byte DID answer, so the floor case has a 5-byte DID
+	short := diag_conn.replace(tx, tx + '\nmax_message = 8').replace('"BLOBLY-TEST"', '"BLOB"')
+	c8, o8, g8 := generate('mm_8', short)
+	assert c8 == 0, o8
+	assert g8.contains('g_diag_req [8]u8') && g8.contains('&g_diag_req[0], &g_diag_resp[0], 8)')
+	c4, o4, g4 := generate('mm_4095', diag_conn.replace(tx, tx + '\nmax_message = 4095'))
+	assert c4 == 0, o4
+	for want in ['g_diag_req [4095]u8', 'g_diag_resp [4095]u8',
+		'g_diag.init(u32(0x7b0), u32(0x7b8), u32(0x7df), 0, 0, &g_diag_req[0], &g_diag_resp[0], 4095)'] {
+		assert g4.contains(want), want
+	}
+	c0, o0, g0 := generate('mm_default', diag_conn)
+	assert c0 == 0, o0
+	assert g0.contains('g_diag_req [520]u8') && g0.contains('&g_diag_req[0], &g_diag_resp[0], 520)')
+}
+
+// @verifies REQ-CAN-TP-022
+// a DID's answer must fit: the 14-byte BLOBLY-TEST DID needs 3 + 11 bytes, more than the floor
+fn test_a_maximum_message_short_of_a_did_answer_is_refused() {
+	tx := 'tx_id         = 0x7B8'
+	code, out, _ := generate('mm_did', diag_conn.replace(tx, tx + '\nmax_message = 13'))
+	assert code != 0
+	assert out.contains("[isotp] max_message = 13 cannot hold [[did]] 0xf190's 0x22 answer: 14 bytes"), out
+	c2, o2, _ := generate('mm_did_ok', diag_conn.replace(tx, tx + '\nmax_message = 14'))
+	assert c2 == 0, o2
+}
+
+// @verifies REQ-CAN-TP-022 REQ-BOOT-020
+// a [boot] node's maximum message must hold its bootloader's 0x29 proof request (66 bytes); the
+// bootloader is generated with the node's maximum message and the one buffer block the boot.bufs
+// layout needs for it — bus-only and with DoIP
+fn test_a_boot_nodes_bootloader_follows_the_maximum_message() {
+	tx := 'tx_id         = 0x7B8'
+	c1, o1, _ := generate('boot_mm_65', boot_conn.replace(tx, tx + '\nmax_message = 65'))
+	assert c1 != 0
+	assert o1.contains('[isotp] max_message = 65 is too short for the [boot] node\'s bootloader: its 0x29 proof request is 66 bytes'), o1
+	for mm, want in {
+		0:    ['#define BOOT_MAX_MESSAGE 520u', '#define BOOT_BUF_LEN ${bufs.layout(520, false).total}u']
+		66:   ['#define BOOT_MAX_MESSAGE 66u', '#define BOOT_BUF_LEN ${bufs.layout(66, false).total}u']
+		4095: ['#define BOOT_MAX_MESSAGE 4095u', '#define BOOT_BUF_LEN ${bufs.layout(4095, false).total}u']
+	} {
+		tmp := os.join_path(os.temp_dir(), 'diag_target_boot_mm_${mm}_${os.getpid()}')
+		defer {
+			os.rmdir_all(tmp) or {}
+		}
+		extra := if mm == 0 { boot_conn } else { boot_conn.replace(tx, tx + '\nmax_message = ${mm}') }
+		code, out, _ := run_in_scratch(tmp, fixture_dir, fn (src string) string {
+			return src
+		}, extra)
+		assert code == 0, out
+		h := os.read_file(os.join_path(tmp, 'boot_gen.h')) or { panic(err) }
+		for w in want {
+			assert h.contains(w), '${w} missing:\n${h}'
+		}
+	}
+}
+
+// @verifies REQ-CAN-TP-023
+// the host bridge holds the connection's request and response buffers beside it in its state, sized
+// by the node's [isotp] max_message, and hands them to the connection with that capacity — run on
+// overspeed as it is (the default 520) and opted in at 4095, so the declarations and the init cannot
+// drift apart
+fn test_the_host_bridge_holds_buffers_of_the_maximum_message() {
+	for mm in [0, 4095] {
+		size := if mm == 0 { 520 } else { mm }
+		edit := fn [mm] (src string) string {
+			return if mm == 0 {
+				src
+			} else {
+				src.replace('functional_id = 0x7DF', 'functional_id = 0x7DF\nmax_message = ${mm}')
+			}
+		}
+		code, out, glue := generate_host('bridge_mm_${mm}', edit, '')
+		assert code == 0, out
+		for want in ['\tconn_diag_req [${size}]u8', '\tconn_diag_resp [${size}]u8',
+			'st.conn_diag.init(u32(0x101), u32(0x102), u32(0x7df), 8, 0, &st.conn_diag_req[0], &st.conn_diag_resp[0], ${size})'] {
+			assert glue.contains(want), '${want} (max_message ${mm})'
+		}
+	}
+}
+
+// @verifies REQ-CAN-TP-026
+// [isotp] tx_dl: absent the connection transmits at 8 — no line for the link, BOOT_TX_DL 8; 64 on
+// a CAN-FD bus sets the link's and the bootloader's, beside BOOT_CAN_FD 1 and the channel opened
+// CAN-FD by the same reading; a length ISO-TP does not transmit with (the schema row's set, below 8
+// and past 64 alike), and one above 8 on a bus that is not CAN-FD (fd = false, or no fd at all) are
+// refused, never narrowed
+fn test_the_frame_length_is_configured_and_refused_off_a_can_fd_bus() {
+	tx := 'tx_id         = 0x7B8'
+	assert boot_conn.contains(tx), 'the fixture [isotp] changed shape — update this test'
+	fd_on := fn (src string) string {
+		return src.replace('fd        = false', 'fd        = true')
+	}
+	tmp8 := os.join_path(os.temp_dir(), 'diag_target_dl8_${os.getpid()}')
+	defer {
+		os.rmdir_all(tmp8) or {}
+	}
+	c8, o8, g8 := run_in_scratch(tmp8, fixture_dir, fn (src string) string {
+		return src
+	}, boot_conn)
+	assert c8 == 0, o8
+	assert !g8.contains('link.tx_dl')
+	h8 := os.read_file(os.join_path(tmp8, 'boot_gen.h')) or { panic(err) }
+	assert h8.contains('#define BOOT_TX_DL 8u'), h8
+	tmp64 := os.join_path(os.temp_dir(), 'diag_target_dl64_${os.getpid()}')
+	defer {
+		os.rmdir_all(tmp64) or {}
+	}
+	c64, o64, g64 := run_in_scratch(tmp64, fixture_dir, fd_on, boot_conn.replace(tx, tx + '\ntx_dl = 64'))
+	assert c64 == 0, o64
+	assert g64.contains('g_diag.link.tx_dl = 64 // [isotp] tx_dl'), g64
+	assert g64.contains("ch.open('0', true)"), 'the connection\'s channel opened CAN-FD'
+	h64 := os.read_file(os.join_path(tmp64, 'boot_gen.h')) or { panic(err) }
+	assert h64.contains('#define BOOT_TX_DL 64u') && h64.contains('#define BOOT_CAN_FD 1'), h64
+	for i, c in [['tx_dl = 13', '[isotp] tx_dl = 13 is not a frame length ISO-TP transmits with — give 8, 12, 16, 20, 24, 32, 48 or 64'],
+		['tx_dl = 10', '[isotp] tx_dl = 10 is not a frame length'],
+		['tx_dl = 4', '[isotp] tx_dl = 4 is not a frame length'],
+		['tx_dl = 128', '[isotp] tx_dl = 128 is not a frame length']] {
+		code, out, _ := generate_edited('dl_bad_${i}', fd_on, diag_conn.replace(tx, tx + '\n' + c[0]))
+		assert code != 0, 'loom2v accepted [isotp] ${c[0]}'
+		assert out.contains(c[1]), out
+	}
+	classic := '[isotp] tx_dl = 64 needs a CAN-FD bus, and bus "can0" is not one'
+	code1, out1, _ := generate('dl_classic', diag_conn.replace(tx, tx + '\ntx_dl = 64'))
+	assert code1 != 0 && out1.contains(classic), out1
+	code2, out2, _ := generate_edited('dl_no_fd', fn (src string) string {
+		return src.replace('fd        = false\n', '')
+	}, diag_conn.replace(tx, tx + '\ntx_dl = 64'))
+	assert code2 != 0 && out2.contains(classic), out2
+}
+
+// ---- 29-bit identifiers: normal addressing with `ext`, and normal fixed addressing ----
+// @verifies REQ-CAN-TP-040 REQ-CAN-TP-041 REQ-CAN-TP-042
+
+const ids_11 = 'rx_id         = 0x7B0\ntx_id         = 0x7B8\nfunctional_id = 0x7DF'
+
+// the fixture's connection on normal fixed addressing: the node 0x10, the tester 0xF1, functional 0x33
+const ids_fixed = 'addressing    = "normal_fixed"\nsa            = 0x10\nta            = 0xF1\nfunctional_ta = 0x33'
+
+// the connection is configured with its 29-bit ids and told their format, on the comm thread and
+// the host bridge alike; an 11-bit node's generated code carries no format line at all
+fn test_a_29_bit_connection_is_generated_with_its_format() {
+	assert diag_conn.contains(ids_11), 'the fixture [isotp] changed shape — update this test'
+	code, out, glue := generate('ext', diag_conn.replace(ids_11, 'rx_id         = 0x18DA10F1\ntx_id         = 0x18DAF110\nfunctional_id = 0x18DB33F1\next           = true'))
+	assert code == 0, out
+	in_order_dt(glue, ['g_diag.init(u32(0x18da10f1), u32(0x18daf110), u32(0x18db33f1)',
+		'g_diag.ext = true'])
+	c2, o2, g2 := generate('std', diag_conn)
+	assert c2 == 0, o2
+	assert !g2.contains('g_diag.ext')
+	hc, ho, hg := generate_host('ext', fn (src string) string {
+		return src.replace('functional_id = 0x7DF', 'functional_id = 0x7DF\next = true')
+	}, '')
+	assert hc == 0, ho
+	in_order_dt(hg, ['st.conn_diag.init(u32(0x101), u32(0x102), u32(0x7df)', 'st.conn_diag.ext = true'])
+}
+
+// normal fixed addressing: the ids derive from the two addresses (0x18DA<sa><ta>, 0x18DA<ta><sa>,
+// 0x18DB<functional_ta><ta>), always 29-bit; ids beside the addresses, an address out of its byte,
+// equal addresses and an address for normal addressing are refused
+fn test_a_normal_fixed_connection_derives_its_ids() {
+	fixed := diag_conn.replace(ids_11, ids_fixed)
+	code, out, glue := generate('fixed', fixed)
+	assert code == 0, out
+	in_order_dt(glue, ['g_diag.init(u32(0x18da10f1), u32(0x18daf110), u32(0x18db33f1)',
+		'g_diag.ext = true'])
+	for i, c in [
+		[fixed.replace('ta            = 0xF1', 'ta            = 0xF1\nrx_id         = 0x7B0'),
+			'rx_id is given with addressing = "normal_fixed"'],
+		[fixed.replace('sa            = 0x10', 'sa            = 0x100'),
+			'[isotp] sa = 0x100 is out of range (0x0..0xff)'],
+		[fixed.replace('sa            = 0x10', 'sa            = 0xF1'), 'sa and ta are both 0xf1'],
+		[diag_conn.replace('functional_id = 0x7DF', 'functional_id = 0x7DF\nfunctional_ta = 0x33'),
+			'functional_ta is for addressing = "normal_fixed"'],
+	] {
+		cc, oc, _ := generate('fixed_bad_${i}', c[0])
+		assert cc != 0, 'loom2v accepted: ${c[1]}'
+		assert oc.contains(c[1]), oc
+	}
+}
+
+// the bootloader serves on the application's ids in their format: BOOT_EXT beside the derived ids
+fn test_a_boot_node_on_normal_fixed_addressing_gets_its_ids_and_format() {
+	tmp := os.join_path(os.temp_dir(), 'diag_target_boot_fixed_${os.getpid()}')
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	assert boot_conn.contains(ids_11), 'the fixture [isotp] changed shape — update this test'
+	code, out, _ := run_in_scratch(tmp, fixture_dir, same, boot_conn.replace(ids_11, ids_fixed))
+	assert code == 0, out
+	h := os.read_file(os.join_path(tmp, 'boot_gen.h')) or { panic(err) }
+	for want in ['#define BOOT_RX_ID 0x18da10f1u', '#define BOOT_TX_ID 0x18daf110u',
+		'#define BOOT_EXT 1 '] {
+		assert h.contains(want), '${want} missing:\n${h}'
+	}
+}
+
+// an id is its number AND its format: a 29-bit id never meets the 11-bit telemetry, trace, NM and
+// shell frames; it meets a DBC frame on its bus only when that frame is extended too
+fn test_a_diagnostic_ids_collisions_are_judged_in_its_format() {
+	code, out, _ := generate('ext_telem', diag_conn.replace('rx_id         = 0x7B0',
+		'rx_id         = 0x7E0').replace('functional_id = 0x7DF', 'functional_id = 0x7DF\next           = true'))
+	assert code == 0, out
+	// on the host example, Powertrain (0x100, whose VehicleSpeed the node receives) made an
+	// extended frame: the [isotp] rx_id on its number collides only as a 29-bit id
+	tmp := os.join_path(os.temp_dir(), 'diag_target_extdbc_${os.getpid()}')
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	src := os.join_path(tmp, 'overspeed')
+	os.mkdir_all(src) or { panic(err) }
+	ex := example_dir('overspeed')
+	os.cp(os.join_path(ex, 'ecu.toml'), os.join_path(src, 'ecu.toml')) or { panic(err) }
+	dbc := os.read_file(os.join_path(ex, 'bus.dbc')) or { panic(err) }
+	assert dbc.contains('BO_ 256 Powertrain:'), 'the example DBC changed shape — update this test'
+	os.write_file(os.join_path(src, 'bus.dbc'), dbc.replace('BO_ 256 Powertrain:', 'BO_ 2147483904 Powertrain:')) or {
+		panic(err)
+	}
+	on_pt := fn (src string) string {
+		return src.replace('rx_id    = 0x101', 'rx_id    = 0x100')
+	}
+	c1, o1, _ := run_in_scratch(os.join_path(tmp, 'x'), src, fn [on_pt] (src string) string {
+		return on_pt(src).replace('functional_id = 0x7DF', 'functional_id = 0x7DF\next = true')
+	}, '')
+	assert c1 != 0, 'loom2v accepted a 29-bit rx_id on an extended DBC frame of the bus'
+	assert o1.contains('rx_id 0x100 is also DBC message "Powertrain"'), o1
+	c2, o2, _ := run_in_scratch(os.join_path(tmp, 'y'), src, on_pt, '')
+	assert c2 == 0, o2 // the 11-bit 0x100 is not the extended frame 0x100
+}
+
+// ... and it meets a frame a signal route forwards on its bus — onto it or off it — only when that
+// frame has its format: gw_extid's raw route of ExtDiag can0 -> can1, the frame 11-bit (0x500)
+// or 29-bit (0x500 extended), the [isotp] on either end listening on 0x500 in either format
+fn test_a_diagnostic_id_meets_a_routed_frame_only_in_its_format() {
+	tmp := os.join_path(os.temp_dir(), 'diag_target_routed_${os.getpid()}')
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	ex := example_dir('gw_extid')
+	dbc := os.read_file(os.join_path(ex, 'bus.dbc')) or { panic(err) }
+	assert dbc.contains('BO_ 2432500992 ExtDiag:'), 'the example DBC changed shape — update this test'
+	for frame_ext in [false, true] {
+		src := os.join_path(tmp, 'gw_extid_${frame_ext}')
+		os.mkdir_all(src) or { panic(err) }
+		os.cp(os.join_path(ex, 'ecu.toml'), os.join_path(src, 'ecu.toml')) or { panic(err) }
+		// a DBC extended id carries bit 31
+		id := if frame_ext { '${u32(0x80000500)}' } else { '${0x500}' }
+		os.write_file(os.join_path(src, 'bus.dbc'), dbc.replace('2432500992', id)) or { panic(err) }
+		for bus in ['can0', 'can1'] {
+			for conn_ext in [false, true] {
+				extra := '\n[uds]\n\n[isotp]\nbus = "${bus}"\nrx_id = 0x500\ntx_id = 0x508\next = ${conn_ext}\n'
+				code, out, _ := run_in_scratch(os.join_path(tmp, '${frame_ext}_${bus}_${conn_ext}'),
+					src, same, extra)
+				what := 'a ${if frame_ext { '29' } else { '11' }}-bit routed frame, a ${if conn_ext { '29' } else { '11' }}-bit rx_id on ${bus}'
+				if frame_ext == conn_ext {
+					assert code != 0, 'loom2v accepted ${what}'
+					assert out.contains('[isotp] rx_id 0x500 is also a routed frame on bus "${bus}"'), out
+				} else {
+					assert code == 0, '${what}: ${out}'
+				}
+			}
+		}
+	}
+}
+
+// --- 0x29 Authentication (access = "authentication") ---
+
+const auth_gate = '
+[[did]]
+id    = 0xF1AC
+bytes = "00"
+write = { session = ["extended"], security = 1 }
+'
+
+// a real Ed25519 public key that is not the dev tester's (examples/keys' image key)
+const other_key = '03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8'
+
+fn auth_uds(keys string) string {
+	return '\n[uds]\naccess = "authentication"\nauth_keys = { ${keys} }\n'
+}
+
+// REQ-DIAG-120 / REQ-DIAG-126: an authenticating ThreadX node is wired through its keys — each
+// level's public key set in the init path (the dev key by name, another as its bytes), the server's
+// 0x29 seam pointed at them, the TRNG the challenge, no 0x27 key seam, the failed-proof state in the
+// journal like 0x27's, a 16 KB comm stack for the verifier.
+// @verifies REQ-DIAG-120 REQ-DIAG-126
+fn test_an_authenticating_target_node_is_wired_through_its_keys() {
+	code, out, glue := generate('auth_ok', diag_conn + auth_gate + auth_uds('"1" = "reference"'))
+	assert code == 0, out
+	for want in ['import comm.udsauth', 'g_auth_keys udsauth.Keys',
+		'g_auth_keys.set(1, &udsauth.reference_key[0])', 'g_diag.server.auth = g_auth_keys.ops()',
+		'seed: diag_sa_seed_v', 'C.diag_sa_init()', 'g_diag.server.security_levels = u8(0x01)',
+		'g_diag.server.restore_persisted_security()', 'g_comm_stack [16384]u8'] {
+		assert glue.contains(want), 'missing: ${want}'
+	}
+	assert !glue.contains('diag_sa_key_ok') && !glue.contains('key_ok:'), 'a 0x27 key seam on an authenticating node'
+	in_order(glue, ['g_diag.server.auth = g_auth_keys.ops()', 'g_diag.server.restore_persisted_security()',
+		'for {'])
+	c2, o2, g2 := generate('auth_hex', diag_conn + auth_gate + auth_uds('"1" = "${other_key}"'))
+	assert c2 == 0, o2
+	assert g2.contains('auth_key_1 := [u8(0x03), u8(0xa1)') && g2.contains('g_auth_keys.set(1, &auth_key_1[0])')
+	// a seed-key node is unchanged: no udsauth, the 8 KB stack
+	c3, o3, g3 := generate('auth_none', diag_conn + auth_gate)
+	assert c3 == 0, o3
+	assert !g3.contains('udsauth') && g3.contains('g_comm_stack [8192]u8')
+}
+
+// the host bridge: the keys in its state, the reference generator the challenge source
+fn test_an_authenticating_host_bridge_is_wired_through_its_keys() {
+	edit := fn (src string) string {
+		return src.replace('\n[uds]\n', '\n[uds]\naccess = "authentication"\nauth_keys = { "1" = "reference" }\n')
+	}
+	code, out, glue := generate_host('auth_host', edit, '')
+	assert code == 0, out
+	for want in ['import comm.udsauth', 'auth_keys_diag udsauth.Keys',
+		'st.auth_keys_diag.set(1, &udsauth.reference_key[0])',
+		'st.conn_diag.server.auth = st.auth_keys_diag.ops()'] {
+		assert glue.contains(want), 'missing: ${want}'
+	}
+	assert !glue.contains('sa_store'), 'the host bridge wired a store'
+}
+
+// REQ-DIAG-120 / REQ-DIAG-121 / REQ-DIAG-126 / REQ-DIAG-066 / REQ-CAN-TP-022: what an authenticating
+// node is refused for, each naming its reason.
+// @verifies REQ-DIAG-120 REQ-DIAG-121 REQ-DIAG-126 REQ-DIAG-066 REQ-CAN-TP-022
+fn test_an_authentication_config_that_cannot_work_is_refused() {
+	not_point := '02' + '00'.repeat(31)
+	zero := '00'.repeat(32)
+	table27 := '\n[uds.services]\n"0x10" = {}\n"0x22" = {}\n"0x27" = {}\n"0x2E" = { sessions = ["extended"], security = 1 }\n"0x3E" = {}\n'
+	table29 := table27.replace('"0x27"', '"0x29"')
+	for name, c in {
+		'no_level':     [diag_conn + '\n[uds]\naccess = "authentication"\n', 'there is nothing to unlock']
+		'no_key':       [diag_conn + auth_gate + auth_uds('"2" = "reference"'), 'security level 1 is gated but auth_keys has no key']
+		'extra_key':    [diag_conn + auth_gate + auth_uds('"1" = "reference", "2" = "reference"'), 'auth_keys "2": no [[did]] gate']
+		'short_key':    [diag_conn + auth_gate + auth_uds('"1" = "abcd"'), 'must be 64 hex characters']
+		'zero_key':     [diag_conn + auth_gate + auth_uds('"1" = "${zero}"'), 'is all zeros']
+		'not_point':    [diag_conn + auth_gate + auth_uds('"1" = "${not_point}"'), 'not a curve point']
+		// the neutral point: under it a forged proof (R neutral, S 0) verifies for every challenge
+		'small_order':  [diag_conn + auth_gate + auth_uds('"1" = "01${'00'.repeat(31)}"'), 'is a point of small order']
+		'small_noncanon': [diag_conn + auth_gate + auth_uds('"1" = "EE${'FF'.repeat(30)}7F"'), 'is a point of small order']
+		'bad_level':    [diag_conn + auth_gate + auth_uds('"9" = "reference"'), 'is not a security level']
+		'bad_access':   [diag_conn + auth_gate + '\n[uds]\naccess = "password"\n', '[uds] access "password"']
+		'keys_on_27':   [diag_conn + auth_gate + '\n[uds]\nauth_keys = { "1" = "reference" }\n', 'but access is "seed_key"']
+		'sec_key_on_29': [diag_conn + auth_gate + auth_uds('"1" = "reference"') + 'security_key = "reference"\n', 'drop security_key']
+		'row_27':       [diag_conn + auth_gate + auth_uds('"1" = "reference"') + table27, 'so 0x27 is not served']
+		'row_29':       [diag_conn + auth_gate + table29, '0x29 is served only with [uds] access = "authentication"']
+		'row_29_default': [diag_conn + auth_gate + auth_uds('"1" = "reference"') + table29.replace('"0x29" = {}', '"0x29" = { sessions = ["default", "extended"] }'), 'ISO 14229-1 allows Authentication there, but this server serves it only in a non-default session']
+		'no_nvm':       [diag_conn.replace(tt_nvm, '') + auth_gate + auth_uds('"1" = "reference"'), 'needs [nvm]']
+		'short_msg':    [diag_conn.replace('functional_id = 0x7DF', 'functional_id = 0x7DF\nmax_message = 80') + auth_gate +
+			auth_uds('"1" = "reference"'), 'cannot hold the 0x29 proof request']
+	} {
+		code, out, _ := generate('auth_refuse_${name}', c[0])
+		assert code != 0, '${name}: accepted'
+		assert out.contains(c[1]), '${name}: ${out}'
+	}
+	// a table naming 0x29 on an authenticating node is fine, and leaving it out is refused
+	ok, oo, _ := generate('auth_table', diag_conn + auth_gate + auth_uds('"1" = "reference"') + table29)
+	assert ok == 0, oo
+	no29 := table29.replace('"0x29" = {}\n', '')
+	nc, no, _ := generate('auth_table_no29', diag_conn + auth_gate + auth_uds('"1" = "reference"') + no29)
+	assert nc != 0 && no.contains('services leaves out 0x29'), no
+}
+
+// REQ-DIAG-126: a tester key equal to the [boot] image key is refused (the field key must not sign
+// firmware)
+// @verifies REQ-DIAG-126
+fn test_an_auth_key_equal_to_the_image_key_is_refused() {
+	handoff := '\n[uds]\naccess = "authentication"\nauth_keys = { "1" = "${other_key}" }\n\n[uds.services]\n"0x10" = {}\n"0x10 02" = { security = 1 }\n"0x22" = {}\n"0x29" = {}\n"0x3E" = {}\n'
+	code, out, _ := generate('auth_image_key', handoff + boot_conn)
+	assert code != 0 && out.contains('is the [boot] image_key'), out
 }

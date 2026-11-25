@@ -6,10 +6,15 @@ module uds
 // filled in by the generated bridge (docs/diagnostics.md §3.1).
 //
 // Services: 0x10 DiagnosticSessionControl, 0x11 ECUReset, 0x22 ReadDataByIdentifier (several
-// DIDs per request), 0x27 SecurityAccess (with injected SecurityOps), 0x28 CommunicationControl,
+// DIDs per request), 0x27 SecurityAccess (with injected SecurityOps) — or, on a node that unlocks
+// by Authentication instead, 0x29 (ACR with Ed25519, injected AuthOps; auth.v) — 0x28 CommunicationControl,
 // 0x14 / 0x19 / 0x85 over an injected FaultOps (comm/fault),
 // 0x2E WriteDataByIdentifier (a BOUND DID — a parameter — through the injected DidWrite, comm/param),
+// 0x2F InputOutputControlByIdentifier (a live signal's DID with a control, io_control.v),
+// 0x31 RoutineControl (each configured routine run by an FB through two cells, routine.v),
 // 0x3E TesterPresent. Anything else -> 0x11 serviceNotSupported.
+// A routine's start or stop is answered responsePending (0x78) until its FB has reported, every
+// other request dropped meanwhile (pending.v).
 // An application server's 0x10 02 is the programming HANDOFF (boot_handoff): answered, then
 // performed by the owner as a reset into the bootloader (reset_into_boot).
 // Which of those a node answers, where, and behind which 0x27 level is the SERVICE TABLE
@@ -21,11 +26,18 @@ module uds
 // subfunction supported (0x12) → exact length (0x13) → conditions / range. The DID services follow
 // their own flow: 0x22 — length, then each DID's support and session (0x31 when none answers),
 // then security (0x33), then the response size (0x14); 0x2E — length, then the DID's support,
-// writability and session (0x31), then security (0x33), then the record length (0x13). 0x27 —
+// writability and session (0x31), then security (0x33), then the record length (0x13); 0x2F — its
+// own order (io_control.v). 0x31 —
+// length < 2 (0x13), subfunction (0x12), length < 4 (0x13), the routine's identifier and session
+// (0x31), its level (0x33), a subfunction it does not offer (0x12), the exact length (0x13), the
+// sequence (0x24), then its FB's own refusal. 0x27 —
 // subfunction (0x12), then requestSeed: the lockout delay (0x37); sendKey: length (0x13), a seed
-// of that level outstanding (0x24), the key (0x35, or 0x36 on the last allowed attempt). A
+// of that level outstanding (0x24), the lockout delay (0x37: the seed spent, the key not judged —
+// a seed drawn over the other transport before the lockout buys no key during it), the key (0x35,
+// or 0x36 on the last allowed attempt). A
 // FUNCTIONAL request never answers 0x11, 0x12, 0x31, 0x7E or 0x7F (handle_functional) — a broadcast
-// into an unsupported or gated service stays silent — and a functional 0x27 is ignored outright.
+// into an unsupported or gated service stays silent — and a functional 0x27, 0x29, 0x2F or 0x31 is
+// ignored outright. 0x29's own order is in auth.v.
 
 pub const max_dids = 16
 pub const max_did_data = 32 // bytes stored per DID
@@ -69,6 +81,8 @@ pub const nrc_security_access_denied = u8(0x33)
 pub const nrc_invalid_key = u8(0x35)
 pub const nrc_exceeded_attempts = u8(0x36)
 pub const nrc_time_delay_not_expired = u8(0x37)
+pub const nrc_general_programming_failure = u8(0x72)
+pub const nrc_response_pending = u8(0x78)
 pub const nrc_subfunction_not_in_session = u8(0x7E)
 pub const nrc_service_not_in_session = u8(0x7F)
 
@@ -179,8 +193,8 @@ pub mut:
 	session u8
 	dids    [max_dids]Did
 	ndid    int
-	// The security level currently unlocked (0 = locked). Set by 0x27 (R1b); relocked on every
-	// session transition.
+	// The security level currently unlocked (0 = locked). Set by 0x27 or 0x29 (whichever the node
+	// unlocks with); relocked on every session transition.
 	unlocked u8
 	// Response capacity of the caller's buffer (init); 0 = legacy_resp_cap.
 	resp_cap int
@@ -227,20 +241,44 @@ pub mut:
 	// needs (0x33). Consulted by 0x10, for the programming handoff; nsubs == 0 = none.
 	subs  [max_sub_services]SubService
 	nsubs int
-	// SecurityAccess (0x27): the seam, the levels served (bit L-1 for level L), the failed-key
+	// SecurityAccess (0x27) or Authentication (0x29): the seam (SecurityOps — for 0x29 its seed is
+	// the challenge source), the levels served (bit L-1 for level L), the failed-key (or failed-proof)
 	// limit and the lockout delay (0 = the defaults). sa_* below is the exchange in progress.
 	security        SecurityOps
+	// the 0x29 seam: one set (authenticates) makes the node unlock by Authentication (auth.v), and 0x27 is
+	// then not served
+	auth            AuthOps
 	security_levels u8
 	sa_attempts     u8
 	sa_delay_us     u64
-	sa_level        u8 // the level whose seed is outstanding (0 = none)
+	sa_level        u8 // the level whose seed (0x27) or challenge (0x29) is outstanding (0 = none)
 	// session_epoch counts session ENTRIES (0x10 — re-entering the same session too — S3, a reset):
 	// an owner keeping an exchange outside the server knows one begun in an earlier entry is void
 	session_epoch u32
 	sa_seed         [seed_len]u8
-	sa_failed       [max_security_level]u8 // wrong keys per level: one level's unlock never clears another's
-	sa_delay_until  u64
-	sa_arm_delay    bool // start the delay at the next tick (boot / reset: the clock is not known yet)
+	auth_challenge  [auth_challenge_len]u8 // the 0x29 challenge outstanding (valid while sa_level != 0)
+	// the 0x29 proof being verified while its answer is owed (auth.v): its level (0 = none), whether
+	// the verdict is in, and the answer it decided (0 = ownershipVerified, else the NRC)
+	auth_level   u8
+	auth_decided bool
+	auth_nrc     u8
+	sa_failed       [max_security_level]u8 // wrong keys (or proofs) per level: one level's unlock never clears another's
+	// wrong keys per level since its last correct key, rising to the attempt limit and no further
+	// (sa_failed restarts when a lockout starts; this does not): what the journal holds (sa_store.v)
+	sa_since        [max_security_level]u8
+	// per level: when its lockout delay ends, and the levels whose delay starts at the next tick
+	// (bit L-1; a start-up or a reset, whose clock is not known yet). A level's wrong keys cost that
+	// level's delay only, so a level nobody unlocks never delays another's seed.
+	sa_delay_until [max_security_level]u64
+	sa_arm         u8
+	// The 0x27 state's persistence (sa_store.v): the journal seam (nil put = RAM only, the host),
+	// the record last stored and whether the store is known to hold it, when a refused write is
+	// retried, and whether a pass wrote since take_sa_wrote last asked.
+	sa_store      SecurityStore
+	sa_stored     [sa_record_len]u8
+	sa_has_stored bool
+	sa_retry_at   u64
+	sa_wrote      bool
 	// The service table: nservices == 0 is the DEFAULT table — every service the owner wired, in
 	// its default sessions, with no service-level security (the behaviour before the table existed);
 	// otherwise exactly services[0 .. nservices].
@@ -251,6 +289,31 @@ pub mut:
 	faults FaultOps
 	// Parameters (0x2E on a bound DID): nil `write` = a bound DID cannot be written (0x22).
 	did_write DidWrite
+	// Routines (0x31, routine.v): routines[0 .. nroutines], each with its request and result cells.
+	routines  [max_routines]Routine
+	nroutines int
+	// The answer owed after a responsePending (pending.v): its service (0 = none), the routine and
+	// sub-function it is for, when the next 0x78 is due, when the owed answer runs out (then, with
+	// pend_fail or pend_late, when it is abandoned), whether it is to be answered
+	// conditionsNotCorrect, and whether it was ready at its timeout with only the transport late.
+	pend_sid   u8
+	pend_idx   int
+	pend_sub   u8
+	pend_next  u64
+	pend_until u64
+	pend_fail  bool
+	pend_late  bool
+	// a failed-attempt count this pass made (a 0x29 verdict or abandoned verify, in tick): no owed
+	// response leaves until the next pass, so the owner's persist step writes the count first
+	// (REQ-DIAG-067). Cleared by the next tick.
+	pend_hold bool
+	// Input/output control (0x2F, io_control.v): the controlled DIDs, nio == 0 = 0x2F not served.
+	ios [max_ios]IoControl
+	nio int
+	// io_ok is the application's conditions seam for 0x2F (REQ-DIAG-106): false answers
+	// conditionsNotCorrect (0x22) and nothing changes; never asked for returnControlToECU. nil =
+	// allowed — the server knows no vehicle state, and only the application can.
+	io_ok fn (did u16, parameter u8) bool = unsafe { nil }
 }
 
 // init puts the server in the default session with everything unlocked-state cleared, and
@@ -264,69 +327,70 @@ pub fn (mut s Server) init(resp_cap int) {
 }
 
 
-// kept_len: the bytes of SecurityAccess state an owner that restarts the MCU carries across its
-// own reset — the failed-key count of each level, and whether a lockout is running.
-pub const kept_len = max_security_level + 1
-
-// kept_security is what must survive the owner's reset: a reset between guesses must buy nothing,
-// and a lockout that is running — whose count the server has already zeroed — must still run.
-pub fn (s &Server) kept_security() [kept_len]u8 {
-	mut k := [kept_len]u8{}
+// sa_restart: what a restart makes of the 0x27 counts — a reset (reset_state) and a start-up
+// (restore_persisted_security, sa_store.v) alike, ONE rule so the host bridge and a target agree:
+// per served level with a wrong key counted since its last correct key, the delay is armed (the
+// full delay, from the next tick: the clock that timed a running one is not trusted across it), and
+// the level's lockout count is that count below the attempt limit, or 0 at or above it — after the
+// delay of a saturated count the level has its attempts again, as after any lockout. The delay is
+// that level's: another level's seed is not delayed. A level with nothing counted, or not served,
+// arms nothing. A loop over the levels: the target has no heap.
+fn (mut s Server) sa_restart() {
+	limit := s.sa_max_attempts()
 	for i in 0 .. max_security_level {
-		k[i] = s.sa_failed[i]
-	}
-	k[max_security_level] = if s.sa_arm_delay || s.now_us < s.sa_delay_until { u8(1) } else { u8(0) }
-	return k
-}
-
-// any_sa_failed: whether any level has wrong-key attempts counting. A loop, not `.any()`: V3
-// copies a fixed array into a heap-allocated one to call it, and the target has no heap.
-fn (s &Server) any_sa_failed() bool {
-	for n in s.sa_failed {
-		if n > 0 {
-			return true
+		if s.sa_since[i] == 0 || s.security_levels & (u8(1) << i) == 0 {
+			continue
 		}
+		s.sa_failed[i] = if s.sa_since[i] < limit { s.sa_since[i] } else { u8(0) }
+		s.sa_arm |= u8(1) << i
 	}
-	return false
-}
-
-// restore_security takes back what kept_security kept, at boot, after init: the counts, and the
-// lockout delay armed — from boot, since the clock that timed it did not survive — whenever a
-// lockout was running or any count is non-zero. The same rule reset_state applies.
-pub fn (mut s Server) restore_security(k [kept_len]u8) {
-	for i in 0 .. max_security_level {
-		s.sa_failed[i] = k[i]
-	}
-	s.sa_arm_delay = k[max_security_level] != 0 || s.any_sa_failed()
 }
 
 // reset_state returns the diagnostic state to power-on: default session, security locked,
-// communication enabled, no pending reset. DIDs are untouched. The 0x27 failed-key count and a
-// running lockout SURVIVE it: a reset between guesses must not buy fresh attempts, so a reset
-// with wrong keys already counted costs the lockout delay — and a clean reset costs nothing.
-// (Across a power cycle the count is lost until the target persists it — R2, docs/diagnostics.md §7.)
+// communication enabled, no pending reset, every routine asked to stop and none accepted (an owed
+// answer then answered 0x22, stop_routines), and every input/output control returned to the ECU
+// (io_control.v). DIDs are untouched. The 0x27 failed-key counts SURVIVE
+// it: a reset between guesses must not buy fresh attempts, so a reset with a wrong key of a level
+// counted since that level's last correct key costs the full lockout delay (one after an ended
+// lockout too, and one during a lockout restarts it), by the rule a start-up follows (sa_restart) —
+// and a clean reset costs nothing.
+// (Across the MCU's restart — an ECUReset, any other reset, a power cycle — a target keeps them in
+// the NvM journal: sa_store.v, docs/diagnostics.md §3.1. The host bridge has no power cycle.)
 pub fn (mut s Server) reset_state() {
 	s.session = session_default
 	s.unlocked = 0
 	s.sa_level = 0
 	s.session_epoch++
-	s.sa_arm_delay = s.any_sa_failed()
+	s.stop_routines()
+	s.sa_arm = 0
+	s.sa_restart()
+	for i in 0 .. max_routines {
+		s.routines[i].accepted = false
+	}
 	s.normal_tx_off = false
 	s.normal_rx_off = false
 	s.restore_dtc_setting()
 	s.reset_req = 0
 	s.last_rx_us = 0
 	s.rx_seen = false
+	s.io_return_where(0, false, session_default) // every input/output control back to the ECU
 }
 
 // tick advances the server's clock and applies S3: a non-default session with no request for
-// S3 returns to default (ISO 14229-2). Call once per owner pass, before handling requests.
+// S3 returns to default (ISO 14229-2) — but never while an answer is owed, whose timeout it applies
+// instead (pending_tick). Call once per owner pass, before handling requests.
 pub fn (mut s Server) tick(now_us u64) {
 	s.now_us = now_us
-	if s.sa_arm_delay {
-		s.sa_arm_delay = false
-		s.sa_delay_until = now_us + s.sa_delay()
+	s.pend_hold = false // the pass before persisted what it counted
+	if s.sa_arm != 0 {
+		for i in 0 .. max_security_level {
+			if s.sa_arm & (u8(1) << i) != 0 {
+				s.sa_delay_until[i] = now_us + s.sa_delay()
+			}
+		}
+		s.sa_arm = 0
 	}
+	s.pending_tick(now_us)
 	if s.session == session_default || s.session == 0 || !s.rx_seen {
 		return
 	}
@@ -365,9 +429,12 @@ pub fn (mut s Server) handle(req &u8, req_len int, resp &u8) int {
 // handle_functional dispatches a FUNCTIONALLY addressed request: identical, except the
 // negative responses ISO 14229-1 forbids for functional requests are withheld.
 pub fn (mut s Server) handle_functional(req &u8, req_len int, resp &u8) int {
-	if req_len >= 1 && unsafe { req[0] } == 0x27 && s.resp_cap >= 0 {
-		// SecurityAccess is physical-only: a broadcast key would spend a guess on every ECU. It is
-		// still a request, so it keeps the session alive like any other (S3).
+	if req_len >= 1 && unsafe { req[0] == 0x27 || req[0] == 0x29 || req[0] == 0x2F || req[0] == 0x31 }
+		&& s.resp_cap >= 0 {
+		// SecurityAccess and Authentication are physical-only: a broadcast key or proof would spend a
+		// guess on every ECU. So is InputOutputControl: an override is one ECU's, never every ECU's at
+		// once. And so is RoutineControl: a routine is an action on one ECU, its answer owed to one
+		// requester. Each is still a request, so it keeps the session alive like any other (S3).
 		s.last_rx_us = s.now_us
 		s.rx_seen = true
 		return 0
@@ -387,6 +454,9 @@ pub fn (mut s Server) handle_functional(req &u8, req_len int, resp &u8) int {
 fn (mut s Server) dispatch(req &u8, req_len int, resp &u8) int {
 	if req_len < 1 || s.resp_cap < 0 {
 		return 0
+	}
+	if s.pend_sid != 0 {
+		return 0 // an answer is owed: every request is dropped, unanswered and unperformed (pending.v)
 	}
 	s.last_rx_us = s.now_us // any request keeps the session alive (S3)
 	s.rx_seen = true
@@ -411,11 +481,14 @@ fn (mut s Server) dispatch(req &u8, req_len int, resp &u8) int {
 		0x11 { return s.ecu_reset(req, req_len, resp) }
 		0x22 { return s.read_did(req, req_len, resp) }
 		0x27 { return s.security_access(req, req_len, resp) }
+		0x29 { return s.authentication(req, req_len, resp) }
 		0x14 { return s.clear_dtcs(req, req_len, resp) }
 		0x19 { return s.read_dtcs(req, req_len, resp) }
 		0x85 { return s.dtc_setting(req, req_len, resp) }
 		0x28 { return s.communication_control(req, req_len, resp) }
 		0x2E { return s.write_did(req, req_len, resp) }
+		0x2F { return s.io_control(req, req_len, resp) }
+		0x31 { return s.routine_control(req, req_len, resp) }
 		else { return negative(resp, sid, nrc_service_not_supported) }
 	}
 }
@@ -428,8 +501,11 @@ fn (s &Server) service_supported(sid u8) bool {
 		0x11 { s.serves_reset }
 		0x14, 0x19 { s.faults.avail != 0 && s.faults.entry != unsafe { nil } && s.faults.count != unsafe { nil } && s.faults.clear != unsafe { nil } }
 		0x85 { s.faults.avail != 0 && s.faults.set_setting != unsafe { nil } }
-		0x27 { s.security.seed != unsafe { nil } && s.security.key_ok != unsafe { nil } && s.security_levels != 0 }
+		0x27 { !s.authenticates() && s.security.seed != unsafe { nil } && s.security.key_ok != unsafe { nil } && s.security_levels != 0 }
+		0x29 { s.authenticates() && s.security.seed != unsafe { nil } && s.security_levels != 0 }
 		0x28 { s.serves_comm_control }
+		0x2F { s.nio > 0 }
+		0x31 { s.nroutines > 0 }
 		else { false }
 	}
 }
@@ -460,13 +536,15 @@ fn (s &Server) service_row(sid u8) (Service, bool) {
 }
 
 // default_sessions: where each service may run unless the table says otherwise (0 = every
-// session). CommunicationControl, SecurityAccess and ControlDTCSetting are non-default-session
-// services (a tester must enter extended first, so a stray request on a quiet bus cannot silence
-// an ECU, spend its key attempts or freeze its fault memory) — a table never opens them in the
-// default session (loom2v refuses that). Per-DID gating sits on top for 0x22/0x2E.
+// session). CommunicationControl, SecurityAccess, InputOutputControl and ControlDTCSetting are
+// non-default-session services (a tester must enter extended first, so a stray request on a quiet
+// bus cannot silence an ECU, spend its key attempts, override its outputs or freeze its fault
+// memory); Authentication, which ISO 14229-1 also allows in the default session, is kept out of it
+// here like 0x27 (REQ-DIAG-121: every session entry relocks) — a table never opens any of them in
+// the default session (loom2v refuses that). Per-DID gating sits on top for 0x22/0x2E/0x2F.
 pub fn default_sessions(sid u8) u8 {
 	return match sid {
-		0x27, 0x28, 0x85 { in_extended | in_programming }
+		0x27, 0x28, 0x29, 0x2F, 0x85 { in_extended | in_programming }
 		else { u8(0) }
 	}
 }
@@ -488,9 +566,10 @@ fn in_mask(mask u8, session u8) bool {
 	return mask & (u8(1) << (session - 1)) != 0
 }
 
-// enter_session changes the active session. EVERY entry relocks security and voids an
-// outstanding seed — re-entering the session already active included (ISO 14229-1: security is
-// per session instance, and the plan's "every transition, explicit or by S3") — and a return to
+// enter_session changes the active session. EVERY entry relocks security, voids an outstanding
+// seed and asks every running routine to stop (stop_routines) — re-entering the session already
+// active included (ISO 14229-1: security is per session instance, and the plan's "every
+// transition, explicit or by S3") — and a return to
 // the default session re-enables communication (0x28 state does not survive leaving the
 // non-default session).
 // end_session returns to the default session as S3 would — relocked, the exchange voided — without
@@ -504,11 +583,13 @@ fn (mut s Server) enter_session(session u8) {
 	s.sa_level = 0
 	s.session_epoch++
 	s.session = session
+	s.stop_routines()
 	if session == session_default {
 		s.normal_tx_off = false
 		s.normal_rx_off = false
 		s.restore_dtc_setting()
 	}
+	s.io_return_where(0, false, session) // the controls this entry's relock or session ends
 }
 
 // restore_dtc_setting turns DTC setting back on when a session ends (explicitly, by S3, or by a
@@ -599,14 +680,17 @@ fn (mut s Server) session_control(req &u8, req_len int, resp &u8) int {
 // session_answer: the 0x10 positive response — the session and the timing record, which is ONE
 // statement for every server built on this one, the bootloader's included, so the P2/P2* an
 // application announces in answer to a handoff are the ones the bootloader's session keeps.
+// The timing is pending.v's p2_server_us (in ms) and p2_star_server_us (in 10 ms units).
 fn session_answer(resp &u8, session u8) int {
+	p2 := u16(p2_server_us / 1000) // 0x0032: 50 ms
+	p2_star := u16(p2_star_server_us / 10_000) // 0x01F4 * 10 ms: 5 s
 	unsafe {
 		resp[0] = 0x50
 		resp[1] = session
-		resp[2] = 0x00 // P2_server_max  = 0x0032 (50 ms)
-		resp[3] = 0x32
-		resp[4] = 0x01 // P2*_server_max = 0x01F4 * 10 ms (5 s)
-		resp[5] = 0xF4
+		resp[2] = u8(p2 >> 8)
+		resp[3] = u8(p2)
+		resp[4] = u8(p2_star >> 8)
+		resp[5] = u8(p2_star)
 	}
 	return 6
 }
@@ -705,14 +789,22 @@ fn (s &Server) sa_delay() u64 {
 }
 
 fn (s &Server) sa_max_attempts() u8 {
-	return if s.sa_attempts == 0 { default_sa_attempts } else { s.sa_attempts }
+	return attempts_of(s.sa_attempts)
+}
+
+// attempts_of: the attempt limit a configured `security_attempts` gives (0 = the default) — the one
+// rule, which the generator's wear check multiplies by too
+pub fn attempts_of(configured u8) u8 {
+	return if configured == 0 { default_sa_attempts } else { configured }
 }
 
 // security_access (0x27). requestSeed (odd subfunction 2L-1) hands out a fresh seed for level L —
 // all zeros when L is already unlocked (ISO 14229-1) — and sendKey (2L) checks a key against the
 // OUTSTANDING seed of that same level, once: a wrong key spends the seed. After sa_attempts wrong
-// keys the answer is exceededNumberOfAttempts and no seed is issued until the lockout delay has
-// passed (requiredTimeDelayNotExpired); a reset with wrong keys counted costs the delay too (reset_state).
+// keys the answer is exceededNumberOfAttempts and no seed is issued, nor a key judged, until the
+// lockout delay has passed (requiredTimeDelayNotExpired); a reset with a wrong key counted since the
+// level's last correct key costs the delay too (reset_state). On a target the count is in the journal before the
+// answer reporting it is pumped (sa_store.v); a write the journal refuses changes no answer.
 // requestSeed always answers, since the seed IS the answer; sendKey honours the suppress bit.
 fn (mut s Server) security_access(req &u8, req_len int, resp &u8) int {
 	if req_len < 2 {
@@ -730,8 +822,9 @@ fn (mut s Server) security_access(req &u8, req_len int, resp &u8) int {
 }
 
 fn (mut s Server) request_seed(level u8, sub u8, resp &u8) int {
-	// an optional securityAccessDataRecord after the subfunction is accepted and ignored
-	if s.sa_arm_delay || s.now_us < s.sa_delay_until {
+	// an optional securityAccessDataRecord after the subfunction is accepted and ignored; the
+	// delay refused here is this level's (its lockout, or one a start-up or reset armed for it)
+	if s.sa_delayed(level) {
 		return negative(resp, 0x27, nrc_time_delay_not_expired)
 	}
 	s.sa_level = 0
@@ -777,17 +870,13 @@ fn (mut s Server) send_key(level u8, req &u8, req_len int, resp &u8) int {
 		return negative(resp, 0x27, nrc_request_sequence_error) // no seed of this level outstanding
 	}
 	s.sa_level = 0 // one key per seed
-	if !s.security.key_ok(s.security.ctx, level, &s.sa_seed[0], unsafe { req + 2 }, seed_len) {
-		s.sa_failed[level - 1]++
-		if s.sa_failed[level - 1] >= s.sa_max_attempts() {
-			s.sa_failed[level - 1] = 0
-			s.sa_delay_until = s.now_us + s.sa_delay()
-			return negative(resp, 0x27, nrc_exceeded_attempts)
-		}
-		return negative(resp, 0x27, nrc_invalid_key)
+	if s.sa_delayed(level) {
+		return negative(resp, 0x27, nrc_time_delay_not_expired)
 	}
-	s.sa_failed[level - 1] = 0
-	s.unlocked = level
+	if !s.security.key_ok(s.security.ctx, level, &s.sa_seed[0], unsafe { req + 2 }, seed_len) {
+		return negative(resp, 0x27, s.sa_wrong(level, nrc_invalid_key))
+	}
+	s.sa_granted(level)
 	if unsafe { req[1] } & 0x80 != 0 {
 		return 0
 	}
@@ -796,6 +885,48 @@ fn (mut s Server) send_key(level u8, req &u8, req_len int, resp &u8) int {
 		resp[1] = req[1]
 	}
 	return 2
+}
+
+// sa_delayed: level's seed (or challenge) is refused for now — its lockout runs, or a start-up or
+// reset armed its delay for the next tick
+fn (s &Server) sa_delayed(level u8) bool {
+	return s.sa_arm & (u8(1) << (level - 1)) != 0 || s.now_us < s.sa_delay_until[level - 1]
+}
+
+// sa_wrong: a wrong 0x27 key or a failed 0x29 proof of `level`, counted — ONE count per level for
+// both, so a node's attempt limit, lockout and persisted record (sa_store.v) hold for either. The NRC
+// to answer: `wrong` (0x35 / 0x58), or 0x36 when this one reached the limit and started the lockout.
+fn (mut s Server) sa_wrong(level u8, wrong u8) u8 {
+	if s.sa_since[level - 1] < s.sa_max_attempts() {
+		s.sa_since[level - 1]++
+	}
+	s.sa_failed[level - 1]++
+	if s.sa_failed[level - 1] >= s.sa_max_attempts() {
+		s.sa_failed[level - 1] = 0
+		s.sa_delay_until[level - 1] = s.now_us + s.sa_delay()
+		return nrc_exceeded_attempts
+	}
+	return wrong
+}
+
+// sa_granted: a correct key or proof of `level` — unlocked, its count cleared (sa_cleared), and the
+// level unlocked before relocked: its controls are returned, its routines asked to stop (end_levels)
+// — one rule for 0x27 and 0x29. 0x27 clears and grants in the request's pass, before its persist
+// step; 0x29 clears at its verdict (auth_advance) and grants with its answer, so the clear is in the
+// journal before either answer leaves.
+fn (mut s Server) sa_granted(level u8) {
+	s.sa_cleared(level)
+	s.unlocked = level
+	s.end_levels(level, true)
+}
+
+// sa_cleared: a correct key or proof of `level` clears its counts; true when the persisted count
+// (sa_since, the record sa_store.v writes) changed
+fn (mut s Server) sa_cleared(level u8) bool {
+	was := s.sa_since[level - 1]
+	s.sa_failed[level - 1] = 0
+	s.sa_since[level - 1] = 0
+	return was != 0
 }
 
 // ReferenceSecurity is the SIM / BENCH key, NOT a secret: key[i] = seed[i] XOR 0xFF, the reference
@@ -862,6 +993,32 @@ fn (s &Server) find_did(id u16) int {
 		}
 	}
 	return -1
+}
+
+// The lengths of the answers below, for whoever must size a buffer to hold them (generation refuses
+// a node's maximum message length that cannot, REQ-CAN-TP-022). Stated beside the writers they
+// describe and pinned against their bytes in uds_test.v.
+
+// did_answer_len: a 0x22 answer carrying one DID of `len` data bytes — and the 0x2E request writing
+// it, which has the same shape (the service, the identifier, the data).
+pub fn did_answer_len(len int) int {
+	return 3 + len
+}
+
+// dtc_list_len: a 0x19 02 / 0A answer listing `n` DTCs (the subfunction, the availability mask,
+// then each DTC and its status).
+pub fn dtc_list_len(n int) int {
+	return 3 + 4 * n
+}
+
+// dtc_records_head: what a 0x19 04 / 06 answer carries before its records (the subfunction, the
+// DTC and its status).
+pub const dtc_records_head = 6
+
+// snapshot_answer_len: a 0x19 04 answer carrying one snapshot record whose body is `body` bytes
+// (the record number, then the body: comm/fault's snapshot_body_len).
+pub fn snapshot_answer_len(body int) int {
+	return dtc_records_head + 1 + body
 }
 
 // read_did serves one or MORE DIDs per request (ISO 14229-1 0x22): each supported DID's record —
@@ -1033,7 +1190,7 @@ fn (mut s Server) read_dtcs(req &u8, req_len int, resp &u8) int {
 		}
 		return 6
 	}
-	total := 3 + 4 * hits
+	total := dtc_list_len(hits)
 	if total > s.cap() {
 		return negative(resp, 0x19, nrc_response_too_long)
 	}
@@ -1130,7 +1287,7 @@ fn (mut s Server) dtc_records(sub u8, req &u8, resp &u8) int {
 		resp[4] = u8(dtc)
 		resp[5] = u8(e) & s.faults.avail
 	}
-	mut o := 6
+	mut o := dtc_records_head
 	if sub == 0x04 {
 		len := s.faults.snapshot(s.faults.ctx, i, unsafe { nil }, 0)
 		if len > 0 {

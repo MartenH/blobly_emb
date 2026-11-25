@@ -530,6 +530,7 @@ fn comm_thread_entry(_ u32) {
 			}
 			xcore_txf.id = u32(0x201)
 			xcore_txf.len = 8
+			xcore_txf.ext = false
 			// initial payload of m4_load_frame: every signal at its initial value (REQ-COM-011)
 			xcore_txf.data[0] = u8(0x00)
 			xcore_txf.data[1] = u8(0x00)

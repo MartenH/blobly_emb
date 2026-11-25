@@ -26,10 +26,12 @@ gen: $(if $(wildcard bus.dbc),$(TOOL_dbc2cfg)) $(TOOL_ecucheck) $(TOOL_cfg2v) $(
 	$(TOOL_loom2v) ecu.toml bus.dbc sig/signals_gen.v ports/ports_gen.v gen/loom_gen.v gen/trace-manifest.csv
 	$(TOOL_sigmap) ecu.toml signal-map.md
 
-# Build: local modules (sig/app/ports/gen) + the repo framework, via V's -path.
+# Build: local modules (sig/app/ports/gen) + the repo framework, via V's -path. -cstrict: V's C
+# compile otherwise runs with -w, which hides an implicit function declaration (a C function a
+# header forgot) on gcc 13 — the error gcc 14 makes of it.
 build:
 	@mkdir -p bin
-	cd $(REPO) && $(V) -cc $(HOST_CC) -gc none -path "@vlib|@vmodules|.|examples/$(NAME)" -o examples/$(NAME)/bin/app examples/$(NAME)
+	cd $(REPO) && $(V) -cc $(HOST_CC) -cstrict -gc none -path "@vlib|@vmodules|.|examples/$(NAME)" -o examples/$(NAME)/bin/app examples/$(NAME)
 
 # depend on `all` (gen + build), not just build, so a config edit is regenerated before running.
 # RUN_IFACE is the interface arg(s); a multi-bus example (e.g. trace_comm) overrides it with its

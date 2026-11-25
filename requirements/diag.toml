@@ -1,20 +1,26 @@
-# DIAG — UDS (ISO 14229) diagnostic services. Runs over the ISO-TP transport (area TP)
+# DIAG — UDS (ISO 14229) diagnostic services. Runs over the ISO-TP transport (area CAN-TP)
 # and reads live values from the same COM/IOC source the FBs use. Implementation- and
 # instance-agnostic. The fault memory and the parameters it serves are here too, for now.
 #
 # Scope — what the server deliberately does NOT do (non-goals until a requirement here says
-# otherwise; silence is not compliance). docs/diagnostics.md §1 "Supported, and not" is the
+# otherwise; silence is not compliance). docs/diagnostics.md §1 "What is supported" is the
 # per-service statement of the same:
 #   * services not served by an application: 0x23/0x3D memory access, 0x24, 0x2A, 0x2C dynamic
-#     DIDs, 0x2F InputOutputControl, generic 0x31 RoutineControl, 0x34..0x38 transfers (the
-#     bootloader keeps its own 0x31/0x34/0x36/0x37), 0x29 Authentication (the bootloader's only),
-#     0x86 ResponseOnEvent, 0x87 LinkControl, OBD / WWH-OBD services;
+#     DIDs, 0x34..0x38 transfers (the bootloader keeps its own
+#     0x31/0x34/0x36/0x37), 0x29 sub-functions other than 00, 05 and 06 (no APCE, no
+#     authenticationConfiguration, no bidirectional ACR), 0x86 ResponseOnEvent,
+#     0x87 LinkControl, OBD / WWH-OBD services;
+#   * 0x2F with a controlEnableMask (a signal of more than one field), a control of a signal whose
+#     database names values outside its range or whose scaling leaves a whole value between raw
+#     steps, and a functionally addressed 0x2F (REQ-DIAG-107);
 #   * 0x11 subfunctions other than hardReset (01) and softReset (03); 0x19 subfunctions other
 #     than 01, 02, 03, 04, 06 and 0A; 0x28 communication types other than normal messages;
-#   * no busyRepeatRequest (0x21): a request that arrives while an answer is in flight is
-#     dropped (REQ-DIAG-037); no responsePending (0x78) in an application (REQ-DIAG-062);
+#   * no busyRepeatRequest (0x21): a request that arrives while an answer is in flight, or while
+#     a routine's answer is owed, is dropped (REQ-DIAG-037, REQ-DIAG-084); responsePending (0x78)
+#     only while a routine's answer is owed (REQ-DIAG-083);
 #   * no memorySelection byte on 0x14 (a 4-byte request only); no power-up delay on 0x27 (the
-#     failed-key count surviving a reset, REQ-DIAG-033, does that job);
+#     failed-key count surviving a reset and a power cycle, REQ-DIAG-033 and REQ-DIAG-065, does
+#     that job);
 #   * one diagnostic server per node, whichever transport a request arrives on.
 #
 # Status: a requirement whose linked verifications all pass is `agreed` (gated by
@@ -46,7 +52,7 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-DIAG-004"
 title = "Negative-response order"
-text = "The server shall evaluate a request in the ISO 14229-1 order — service supported, service allowed in the active session, the service's security level, then the service's own checks in the order ISO 14229-1 gives for it (minimum length, subfunction supported, subfunction allowed in the active session and behind its level, exact length, conditions, range) — and answer the first check that fails with its negative response code."
+text = "The server shall evaluate a request in the ISO 14229-1 order — service supported, service allowed in the active session, the service's security level, then the service's own checks in the order ISO 14229-1 gives for it (minimum length, subfunction supported, subfunction allowed in the active session and behind its level, exact length, then its conditions and range checks in the order that service takes them) — and answer the first check that fails with its negative response code."
 status = "agreed"
 method = "test"
 asil = "QM"
@@ -91,7 +97,7 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-DIAG-062"
 title = "A request's own write never erases"
-text = "The write a request makes durable before its answer — a parameter's 0x2E, a 0x14 clear — shall append its own records and, when the journal sector is full, at most copy the live set into the already-erased partner sector, never erase one; a write that would need an erase shall be refused with generalProgrammingFailure (0x72) instead. The application server computes the answer in the pass that served the request and sends no responsePending (0x78)."
+text = "The write a request makes durable before its answer — a parameter's 0x2E, a 0x14 clear — shall append its own records and, when the journal sector is full, at most copy the live set into the already-erased partner sector, never erase one; a write that would need an erase shall be refused with generalProgrammingFailure (0x72) instead. The application server answers such a write in the pass that served it, never with responsePending (0x78)."
 status = "agreed"
 method = "test"
 asil = "QM"
@@ -100,7 +106,7 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-DIAG-064"
 title = "Response within P2"
-text = "On a target the application server shall send its answer within P2server_max (50 ms) of the request's last frame, a parameter write that copies the live set included."
+text = "On a target the application server shall send its answer — a routine's responsePending (REQ-DIAG-083) included — within P2server_max (50 ms) of the request's last frame, a parameter write that copies the live set included."
 status = "draft"   # a bench measurement, not yet run (the in-sleep flush no longer erases, REQ-NVM-015)
 method = "test"
 asil = "QM"
@@ -256,6 +262,80 @@ method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
 
+# ---- Input/output control --------------------------------------------------------------------
+
+[[req]]
+id = "REQ-DIAG-100"
+title = "Input/output control served per configuration"
+text = "The server shall serve InputOutputControlByIdentifier (0x2F), whichever transport carries the request, for exactly the data identifiers whose configuration declares a control of a live signal, each only in its control's sessions (requestOutOfRange 0x31 outside them; the service itself is not served in the default session, 0x7F) and behind the security level its control or the service's table row names (securityAccessDenied 0x33 while locked), accepting returnControlToECU (00) for every control whatever its configured parameters (while a routine's answer is owed it is dropped like every request, REQ-DIAG-084) and resetToDefault (01), freezeCurrentState (02) and shortTermAdjustment (03) only where configured; a node that declares no control shall answer 0x2F serviceNotSupported (0x11)."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-101"
+title = "Input/output control negative-response order"
+text = "After its service row (REQ-DIAG-020), the server shall check an InputOutputControlByIdentifier request in this order and answer the first check that fails: shorter than four bytes, incorrectMessageLengthOrInvalidFormat (0x13); a data identifier without a control, or outside its control's sessions, requestOutOfRange (0x31); the control's security level not unlocked, securityAccessDenied (0x33); a length other than four bytes for returnControlToECU, resetToDefault or freezeCurrentState, or four plus the value's width for shortTermAdjustment, 0x13, whether or not the data identifier accepts that parameter, so no controlEnableMask is accepted; a control parameter above shortTermAdjustment, or one the data identifier does not accept, 0x31; a controlState outside the signal's range, 0x31; the application's refusal, conditionsNotCorrect (0x22)."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-102"
+title = "Input/output control parameters"
+text = "For an accepted request the server shall publish, in place of the function block's value of the controlled signal: for shortTermAdjustment the controlState; for freezeCurrentState the value published at that moment (a value already under control stays; otherwise the function block's current value held to the signal's range, or the signal's initial value (REQ-COM-011) while the function block has not published it); for resetToDefault the signal's initial value; and for returnControlToECU what the node publishes with no control (REQ-DIAG-105). The positive response shall carry 0x6F, the data identifier, the control parameter and the value published from then on, big-endian at the signal's width as a live data identifier reads it."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-103"
+title = "Override at publication"
+text = "A value under control shall replace the controlled signal's value where the node encodes the signal into its frame, on the thread that serves the diagnostic server; the function blocks shall keep running and writing the signal unchanged and never see the value under control. While a control is active the frame shall carry its value whether or not the function block has published the signal; every live data identifier of a controlled signal shall read the value published — under control its value, otherwise the function block's held to the signal's range as the encoder sends it, and the initial value before the function block's first publish; and a value under control shall be inside the signal's range and on its database's scaling grid, so it is never saturated, rounded nor counted as a saturated sent value."
+status = "agreed"   # on-bus evidence: the bench review the lead records (ioctl_domain.lua), not tagged
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-104"
+title = "A control the server cannot apply is refused at generation"
+text = "Generation shall refuse, naming the reason: a control on a node with no diagnostic connection; on a data identifier without a live signal; on a signal the node does not send on a CAN bus from a function block (one it receives or routes, or keeps inside the node; one written to an I/O point or sent on an Ethernet bus, whose live data identifier is refused already by the single-reader rule), or, on the host, sends on another bus than the diagnostic connection's, since another thread publishes it; on a signal of more than one field or with a value wider than 32 bits; on a signal whose database names a value outside its range; on a signal whose database scaling leaves a whole value of its field inside its range between two raw steps, or whose range ends, inside its field's values, at a value that is not one of them (a value under control or a saturated function-block value would then go out as another than the server states); on a signal whose initial value is not a value of its field; a second control of one signal, or more controls than the server holds; a control naming the default or the programming session; a control whose sessions share none with the service's (default or configured) table row, or whose security level differs from the row's; a control weaker than the data identifier's read gate (a session the read does not allow, or a level other than the read's); and a control whose service-table row is missing."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-105"
+title = "Control returned to the ECU"
+text = "The server shall return every control to the ECU on a return to the default session (DiagnosticSessionControl or S3) and on an ECU reset; on any other session entry, re-entry included, it shall return each control that needs a security level (the entry relocks, REQ-DIAG-023) or whose sessions leave out the new session; and when the level a control needs is relocked without a session entry (another level unlocked by 0x27 or 0x29, the level deauthenticated by 0x29 00, or the network tester that held the level disconnected), it shall return that control. From then on the node publishes the signal as it does with no control: the function block's value, and while the function block has not published it, what the node sends then — on a target the frame at its initial payload, on the host bridge the frame only once another of its signals is published (with this one at its initial value)."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-106"
+title = "Application refusal of a control"
+text = "On a target, the application shall be able to refuse a resetToDefault, freezeCurrentState or shortTermAdjustment request by overriding the board's weak diag_io_ok, which the server then answers with conditionsNotCorrect (0x22) with nothing changed; a returnControlToECU shall never be put to the application, so never refused by it, and an application that states no conditions — and the host bridge, which has no such hook — accepts every request."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-107"
+title = "Input/output control is physical only"
+text = "A functionally addressed InputOutputControlByIdentifier request shall be neither answered nor acted on; like any request it keeps the session alive (S3)."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
 # ---- Security access -------------------------------------------------------------------------
 
 [[req]]
@@ -270,7 +350,7 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-DIAG-032"
 title = "Wrong keys and lockout"
-text = "A wrong key shall be refused with invalidKey (0x35); the configured number of wrong keys for a level shall be refused with exceededNumberOfAttempts (0x36) and start the lockout delay, during which a seed request is refused with requiredTimeDelayNotExpired (0x37); wrong keys shall be counted per level."
+text = "A wrong key shall be refused with invalidKey (0x35); the configured number of wrong keys for a level shall be refused with exceededNumberOfAttempts (0x36) and start that level's lockout delay, during which a seed request of that level, and a key answering a seed of that level issued before the lockout began (over another transport), is refused with requiredTimeDelayNotExpired (0x37) — the key not judged, nothing counted and the seed spent; wrong keys and the delay shall be per level, so a level's lockout delays no other level's seed."
 status = "agreed"
 method = "test"
 asil = "QM"
@@ -279,7 +359,43 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-DIAG-033"
 title = "Wrong keys survive a reset"
-text = "The count of wrong keys, and a lockout in progress, shall be kept across an ECU reset, so that a reset grants no fresh attempts."
+text = "The count of wrong keys shall be kept across an ECU reset, so that a reset grants no attempts beyond the configured limit per lockout delay: a reset after a wrong key of a level counted since that level's last correct key shall cost the full lockout delay, a count below the limit shall carry over as it is, and after the delay of a count at the limit the level shall have its attempts again, as after a start-up restoring that count. On a target the count is kept in the persistence journal (REQ-DIAG-065), and the flush before the reset retries a write the journal refused, and may erase the sector a compaction left behind to take the count across the reset; a journal that refuses every write (it failed to mount, or holds more blocks than this firmware pools) keeps the count in RAM only, as it keeps no fault memory or coding."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-065"
+title = "Wrong keys survive a power cycle"
+text = "On a target, each level's count of wrong keys since its last correct key shall be kept in the persistence journal across a power cycle and any reset, and restored before the first request is served: a stored count below the configured attempts shall carry over and cost the lockout delay as after an ECU reset; a count at or above them shall cost the full lockout delay from start-up, after which the level has its attempts again as after any lockout, so that while the journal takes the state no reset or power cycle grants more than the configured attempts per lockout delay; such a count stays stored, costing the delay at every start-up, until a correct key of that level. The delay is that level's: it refuses that level's seed request (0x37), not another level's. A stored count of a level the firmware does not serve shall cost no delay, not be restored, and be dropped from the journal by the first write after the start-up. A start-up with nothing counted, or with a stored record of another layout, shall impose no delay."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-066"
+title = "SecurityAccess or Authentication on a target declares its storage"
+text = "Generation shall refuse a target node that performs SecurityAccess or Authentication — a security level named by a data identifier's gate or control, by a service table row or by the programming handoff row — without a persistence journal, naming the reason; the host bridge, which has no power cycle, keeps the count in RAM."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-067"
+title = "The SecurityAccess state is written only when it changes"
+text = "The persisted SecurityAccess state shall be written only when it changes — a wrong key of a level whose count is below the configured attempts (the count raised), and a correct key of a level with a count (the count cleared) — and never by a correct key with nothing counted, a wrong key at the limit, a lockout's end, a start-up or an ECU reset, so that no flush before an ECU reset or the programming handoff is needed to keep it current. Each change shall be written before the answer that reports it is sent on CAN, by one append that never erases (REQ-DIAG-062). A write the journal refuses shall change no answer of the server, and shall be retried after the system write floor and at once by every flush until the journal holds the state; a journal another writer filled holds the changes in RAM until the flush before an ECU reset or, with NM, a sleep edge erases it, and a power cut or a reset the server did not perform meanwhile restores the state last written."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-068"
+title = "Wrong keys write the journal a bounded number of times"
+text = "The persisted SecurityAccess state shall be written at most the configured attempts times per level between two correct keys of that level, plus once by a correct key that follows a wrong one, however many wrong keys a tester sends and however often the ECU is reset or powered off, so that a tester without the key writes at most the configured attempts records per level until an authorised unlock and can neither fill the persistence journal for its other writers (generation refuses a sector that cannot hold those writes beside the live set and its rewrite) nor wear it beyond what the wear check proved (REQ-NVM-010); no write budget is needed, and retrying a write the journal refused is not a further write."
 status = "agreed"
 method = "test"
 asil = "QM"
@@ -610,6 +726,154 @@ derives = "SYS-REQ-DIAG-001"
 id = "REQ-DIAG-061"
 title = "Parameters restored before any FB runs"
 text = "Every parameter shall be restored before any FB dispatches."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+# ---- Routines (RoutineControl, run by an FB) -------------------------------------------------
+
+[[req]]
+id = "REQ-DIAG-080"
+title = "RoutineControl per configured routine"
+text = "An application server shall serve RoutineControl (0x31) for each routine its node configures — startRoutine (01) always, stopRoutine (02) and requestRoutineResults (03) where the routine offers them — and refuse, in this order: a request shorter than 2 bytes 0x13; a sub-function other than 01, 02 or 03 0x12; a request shorter than 4 bytes 0x13; a routine not configured, or not allowed in the active session, 0x31; its 0x27 level not unlocked 0x33; a sub-function the routine does not offer 0x12; a length other than its declared option record's 0x13; a start while the routine runs (a stop its FB refused leaving it running), a stop while it does not, or results unless the latest start was answered positively (since the server's last reset) 0x24. requestRoutineResults shall answer from the FB's latest report. A functionally addressed 0x31 shall be ignored, unanswered and unperformed."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-081"
+title = "A routine runs in its FB, through two cells"
+text = "A routine shall run in the FB handler that reads its request and writes its result, on that handler's thread, never on the server's: the server shall write each start or stop into the routine's request cell under a fresh sequence number; the handler shall see each operation, with its option record, in exactly one dispatch and in the order the server wrote them — a stop the server wrote before a later start included, in a dispatch before that start's — save that stops written before the handler took the first are seen as one, and a start the server stopped before the handler took it is not handed over; the state and record it writes shall be stamped with the request it answers and stand until it writes another state, a refusal changing neither; and the server shall act on a result only when it answers the latest request, but for requestRoutineResults. So that the order holds for a handler that stops running, a start shall be refused conditionsNotCorrect (0x22) while the handler's last result is 4096 or more requests behind the latest."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-082"
+title = "When a routine is answered"
+text = "A synchronous routine's start shall be answered when its FB reports it done, stopped or failed; an asynchronous routine's once its FB reports any state — each positively, with that state as routineInfo and the routine's start record — or, when the FB refuses it, with the FB's NRC (0x22, 0x24, 0x31 or 0x72; any other as 0x22). A stop shall be answered when the FB reports the routine no longer running. A start or stop not answered within the routine's timeout shall be answered conditionsNotCorrect (0x22) and its FB asked to stop at that moment — unless its answer is ready then (the FB's report in its result cell when the timeout is judged), which is then the answer, sent once the transport that asked can take it. Either answer shall be abandoned when that transport cannot take it within P2*server_max (5 s) after the timeout, a ready answer's FB then asked to stop; a session entry meanwhile answers conditionsNotCorrect (0x22) within the same bound."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-083"
+title = "responsePending while a routine's answer is owed"
+text = "A start or stop the server cannot answer in the pass that serves it shall be answered responsePending (0x78) in that pass, again at most P2*server_max less 1 s (4 s) after each responsePending, and finally with its answer, on the transport the request came over — the final answer sent even when the request set suppressPosRspMsgIndicationBit. On CAN each responsePending is a single frame and a lost one is sent again in the next pass; over DoIP every response after the first is pushed once the one before it has been acknowledged."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-084"
+title = "The server while a routine's answer is owed"
+text = "While a routine's answer is owed the server shall drop every other request unanswered and unperformed — physical or functional, on CAN or over DoIP, TesterPresent and a returnControlToECU (0x2F 00) included, so a control in force stays in force until the answer is given or abandoned — without moving the answer to the transport the dropped request came over; shall not let S3 run (nor while a pushed answer awaits its acknowledgement, unless the server has abandoned that answer); and shall hold the network awake. When the DoIP connection that asked drops, the answer owed to it shall be abandoned and the routine's FB asked to stop."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-085"
+title = "A routine does not outlive its session or its security level"
+text = "Every session entry — a DiagnosticSessionControl (re-entering the active session included), S3, a reset, or a network tester's session ending with its connection — shall ask every running routine's FB to stop; an answer then still owed shall be answered conditionsNotCorrect (0x22) on the transport that asked; and when the security level a routine needs is relocked without a session entry — another level unlocked by 0x27 or 0x29, the level deauthenticated by 0x29 00, or the network tester that held the level disconnected — the server shall ask that routine's FB to stop, as it returns that level's controls (REQ-DIAG-105); the server shall not wait for a stop to be acknowledged before serving the next start."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-086"
+title = "A gateway keeps a routed exchange open through responsePending"
+text = "A DoIP gateway routing a request to a node behind it shall forward each responsePending the node answers to the tester and renew its wait for the next answer by P2*server_max plus 1 s from each, so that the final answer of a routine answered responsePending several times, over longer than one such wait, reaches the tester."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-087"
+title = "A routine is generated only where it can run"
+text = "Generation shall refuse a routine its node cannot serve, naming the reason: no diagnostic server or a bare-metal target; a duplicate routineIdentifier, one outside 0x0200-0xDFFF and 0xF000-0xFEFF, or the bootloader's own on a node behind a bootloader; a stop on a synchronous routine; a results record without results; a record longer than 32 bytes, a request or answer longer than the node's maximum message length, or on a DoIP node a start record over 19 bytes; a gate sharing no session, or another level, with the 0x31 service row, or a table leaving 0x31 out; judged by the sessions the routine and that row both admit and either's level, a routine startable from the default session with no 0x27 level, a level whose sessions leave out extended, or sessions only a DiagnosticSessionControl the service table does not serve from the default session could enter; a timeout not above the serving handler's period plus 20 ms; a request not read by exactly one FB handler or written by any, a result not written by that same handler, written by another or read by any; an FB on a satellite core, a hand-written satellite or in a multi-thread partition; a request or result name colliding, once snake-cased as its port, with a signal, parameter or routine; more routines than the server holds, or more byte cells than the image has."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+# ---- Authentication (0x29) in an application -------------------------------------------------
+
+[[req]]
+id = "REQ-DIAG-120"
+title = "One way to unlock per node"
+text = "A server shall unlock its security levels by exactly one configured access method, SecurityAccess (0x27, the default) or Authentication (0x29), and shall answer the other service serviceNotSupported (0x11). Both methods shall unlock the same levels — the ones the data identifier gates, the service table rows and the programming handoff row name — and an unlock earned by either shall be relocked by the same events. Generation shall refuse a service table row naming the other method's service, the other method's settings, and Authentication on a node whose gates name no security level."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-121"
+title = "Authentication challenge"
+text = "A requestChallengeForAuthentication (0x29 05) naming a served level in communicationConfiguration and the Ed25519 algorithmIndicator shall be answered with a fresh 32-byte challenge from the injected seed source: requestAccepted, the algorithmIndicator echoed, length 0x0020, no additional parameter. The challenge shall be bound to that level and replace any challenge outstanding on that transport. A challenge for a level under lockout, or while a start-up or reset delay is armed, shall be refused 0x37; a seed source that fails or draws all zeros shall be refused challengeCalculationFailed (0x59). A functionally addressed Authentication request shall be ignored. Authentication shall not be served in the default session — a project choice, since ISO 14229-1 allows it there: every session entry relocks — and generation shall refuse a service table row opening it there, naming that choice."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-122"
+title = "Proof of ownership"
+text = "A verifyProofOfOwnershipUnidirectional (0x29 06) shall unlock the level bound to the outstanding challenge only for an Ed25519 signature that verifies under that level's public key over the application message — the fixed context \"blobly uds 0x29 application v1\" with a terminating zero byte, the level (one byte), then that challenge — never over the bare challenge the bootloader's proof signs, so neither a bootloader's proof nor one made for another level unlocks it; answered — after its responsePending (REQ-DIAG-127), whatever the suppress bit — ownershipVerified (0x12) with the Ed25519 algorithmIndicator and a zero lengthOfSessionKeyInfo, ISO 14229-1:2020's layout. The unlock shall belong to the transport the proof came over (REQ-NET-012). Each challenge shall serve one proof and be consumed by a failed one. A proof with no challenge outstanding shall be refused 0x24. A session entry (re-entering the same session included), S3, an ECU reset, deAuthenticate and the end of the transport connection that asked shall void the challenge, and a challenge asked over one transport shall not be answerable over another."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-123"
+title = "Failed proofs count as wrong keys"
+text = "A failed proof shall be refused ownershipVerificationFailed (0x58), and the one that reaches the attempt limit 0x36, starting that level's lockout. Failed proofs shall be counted in the same per-level count as wrong 0x27 keys, so REQ-DIAG-032, REQ-DIAG-033, REQ-DIAG-065, REQ-DIAG-067 and REQ-DIAG-068 hold for proofs unchanged, and a correct proof shall clear the count."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-124"
+title = "DeAuthenticate"
+text = "A deAuthenticate (0x29 00) shall relock the level the requesting transport holds — returning the controls and stopping the routines gated on it (REQ-DIAG-105, REQ-DIAG-085) —, void its challenge, and be answered deAuthenticationSuccessful (0x10) unless suppressed. An unlock held over the other transport shall be unaffected (REQ-NET-012)."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-125"
+title = "Authentication request checks in order"
+text = "An Authentication request shall be checked in this order: shorter than 2 bytes 0x13; a sub-function other than 00, 05 and 06 0x12; not that sub-function's exact length, or — for a proof — a lengthOfProofOfOwnershipClient other than 0x0040, a client challenge or an additional parameter, 0x13. A challenge request: an algorithm other than Ed25519, or a level that is 0, above 8, not served or without a key in the injected key interface, 0x31; then the lockout 0x37, then the response capacity 0x14 (drawing nothing and keeping an outstanding challenge), then the seed source 0x59 (voiding an outstanding challenge). A proof: a missing challenge 0x24, then an algorithm other than Ed25519 0x31 (keeping the challenge), then the lockout of the challenge's level 0x37 (one drawn before the lockout began, over another transport: the challenge voided, the proof neither verified nor counted), then the response capacity 0x14 (keeping the challenge), then responsePending and the verification 0x58 or 0x36."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-126"
+title = "Authentication keys per level"
+text = "Each served level shall be verified against exactly one configured 32-byte Ed25519 public key, through an injected interface. Generation shall refuse a served level with no key, a key for an ungated level, a key that is not 64 hex characters, is all zeros, is not a curve point or is a point of small order (under which a forged proof verifies for every challenge), and a key equal to the bootloader's image key. \"reference\" names blobly_net's published dev tester key — and so does that key written out as its hex digits, in either case — which a network-reachable node shall accept only where the bench key is allowed by name (REQ-NET-012)."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-127"
+title = "A proof is verified without stalling the pass"
+text = "A proof that passes the request checks shall be answered responsePending (0x78) in the pass that receives it, and its verification shall then run a bounded slice per pass while its answer is owed — every other request dropped and S3 held meanwhile, a responsePending repeated within P2*server_max — so no pass spends a whole verification; the slices shall advance whether or not the transport owing the answer can take a response, so a busy transport delays only the answer. A failed proof shall be counted, and a verified proof shall clear its level's count, in the pass that reaches its verdict, and a proof whose verdict changed the count shall be answered in a later pass, so the count is persisted before the answer reporting it leaves (REQ-DIAG-067); a verified proof's cleared count shall stand whatever becomes of its answer, and it shall unlock its level only with its answer, so no level is unlocked whose ownershipVerified was not given. A verification given up before its verdict — its timeout, answered conditionsNotCorrect (0x22) in a later pass than the one counting it, or its transport connection ended — shall count as a failed proof; a session entry during verification — which only the other transport can cause, its tester's connection ending while it owns the session or its answered ECU reset — shall end it answered conditionsNotCorrect (0x22) and not counted, its tester having been judged nothing; a restart of the ECU during verification ends it with no verdict and no answer. A verified proof shall unlock its level only where the transport owing the answer can carry ownershipVerified; where it cannot, the answer shall be responseTooLong (0x14), with nothing unlocked."
 status = "agreed"
 method = "test"
 asil = "QM"

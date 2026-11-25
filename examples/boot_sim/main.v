@@ -23,6 +23,10 @@ const app_base = u32(0x0802_0000)
 const app_size = u32(0x0001_0000)
 const req_id = u32(0x7B0)
 const rsp_id = u32(0x7B8)
+// the ids' format: 11-bit, as a bootloader built with BOOT_EXT 0 serves them. A frame is this
+// connection's only on req_id in that format (REQ-CAN-TP-042), as diag.serve_step takes it, and
+// every frame goes out in it
+const ids_ext = false
 const flash_file = 'bin/flash.bin'
 
 struct FileFlash {
@@ -67,6 +71,12 @@ fn sim_rng(out &u8, n int) bool {
 	return true
 }
 
+// is_request: a frame of this connection's physical request id, in its format, at a length a
+// controller delivers — anything else is left alone, as the bootloader leaves it
+fn is_request(id u32, ext bool, len u8) bool {
+	return id == req_id && ext == ids_ext && len >= 1 && len <= can.max_dlc
+}
+
 fn main() {
 	iface := if os.args.len > 1 { os.args[1] } else { 'vcan0' }
 	os.mkdir_all('bin') or {}
@@ -101,7 +111,9 @@ fn main() {
 		app_base: app_base
 		app_size: app_size
 	}
-	p.init() // seed + default session — no field defaults (the _vinit rule)
+	// default session — no field defaults (the _vinit rule); a config-less sim's connection carries
+	// the default maximum message, so its blocks are 512 bytes
+	p.init(isotp.default_message)
 	p.image_key = [u8(0x03), 0xa1, 0x07, 0xbf, 0xf3, 0xce, 0x10, 0xbe, 0x1d, 0x70, 0xdd, 0x18, 0xe7, 0x4b, 0xc0, 0x99, 0x67, 0xe4, 0xd6, 0x30, 0x9b, 0xa5, 0x0d, 0x5f, 0x1d, 0xdc, 0x86, 0x64, 0x12, 0x55, 0x31, 0xb8]! // release key (examples/keys/mkimage.seed)
 	p.session_key = [u8(0x29), 0xac, 0xba, 0xe1, 0x41, 0xbc, 0xca, 0xf0, 0xb2, 0x2e, 0x1a, 0x94, 0xd3, 0x4d, 0x0b, 0xc7, 0x36, 0x1e, 0x52, 0x6d, 0x0b, 0xfe, 0x12, 0xc8, 0x97, 0x94, 0xbc, 0x93, 0x22, 0x96, 0x6d, 0xd7]! // tester key (examples/keys/tester.seed)
 	p.rng = sim_rng // 0x29 challenge source
@@ -124,17 +136,21 @@ fn main() {
 
 	mut link := isotp.Link{}
 	link.init_defaults()
-	mut req := [isotp.max_payload]u8{}
-	mut rsp := [isotp.max_payload]u8{}
+	mut req := [isotp.default_message]u8{}
+	mut rsp := [isotp.default_message]u8{}
+	link.bind_rx(&req[0], req.len)
+	link.bind_tx(&rsp[0], rsp.len)
 	for {
 		now := u64(time.sys_mono_now() / 1000)
 		mut f := can.Frame{}
 		for ch.recv(mut f) {
-			if f.id != req_id {
-				continue
+			if !is_request(f.id, f.ext, f.len) {
+				continue // another id or format, or no frame a controller delivers
 			}
-			mut pdu := isotp.Pdu{}
-			for i in 0 .. 8 {
+			mut pdu := isotp.Pdu{
+				len: int(f.len) // the link reads only the bytes that arrived
+			}
+			for i in 0 .. int(f.len) {
 				pdu.data[i] = f.data[i]
 			}
 			link.on_frame(now, pdu)
@@ -153,9 +169,10 @@ fn main() {
 		for ch.tx_ready() && link.poll(now, mut out) {
 			mut tf := can.Frame{
 				id:  rsp_id
-				len: 8
+				len: u8(out.len) // 8: the channel is classic, the link's TX_DL 8
+				ext: ids_ext
 			}
-			for i in 0 .. 8 {
+			for i in 0 .. out.len {
 				tf.data[i] = out.data[i]
 			}
 			ch.send(tf)

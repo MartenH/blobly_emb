@@ -1,6 +1,6 @@
 -- @project diag_bench.blobnet
 -- The programming handoff and the field update on the target (docs/bootloader.md P3 and "The DoIP
--- binding", docs/diagnostics.md R2): each system_full node runs behind its bootloader ([boot]), and
+-- binding", docs/diagnostics.md §3.1): each system_full node runs behind its bootloader ([boot]), and
 -- its application's 0x10 02 hands the ECU over — answered 50 02, then the boot request cell and the
 -- reset — to a boot manager that answers on the SAME ids and bus, already in the programming session
 -- it was promised. A [doip] node's bootloader is its DoIP entity too: asked over DoIP, the tester's
@@ -25,8 +25,10 @@ local all = {
   { name = "domain", bus = "compute", req = 0x7B0, rsp = 0x7B8, ident = "BLOBLY-DOMAIN-H755" },
   -- a [doip] node: its "0x10 02" row needs level 1 (REQ-NET-012), earned here over CAN
   { name = "sysnode", bus = "compute", req = 0x7A0, rsp = 0x7A8, ident = "BLOBLYSYSNODEH735", level = 1 },
-  -- the CAN-FD edge bus, classic-sized ISO-TP: the boot opens it in FD as the application does
-  { name = "zone_a", bus = "edge", req = 0x7C0, rsp = 0x7C8, ident = "BLOBLY-ZONE_A-H723" },
+  -- the CAN-FD edge bus: the boot opens it in FD as the application does, and answers at the
+  -- node's TX_DL 64 ([isotp] tx_dl) as the application does
+  -- its [isotp] max_message is 4095, so its bootloader takes 4064 bytes of data per block (REQ-BOOT-020)
+  { name = "zone_a", bus = "edge", req = 0x7C0, rsp = 0x7C8, ident = "BLOBLY-ZONE_A-H723", block = 4064, tx_dl = 64 },
   -- sysnode's bootloader over DoIP (diag_bench.blobnet's sysnode_ip): the handoff needs this network
   -- tester's own level 1 (REQ-NET-012), and the session it opens is the network's
   { name = "sysnode-doip", node = "sysnode", doip = "sysnode_ip", ident = "BLOBLYSYSNODEH735", level = 1 },
@@ -112,9 +114,29 @@ local function handoff(n)
     check.equal(d:read_did(0xF190), n.ident, "the boot answers the VIN its DoIP entity announces")
   end
   -- the session survives the handoff: 0x29 at once, no second 0x10 02
+  if n.bus then
+    -- this script's handle reads the bus from here: nothing an earlier answer left queued
+    for _ = 1, 100000 do
+      if not bus.recv(n.bus, 0) then break end
+    end
+  end
   local ch = d:raw("\x29\x01")
   check.equal(tohex(ch:sub(1, 2)), "69 01")
   check.equal(#ch, 34, "a 32-byte challenge")
+  if n.bus then
+    -- on the wire the bootloader answers at the node's TX_DL ([isotp] tx_dl, BOOT_TX_DL;
+    -- REQ-CAN-TP-026): at 64 the 34 bytes behind the escape in one 48-byte frame, at 8 a first frame
+    local f = expect(n.bus, n.rsp, 1000)
+    local dl = n.tx_dl or 8
+    if dl > 8 then
+      check.equal(#f.data, 48, "the challenge behind the escape: one 48-byte frame at TX_DL " .. dl)
+      check.equal(f.data:byte(1), 0x00, "the escape")
+    else
+      check.equal(#f.data, 8, "the challenge's first frame: 8 bytes at TX_DL 8")
+      check.equal(f.data:byte(1), 0x10, "a first frame")
+    end
+    check.equal(f.data:byte(2), 34, "the length, in the second byte")
+  end
   return d
 end
 
@@ -144,6 +166,10 @@ for _, n in ipairs(nodes) do
       local r = flash.program(d, { image = "../nodes/" .. node .. "/build/" .. node .. ".img" })
       check.equal(r.auth, "authenticated", "the boot required the 0x29 proof")
       check.truthy(r.wrapped, "the signed container went as it is")
+      -- the blocks the boot advertised: its connection's maximum message, in whole flash words
+      -- (512 bytes of data at the default 520, REQ-BOOT-020)
+      local block = n.block or 512
+      check.equal(r.blocks, math.floor((r.bytes + block - 1) / block), "TransferData blocks of " .. block .. " bytes")
       app_back(d, n)
       check.equal(be32(d:read_did(0xF195)), want_ver, "the image-version DID is the flashed image's")
     end)

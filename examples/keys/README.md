@@ -15,6 +15,10 @@ Public keys baked into the boot manager (a node's `[boot]` `image_key` / `sessio
     image_key   = 03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8
     session_key = 29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7
 
+The tester public key is also what an application's `[uds] auth_keys = { "<level>" = "reference" }`
+trusts (0x29 Authentication in an application, docs/diagnostics.md §3.1): one dev key signs a
+bootloader session and an application unlock alike.
+
 Production: generate your own, keep **both private seeds off every ECU**. The
 release seed lives only in a signing service / HSM; the tester seed lives with
 the technician (ideally a smartcard / per-technician PKI, not a shared file).

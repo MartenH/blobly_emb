@@ -2,9 +2,11 @@ module main
 
 // @verifies REQ-DIAG-012 REQ-DIAG-047 REQ-NVM-015
 import os
+import comm.fault
+import comm.uds
 import tools.sysmodel
 
-// Faults on a ThreadX target (docs/diagnostics.md R6): the fault memory on the comm thread, each
+// Faults on a ThreadX target (docs/diagnostics.md §3.3): the fault memory on the comm thread, each
 // fault-owning FB's report and control cells on the byte IOC, the operation cycle from NM (D3) or
 // the power cycle — and what stays refused. Runs the real generator on testdata/threadx_node with
 // its FBs on one thread and a connection and faults appended (a refusal is a panic, which cannot be
@@ -195,6 +197,13 @@ fn test_the_power_cycle_begins_with_the_comm_thread() {
 	assert o2.contains('needs an operation cycle: [nm]'), o2
 }
 
+// boot_fn: the generated boot() — mount, prune, restore, up to the kernel start — as one string
+// (diag_target_test.v has its own: each test file is its own program).
+fn boot_fn(glue string) string {
+	at := glue.index('pub fn boot() {') or { return '' }
+	return glue[at..].all_before('\n}\n')
+}
+
 // The fault memory on the target is persisted (R6b): wired to the journal and restored from it
 // before the power cycle begins, written every pass after the cycle's step, flushed with the
 // persisted signals at every quiet point (the ECUReset included, after the latest reports and
@@ -217,7 +226,7 @@ fn test_the_fault_memory_is_persisted_in_the_journal() {
 		'g_fmem.consume(0, g_frep_load_slow.r[0])', 'if g_fmem.capture_due() {', 'g_diag.refresh_now()',
 		'g_fmem.capture(&g_diag.server)', 'g_fmem.persist(t1, false)',
 		'if g_diag.reset_due() != 0 {', 'g_fmem.consume(0, g_frep_load_slow.r[0])',
-		'if !g_fmem.persist(t1, true) {', 'C.diag_sys_reset()', 'fn fmem_put(_ voidptr, id u16, data &u8, len u16) bool {',
+		'if !g_fmem.persist(t1, true) {', 'C.diag_sys_reset()', 'fn nvm_store_put(_ voidptr, id u16, data &u8, len u16) bool {',
 		'return g_nvm.put(id, data, len)', 'pub fn boot() {', 'if g_nvm.mounted {',
 		'keep := [', '/* the fault memory status */', 'g_nvm.prune(&keep[0], 3)',
 		'g_nvm.erase_pending() // the boot quiet point (no NM)',
@@ -227,11 +236,13 @@ fn test_the_fault_memory_is_persisted_in_the_journal() {
 	run := glue.all_after('fn comm_thread_entry').all_before('if g_diag.reset_due() != 0 {')
 	assert !run.contains('erase_pending()'), 'an erase at run time'
 	assert mk.contains(r'$(REPO)/boards/common/nvm_map.c $(BOARD_FLASH)'), mk
+	assert !glue.contains('fmem_put'), 'the fault memory has a store seam of its own again'
 	// with NM: no erase at boot (the sleep edges are the quiet points), and a write made in bus
 	// sleep re-lays the clean marker through the whole choreography
 	c2, o2, g2, _ := ft_generate('persist_nm', same, ft_conn + ft_fault)
 	assert c2 == 0, o2
-	assert !g2.contains('g_nvm.erase_pending() // the boot quiet point')
+	assert boot_fn(glue).contains('erase_pending()'), 'boot_fn found no erase in a node without NM'
+	assert !boot_fn(g2).contains('erase_pending'), 'an NM node erases at boot:\n${boot_fn(g2)}'
 	assert !g2.contains('g_fmem.refused && g_nvm.pending_erase'), 'an NM node erased outside its sleep edges'
 	in_order(g2, ['if g_fmem.ending { // woken inside the grace', 'g_fmem.consume(0, g_frep_load_slow.r[0])',
 		'g_fmem.cycle_start()', 'g_fmem.end_cycle_after(t1, u64(200000)) // the cycle-end barrier',
@@ -257,7 +268,7 @@ fn test_the_fault_memory_is_persisted_in_the_journal() {
 }
 
 // A snapshot names this node's DIDs, at most max_freeze of them, each readable wherever 0x19 is —
-// never a side door around a DID's gate (docs/diagnostics.md §7) — and the entries are bounded.
+// never a side door around a DID's gate (docs/diagnostics.md §6) — and the entries are bounded.
 fn test_snapshot_declarations_are_checked() {
 	did := '[[did]]\nid    = 0xF190\nascii = "BLOBLY"\n[[did]]\nid    = 0xF191\nascii = "X"\nread  = { session = ["extended"] }\n[[did]]\nid    = 0xF193\nascii = "Y"\nread  = { security = 1 }\n'
 	cases := {
@@ -281,6 +292,17 @@ fn test_snapshot_declarations_are_checked() {
 		code, out, _, _ := ft_generate('entries_${entries}', same, ft_conn + did + ft_fault.replace('fail = 3, pass = 3 }',
 			'fail = 3, pass = 3 }\nfreeze = [0xF190]') + '\n[fault_memory]\nentries = ${entries}\n')
 		assert code != 0 && out.contains(msg), out
+	}
+	// judged on the gate 0x22 enforces: a level or a session its row adds is the DID's too
+	for name, c in {
+		'row_locked': ['"0x22" = { security = 1 }', 'which 0x19 does not demand']
+		'row_narrow': ['"0x22" = { sessions = ["extended"] }', 'is not readable in every session 0x19 is served in']
+	} {
+		table := '\n[uds.services]\n"0x10" = {}\n"0x19" = {}\n"0x27" = {}\n${c[0]}\n"0x3E" = {}\n'
+		rc, ro, _, _ := ft_generate('snap_${name}', same, ft_conn + did + ft_fault.replace('fail = 3, pass = 3 }',
+			'fail = 3, pass = 3 }\nfreeze = [0xF190]') + table)
+		assert rc != 0, '${name}: accepted'
+		assert ro.contains(c[1]), '${name}: ${ro}'
 	}
 	code, out, _, _ := ft_generate('entries_nosnap', same, ft_conn + ft_fault + '\n[fault_memory]\nentries = 1\n')
 	assert code != 0 && out.contains('no [[fault]] declares a snapshot'), out
@@ -505,4 +527,63 @@ fn test_the_journal_budget_holds_every_snapshot_whole() {
 	c2, o2, _, _ := ft_generate('budget_ok', same, cfg.replace('sector_records = 40', 'sector_records = 42') +
 		'endurance = 10000000\n\n[nvm.assume]\ncycles_per_day = 1\nresets_per_day = 0\nclears_per_day = 0\nsetting_changes_per_day = 0\n')
 	assert c2 == 0, o2
+}
+
+// @verifies REQ-CAN-TP-022
+// the maximum message must hold what the configuration determines the server exchanges whole: here
+// the fault's snapshot answer (0x19 04: the DTC header, the record number, the DID count, F190's
+// identifier and its 6 bytes = 16) — one byte short is refused naming it, the exact length generates
+fn test_a_maximum_message_short_of_a_snapshot_answer_is_refused() {
+	no_nm := fn (src string) string {
+		at := src.index('[nm]') or { panic('no [nm]') }
+		end := src.index_after('\n\n', at) or { panic('no end of [nm]') }
+		return src[..at] + src[end + 2..]
+	}
+	snap := '[[did]]\nid    = 0xF190\nascii = "BLOBLY"\n' + ft_fault.replace('fail = 3, pass = 3 }',
+		'fail = 3, pass = 3 }\nfreeze   = [0xF190]') + '\n[fault_memory]\ncycle = "power"\n'
+	tx := 'functional_id = 0x7DF'
+	c1, o1, _, _ := ft_generate('mm_short', no_nm, ft_conn.replace(tx, tx + '\nmax_message = 15') + snap)
+	assert c1 != 0, 'loom2v accepted a max_message short of the snapshot answer'
+	assert o1.contains('[isotp] max_message = 15 cannot hold [[fault]] "LoadImplausible"\'s snapshot (0x19 04): 16 bytes'), o1
+	c2, o2, glue, _ := ft_generate('mm_exact', no_nm, ft_conn.replace(tx, tx + '\nmax_message = 16') + snap)
+	assert c2 == 0, o2
+	assert glue.contains('g_diag_req [16]u8') && glue.contains('&g_diag_req[0], &g_diag_resp[0], 16)')
+}
+
+// @verifies REQ-CAN-TP-022
+// the DTC answers the configuration determines bound the maximum too: with one [[fault]] and no
+// snapshot the longest is a DTC's extended data (0x19 06, fault.extended_answer_len), and with three
+// the DTC list (0x19 02 / 0A, uds.dtc_list_len) — one byte short of either is refused naming it, the
+// exact length generates
+fn test_a_maximum_message_short_of_a_dtc_list_or_extended_data_is_refused() {
+	no_nm := fn (src string) string {
+		at := src.index('[nm]') or { panic('no [nm]') }
+		end := src.index_after('\n\n', at) or { panic('no end of [nm]') }
+		return src[..at] + src[end + 2..]
+	}
+	tx := 'functional_id = 0x7DF'
+	cycle := '\n[fault_memory]\ncycle = "power"\n'
+	ext := fault.extended_answer_len()
+	assert ext > uds.dtc_list_len(1), 'one fault: the extended data is the longer'
+	c1, o1, _, _ := ft_generate('mm_ext', no_nm, ft_conn.replace(tx, tx + '\nmax_message = ${ext - 1}') +
+		ft_fault + cycle)
+	assert c1 != 0, 'loom2v accepted a max_message short of the extended data'
+	assert o1.contains("[isotp] max_message = ${ext - 1} cannot hold a DTC's extended data (0x19 06): ${ext} bytes"), o1
+	c2, o2, _, _ := ft_generate('mm_ext_ok', no_nm, ft_conn.replace(tx, tx + '\nmax_message = ${ext}') +
+		ft_fault + cycle)
+	assert c2 == 0, o2
+	// three faults: the list (3 + 4 x 3 = 15) passes the extended data
+	mut three := ft_fault
+	for i, name in ['LoadHigh', 'LoadLow'] {
+		three += '\n[[fault]]\nname     = "${name}"\ndtc      = 0xC4010${i + 1}\nfrom     = "LoadSlow.on_100ms"\ndebounce = { kind = "counter", fail = 3, pass = 3 }\n'
+	}
+	list := uds.dtc_list_len(3)
+	assert list > ext
+	c3, o3, _, _ := ft_generate('mm_list', no_nm, ft_conn.replace(tx, tx + '\nmax_message = ${list - 1}') +
+		three + cycle)
+	assert c3 != 0, 'loom2v accepted a max_message short of the DTC list'
+	assert o3.contains('[isotp] max_message = ${list - 1} cannot hold the DTC list (0x19 02 / 0A) of 3 [[fault]]s: ${list} bytes'), o3
+	c4, o4, _, _ := ft_generate('mm_list_ok', no_nm, ft_conn.replace(tx, tx + '\nmax_message = ${list}') +
+		three + cycle)
+	assert c4 == 0, o4
 }

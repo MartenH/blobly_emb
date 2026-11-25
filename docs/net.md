@@ -109,7 +109,7 @@ programming/diag path is exposed over IP, not after:
 - **State-changing diagnostics need authentication (REQ-NET-012).** Over CAN an
   unauthenticated 0x2E or 0x11 is a physically-present adversary; over IP, reachability
   alone would grant it. Closed for DoIP (the sysnode section below): a `[doip]` node's
-  every state-changing service carries a 0x27 level, and the unlock that level asks for
+  every state-changing service carries a security level (0x27's or 0x29's), and the unlock that level asks for
   is the network tester's own. A routing-activation tester list (`[doip] testers`, below)
   does not close this: it filters claimed source addresses, which are not authenticated.
 
@@ -355,15 +355,21 @@ checker and writer (`tools/doipcfg`) serves loom2v (`[doip]`), syscheck (a node'
 | 0x0005 routing activation | checked in the spec's order: source address (**0x00** unknown source — outside the list, or outside 0x0E00..0x0FFF with no list), activation type (**0x06** unsupported), the socket (**0x02** a different source address on this already-registered socket); else **0x10**, and the registered address may activate again. Every refusal closes the socket after the response, and nothing queued behind it is served | silence |
 | 0x0007 alive check request | answered 0x0008 with the entity's address (the spec sends this request the other way; answered as a liveness probe) | silence |
 | 0x0008 alive check response | accepted, no reply (2-byte payload) | silence |
-| 0x4001 entity status | 0x4002: node type 0x01 (node), or 0x00 (gateway) on a node that routes (`[[doip.route]]`), max sockets 1, open sockets 1, max data size 524 | 0x4002, open sockets 0 or 1 |
+| 0x4001 entity status | 0x4002: node type 0x01 (node), or 0x00 (gateway) on a node that routes (`[[doip.route]]`), max sockets 1, open sockets 1, max data size 4 + the node's `[isotp] max_message` (524 at the default 520) | 0x4002, open sockets 0 or 1 |
 | 0x4003 diagnostic power mode | 0x4004: 0x01 ready | 0x4004 |
 | 0x0001..0x0003 identification | NACK 0x01 | the announcement (0xFF/0x00 version pattern accepted for these only) |
 | 0x8001 diagnostic message | as before (acks 0x8002/0x8003) | silence |
 | anything else | generic NACK 0x01 | silence |
 | a payload length its type does not allow | generic NACK 0x04, and the socket closes | silence |
+| a payload longer than the entity assembles (`doip.msg_len(max_message)` − 8) | generic NACK 0x02 once its header is in; its bytes discarded as they arrive, the socket kept open | silence |
 
-Max data size is the assembly buffer's payload room (532 − 8: one ISO-TP message of 520 bytes and its addresses): a message sized to it fits whether a
-tester reads the field as the payload or the whole message. A malformed UDP request gets silence,
+Max data size is the assembly buffer's payload room (`doip.msg_len(max_message)` − 8: one ISO-TP
+message of the node's maximum length and its addresses, 524 at the default 520): a message sized to
+it fits whether a tester reads the field as the payload or the whole message. The entity's limit,
+its buffers and the mailbox's are all sized by the node's `[isotp] max_message` (REQ-CAN-TP-023); a
+diagnostic message longer than the limit is answered with the generic NACK 0x02 (message too large)
+and discarded as its bytes arrive; the socket stays open, as ISO 13400-2's generic header handler
+has it, so the tester keeps its activation, session and unlocks. A malformed UDP request gets silence,
 never a NACK, as identification always has.
 
 **One TCP_DATA socket** (`max_sockets`, NetX listen backlog 1). So the socket handler's other
@@ -391,8 +397,8 @@ closes the requirement is two rules that already existed, joined by one at gener
   the `[uds] services` `"0x2E"` row (comm/uds checks the row before the DID, so a gated row gates
   every write behind it), and every other service needs a row with `security = N` — or is left
   out of the table. The rule lists what is EXEMPT (`open_services`), not what is gated: 0x10 and
-  0x3E (reaching and keeping a session), 0x27 (authenticating, which no 0x27 gate can itself
-  require), 0x22 and 0x19 (reads), and 0x2E (gated as above). Everything else — 0x11 ECUReset,
+  0x3E (reaching and keeping a session), 0x27 and 0x29 (authenticating — 0x29 on a node with
+  `[uds] access = "authentication"` — which no security gate can itself require), 0x22 and 0x19 (reads), and 0x2E (gated as above). Everything else — 0x11 ECUReset,
   0x14 clearing the fault memory, 0x85 freezing it, 0x28 silencing the bus — must be gated. It is
   fail-closed: the default table (no `services`) serves whatever the build performs with no
   security, so a `[doip]` node with no table is refused outright, and a service comm/uds learns
@@ -416,8 +422,14 @@ would be a second copy of the per-service gate inside `comm/uds`.
 **What an unauthenticated network tester can still do** is deny diagnostics, not change ECU
 state. 0x10 is open: it can move the SHARED session, which relocks the bus tester's unlock (every
 session entry relocks). And 0x27 is open: its failed-key count and lockout are the SERVER's, and
-kept through a reset (`kept_security`), so a network tester sending wrong keys locks the bus
-tester out of 0x27 too for the lockout delay. Neither is preventable by a session gate — the
+kept through a reset and a power cycle (in the journal), so a network tester sending wrong keys
+locks the bus tester out of 0x27 too for the lockout delay. Its wrong keys cannot fill the
+journal, though: the state is written only when it changes — a wrong key below the limit, a correct
+key clearing a count — so at most `security_attempts` times per level until a correct key, and the
+fault memory and the codings keep their room however many wrong keys come (docs/nvm.md, "The 0x27
+failed-key state"). Nor can it drive the journal's other writers: on a `[doip]` node 0x14, 0x85
+and a parameter's 0x2E need a level, from either transport. Neither the session move nor the
+lockout is preventable by a session gate — the
 attempt is the authentication — only by authenticating before the request is served, at
 activation. Not built: that authenticated routing activation (the OEM-specific field, or 0xE0
 central security) — it would authenticate the CONNECTION, while ISO 14229's 0x27 / 0x29
@@ -436,22 +448,36 @@ node's Makefile lists those sources by hand.
 zone_a (H723) is on the edge bus only, with no network of its own. A tester reaches it over IP
 through sysnode: a diagnostic message to zone_a's logical address (0x07C0) is forwarded on the
 edge bus to zone_a's diag ids, and each answer comes back as a diagnostic message from 0x07C0 —
-the same UDS as on the bus, so zone_a's bootloader is reprogrammed this way too.
+the same UDS as on the bus, so zone_a's bootloader is reprogrammed this way too (in TransferData
+blocks the gateway carries: below, "How long a routed message may be").
 
 **Declared by the system.** zone_a's `diag` takes a `logical` (its DoIP address behind a gateway)
 and sysnode's `doip` names it in `routes = ["zone_a"]`. syscheck (`check_doip_routes`) requires a
-routed node to be a CAN node on a bus the gateway sits on, with a `diag` allocation whose ids its
-`[isotp]` listens on, a logical address unique among every entity's and routed node's, and no
+routed node to be a CAN node on a bus the gateway sits on, with a `diag` allocation whose request
+and response ids, in their format, its `[isotp]` serves on (an `[isotp]` stating no ids takes them,
+lowered by sysgen; its functional id is the node's own listener's, never the route's, and is held to
+the allocation by REQ-TOPO-014), a logical address unique among every entity's and routed node's, and no
 `doip` of its own; and a `logical` that no gateway routes to is refused. No other node may listen
 on the routed node's request id on that bus (`check_route_ids`: its `[isotp]` rx or
-functional id, a trace or shell receive id) — it would take the routed requests as its own; a
+functional id — or, for a node with no `[isotp]`, its `diag` request and functional id — a trace or
+shell receive id) — it would take the routed requests as its own; a
 composed system's gateway authors its `[[doip.route]]` itself, and the system reads those (`node`,
 `bus`, `tx_id`, `rx_id`) and holds them to the same rule — and to the node they name, which must
 have an `[isotp]` on that bus listening on `tx_id` and answering on `rx_id`. sysgen lowers each route
 into the gateway's `[[doip.route]]` (`node`, `logical`, `bus` — the gateway's interface on the
 shared bus — `tx_id` = the node's request id, `rx_id` = its response id), and the node gate checks
 them against everything else on that bus (`diag_ids_refused`, the rule `[isotp]` ids follow) and
-against each other. The route goes to the bus the node's diagnostic server is on (its `[isotp]`
+against each other.
+
+**The node's id format** (REQ-NET-021). A route carries `ext`: set, its `tx_id` / `rx_id` are 29-bit
+ids (up to `0x1FFFFFFF`; without it, 11-bit — a wider id is refused), and the router sends the
+request and its flow control with the extended id and takes an answer only as a 29-bit frame on
+`rx_id` ([can-tp.md](can-tp.md) §3.8). sysgen writes it from the node's `diag`: `ext = true`, or
+normal fixed addressing (`addressing = "normal_fixed"`, `sa`, `ta`), whose derived ids it writes as
+the numbers (`tx_id = 0x18DA<sa><ta>`, `rx_id = 0x18DA<ta><sa>`). Every comparison of a route's ids —
+with the routed node's `[isotp]` (`check_doip_routes`, `check_route_ids`), the gateway's own
+`[isotp]` and its other routes (`validate_doip_routes`), and the other frames on the bus — is by
+(id, format): an 11-bit and a 29-bit id of one number are two frames. The route goes to the bus the node's diagnostic server is on (its `[isotp]`
 interface, by the name sysgen gives each bus: `local_can_iface`), which the gateway must sit on; a
 gateway that routes only diagnostics is a gateway all the same (`is_route_gateway`). A route bus
 must be the comm thread's to drive: on its core, and not the node's own controller under another
@@ -464,15 +490,18 @@ answer a pending reset waits on) to the comm thread's router (`comm/diagroute`),
 buses. The router's verdict comes back at once: forwarded, and the doip thread acknowledges from
 zone_a's address; or refused, and it NACKs from that address (0x06 target unreachable: not
 authorised; 0x05: the previous request is still being sent). The router is zone_a's tester on the
-edge bus — one ISO-TP link, its flow control granting BS 8 (the bus's receive FIFO depth) — and
-each answer it reassembles goes back through the channel's answer slot; the doip thread frames it
-from the routed node's address. While the request is leaving only flow control is taken from the
-node; a send ISO-TP gives up on (no flow control within N_Bs, more WAITs than WFTmax 16, an
-overflow) ends the exchange; and frames that stop moving either way for 5 s while something is in
-flight — the request's next frame, or our flow control for an answer, waiting for a transmit FIFO
-that takes nothing — end it too, while a transfer that keeps moving however slowly (STmin 127 ms;
-a node asking WAIT again and again, which N_Bs and WFTmax bound) is never cut off. Moving is what
-the link took (`isotp` `progress`), never a frame it ignored or rejected. Once the request has
+edge bus — one ISO-TP link, sending to each node at that node's `[isotp] tx_dl` (zone_a's 64:
+CAN-FD frames of up to 64 bytes; `[[doip.route]] tx_dl`, which sysgen lowers), taking its answers at
+any frame length, its flow control granting BS 8 (the bus's receive FIFO depth) — and each answer
+it reassembles goes back through the channel's answer slot; the doip thread frames it from the
+routed node's address. While the request is leaving only flow control is taken from the node; a
+send ISO-TP gives up on (no flow control within N_Bs, more WAITs than WFTmax 16, an overflow) ends
+the exchange; so does an answer reception ISO-TP gives up — N_Cr, or our flow control for it
+waiting 1 s (ISO-TP's N_Ar) for a transmit FIFO that takes nothing — counted in `timeouts`; and
+frames that stop moving either way for 5 s while something is in flight — the request's single or
+first frame waiting for that FIFO — end it too, while a transfer that keeps moving however slowly
+(STmin 127 ms; a node asking WAIT again and again, which N_Bs and WFTmax bound) is never cut off.
+Moving is what the link took (`isotp` `progress`), never a frame it ignored or rejected. Once the request has
 left, the node's answer must BEGIN within 6 s (P2*max + 1 s; a multi-frame answer under way is
 ISO-TP's to bound, N_Cr) — counted from the request's last frame — and a responsePending renews
 the wait. An answer must answer THIS request: a negative one names its service, a positive one
@@ -495,6 +524,39 @@ the exchange (`doip_rt_live`: a slow transfer that keeps moving may outlast any 
 the router's own timers bound it), then for at most 7 s of ticks from the router letting it go,
 the request or its last answer — an answer later than that is dropped.
 
+**How long a routed message may be.** The gateway carries routed requests and answers up to its
+OWN maximum message length (its `[isotp] max_message`, which sizes its router's storage,
+`diagroute.storage_len`, and the route channel). Past that, each direction has its own answer:
+
+- **A longer request** never reaches the router: the gateway's DoIP entity refuses it as too large
+  for its assembly buffer, with the generic NACK 0x02, and discards it — the connection stays open,
+  with its routing, session and unlocks (REQ-CAN-TP-023).
+- **A request longer than the routed node takes**, where the gateway's maximum is the larger, is
+  refused by the router at once with the diagnostic NACK 0x04 (diagnostic message too large): each
+  route carries its node's `max_message` (`[[doip.route]] max_message`, which sysgen writes from the
+  node's `[isotp]`), so the gateway does not forward a request the node would refuse on its bus with
+  FC.OVFLW and leave the tester to wait out its P2 (REQ-CAN-TP-023).
+- **A longer answer** is refused on the bus: the router's link answers the node's first frame with
+  FC.OVFLW, so the node gives it up at once, and the router answers the tester in the node's name
+  with `7F <service> 14` (responseTooLong) — what the node itself would answer at the gateway's size
+  — at once, not after the tester's P2* (REQ-CAN-TP-025). Only when that first frame answers the
+  request in flight, judged as any answer is (its service, and the identifier or sub-function it
+  echoes, all in a first frame's six bytes): a late too-long answer to a request the tester gave up
+  on is refused on the bus and dropped, and the request in flight still gets its own answer.
+- **TransferData blocks** follow the path: a routed RequestDownload answer that offers blocks longer
+  than the gateway carries has its maxNumberOfBlockLength lowered to the gateway's maximum (in place,
+  in the width the node gave it), so the tester sizes its blocks for the gateway and the node's
+  bootloader, which takes any block up to what it offered, is reprogrammed through it in smaller
+  blocks (REQ-CAN-TP-025).
+
+syscheck refuses a gateway's own `[[doip.route]]` whose `max_message` is not its node's, or whose
+`tx_dl` is not its node's (REQ-CAN-TP-026: the gateway sends to the node at the route's frame length),
+and warns of a routed node whose `max_message` is larger than its gateway's (REQ-CAN-TP-023) — the other way
+round nothing is lost, the route carrying the node's maximum:
+system_full's zone_a, at 4095 behind sysnode at 520, is such a node — its messages longer than 520
+bytes, and its bootloader's 4066-byte blocks, are for a tester on its own bus; through sysnode it is
+reprogrammed in blocks of 520.
+
 **Access (REQ-NET-020).** Routing changes state on nodes that otherwise no network tester could
 reach, so a tester is routed only while it holds the gateway's own security level
 `route_level` (default 1) — an unlock earned over the network (`comm/diag remote_unlocked`; a bus
@@ -513,7 +575,8 @@ reads at 1.7 ms each, `3E 80` acknowledged without an answer, entity status "gat
 connection locked again; zone_a's programming handoff and its bootloader's F181 through the route,
 and back. Then the OTA gateway (stm32_linux `otad`, blobly_net's DoIP client retargeted after the
 gateway unlock) reprogrammed zone_a through sysnode: handoff, 0x29, erase with responsePending, 124
-TransferData blocks of 514 bytes, check, reset — 3.0 s, v404 → 1 → 2 → 1.
+TransferData blocks of 514 bytes (zone_a's maximum message was the default 520 then), check, reset —
+3.0 s, v404 → 1 → 2 → 1.
 
 **Not routed:** a node on the bus the gateway runs NM on (a routed exchange would neither hold nor
 wake the network — refused at generation); functional requests (0xE400 reaches the gateway's own

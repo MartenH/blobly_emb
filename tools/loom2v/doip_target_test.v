@@ -14,7 +14,7 @@ const fixture_dir = os.join_path(@DIR, 'testdata', 'threadx_node')
 
 // a service table gating the one state-changing service that config performs (0x11; no fault
 // memory, so no 0x14/0x85), as every [doip] node must (REQ-NET-012)
-const doip_uds = '
+const doip_uds = tt_nvm + '
 [uds.services]
 "0x10" = {}
 "0x11" = { sessions = ["extended"], security = 1 }
@@ -42,6 +42,14 @@ ascii = "BLOBLYH735THREADX"
 [doip]
 address         = "192.168.0.50"
 logical_address = 0x07B0
+'
+
+// [nvm]: a ThreadX node that performs 0x27 keeps its failed-key state in the journal, so a gated
+// config declares it (REQ-DIAG-066); with no journal writer it generates nothing
+const tt_nvm = '
+[nvm]
+min_write_ms   = 1000
+sector_records = 4096
 '
 
 fn doip_loom2v() string {
@@ -114,7 +122,11 @@ fn test_the_comm_thread_serves_doip_from_the_mailbox() {
 	code, out, glue := generate('doip_ok', doip_conn)
 	assert code == 0, out
 	assert glue.contains('import comm.doip')
-	for g in ['g_doip      doip.Server', 'g_doip_out  [doip.max_resp]u8', 'g_doip_resp [doip.max_uds]u8'] {
+	// sized by the node's [isotp] max_message (520 when not configured), literal: 12 + 520, 25 + 520
+	for g in ['g_doip      doip.Server', 'g_doip_buf  [532]u8', 'g_doip_in   [532]u8',
+		'g_doip_out  [545]u8', 'g_doip_req  [520]u8', 'g_doip_resp [520]u8',
+		'g_doip.bind(&g_doip_buf[0], 520)', 'C.doip_mb_init(&g_doip_req[0], 520, &g_doip_resp[0], 520)',
+		'fn C.doip_mb_init(&u8, int, &u8, int)'] {
 		assert glue.contains(g), g
 	}
 	// the TCP seed before the loop; each pass: housekeep, what the doip thread reported, then the
@@ -283,6 +295,35 @@ fn test_the_public_bench_key_over_ip_is_allowed_only_by_name() {
 	assert c3 != 0 && o3.contains('it would mean nothing'), o3
 	c4, o4, _ := generate('doip_bench_bad', keyed + 'allow_bench_key = "yes"\n')
 	assert c4 != 0 && o4.contains('must be true or false'), o4
+}
+
+// REQ-NET-012 / REQ-DIAG-126: a [doip] node that unlocks by 0x29 — the dev tester key ("reference")
+// is a PUBLIC bench key over the network like 0x27's reference key, allowed only by name, and the
+// name means nothing beside a tester's own key; the generated comm thread pushes the 0x29 proof's
+// owed answer (its 0x78, then the verdict) to the DoIP tester, with no routine on the node.
+// @verifies REQ-NET-012 REQ-DIAG-126 REQ-DIAG-122
+fn test_an_authenticating_doip_node_takes_the_dev_key_only_by_name() {
+	auth := '\n[uds]\naccess = "authentication"\nauth_keys = { "1" = "reference" }\n' +
+		doip_conn.replace('"0x27" = {}', '"0x29" = {}')
+	code, out, _ := generate('doip_auth_ref', auth)
+	assert code != 0 && out.contains('auth_keys names "reference"') && out.contains('PUBLIC dev tester key'), out
+	c2, o2, g2 := generate('doip_auth_ref_ok', auth + 'allow_bench_key = true\n')
+	assert c2 == 0, o2
+	for want in ['g_diag_push [doipnet.push_max]u8', 'g_diag.push_step(&g_diag_push[0], doipnet.push_max)',
+		'g_diag.pushed(doipnet.push_resp(&g_diag_push[0], push_n))', 'g_diag.push_sent()'] {
+		assert g2.contains(want), 'missing: ${want}'
+	}
+	other := '03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8'
+	own := auth.replace('"1" = "reference"', '"1" = "${other}"')
+	c3, o3, g3 := generate('doip_auth_own', own)
+	assert c3 == 0, o3
+	assert g3.contains('g_diag_push [doipnet.push_max]u8')
+	c4, o4, _ := generate('doip_auth_own_bench', own + 'allow_bench_key = true\n')
+	assert c4 != 0 && o4.contains('it would mean nothing'), o4
+	// a seed-key [doip] node with no routine owes no answer: nothing to push
+	c5, o5, g5 := generate('doip_no_push', doip_conn)
+	assert c5 == 0, o5
+	assert !g5.contains('g_diag_push'), 'a node that can owe no answer pushes'
 }
 
 // the [doip] address is a host of its subnet (tools/netcfg): on the default /24 not .0, .1 or .255
@@ -476,7 +517,7 @@ fn test_doip_and_someip_share_one_netx() {
 // A DoIP gateway (REQ-NET-019/020): the routes sysgen lowers into [[doip.route]] — the router on
 // the comm thread, fed from the route's bus and pumped onto it, served from the route channel after
 // the mailbox; the entity told the routed addresses and given the hook; the doip loop the gateway's.
-// @verifies REQ-NET-019 REQ-NET-020
+// @verifies REQ-NET-019 REQ-NET-020 REQ-CAN-TP-023
 // the routed node on the gateway's second bus (the fixture runs NM on can0)
 const doip_route = '
 [bus.can1]
@@ -505,15 +546,43 @@ rx_id   = 0x7C8
 // a route on can0, the bus of the node's own diagnostic server, telemetry and DBC frames
 const doip_route_can0 = doip_route_more.replace('"can1"', '"can0"')
 
+// @verifies REQ-CAN-TP-026
+// a route carries its node's tx_dl: absent (8) no line; 64 on a CAN-FD route bus generates it, the
+// route bus opened CAN-FD by the same reading; 64 on a classic route bus, or a length ISO-TP does
+// not transmit with, is refused
+fn test_a_route_carries_its_nodes_frame_length() {
+	_, _, glue := generate('doip_route_dl8', doip_conn + doip_route)
+	assert !glue.contains('tx_dl:'), 'a route at 8 states nothing'
+	fd_route := doip_route.replace('fd        = false', 'fd        = true')
+	code, out, g64 := generate('doip_route_dl64', doip_conn + fd_route + 'tx_dl = 64\n')
+	assert code == 0, out
+	assert g64.contains('tx_dl:   u8(64) // its [isotp] tx_dl'), g64
+	assert g64.contains("ch_can1.open('1', true)"), 'the route bus opened CAN-FD'
+	c1, o1, _ := generate('doip_route_dl64_classic', doip_conn + doip_route + 'tx_dl = 64\n')
+	assert c1 != 0 && o1.contains('[[doip.route]] "zone_a" tx_dl = 64 needs a CAN-FD bus, and bus "can1" is not one'), o1
+	c2, o2, _ := generate('doip_route_dl13', doip_conn + fd_route + 'tx_dl = 13\n')
+	assert c2 != 0 && o2.contains('tx_dl = 13 is not a frame length ISO-TP transmits with — give 8, 12, 16, 20, 24, 32, 48 or 64'), o2
+}
+
 fn test_a_gateway_routes_from_the_comm_thread() {
 	code, out, glue := generate('doip_route_ok', doip_conn + doip_route)
 	assert code == 0, out
 	assert glue.contains('import comm.diagroute')
 	assert glue.contains('g_droute   diagroute.Router')
 	// the router before the loop: the level a tester must hold (route_level's default, 1), BS 8
-	assert glue.contains('g_droute.init(u8(1), u8(8))')
+	assert glue.contains('g_droute.init(u8(1), u8(8), &g_droute_buf[0], 520)')
+	assert glue.contains('g_droute_buf [2080]u8') // diagroute.storage_len(520)
 	assert glue.contains('logical: u16(0x7c0)') && glue.contains('tx_id:   u32(0x7c0)')
 		&& glue.contains('rx_id:   u32(0x7c8)')
+	assert !glue.contains('ext:     true') // an 11-bit node's route states no format
+	// the route carries its node's maximum message (absent: the default), which the router refuses a
+	// longer request by (REQ-CAN-TP-023)
+	assert glue.contains('max_message: 520 // its [isotp] max_message')
+	code4, out4, glue4 := generate('doip_route_big', doip_conn + doip_route + 'max_message = 4095\n')
+	assert code4 == 0, out4
+	assert glue4.contains('max_message: 4095 // its [isotp] max_message')
+	code0, out0, _ := generate('doip_route_tiny', doip_conn + doip_route + 'max_message = 7\n')
+	assert code0 != 0 && out0.contains('max_message'), out0
 	// each pass: the mailbox first (a dropped tester's unlock ends before the next is judged),
 	// then the route channel, the bus drain feeding the router, its pump after the server's answer
 	steps := [
@@ -545,7 +614,9 @@ fn test_a_gateway_routes_from_the_comm_thread() {
 	assert glue.contains('g_doip.routes[0] = u16(0x7c0) // zone_a')
 	assert glue.contains('g_doip.n_routes = 1')
 	assert glue.contains('g_doip.serve.route = doipnet.route')
-	assert glue.contains('C.doip_rt_init(&g_rt_req[0], &g_rt_ans[0])')
+	assert glue.contains('C.doip_rt_init(&g_rt_req[0], 520, &g_rt_ans[0], 520)')
+	assert glue.contains('fn C.doip_rt_init(&u8, int, &u8, int)')
+	assert glue.contains('g_rt_req   [520]u8') && glue.contains('g_rt_ans   [520]u8')
 	assert glue.contains('doipnet.run_gateway(mut g_doip, 3, 500, &g_doip_in[0], &g_doip_out[0], &g_rt_ans[0])')
 }
 
@@ -636,4 +707,69 @@ core      = 0
 	// a route bus assigned to another core: the comm thread here would drive it anyway
 	code2, out2, _ := generate('doip_route_core', doip_conn + doip_route.replace('core      = 0', 'core      = 1'))
 	assert code2 != 0 && out2.contains('is on core 1'), out2
+}
+
+// @verifies REQ-CAN-TP-023
+// the entity's UDS limit, its buffers, the mailbox, the route channel and the gateway's router all
+// follow the node's [isotp] max_message: 4095 sizes every one of them, and the entity is bound to it
+fn test_the_doip_buffers_follow_the_maximum_message() {
+	conn := doip_conn.replace('functional_id = 0x7DF', 'functional_id = 0x7DF\nmax_message   = 4095')
+	code, out, glue := generate('doip_4095', conn + doip_route)
+	assert code == 0, out
+	for g in ['g_doip_buf  [4107]u8', 'g_doip_in   [4107]u8', 'g_doip_out  [4120]u8',
+		'g_doip_req  [4095]u8', 'g_doip_resp [4095]u8', 'g_doip.bind(&g_doip_buf[0], 4095)',
+		'C.doip_mb_init(&g_doip_req[0], 4095, &g_doip_resp[0], 4095)', 'g_droute_buf [16380]u8',
+		'g_droute.init(u8(1), u8(8), &g_droute_buf[0], 4095)',
+		'C.doip_rt_init(&g_rt_req[0], 4095, &g_rt_ans[0], 4095)', 'g_diag_req [4095]u8'] {
+		assert glue.contains(g), g
+	}
+}
+
+// @verifies REQ-NET-021
+// a node on 29-bit (or normal fixed) addressing: its route carries the format, which the router
+// sends and receives in — and the route's ids are compared with the gateway's own [isotp] and the
+// other routes' in their format, an 11-bit and a 29-bit id of one number being two frames
+fn test_a_29_bit_route_carries_its_format() {
+	ext := doip_route.replace('tx_id   = 0x7C0', 'tx_id   = 0x18DA20F1').replace('rx_id   = 0x7C8',
+		'rx_id   = 0x18DAF120\next     = true')
+	assert ext != doip_route, 'the fixture route changed shape — update this test'
+	code, out, glue := generate('doip_route_ext', doip_conn + ext)
+	assert code == 0, out
+	assert glue.contains('tx_id:   u32(0x18da20f1)') && glue.contains('rx_id:   u32(0x18daf120)')
+	assert glue.contains('ext:     true')
+	code2, out2, _ := generate('doip_route_wide', doip_conn +
+		doip_route.replace('tx_id   = 0x7C0', 'tx_id   = 0x800'))
+	assert code2 != 0 && out2.contains('[[doip.route]] "zone_a" tx_id 0x800 must be a standard 11-bit id'), out2
+	// on can0, the gateway's own [isotp] numbers (0x7B0 / 0x7B8) as 29-bit ids are other frames
+	code3, out3, _ := generate_without_nm('doip_route_ext_can0', doip_conn +
+		doip_route_can0.replace('tx_id   = 0x7C0', 'tx_id   = 0x7B8').replace('rx_id   = 0x7C8', 'rx_id   = 0x7C8\next     = true'))
+	assert code3 == 0, out3
+	// two routes on one bus with one number: accepted in two formats, refused in one
+	twin := doip_route_more.replace('"zone_a"', '"twin"').replace('0x07C0', '0x07D0')
+	code4, out4, _ := generate('doip_route_twin_ext', doip_conn + doip_route +
+		twin.replace('rx_id   = 0x7C8', 'rx_id   = 0x7C8\next     = true'))
+	assert code4 == 0, out4
+	code5, out5, _ := generate('doip_route_twin', doip_conn + ext +
+		twin.replace('tx_id   = 0x7C0', 'tx_id   = 0x18DA20F1').replace('rx_id   = 0x7C8', 'rx_id   = 0x18DAF121\next     = true'))
+	assert code5 != 0 && out5.contains('share a diagnostic id'), out5
+}
+
+// @verifies REQ-NET-021
+// a route's ids meet the gateway's other frames on the route bus in the route's format: a 29-bit
+// route on the number of an 11-bit frame there — the [telemetry] frame, a DBC message — is another
+// frame, an 11-bit one is that frame (a ThreadX gateway's DBC frames are 11-bit: its comm thread
+// refuses an extended one)
+fn test_a_routes_collisions_are_judged_in_its_format() {
+	// can0 without NM: the [telemetry] id 0x7E0 and the DBC's WorkloadFrame (0x200) are there
+	for id, want in {
+		'0x7E0': 'tx_id 0x7e0 is also a [telemetry] frame id'
+		'0x200': 'tx_id 0x200 is also DBC message "WorkloadFrame"'
+	} {
+		route := doip_route_can0.replace('tx_id   = 0x7C0', 'tx_id   = ${id}')
+		code, out, _ := generate_without_nm('doip_route_ext_on', doip_conn +
+			route.replace('rx_id   = 0x7C8', 'rx_id   = 0x7C8\next     = true'))
+		assert code == 0, '${id}: ${out}'
+		c11, o11, _ := generate_without_nm('doip_route_std_on', doip_conn + route)
+		assert c11 != 0 && o11.contains('[[doip.route]] "zone_a" ${want}'), o11
+	}
 }

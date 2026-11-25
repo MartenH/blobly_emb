@@ -45,7 +45,7 @@ fn example(name string) string {
 
 // the DID record: the count, big-endian, written into the server's table after the pass's sends
 fn did_writes(srv string, count string) string {
-	return '${srv}.dids[6].data[0] = u8(${count} >> 24)'
+	return '${srv}.dids[7].data[0] = u8(${count} >> 24)'
 }
 
 fn test_the_host_bridge_counts_what_it_saturates_and_the_did_reads_it() {
@@ -56,9 +56,9 @@ fn test_the_host_bridge_counts_what_it_saturates_and_the_did_reads_it() {
 	assert glue.contains('if lamp_frame_warn_lamp_set(mut tx_lamp_frame.data, '), glue
 	assert glue.contains('tx_lamp_frame_sat++')
 	assert glue.contains('st.tx_sat.add(tx_lamp_frame_sat)')
-	// the DID (the seventh in overspeed's table) holds the count
+	// the DID (the eighth in overspeed's table) holds the count
 	assert glue.contains(did_writes('st.conn_diag.server', 'st.tx_sat.count')), glue
-	assert glue.contains('st.conn_diag.server.dids[6].len = 4')
+	assert glue.contains('st.conn_diag.server.dids[7].len = 4')
 }
 
 fn test_a_gateway_signal_route_counts_too() {
@@ -149,4 +149,40 @@ fn test_a_target_signal_route_is_held_to_the_range_and_a_frame_route_is_copied()
 	assert frame_arm.contains('ff.data = rx.data // frame route: forwarded as is'), g
 	assert !frame_arm.contains('encode_raw')
 	assert target_encodes(m)
+}
+
+// @verifies REQ-COM-012
+// The host bridge sends a 29-bit DBC message as an extended frame: its frame carries the width
+// beside the id, as the receive arms and the routes do.
+fn test_the_host_bridge_sends_a_29_bit_dbc_message_as_extended() {
+	assert host_ext_gen('ext', 'BO_ 2566844672 ').contains('mut tx_lamp_frame := can.Frame{\n\t\tid:  lamp_frame_id\n\t\tlen: lamp_frame_dlc\n\t\text: true')
+}
+
+// @verifies REQ-COM-012
+// and a standard id past 11 bits is refused there too, rather than handed to SocketCAN, which
+// rejects it, so the frame would never be sent
+fn test_the_host_bridge_refuses_a_standard_id_past_11_bits() {
+	assert host_ext_gen('stdbig', 'BO_ 4096 ').contains('has the standard id 0x1000, which does not fit 11 bits')
+}
+
+// host_ext_gen generates overspeed with LampFrame's `BO_ 272 ` record replaced by `bo`, and returns
+// the glue, or the generator's output when it refuses
+fn host_ext_gen(name string, bo string) string {
+	ex := example('overspeed')
+	tmp := os.join_path(os.temp_dir(), 'tx_ext_${name}_${os.getpid()}')
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	os.mkdir_all(tmp) or { panic(err) }
+	dbc := (os.read_file(os.join_path(ex, 'bus.dbc')) or { panic(err) }).replace('BO_ 272 ', bo)
+	os.write_file(os.join_path(tmp, 'bus.dbc'), dbc) or { panic(err) }
+	os.cp(os.join_path(ex, 'ecu.toml'), os.join_path(tmp, 'ecu.toml')) or { panic(err) }
+	glue := os.join_path(tmp, 'gen.v')
+	r := os.exec([ts_bin, os.join_path(tmp, 'ecu.toml'), os.join_path(tmp, 'bus.dbc'),
+		os.join_path(tmp, 'sig.v'), os.join_path(tmp, 'ports.v'), glue,
+		os.join_path(tmp, 'manifest.csv')])
+	if r.exit_code != 0 {
+		return r.output
+	}
+	return os.read_file(glue) or { '' }
 }

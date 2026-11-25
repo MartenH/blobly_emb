@@ -487,3 +487,83 @@ fn test_a_bus_rx_signal_read_on_both_images_goes_to_the_owner() {
 		assert cmd.contains('from   = "can0"') && cmd.contains('to     = "own"'), out
 	}
 }
+
+// @verifies REQ-TOPO-014
+// lower_isotp writes a node's diag allocation under its [isotp] header when that states no ids —
+// as the allocation states them — and leaves every other node's text as authored
+fn test_the_diag_allocation_is_lowered_into_an_isotp_that_states_no_ids() {
+	lowered := sysmodel.IsotpConn{
+		iface:      'can0'
+		ids_stated: false
+		lowered:    true
+	}
+	std := sysmodel.Node{
+		name: 'n'
+		diag: sysmodel.Diag{
+			req: 0x7A0
+			rsp: 0x7A8
+		}
+		view: sysmodel.NodeView{
+			isotp_conns: [lowered]
+		}
+	}
+	text := '[uds]\ns3_ms = 5000\n\n[ isotp ] # the server\nbus = "can0"\nbs  = 8\n'
+	assert lower_isotp(std, text)! == '[uds]\ns3_ms = 5000\n\n[ isotp ] # the server\n# lowered by sysgen from the node\'s diag in system.toml (REQ-TOPO-014)\nrx_id = 0x7A0\ntx_id = 0x7A8\nbus = "can0"\nbs  = 8\n'
+	ext := sysmodel.Node{
+		...std
+		diag: sysmodel.Diag{
+			req: 0x18DA10F1
+			rsp: 0x18DAF110
+			ext: true
+		}
+	}
+	assert lower_isotp(ext, '[isotp]\nbus = "can0"')!.contains('rx_id = 0x18DA10F1\ntx_id = 0x18DAF110\next = true\nbus')
+	// an ext and a functional_id the [isotp] states beside the allocation stay as authored: ext
+	// written once
+	kept := sysmodel.Node{
+		...ext
+		view: sysmodel.NodeView{
+			isotp_conns: [sysmodel.IsotpConn{
+				...lowered
+				functional_stated: true
+				ext_stated:        true
+				ext_authored:      true
+			}]
+		}
+	}
+	both := lower_isotp(kept, '[isotp]\nbus = "can0"\next = true\nfunctional_id = 0x18DB33F1')!
+	assert both.count('ext = true') == 1, both
+	assert both.contains('tx_id = 0x18DAF110\nbus = "can0"\next = true\nfunctional_id = 0x18DB33F1'), both
+	fixed := sysmodel.Node{
+		...std
+		diag: sysmodel.Diag{
+			req:   0x18DA10F1
+			rsp:   0x18DAF110
+			ext:   true
+			fixed: true
+			sa:    0x10
+			ta:    0xF1
+		}
+	}
+	got := lower_isotp(fixed, '[isotp]\nbus = "can0"')!
+	assert got.contains('addressing = "normal_fixed"\nsa = 0x10\nta = 0xF1\nbus'), got
+	assert !got.contains('functional_ta') && !got.contains('rx_id')
+	// a node whose [isotp] states its ids: as authored
+	stated := sysmodel.Node{
+		...std
+		view: sysmodel.NodeView{
+			isotp_conns: [sysmodel.IsotpConn{
+				iface: 'can0'
+				rx_id: 0x7A0
+				tx_id: 0x7A8
+			}]
+		}
+	}
+	assert lower_isotp(stated, text)! == text
+	// no table header to write under (a dotted or inline [isotp]): refused, saying so
+	if r := lower_isotp(std, 'isotp.bus = "can0"\n') {
+		assert false, 'lowered without a header: ${r}'
+	} else {
+		assert err.msg().contains('its [isotp] states no ids, and sysgen lowers its diag allocation under an `[isotp]` table header'), err.msg()
+	}
+}

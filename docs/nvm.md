@@ -1,14 +1,25 @@
 # Persistence (non-volatile storage) — design
 
-> Status (2026-10-07, #371): **the wear check covers every journal writer** — the persisted
+> Status (2026-11-17): **the 0x27 failed-key state is a journal writer** — each level's wrong keys
+> since its last correct key, saturating at `security_attempts`, one 10-byte record at the fixed
+> block 0x044E, so neither a reset nor a power cycle between guesses buys fresh attempts
+> ([diagnostics.md](diagnostics.md) §3.1). A ThreadX node that performs 0x27 — or unlocks by 0x29 Authentication, whose failed proofs
+> are counted in the same record — must declare `[nvm]`;
+> the RAM keep cell that carried the state across the server's own reset is gone. It is written only
+> when it changes — a wrong key below the limit, a correct key clearing a count — so at most
+> `security_attempts` times per level until a correct key, plus once by it, and a tester sending
+> wrong keys can neither fill the journal for its other writers nor wear it past the wear check —
+> no budget is needed. "The 0x27 failed-key state" below.
+>
+> Earlier (2026-10-07, #371): **the wear check covers every journal writer** — the persisted
 > signals, the clean markers, the fault memory and the parameters — in one computation, the
 > vehicle's rates declared in `[nvm.assume]` (see "Wear, proven per configuration" below).
 >
 > Earlier (2026-10-04, R7): **P4 is built** as the parameters' write path — a `[[param]]` is one
 > record in this journal, coded with 0x2E on the `[[did]]` that names it, durable before the answer
-> ([diagnostics.md](diagnostics.md) §3.4 "As built"). The persisted signals still have no DID binding.
+> ([diagnostics.md](diagnostics.md) §3.4). The persisted signals still have no DID binding.
 >
-> Earlier (2026-10-04): the fault memory (diagnostics.md R6b) persists in this journal — a
+> Earlier (2026-10-04): the fault memory (diagnostics.md §3.3) persists in this journal — a
 > status image and per-fault snapshot blocks, the journal's sectors now the board's (`bootmap.h`
 > NVM_*, linked by the generator through `boards/common/nvm_map.c`).
 >
@@ -17,7 +28,7 @@
 > ThreadX target (`examples/h755_threadx`, `system_full/nodes/domain`), its power-pull bench
 > loop not yet recorded. **P4
 > (writable DIDs backed by blocks) is not built** — it is the first step of parameters in
-> [diagnostics.md](diagnostics.md) (R7). Requirements: `requirements/nvm.toml` (draft,
+> [diagnostics.md](diagnostics.md) §3.4. Requirements: `requirements/nvm.toml` (draft,
 > deriving from SYS-REQ-NVM-001). This page began as the design (2026-07-14); the phasing
 > below records what landed. Fault-memory storage (freeze frames) is now designed in
 > [diagnostics.md](diagnostics.md) §3.3 — chained values in this journal — which supersedes
@@ -171,6 +182,7 @@ are in every build log and in review.
 | the fault memory's status image | its writes × its records (2 + 10 B per fault, chained): per operation cycle `comm/fault` `cycle_images` = start + end + per DTC its first test and first failure + per snapshot DTC its claim; per 0x14 `clear_images` (its own write and the requalification it reopens); per 0x85 change one; one more per flush that can carry deferred occurrence counters (the NM sleep edges and the `now` puts inside the cycle-end barrier's grace, every ECUReset, a tester's or the memory's own write in bus sleep) |
 | the fault memory's snapshots | one capture per snapshot DTC per cycle and per 0x14 (`captures_per_cycle`), its block's records, and one tombstone record per capture |
 | the parameters | one record per accepted 0x2E coding |
+| the 0x27 failed-key state | `security_attempts` records per served level once over `min_years` (the counts a tester without the key may leave, which nothing but a correct key clears), plus `security_attempts` + 1 per correct-key unlock, `unlocks_per_day` of them — however many wrong keys a tester sends (`comm/uds` `sa_store_test.v` holds the server to it); on an NM node each write is also a choreography run |
 
 The **debounce counters are never written**; the aging and failed-cycle counters ride in the status
 image (its cycle-end write). The fault memory's bounds are not the generator's guess: they are
@@ -189,6 +201,7 @@ resets_per_day          = 24   # ECUResets (0x11) — each also ends a cycle
 clears_per_day          = 24   # 0x14 (counted only with a persisted fault memory)
 setting_changes_per_day = 24   # 0x85 changes (likewise)
 codings_per_day         = 24   # accepted 0x2E codings (only with [[param]]s)
+unlocks_per_day         = 24   # correct-key unlocks (0x27 keys or 0x29 proofs), all levels (only where the node unlocks a level)
 ```
 
 The defaults are deliberately pessimistic — an operation cycle every ten minutes and a tester
@@ -207,14 +220,18 @@ outside the model: a fault, not traffic.
 system_full at the default assumptions (`tools/loom2v/wear_test.v` prints and pins these):
 
 - **domain** — DriveMode (written on the CM7) and DynKept (written on the CM4) floored at 60 s on an
-  NM node, one parameter, and the fault memory of one DTC with a snapshot (tested on the CM4): 240
-  records/h each of puts and choreography flushes (a coding or a fault-memory write in bus sleep is
-  one more run) plus 240 clean markers, the status image 88, snapshots 16 and the parameter 1 = 825
-  records/h, 11.3 years. At the 10 s floor DriveMode alone had, the second signal took it to 4.2
-  years; at 30 s the fault memory took the pair to 7.9.
-- **zone_a** — power cycles, 4 DTCs (one with a snapshot), one parameter: the status image (42 B =
-  3 records, 89 writes/h) 267 records/h, snapshots 16, the parameter 1, the resets' markers 1 =
-  285 records/h, 16.4 years.
+  NM node, one parameter, the fault memory of one DTC with a snapshot (tested on the CM4) and the
+  0x27 state: 244 records/h each of puts and choreography flushes (a coding, a 0x27 state write or a
+  fault-memory write in bus sleep is one more run) plus 244 clean markers, the status image 88,
+  snapshots 16, the 0x27 state 4 and the parameter 1 = 841 records/h, 11.1 years. At the 10 s
+  floor DriveMode alone had, the second signal took it to 4.2 years; at 30 s the fault memory took
+  the pair to 7.9.
+- **zone_a** — power cycles, 4 DTCs (one with a snapshot), one parameter, the 0x27 state: the status
+  image (42 B = 3 records, 89 writes/h) 267 records/h, snapshots 16, the 0x27 state 4, the parameter
+  1, the resets' markers 1 = 289 records/h, 16.1 years.
+- **sysnode** — the 0x27 state alone, on an NM node: 4 records/h (3 + 1 per unlock, one an hour)
+  and 19 clean markers (the resets, both sleep edges of every cycle, every state write in bus sleep)
+  = 23 records/h, live set 2.
 
 ## Shutdown choreography (and why GC can't collide with it)
 
@@ -228,7 +245,10 @@ time to make space — is closed structurally, not handled:
   makes compaction due during NORMAL runtime, on the comm thread's schedule, long
   before shutdown needs the room. The sleep flush therefore never erases — it is
   N microsecond-scale appends into space guaranteed to exist. GC-at-shutdown is
-  not a case to handle; it is a state that cannot be reached.
+  not a case to handle; it is a state that cannot be reached. Generation refuses a
+  sector that cannot hold the live set twice plus, on a node that performs 0x27 (or 0x29),
+  every write a tester without the key can make (`security_attempts` per served
+  level), so wrong keys alone never fill a sector.
 - **Quiesce ordering, storage holds the door.** Dispatch stops → flush dirty →
   clean marker → (compact now if the watermark says so — on same-bank boards this
   IS the designated erase window; other-bank boards already compacted at runtime)
@@ -350,8 +370,13 @@ until then (it is the fuzz-proven code).
 Erasing a sector STALLS same-bank execution (seconds for 128 KB) — the flash map
 must be drawn per board, next to the bootloader's:
 
-- **Single-image parts (H735)**: journal in the OTHER bank — H7 read-while-write
-  across banks makes erase invisible. Free lunch.
+- **Single-bank parts (H723, H735)**: one bank of 8 × 128 KB sectors, so the journal is
+  sectors 6 + 7 (`bootmap.h` NVM_*) and the application slot sectors 1..5 (640 KB). An erase
+  stalls every instruction fetch for the sector's erase time (1–2 s): it runs only at a quiet
+  point — boot without NM, the sleep edges with NM, the flush after an ECUReset's answer —
+  never at run time for a write (REQ-DIAG-062, REQ-NVM-015).
+- **Dual-bank parts (H755)**: journal in the OTHER bank — H7 read-while-write
+  across banks makes the erase invisible to the CM7.
 - **H755 with the M4 image in bank 2**: bank 2's tail sectors collide with a live
   M4 fetching from that bank. Options, decided at the board level: compact only at
   NM sleep-entry (the M4 is quiescing too), or run the M4 from RAM (its image is
@@ -503,4 +528,73 @@ waiting. A sector only needs erasing after a compaction, and the `bus_sleep`
 entry edge erases whatever the run left, so in sleep the partner is clean
 unless a sleep's writes fill a whole sector. If one does, the next sleep edge
 erases it, and until then a put or marker the journal refuses stays refused:
-0x72 to a tester, an unclean claim for a value.
+0x72 to a tester, an unclean claim for a value (the 0x27 state is held in RAM and retried, below).
+
+## The 0x27 failed-key state
+
+The diagnostic server's SecurityAccess state — each level's wrong keys since its last correct key —
+is one journal value, so a power cycle between guesses buys nothing (REQ-DIAG-065). On a node that
+unlocks by Authentication (0x29) a failed proof is a wrong key of its level: counted, written and
+bounded here exactly as below, the wear check's `unlocks_per_day` then counting verified proofs. `comm/uds`
+`sa_store.v` owns the record and reaches the journal through an injected seam (`SecurityStore`), as
+the fault memory and the parameters do; the comm thread wires it to the journal and restores it
+before the loop, so before the first request.
+
+- **Block**: FIXED, `nvm_hash16("uds:security")` = **0x044E** — never a schema hash, because the
+  record states its own layout; no firmware update moves it, and it is in the boot's prune keep-set.
+  A `[[param]]` on DID 0x044E or a signal pinned to it is refused at generation and needs a pin of
+  its own.
+- **Record** (10 B, one journal record): `[format 1 | level count 8 | the wrong keys of levels 1..8
+  since each one's last correct key]`, each count rising to `security_attempts` and no further. A
+  count at the limit IS the lockout: no lockout byte, no clock. Exact header, never a hash
+  (`comm/param`'s rule): another length, format or level count — the earlier 11-byte layout with
+  its lockout byte included — restores nothing, a clean start, rather than being misread.
+- **Writes** (REQ-DIAG-067): only when the record changes, which the record makes one rule — a
+  wrong key below the limit raises its level's count, a correct key clears a non-zero count — in
+  the pass's persist step, after the pass's requests and before the CAN answer is pumped, so a count
+  is in the journal before the 0x35 / 0x36 reporting it leaves; every flush choreography flushes it
+  too. Nothing else changes a byte, so nothing else writes: not a correct key with nothing counted
+  (a clean unlock writes nothing), a wrong key at the limit, the lockout beyond the key that reached
+  the limit (that rise is the lockout), its end, a start-up, the delay a start-up arms or an
+  ECUReset — and no special flush is needed before a reset or the programming handoff: the journal
+  is current after every accepted write. A refused write changes no answer (the key was judged, the
+  count in RAM counts) and is retried after `min_write_ms`, at once by a flush, until the journal
+  holds the record.
+- **The bound** (REQ-DIAG-068): at most `security_attempts` writes per level between two correct
+  keys of that level, plus one by a correct key that follows a wrong one. A
+  tester without the key — however many wrong keys, resets and power cycles — writes at most
+  `security_attempts` records per level, ever, until an authorised unlock, so it can neither fill
+  the journal for the fault memory, 0x14 and the codings nor wear it: no budget is needed. The wear
+  check counts `security_attempts` per served level once over `min_years` and `security_attempts` +
+  1 per `[nvm.assume] unlocks_per_day`. The bound counts writes the journal ACCEPTED: a put it
+  reports unconfirmed is retried like a refusal, and if it had landed it falls outside the bound (a
+  flash fault, not a tester's doing).
+- **Restore**, per served level with stored count c, by the rule a reset follows: 0 is a clean
+  start; 0 < c < `security_attempts` carries over and arms the lockout delay from boot, as after an
+  ECU reset; c ≥ `security_attempts` is a lockout: the full delay from boot, after which the level
+  has its attempts again — the count kept as stored, never clamped (so a start-up writes nothing) —
+  and it stays stored, costing the delay at every start-up, until that level's correct key. The
+  delay is the level's own: 0x37 to its seed, never to another level's. So no reset or power cycle
+  grants more than `security_attempts` keys per level per lockout delay while the journal takes the
+  state (a full one: below). A count of a level the firmware no longer serves is not restored and
+  arms nothing (its seed is refused 0x12, and its correct key, so nothing could clear it); the first
+  pass writes the record without it (one write per such firmware update). A count above the limit
+  (an update that lowered `security_attempts`) reads as saturated.
+- **A full journal — never an erase for the write.** The write runs in the pass that served the key,
+  before the answer is pumped, so it is one append and never an erase (REQ-DIAG-062): an erase there
+  would hold the 0x35 / 0x36 for 1–2 s on a single-bank H723/H735, and on the H755 stall the CM4
+  executing from bank 2 mid-run. The 0x27 state cannot fill the journal (`comm/diag`
+  `sa_persist_test.v` streams wrong keys for three simulated hours: three writes, and another
+  writer's put is still accepted), but another writer can — persisted "now" signals, the fault
+  memory's cycles, a coding — on a node with no erase point in reach: no NM, or NM kept awake. From
+  then on every write is refused until the next erase point; the server judges keys and answers as
+  before, holding the counts in RAM. The flush before an ECUReset erases once, after its answer is
+  on the wire, and takes them across the reset (REQ-DIAG-033); with NM so does a sleep edge. A power
+  cut, or a reset the server did not perform, before then restores the record last accepted — the
+  counts since the journal filled are lost, as the fault memory's and the codings' changes are — and
+  writes resume at the next erase point: the boot itself without NM, the next sleep edge with NM
+  (an NM node never erases at boot: on a single-bank part that would stall a just-woken node 1–2 s,
+  and on the H755 erase bank 2 under a CM4 running its own firmware from it). A correct key's clear
+  the journal refuses leaves a higher count stored: a power cut then restores it — a delay at
+  start-up, never a key — and the next flush takes the clear (`sa_persist_test.v` holds both on the
+  real journal, power cuts inside the ECUReset flush's erase included).

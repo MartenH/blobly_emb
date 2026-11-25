@@ -2,6 +2,7 @@ module cfgschema
 
 import toml
 import tools.doipcfg
+import comm.isotp
 
 // The schema is data, so what it says about itself is checkable: every reference resolves, every
 // default is a legal value of its own key, and the two parsers that keep their own key lists
@@ -55,11 +56,7 @@ fn test_every_default_is_a_legal_value() {
 				if key.def == '' {
 					continue
 				}
-				doc := toml.parse_text('v = ${key.def}') or {
-					assert false, '${t.ctx}.${key.name}: default `${key.def}` is not TOML'
-					continue
-				}
-				v := doc.value('v')
+				v := key.default_value() // the value a reader taking its default from the schema gets
 				assert type_ok(v, key.typ), '${t.ctx}.${key.name}: default `${key.def}` is not ${type_name(key.typ)}'
 				if key.choices.len > 0 && v is string {
 					assert v in key.choices, '${t.ctx}.${key.name}: default ${key.def} is not one of its choices'
@@ -170,9 +167,15 @@ fn test_check_refuses_a_value_outside_its_row() {
 		'[target] "kind": "threadX" is not one of "baremetal", "threadx"',
 	]
 	assert errs_of('[[signal]]\nname = "A"\nfields = { v = "u8" }\nfrom = "p"\nto = "q"\ntransport = "tripple"\n').len == 1
-	assert errs_of('[isotp]\nbus = "can0"\nrx_id = 0x800\ntx_id = 0x7E8\n') == [
-		'[isotp] "rx_id": 0x800 is outside 0x0..0x7FF',
+	assert errs_of('[isotp]\nbus = "can0"\nrx_id = 0x7E0\ntx_id = 0x7E8\nbs = 256\n') == [
+		'[isotp] "bs": 256 is outside 0..255',
 	]
+	// an [isotp] id's width depends on `ext` and `addressing`, which a row cannot state: ecumodel's
+	// one reader judges it (own_check), and the walk knows the keys of both addressing formats
+	assert errs_of('[isotp]\nbus = "can0"\nrx_id = 0x18DA10F1\ntx_id = 0x7E8\n') == []
+	assert errs_of('[isotp]\nbus = "can0"\naddressing = "normal_fixed"\nsa = 0x10\nta = 0xF1\nfunctional_ta = 0x33\n') == []
+	assert errs_of('[isotp]\nbus = "can0"\nrx_id = 0x7E0\ntx_id = 0x7E8\next = true\n') == []
+	assert errs_of('[isotp]\nbus = "can0"\next = 1\n') == ['[isotp] "ext": expected a boolean, got an integer']
 	assert errs_of('[[did]]\nid = 0xF190\nread = { session = ["extended", "factory"] }\n') == [
 		'[[did]] read/write "session": "factory" is not one of "default", "extended", "programming", "safety"',
 	]
@@ -197,4 +200,30 @@ fn test_a_required_by_model_row_is_stated_but_not_reported_twice() {
 	assert ecu.key('partition', 'core').required
 	assert errs_of('[[partition]]\nname = "p"\n') == []
 	assert ecu.json_schema().contains('"required": ["name", "core", "thread"]')
+}
+
+// @verifies REQ-CAN-TP-026
+// the two tx_dl rows take the frame lengths ISO-TP transmits with as isotp.valid_dl states them, and
+// no other — as a set, not a range: the schema check (ecucheck) refuses 10 as generation does, the
+// reference and the JSON Schema list the set, and the description names it
+fn test_the_tx_dl_rows_take_the_lengths_iso_tp_takes() {
+	assert tx_dl_list() == '8, 12, 16, 20, 24, 32, 48 or 64'
+	for ctx in ['isotp', 'doip_route'] {
+		k := ecu.key(ctx, 'tx_dl')
+		assert k.int_choices == [i64(8), 12, 16, 20, 24, 32, 48, 64] && k.def == '8', ctx
+		assert k.desc.contains(tx_dl_list()), ctx
+		assert allowed(k) == '8, 12, 16, 20, 24, 32, 48, 64', ctx
+		assert key_json(k).contains('"enum": [8, 12, 16, 20, 24, 32, 48, 64]'), ctx
+		for dl in -1 .. 70 {
+			assert k.in_range(dl) == isotp.valid_dl(dl), '${ctx} ${dl}'
+		}
+	}
+	base := '[isotp]\nbus = "can0"\nrx_id = 0x7E0\ntx_id = 0x7E8\n'
+	assert errs_of(base + 'tx_dl = 64\n') == []
+	for bad in [0, 9, 10, 13, 63, 65] {
+		assert errs_of(base + 'tx_dl = ${bad}\n') == ['[isotp] "tx_dl": ${bad} is not one of 8, 12, 16, 20, 24, 32, 48, 64'], '${bad}'
+	}
+	route := '[doip]\nlogical_address = 0x0E80\n\n[[doip.route]]\nnode = "z"\nlogical = 0x07C0\nbus = "can1"\ntx_id = 0x7C0\nrx_id = 0x7C8\n'
+	assert errs_of(route + 'tx_dl = 32\n').filter(it.contains('tx_dl')) == []
+	assert errs_of(route + 'tx_dl = 33\n').filter(it.contains('tx_dl')) == ['[[doip.route]] "tx_dl": 33 is not one of 8, 12, 16, 20, 24, 32, 48, 64']
 }

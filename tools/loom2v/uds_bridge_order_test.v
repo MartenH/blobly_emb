@@ -12,9 +12,9 @@ import os
 //   during it → one request served (one that completes while a response is still in
 //   flight is dropped — half-duplex, the tester retries) →
 //   response transmitted → the rx gate re-sampled and the rx deadlines checked (after the pass's
-//   requests, so a 0x28 suspends them first) → the 0x28 tx gate sampled → application tx. A
-//   functional request is served ON ARRIVAL inside the drain (quiet link, no reset pending) and
-//   re-samples the rx gate at once.
+//   requests, so a 0x28 suspends them first) → the 0x28 tx gate sampled → application tx, a value
+//   under 0x2F control written over the FB's before the encode. A functional request is served
+//   ON ARRIVAL inside the drain (quiet link, no reset pending) and re-samples the rx gate at once.
 fn test_the_generated_diagnostic_pass_runs_in_order() {
 	glue := os.read_file(os.join_path(@VMODROOT, 'examples', 'overspeed', 'gen', 'loom_gen.v')) or {
 		assert false, '${err}'
@@ -23,8 +23,16 @@ fn test_the_generated_diagnostic_pass_runs_in_order() {
 	// the connection's own steps (housekeeping, one request at a time, the drop while busy) are
 	// comm/diag's and tested there; this pins where the bridge calls them
 	steps := [
+		// a routine's result read BEFORE the housekeeping, whose tick judges the routine's deadline:
+		// a result the FB published before it counts (comm/uds pending.v, gen_routine.v)
+		'osal.ioc_acquire(routine_res_self_check_ch, &st.conn_diag.server.routines[0].res',
 		'st.conn_diag.housekeep(now)',
 		'if st.rxg.sample(st.conn_diag.server.rx_enabled(), true)',
+		// the request after the fault pass, before the drain: a request the server wrote last pass,
+		// or a stop its housekeeping asked, reaches its FB
+		'osal.ioc_publish(fault_ctl_engine_monitor_ch',
+		'osal.ioc_publish(routine_req_self_check_ch, &st.conn_diag.server.routines[0].req',
+		'for st.chan.recv(mut rx) {',
 		'match st.conn_diag.on_frame(now, rx) {',
 		'.request { break }',
 		'.served {',
@@ -34,6 +42,9 @@ fn test_the_generated_diagnostic_pass_runs_in_order() {
 		'if st.rxg.sample(st.conn_diag.server.rx_enabled(), true)',
 		'if st.rxg.settle()',
 		'diag_tx_ok :=',
+		'|| st.conn_diag.server.io_on(0) { // 0x2F', // (gen_ioctl.v)
+		'warn_lamp.on = st.conn_diag.server.io_published(0) != 0',
+		'lamp_frame_warn_lamp_set(mut tx_lamp_frame.data, if warn_lamp.on {',
 		'if tx_lamp_frame_any && diag_tx_ok',
 	]
 	mut at := -1
@@ -46,7 +57,8 @@ fn test_the_generated_diagnostic_pass_runs_in_order() {
 	}
 }
 
-// a connection with no [[did]] names nothing from comm.uds: importing it would warn on every build
+// a connection with no [[did]] and no [[routine]] names nothing from comm.uds: importing it would
+// warn on every build
 fn test_the_uds_import_follows_the_dids() {
 	mut m := Model{
 		isotp_conns: [IsotpConn{
@@ -62,4 +74,12 @@ fn test_the_uds_import_follows_the_dids() {
 	}]
 	_, with_dids := emit_module_headers(m, 'ecu', false, false)
 	assert 'import comm.uds' in with_dids
+	m.dids = []
+	m.routines = [RoutineCfg{
+		name: 'SelfCheck'
+		id:   0x0201
+	}]
+	_, with_routines := emit_module_headers(m, 'ecu', false, false)
+	assert 'import comm.uds' in with_routines
 }
+

@@ -12,7 +12,9 @@ BO_ 513 M4LoadFrame: 8 SUT
  SG_ M4Acc : 32|32@1+ (1,0) [0|4294967295] "" Tester
 ```
 
-- `513` = decimal CAN id (0x201). Keep it 11-bit for the target FDCAN backend.
+- `513` = decimal CAN id (0x201). A 29-bit id is written with the extended flag, bit 31, set
+  (`BO_ 2566870648` is the extended id `0x18FF5678`); the host bridge and the target FDCAN backend
+  both send and receive it as an extended frame.
 - Signal names here are what `[[signal]]` declarations resolve against.
 - The lean target codec wants unsigned little-endian u32 fields at 32-bit offsets,
   factor 1, offset 0 (see [add-a-signal.md](add-a-signal.md) for the full rules).

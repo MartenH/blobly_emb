@@ -31,8 +31,8 @@ the down channel the FB reads, exactly as the comm thread already does for a bus
 satellite FB's output to send it, and writes a received value down to a satellite reader). The
 transport, its gate and its single-writer rule do not change; each service only names the context
 it reads and writes in. Every gap below is a route of that kind not generated yet — not a limit of
-the design. NvM, parameters, faults and DIDs (006–009) are closed; io points, SOME/IP and a bus
-owned by the satellite (010–012) remain.
+the design. NvM, parameters, faults and DIDs (006–009) are closed; io points, SOME/IP, a bus
+owned by the satellite and a routine (010–013) remain.
 
 An FB's source does not move either: a node's FBs are one `app` module, in the platform owner's
 folder, which every image of the node compiles (each declares every FB's ports; the linker drops
@@ -58,6 +58,7 @@ refused naming both partitions, never generated wrong.
 | an io point (GPIO, ADC, PWM) read or written by an FB | ✅ | ❌ | REQ-PLACE-010 | route: the io thread reads the up channel of an output and writes a down channel of an input. Not the memory map — the CM4 reaches the GPIO and timers; the io thread stays each point's one owner |
 | a SOME/IP signal sent or received by an FB | ✅ | ❌ | REQ-PLACE-011 | route: the eth thread reads and writes the channels, as the comm thread does for CAN |
 | a bus owned by the satellite core | — | ❌ | REQ-PLACE-012 | route: a comm thread generated in the satellite's image; its signals reach owner FBs as up channels and come from them as down channels |
+| a routine (`[[routine]]`, 0x31) run by an FB | ✅ | ❌ | REQ-PLACE-013 | on the owner, in a single-thread partition: the request and result cells are byte-IOC cells the comm thread reads and writes (docs/diagnostics.md §3.1). Route: the request on a down channel, the result on an up channel, as a fault's control and reports cross. Refused on a satellite and on a hand-written one, naming REQ-PLACE-013 |
 | the UDS server: 0x28 communication control, NM bus-sleep gating of an FB's sends | ✅ | ✅ | — | the satellite FB keeps running; only the bus send is gated, as for an owner FB |
 | FB trace records (`[trace] level = "all"`), two-core dump | ✅ | ✅ | — | generated per core, one timeline in blobly_net |
 | an FB's load in `CpuLoad` | ✅ | ⚠️ | — | the FB threads only, not the comm thread or ISRs; a multi-thread satellite reports its first thread only |

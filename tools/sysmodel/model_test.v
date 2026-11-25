@@ -3831,6 +3831,60 @@ fn test_dissolved_local_io_signal_accepted() {
 	assert !issue_msgs(validate_system_gen(s)).any(it.contains('LedGreen'))
 }
 
+// routine_node: node a's view parsed from an ecu.toml whose [[routine]] "SelfTest" is served by
+// handlers reading and writing the given names
+fn routine_node(handlers string) NodeView {
+	doc := toml.parse_text('[[routine]]\nid = 0x0201\nname = "SelfTest"\n\n[[fb]]\nname = "Checker"\nthread = "t0"\nhandler = [${handlers}]\n') or {
+		panic(err)
+	}
+	mut v := parse_node_view(doc)
+	v.fb_reads << 'Rpm'
+	v.fb_writes << 'Speed'
+	v.is_threadx = true
+	v.has_telemetry = true
+	v.telem_bus = 'can0'
+	v.telem_id = 0x7e0
+	return v
+}
+
+// REQ-TOPO-001: a [[routine]]'s request and result (docs/diagnostics.md §3.1) are the node's own —
+// its FB reads one and writes the other — while a name that is no routine's still fails.
+fn test_dissolved_routine_ports_accepted() {
+	mut s := clean_dissolved()
+	s.nodes[0].view = routine_node('{ name = "run", period_ms = 10, reads = ["SelfTestRequest"], writes = ["SelfTestResult"] }')
+	assert !issue_msgs(validate_system_gen(s)).any(it.contains('SelfTest')), issue_msgs(validate_system_gen(s)).str()
+	assert !issue_msgs(validate_system(s)).any(it.contains('SelfTest'))
+	s.nodes[0].view.fb_reads << 'OtherRequest'
+	assert issue_msgs(validate_system_gen(s)).any(it.contains('reads "OtherRequest"'))
+}
+
+// @verifies REQ-DIAG-087
+// A routine's request is only READ by its FB and its result only WRITTEN by it: an FB writing the
+// request (the server's cell) or reading the result, a second writer of the result, or no reader of
+// the request is refused by a dissolved system in the words loom2v refuses the node by.
+fn test_routine_request_and_result_directions_are_refused() {
+	for c in [
+		['{ name = "run", reads = ["SelfTestRequest"], writes = ["SelfTestResult", "SelfTestRequest"] }',
+			'`SelfTestRequest` is written by [\'Checker.run\'] — the diagnostic server alone writes a routine\'s request'],
+		['{ name = "run", reads = ["SelfTestRequest", "SelfTestResult"], writes = ["SelfTestResult"] }',
+			'`SelfTestResult` is read by [\'Checker.run\'] — the diagnostic server alone reads a routine\'s result'],
+		['{ name = "run", reads = ["SelfTestRequest"], writes = ["SelfTestResult"] }, { name = "aux", writes = ["SelfTestResult"] }',
+			'`SelfTestResult` must be written by the handler that reads `SelfTestRequest` (Checker.run) and by no other'],
+		['{ name = "run", writes = ["SelfTestResult"] }',
+			'`SelfTestRequest` must be read by exactly one FB handler (the one that runs it), not 0'],
+	] {
+		mut s := clean_dissolved()
+		s.nodes[0].view = routine_node(c[0])
+		msgs := issue_msgs(validate_system_gen(s))
+		want := 'node "a": [[routine]] "SelfTest": ${c[1]}'
+		assert msgs.any(it.starts_with(want)), '${c[0]}: ${msgs}'
+		assert !msgs.any(it.contains('neither a system signal')), '${c[0]}: ${msgs}'
+		// a composed system says it once, through loom2v (check_node_generatable, which needs the
+		// node's file), and nothing of its own
+		assert !issue_msgs(validate_system(s)).any(it.contains('[[routine]]')), '${c[0]}'
+	}
+}
+
 // REQ-TOPO-001: a signal no other node reads is a warning, not an error.
 fn test_dissolved_unread_signal_is_warning() {
 	mut s := clean_dissolved()
@@ -4656,4 +4710,28 @@ form = "compute"
 		assert e.any(it.starts_with(want)), '${want} not in ${e}'
 	}
 	assert s.unknown_keys == []
+}
+
+// REQ-TOPO-002: a named [nm].alive resolves through the DBC of the bus the node's config names —
+// by the rule its frames are placed by (node_can_bus): a node on edge alone calls edge can0, and
+// its alive message is edge's, never that of compute, the system bus whose interface is can0
+fn test_named_alive_resolves_on_the_nodes_own_bus() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_lalive_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'edge.dbc'), 'VERSION ""\n\nBU_: a\n\nBO_ 1297 AliveMsg: 8 a\n SG_ Alive : 0|8@1+ (1,0) [0|255] "" a\n') or {
+		panic(err)
+	}
+	os.write_file(os.join_path(dir, 'node_a.toml'), '[bus.can0]\n[telemetry]\nbus = "can0"\n[target]\nkind    = "threadx"\ntick_ms = 1\n[nm]\nnode  = 0x11\nalive = "AliveMsg"\npeers = [0x500, 0x53F]\n[isotp]\nbus   = "can0"\nrx_id = 0x101\ntx_id = 0x102\n') or {
+		panic(err)
+	}
+	os.write_file(os.join_path(dir, 'system.toml'), '[bus.compute]\ninterface = "can0"\n\n[bus.edge]\ninterface = "can1"\ndbc = "edge.dbc"\n\n[[node]]\nname = "a"\necu = "node_a.toml"\nbuses = ["edge"]\nnm = 0x11\ntrace = 1\n') or {
+		panic(err)
+	}
+	mut sys := parse_system(os.join_path(dir, 'system.toml')) or { panic(err) }
+	load_errs := sys.load_nodes()
+	assert load_errs.len == 0, load_errs.str()
+	assert sys.nodes[0].view.alive == 0x511, '0x${sys.nodes[0].view.alive.hex()}'
 }

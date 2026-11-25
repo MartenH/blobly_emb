@@ -48,7 +48,7 @@ test("UDS: write + read DID 0xF1AD (RAM, multi-frame both ways)", function()
   check.equal(d:read_did(0xF1AD), payload)
 end)
 
--- R1 (docs/diagnostics.md): the server's session model, gating, multi-DID reads, functional
+-- docs/diagnostics.md §3.1: the server's session model, gating, multi-DID reads, functional
 -- requests, ECUReset and CommunicationControl, over the real bus. Built on the client's raw()
 -- plus raw frames, so it needs nothing beyond what blobly_net already offers.
 
@@ -102,7 +102,7 @@ test("UDS: 0x28 is gated to non-default sessions and silences application frames
   check.truthy(lamp_frames(400) > 0, "LampFrame did not resume after returning to default")
 end)
 
-test("UDS: functional TesterPresent is answered; a functional unsupported service is silent", function()
+test("UDS: functional TesterPresent is answered; a functional RoutineControl is ignored", function()
   local function functional(req_hex, wait_ms)
     local req = fromhex(req_hex)
     bus.send("CAN1", 0x7DF, string.char(#req) .. req .. string.rep("\0", 7 - #req))
@@ -118,7 +118,14 @@ test("UDS: functional TesterPresent is answered; a functional unsupported servic
   local r = functional("3E 00", 300)
   check.truthy(r ~= nil, "no answer to a functional TesterPresent")
   check.equal(tohex(r:sub(1, 3)), "02 7E 00")
-  check.equal(functional("31 01 FF 00", 300), nil, "a functional request answered 0x11") -- RoutineControl: unsupported
+  -- SelfCheck (0x0201) in the extended session it runs in: served, its start would be answered
+  -- 0x78 at once, and every request after it dropped until the check completes
+  local d = diag()
+  d:session(0x03)
+  drain()
+  check.equal(functional("31 01 02 01 05", 300), nil, "a functional RoutineControl answered")
+  check.equal(tohex(d:raw(fromhex("3E 00"))), "7E 00") -- answered: no routine answer is owed
+  d:session(0x01)
 end)
 
 test("UDS: ECUReset answers first, then the diagnostic state is back at power-on", function()

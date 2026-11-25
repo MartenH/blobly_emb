@@ -55,6 +55,7 @@ The sections of an ecu.toml. Only what the node declares is generated; every sec
 | `did` | array of tables → [`[[did]]`](#ecu-did) |  | — |  | the server's data identifiers |
 | `fault` | array of tables → [`[[fault]]`](#ecu-fault) |  | — |  | diagnostic faults and their DTCs (docs/diagnostics.md §3.3) |
 | `param` | array of tables → [`[[param]]`](#ecu-param) |  | — |  | coded parameters (docs/diagnostics.md §3.4) |
+| `routine` | array of tables → [`[[routine]]`](#ecu-routine) |  | — |  | RoutineControl (0x31) routines, each run by an FB (docs/diagnostics.md §3.1) |
 | `fault_memory` | table → [`[fault_memory]`](#ecu-fault-memory) |  | — |  | the fault memory's operation cycle and snapshot entries |
 | `route` | array of tables → [`[[route]]`](#ecu-route) |  | — |  | gateway routes: raw frames or decoded signals between buses |
 | `io` | table → [`[io]`](#ecu-io) |  | — |  | physical IO points (docs/io.md) |
@@ -203,6 +204,7 @@ Vehicle usage rates the wear check assumes, per day.
 | `clears_per_day` | integer |  | `24` | 0..1000000 | ClearDiagnosticInformation (0x14) |
 | `setting_changes_per_day` | integer |  | `24` | 0..1000000 | ControlDTCSetting (0x85) changes |
 | `codings_per_day` | integer |  | `24` | 0..1000000 | accepted 0x2E codings of a [[param]] |
+| `unlocks_per_day` | integer |  | `24` | 0..1000000 | correct-key unlocks a day, all levels — SecurityAccess (0x27) keys, or Authentication (0x29) proofs on an access = "authentication" node: the failed-key state (wrong keys, or failed proofs) is written at most security_attempts times per level until a correct key or proof, and once more by it; only where the node unlocks a security level |
 
 <a id="ecu-target"></a>
 
@@ -388,36 +390,45 @@ The diagnostic server's ISO 15765-2 connection on CAN (docs/diagnostics.md).
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
 | `bus` | string | yes | — |  | the CAN bus ([bus.*] name) the connection runs on |
-| `rx_id` | integer | yes | — | 0x0..0x7FF | the CAN id physical requests arrive on (11-bit) |
-| `tx_id` | integer | yes | — | 0x0..0x7FF | the CAN id responses are sent on (11-bit) |
+| `addressing` | string |  | `"normal"` | `"normal"`, `"normal_fixed"` | how the ids are stated (docs/can-tp.md §2): "normal" gives rx_id / tx_id (11-bit, or 29-bit with ext); "normal_fixed" gives sa / ta, from which the 29-bit ids derive (ISO 15765-2 normal fixed addressing, priority 6). Extended and mixed addressing are not supported |
+| `rx_id` | integer |  | — | 0x0..0x1FFFFFFF | the CAN id physical requests arrive on: 11-bit (0x000..0x7FF) unless ext; required with normal addressing (a dissolved node's [isotp] that states no ids takes its system diag, lowered by sysgen), refused with normal_fixed |
+| `tx_id` | integer |  | — | 0x0..0x1FFFFFFF | the CAN id responses are sent on: 11-bit (0x000..0x7FF) unless ext; required with normal addressing (a dissolved node's [isotp] that states no ids takes its system diag, lowered by sysgen), refused with normal_fixed |
+| `ext` | boolean |  | `false` |  | normal addressing: rx_id, tx_id and functional_id are 29-bit identifiers (0x00000000..0x1FFFFFFF), frames received and sent with the extended id; false = 11-bit. Refused with normal_fixed (always 29-bit) |
+| `sa` | integer |  | — | 0x0..0xFF | normal_fixed: this node's own address — the target address of the requests it receives (0x18DA<sa><ta>) and the source address of its answers (0x18DA<ta><sa>); required there, refused with normal |
+| `ta` | integer |  | — | 0x0..0xFF | normal_fixed: the tester's address (e.g. 0xF1) — the source address of the requests and the target address of the answers; not sa; required there, refused with normal |
+| `functional_ta` | integer |  | — | 0x0..0xFF | normal_fixed: the functional target address (conventionally 0x33, ISO 15765-4) — functional requests arrive on 0x18DB<functional_ta><ta>; absent = none; refused with normal |
 | `bs` | integer |  | `0` | 0..255 | the block size granted in our Flow Control, one byte on the wire (0 = the whole message at once) |
 | `stmin_ms` | integer |  | `0` | 0..127 | the STmin (ms) we ask a sender to keep between consecutive frames; ISO 15765-2 encodes milliseconds only up to 127 |
-| `functional_id` | integer |  | — | 0x0..0x7FF | the functional (broadcast) request id, e.g. 0x7DF, single frames only; absent = none |
+| `functional_id` | integer |  | — | 0x0..0x1FFFFFFF | the functional (broadcast) request id, e.g. 0x7DF, single frames only: 11-bit unless ext; absent (or 0) = none; refused with normal_fixed (functional_ta). A dissolved node's [isotp] that takes its system diag may state it beside a normal-addressing one, read in the allocation's format (with an ext only where it agrees) |
+| `max_message` | integer |  | `520` | 8..4095 | the longest diagnostic message either way, in bytes (the escape first frame above 4095 is not supported). It sizes the server's buffers and response capacity, the DoIP entity's message limit, a gateway's routed messages and the bootloader's TransferData block; generation refuses one smaller than the largest message the configuration determines |
+| `tx_dl` | integer |  | `8` | 8, 12, 16, 20, 24, 32, 48, 64 | the frame length (TX_DL) the connection transmits with, in bytes: 8, 12, 16, 20, 24, 32, 48 or 64. Above 8 only on a CAN-FD bus ([bus.*] fd = true): single frames of up to TX_DL - 2 bytes behind the escape, consecutive frames of TX_DL - 1. Frames of any length are received without it; the bootloader and a gateway's route to the node send with it too (REQ-CAN-TP-026) |
 
 <a id="ecu-uds"></a>
 
 ### `[uds]`
 
-The node's one ISO 14229 diagnostic server: session and security timing, the 0x27 key, the service table.
+The node's one ISO 14229 diagnostic server: session and security timing, how a security level is unlocked (0x27 or 0x29) and its keys, the service table.
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
 | `s3_ms` | integer |  | `5000` |  | the session timeout back to the default session (ms; 0 = the default) |
-| `security_attempts` | integer |  | `3` | 0..255 | wrong 0x27 keys before the lockout (0 = the default) |
-| `security_delay_ms` | integer |  | `10000` |  | the 0x27 lockout delay after too many wrong keys (ms; 0 = the default) |
-| `security_key` | string |  | — | `"reference"` | "reference" = blobly_net's PUBLIC bench key (a target); absent = the OEM's diag_sa_key_ok |
+| `access` | string |  | `"seed_key"` | `"seed_key"`, `"authentication"` | how a security level is unlocked: "seed_key" = SecurityAccess (0x27), "authentication" = Authentication (0x29, ACR with Ed25519; 0x27 then not served). Both grant the same levels |
+| `security_attempts` | integer |  | `3` | 0..255 | wrong 0x27 keys (or failed 0x29 proofs) before the lockout (0 = the default) |
+| `security_delay_ms` | integer |  | `10000` |  | the lockout delay after too many wrong keys or failed proofs (ms; 0 = the default) |
+| `security_key` | string |  | — | `"reference"` | access = "seed_key" only: "reference" = blobly_net's PUBLIC bench key (a target); absent = the OEM's diag_sa_key_ok |
+| `auth_keys` | table of strings |  | — |  | access = "authentication" only: level ("1".."8") -> the tester's Ed25519 PUBLIC key, 64 hex, or "reference" = blobly_net's dev tester key (the one examples/keys/tester.seed signs with); exactly the levels a gate names |
 | `services` | tables by name → [`[uds] services row`](#ecu-uds-service) |  | — |  | the service table, "0xSID" = { ... } ("0x10 02": the [boot] handoff); absent = every service the build performs |
 
 <a id="ecu-uds-service"></a>
 
 ### `[uds] services row`
 
-One served service: the sessions it is accepted in and the 0x27 level it needs.
+One served service: the sessions it is accepted in and the security level (unlocked by 0x27 or 0x29) it needs.
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
 | `sessions` | array of strings |  | — | `"default"`, `"extended"`, `"programming"`, `"safety"` | the sessions it is accepted in; absent = the service's default sessions |
-| `security` | integer |  | `0` | 0..8 | the 0x27 level that must be unlocked first (0 = none) |
+| `security` | integer |  | `0` | 0..8 | the security level (0x27 or 0x29) that must be unlocked first (0 = none) |
 
 <a id="ecu-doip"></a>
 
@@ -440,7 +451,7 @@ The diagnostic server over DoIP (ISO 13400) too — ThreadX target; one parser f
 | `announce_count` | integer |  | `3` | 0..10 | A_DoIP_Announce_Num: vehicle announcements at start-up |
 | `announce_interval_ms` | integer |  | `500` | 10..10000 | A_DoIP_Announce_Interval (ms); count x interval at most 10000 ms |
 | `route_level` | integer |  | `1` | 1..8 | a gateway's: the security level of its own server a tester must have unlocked over the network before it routes to the nodes behind it (REQ-NET-020); one its [uds] serves |
-| `allow_bench_key` | boolean |  | `false` |  | answer 0x27 with blobly_net's PUBLIC reference key over the network — a bench posture, opted into by name; required (true) when [uds] security_key = "reference" |
+| `allow_bench_key` | boolean |  | `false` |  | unlock with one of blobly_net's PUBLIC bench keys over the network — the 0x27 reference key or the 0x29 dev tester key — a bench posture, opted into by name; required (true) when [uds] security_key = "reference" or an auth_keys entry is "reference" |
 
 <a id="ecu-doip-route"></a>
 
@@ -453,8 +464,11 @@ A node behind this DoIP gateway that diagnostic messages to its logical address 
 | `node` | string | yes | — |  | the routed node (named in refusals and the generated code) |
 | `logical` | integer | yes | — |  | its DoIP logical address (0x0001..0x0DFF or 0x1000..0x7FFF); not this entity's own or its functional address |
 | `bus` | string | yes | — |  | the CAN bus ([bus.*] name) it is on |
-| `tx_id` | integer | yes | — | 0x0..0x7FF | its physical request id: what the gateway sends on (11-bit) |
-| `rx_id` | integer | yes | — | 0x0..0x7FF | its response id: what the gateway receives on (11-bit) |
+| `tx_id` | integer | yes | — | 0x0..0x1FFFFFFF | its physical request id: what the gateway sends on (11-bit unless ext) |
+| `rx_id` | integer | yes | — | 0x0..0x1FFFFFFF | its response id: what the gateway receives on (11-bit unless ext) |
+| `ext` | boolean |  | `false` |  | the routed node's ids are 29-bit identifiers (its 29-bit or normal fixed addressing): the gateway sends and receives them with the extended id (REQ-NET-021); sysgen writes it from the node's diag |
+| `max_message` | integer |  | `520` | 8..4095 | its [isotp] max_message: the gateway refuses a longer routed request at once (diagnostic NACK 0x04) rather than forward one the node would refuse on its bus (REQ-CAN-TP-023); sysgen writes it when the node's is not the default |
+| `tx_dl` | integer |  | `8` | 8, 12, 16, 20, 24, 32, 48, 64 | its [isotp] tx_dl: the frame length the gateway sends to it with (8, 12, 16, 20, 24, 32, 48 or 64; above 8 only on a CAN-FD bus); sysgen writes it when the node's is not 8, and syscheck refuses an authored route whose tx_dl is not its node's (REQ-CAN-TP-026) |
 
 <a id="ecu-boot"></a>
 
@@ -481,7 +495,7 @@ A local screen: one more ThreadX thread (boards/<board>/display.c, docs/display.
 
 ### `[[did]]`
 
-A data identifier the server reads (0x22) and may write (0x2E). Its value is ONE of: `ascii` / `bytes` (a constant), `signal` (live), `param` (a coded [[param]]), `param_status`, `tx_saturations`.
+A data identifier the server reads (0x22) and may write (0x2E). Its value is ONE of: `ascii` / `bytes` (a constant), `signal` (live), `param` (a coded [[param]]), `param_status`, `tx_saturations`. A live signal's DID may also carry a `control` (0x2F).
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
@@ -495,17 +509,30 @@ A data identifier the server reads (0x22) and may write (0x2E). Its value is ONE
 | `tx_saturations` | boolean |  | `false` |  | the count of sent values saturated to their DBC range since start (u32 BE) |
 | `read` | table → [`[[did]] read/write`](#ecu-did-access) |  | — |  | the 0x22 gate; absent = every session, no security |
 | `write` | table → [`[[did]] read/write`](#ecu-did-access) |  | — |  | the 0x2E gate (makes the DID writable; a record of exactly its size); absent = every session, no security |
+| `control` | table → [`[[did]] control`](#ecu-did-control) |  | — |  | 0x2F InputOutputControlByIdentifier on the `signal` this DID reads: a tester's value replaces the signal where the node encodes it into its frame (docs/diagnostics.md §3.1); absent = no control |
 
 <a id="ecu-did-access"></a>
 
 ### `[[did]] read/write`
 
-The sessions and the 0x27 level an access needs.
+The sessions and the security level (unlocked by 0x27 or 0x29) an access needs.
 
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
 | `session` | array of strings |  | — | `"default"`, `"extended"`, `"programming"`, `"safety"` | the sessions it is allowed in; absent = every session |
-| `security` | integer |  | `0` | 0..8 | the 0x27 level that must be unlocked (0 = none) |
+| `security` | integer |  | `0` | 0..8 | the security level (unlocked by 0x27 or 0x29) that must be unlocked (0 = none) |
+
+<a id="ecu-did-control"></a>
+
+### `[[did]] control`
+
+An input/output control (0x2F) of the output signal a live DID reads: the parameters served beside returnControlToECU, and the gate.
+
+| key | type | required | default | allowed | description |
+|---|---|---|---|---|---|
+| `parameters` | array of strings | yes | — | `"reset_to_default"`, `"freeze_current_state"`, `"short_term_adjustment"` | the control parameters served besides returnControlToECU (always served): reset to the signal's initial value, freeze the value published now, a value of the tester's |
+| `session` | array of strings |  | `["extended"]` | `"extended"`, `"safety"` | the sessions it is accepted in (never default or programming) |
+| `security` | integer |  | `0` | 0..8 | the 0x27 level that must be unlocked; 0 = the [uds] services 0x2F row's level (none if the row names none). The control is returned when that level is relocked |
 
 <a id="ecu-fault"></a>
 
@@ -572,6 +599,26 @@ The coded values one field may take (0x2E answers 0x31 outside it).
 |---|---|---|---|---|---|
 | `min` | integer |  | — |  | the lowest value (default: the type's minimum) |
 | `max` | integer |  | — |  | the highest value (default: the type's maximum) |
+
+<a id="ecu-routine"></a>
+
+### `[[routine]]`
+
+A RoutineControl (0x31) routine, run by the FB handler that reads its `<Name>Request` and writes its `<Name>Result`; answered responsePending (0x78) while it runs (docs/diagnostics.md §3.1).
+
+| key | type | required | default | allowed | description |
+|---|---|---|---|---|---|
+| `id` | integer | yes | — | 0x0..0xFFFF | the 16-bit routineIdentifier: 0x0200..0xDFFF or 0xF000..0xFEFF, unique; not the bootloader's 0xFF00 / 0xFF01 on a [boot] node |
+| `name` | string | yes | — |  | PascalCase, unique; the FB names `<name>Request` in its handler's reads and `<name>Result` in its writes |
+| `mode` | string |  | `"sync"` | `"sync"`, `"async"` | sync: 0x31 01 is answered when the routine completes; async: once the FB has accepted it (running), 03 reads its progress |
+| `stop` | boolean |  | `false` |  | 0x31 02 stopRoutine is offered (async only) |
+| `results` | boolean |  | `false` |  | 0x31 03 requestRoutineResults is offered |
+| `start_in` | integer |  | `0` | 0..32 | the option record bytes a start carries (exactly; another length is 0x13) |
+| `start_out` | integer |  | `0` | 0..32 | the record bytes the start's answer carries |
+| `results_out` | integer |  | `0` | 0..32 | the record bytes 03's answer carries (needs `results`) |
+| `timeout_ms` | integer |  | `10000` | 100..100000 | a start or stop its FB has not answered by then is answered 0x22 and the FB asked to stop |
+| `sessions` | array of strings |  | `["extended"]` | `"default"`, `"extended"`, `"safety"` | the sessions it may be started, stopped and read in |
+| `security` | integer |  | `0` | 0..8 | the security level (unlocked by 0x27 or 0x29) that must be unlocked (0 = none) |
 
 <a id="ecu-fault-memory"></a>
 
@@ -747,7 +794,7 @@ A member ECU and its system-owned identities.
 | `buses` | array of strings | yes | `[]` |  | the system buses it sits on; more than one CAN bus makes it a [[route]] gateway |
 | `nm` | integer |  | — | 0..255 | its NM node id (alive = peers lo + nm); absent = not an NM node; required for a ThreadX member of a bus with an NM cluster |
 | `trace` | integer |  | — |  | its trace node id, unique across the system (checked only, not generated) |
-| `diag` | table → [`[[node]] diag`](#system-sys-diag) |  | — |  | its ISO-TP diagnostic ids, unique across the system (checked only, not generated); required with `doip` |
+| `diag` | table → [`[[node]] diag`](#system-sys-diag) |  | — |  | its ISO-TP diagnostic ids, unique across the system by number and format: `{ req, rsp [, ext] }` or `{ addressing = "normal_fixed", sa, ta [, functional_ta] }` — sysgen lowers them into the node's [isotp] where that states no ids, and into a routing gateway's [[doip.route]]; an [isotp] that states its ids must state these (REQ-TOPO-014); required with `doip` |
 | `endpoint` | table → [`[[node]] endpoint`](#system-sys-endpoint) |  | — |  | its network identity: the address SOME/IP and DoIP answer at; required on a someip bus member (a plain IP host on the segment too) and on a DoIP entity |
 | `doip` | table → [`[[node]] doip`](#system-sys-doip) |  | — |  | the node is a DoIP entity at its endpoint address (lowered into [doip]; dissolved systems only) |
 
@@ -755,11 +802,18 @@ A member ECU and its system-owned identities.
 
 ### `[[node]] diag`
 
+The node's diagnostic allocation, stated one of two ways (as its [isotp] states them): `req` / `rsp` (normal addressing, 11-bit or with `ext` 29-bit), or `addressing = "normal_fixed"` with `sa` / `ta`, from which the 29-bit ids derive. sysgen lowers it into the node's [isotp] where that states no ids (a node without an [isotp] runs no server, and gets none) and into the [[doip.route]] of a gateway that routes to it.
+
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
-| `req` | integer |  | — |  | the diagnostic request CAN id |
-| `rsp` | integer |  | — |  | the diagnostic response CAN id |
-| `logical` | integer |  | — |  | its DoIP logical address behind a DoIP gateway that routes to it (a gateway's doip `routes`; 0x0001..0x0DFF or 0x1000..0x7FFF; unique among every logical address); needs `req` and `rsp` |
+| `addressing` | string |  | `"normal"` | `"normal"`, `"normal_fixed"` | "normal" (req / rsp) or "normal_fixed" (sa / ta: requests 0x18DA<sa><ta>, answers 0x18DA<ta><sa>) |
+| `req` | integer |  | — | 0x0..0x1FFFFFFF | the diagnostic request CAN id: 11-bit (0x000..0x7FF) unless ext; refused with normal_fixed |
+| `rsp` | integer |  | — | 0x0..0x1FFFFFFF | the diagnostic response CAN id: 11-bit unless ext; refused with normal_fixed |
+| `ext` | boolean |  | `false` |  | req and rsp are 29-bit identifiers; refused with normal_fixed (always 29-bit) |
+| `sa` | integer |  | — | 0x0..0xFF | normal_fixed: the node's own address (the target address of its requests) |
+| `ta` | integer |  | — | 0x0..0xFF | normal_fixed: the tester's address (e.g. 0xF1); not sa |
+| `functional_ta` | integer |  | — | 0x0..0xFF | normal_fixed: the functional target address (conventionally 0x33) — functional requests on 0x18DB<functional_ta><ta>; absent = none |
+| `logical` | integer |  | — |  | its DoIP logical address behind a DoIP gateway that routes to it (a gateway's doip `routes`; 0x0001..0x0DFF or 0x1000..0x7FFF; unique among every logical address); needs an allocation (req and rsp, or sa and ta) |
 
 <a id="system-sys-endpoint"></a>
 
@@ -792,7 +846,7 @@ The DoIP entity and its ISO 13400-2 transport policy (one parser for both files:
 | `announce_count` | integer |  | `3` | 0..10 | A_DoIP_Announce_Num: vehicle announcements at start-up |
 | `announce_interval_ms` | integer |  | `500` | 10..10000 | A_DoIP_Announce_Interval (ms); count x interval at most 10000 ms |
 | `route_level` | integer |  | `1` | 1..8 | a gateway's: the security level of its own server a tester must have unlocked over the network before it routes to the nodes behind it (REQ-NET-020); one its [uds] serves |
-| `allow_bench_key` | boolean |  | `false` |  | answer 0x27 with blobly_net's PUBLIC reference key over the network — a bench posture, opted into by name; required (true) when [uds] security_key = "reference" |
+| `allow_bench_key` | boolean |  | `false` |  | unlock with one of blobly_net's PUBLIC bench keys over the network — the 0x27 reference key or the 0x29 dev tester key — a bench posture, opted into by name; required (true) when [uds] security_key = "reference" or an auth_keys entry is "reference" |
 
 <a id="system-sys-signal"></a>
 

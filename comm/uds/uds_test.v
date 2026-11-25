@@ -182,6 +182,11 @@ fn test_every_supported_service_dispatches() {
 		avail:       0x7F
 	}
 	assert s.service_supported(0x19) && s.service_supported(0x14) && s.service_supported(0x85)
+	s.routines[0] = Routine{ // and 0x31 only with a routine configured (`31 00 ..` -> 0x12)
+		id: 0x0201
+	}
+	s.nroutines = 1
+	assert s.service_supported(0x31)
 	call(mut s, [u8(0x10), 0x03])
 	for sid in 0 .. 256 {
 		if !s.service_supported(u8(sid)) {
@@ -190,6 +195,19 @@ fn test_every_supported_service_dispatches() {
 		r := call(mut s, [u8(sid), 0x00, 0x00, 0x00])
 		assert !(r.len == 3 && r[0] == 0x7F && r[2] == 0x11), 'SID 0x${u8(sid).hex()} is supported but not dispatched'
 	}
+	// an authenticating node's 0x29 (auth.v) too
+	s.auth = AuthOps{
+		keyed: fn (_ voidptr, _ u8) bool {
+			return true
+		}
+		start: fn (_ voidptr, _ u8, _ &u8, _ int, _ &u8) {}
+		step:  fn (_ voidptr) AuthVerdict {
+			return .invalid
+		}
+	}
+	assert s.service_supported(0x29) && !s.service_supported(0x27)
+	r := call(mut s, [u8(0x29), 0x00, 0x00, 0x00])
+	assert !(r.len == 3 && r[0] == 0x7F && r[2] == 0x11), 'SID 0x29 is supported but not dispatched'
 }
 
 // An owner that does not act on 0x11 / 0x28 must not acknowledge them.
@@ -550,8 +568,8 @@ fn test_security_access_unlocks_with_the_reference_key() {
 	assert call(mut s, [u8(0x2E), 0xF1, 0xAA, 0x01]) == [u8(0x6E), 0xF1, 0xAA]
 }
 
-// REQ-DIAG-008 / REQ-DIAG-004: 0x27's own order — session, length, subfunction, then for sendKey
-// length and sequence; a server with no ops injected does not serve 0x27 at all.
+// REQ-DIAG-008 / REQ-DIAG-004 / REQ-DIAG-032: 0x27's own order — session, length, subfunction,
+// then for sendKey length, sequence and the lockout; a server with no ops injected does not serve 0x27 at all.
 fn test_security_access_nrc_order() {
 	mut s := secured()
 	assert call(mut s, [u8(0x27)]) == [u8(0x7F), 0x27, 0x13]
@@ -560,6 +578,15 @@ fn test_security_access_nrc_order() {
 	assert call(mut s, [u8(0x27), 0x7F]) == [u8(0x7F), 0x27, 0x12]
 	assert call(mut s, [u8(0x27), 0x02, 1, 2, 3]) == [u8(0x7F), 0x27, 0x13]
 	assert send_key(mut s, [u8(1), 2, 3, 4]) == [u8(0x7F), 0x27, 0x24] // no seed requested
+	// REQ-DIAG-032: a seed drawn before its level's lockout began (over another transport —
+	// comm/diag keeps one per transport) buys no key during it: 0x37, after the sequence, the key
+	// not judged and nothing counted, the seed spent
+	seed := call(mut s, [u8(0x27), 0x01])[2..].clone()
+	s.sa_delay_until[0] = s.now_us + 1_000_000
+	assert send_key(mut s, key_for(seed)) == [u8(0x7F), 0x27, 0x37], 'a key was judged during the lockout'
+	assert s.unlocked == 0 && s.sa_since[0] == 0 && s.sa_failed[0] == 0
+	assert send_key(mut s, key_for(seed)) == [u8(0x7F), 0x27, 0x24], 'the seed outlived its refusal'
+	s.sa_delay_until[0] = 0
 	call(mut s, [u8(0x10), 0x01])
 	assert call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x7F]
 	mut plain := started()
@@ -608,6 +635,76 @@ fn test_only_a_reset_after_wrong_keys_imposes_the_lockout() {
 	assert send_key(mut s, [u8(0), 0, 0, 1]) == [u8(0x7F), 0x27, 0x36]
 }
 
+// REQ-DIAG-033: the count a reset keeps is the wrong keys since the level's last correct key, so a
+// reset after a lockout that has ENDED still costs the full delay (no reset buys more than the
+// attempts per delay), after which the level has its attempts again; a reset during a lockout
+// restarts it; a correct key clears the count, and the next reset does not wait. (The file's header
+// tags REQ-DIAG-033.)
+fn test_a_reset_after_an_ended_lockout_costs_the_delay() {
+	mut s := secured()
+	for attempt in 1 .. 4 {
+		r := call(mut s, [u8(0x27), 0x01])
+		want := if attempt < 3 { nrc_invalid_key } else { nrc_exceeded_attempts }
+		assert send_key(mut s, key_for(r[2..]).map(it ^ 0x01)) == [u8(0x7F), 0x27, want]
+	}
+	s.tick(2_000_000) // the lockout has ended
+	assert call(mut s, [u8(0x27), 0x01])[0] == 0x67
+	s.reset_state()
+	s.tick(2_100_000)
+	call(mut s, [u8(0x10), 0x03])
+	assert call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x37], 'a reset after an ended lockout was free'
+	// a reset during that delay restarts it
+	s.tick(2_600_000)
+	s.reset_state()
+	s.tick(2_700_000)
+	call(mut s, [u8(0x10), 0x03])
+	assert call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x37]
+	s.tick(3_699_999)
+	assert call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x37], 'the reset did not restart the delay'
+	s.tick(3_700_000)
+	// the delay over: the attempts again, the limit's own answering 0x36
+	for attempt in 1 .. 3 {
+		r := call(mut s, [u8(0x27), 0x01])
+		assert r[0] == 0x67, 'attempt ${attempt}: ${r}'
+		assert send_key(mut s, key_for(r[2..]).map(it ^ 0x01)) == [u8(0x7F), 0x27, nrc_invalid_key]
+	}
+	// a correct key clears it all: the next reset does not wait
+	r := call(mut s, [u8(0x27), 0x01])
+	assert send_key(mut s, key_for(r[2..])) == [u8(0x67), 0x02]
+	s.reset_state()
+	s.tick(3_800_000)
+	call(mut s, [u8(0x10), 0x03])
+	assert call(mut s, [u8(0x27), 0x01])[0] == 0x67, 'a reset after a correct key waited'
+}
+
+// REQ-DIAG-033: a reset follows the rule a start-up restores by (sa_restart) — after an ended
+// lockout and more wrong keys, the reset's delay is followed by the level's full attempts, as a
+// target restoring a saturated count grants them, never fewer and never more.
+fn test_a_reset_after_an_ended_lockout_and_more_wrong_keys_grants_the_attempts() {
+	mut s := secured()
+	for attempt in 1 .. 4 {
+		r := call(mut s, [u8(0x27), 0x01])
+		want := if attempt < 3 { nrc_invalid_key } else { nrc_exceeded_attempts }
+		assert send_key(mut s, key_for(r[2..]).map(it ^ 0x01)) == [u8(0x7F), 0x27, want]
+	}
+	s.tick(2_000_000) // the lockout has ended
+	for _ in 0 .. 2 {
+		r := call(mut s, [u8(0x27), 0x01])
+		assert send_key(mut s, key_for(r[2..]).map(it ^ 0x01)) == [u8(0x7F), 0x27, nrc_invalid_key]
+	}
+	s.reset_state()
+	s.tick(2_100_000)
+	call(mut s, [u8(0x10), 0x03])
+	assert call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x37]
+	s.tick(3_100_000)
+	for attempt in 1 .. 4 {
+		r := call(mut s, [u8(0x27), 0x01])
+		assert r[0] == 0x67, 'attempt ${attempt}: ${r}'
+		want := if attempt < 3 { nrc_invalid_key } else { nrc_exceeded_attempts }
+		assert send_key(mut s, key_for(r[2..]).map(it ^ 0x01)) == [u8(0x7F), 0x27, want], 'attempt ${attempt}'
+	}
+}
+
 // A boot (init) with no history unlocks at once.
 fn test_boot_imposes_no_lockout() {
 	mut s := started()
@@ -620,7 +717,8 @@ fn test_boot_imposes_no_lockout() {
 }
 
 // REQ-DIAG-032: failures are counted per level — unlocking a level whose key is known must not
-// reset the count of wrong keys for another (codex #296: brute force through a known level).
+// reset the count of wrong keys for another (codex #296: brute force through a known level) — and
+// a level's lockout delays only its own seed.
 fn test_failed_keys_are_counted_per_level() {
 	mut s := secured()
 	s.security_levels = 0x03 // levels 1 and 2
@@ -634,6 +732,12 @@ fn test_failed_keys_are_counted_per_level() {
 			assert send_key(mut s, key_for(r[2..])) == [u8(0x67), 0x02]
 		}
 	}
+	// and the delay is per level: level 2's lockout refuses its own seed, not level 1's
+	assert call(mut s, [u8(0x27), 0x03]) == [u8(0x7F), 0x27, nrc_time_delay_not_expired]
+	call(mut s, [u8(0x10), 0x03])
+	r := call(mut s, [u8(0x27), 0x01])
+	assert r[0] == 0x67, "level 2's lockout delayed level 1's seed"
+	assert send_key(mut s, key_for(r[2..])) == [u8(0x67), 0x02]
 }
 
 // REQ-DIAG-023: a session transition relocks and voids an outstanding seed.
@@ -693,36 +797,6 @@ fn test_a_too_small_buffer_silences_the_server() {
 	assert call(mut s, [u8(0x19)]).len == 0
 	s.init(min_resp_cap)
 	assert call(mut s, [u8(0x10), 0x03]).len == 6
-}
-
-// what an owner that restarts the MCU keeps across its reset: the counts, and a running lockout —
-// whose count the server has already zeroed — so neither a reset between guesses nor one during
-// a lockout buys fresh attempts
-fn test_security_state_kept_across_the_owners_reset() {
-	mut s := Server{}
-	s.init(64)
-	s.sa_failed[0] = 2
-	mut k := s.kept_security()
-	assert k[0] == 2 && k[max_security_level] == 0
-	mut t := Server{}
-	t.init(64)
-	t.restore_security(k)
-	assert t.sa_failed[0] == 2 && t.sa_arm_delay
-	// a lockout running, its count already zeroed
-	s.sa_failed[0] = 0
-	s.now_us = 1000
-	s.sa_delay_until = 5000
-	k = s.kept_security()
-	assert k[0] == 0 && k[max_security_level] == 1
-	mut r := Server{}
-	r.init(64)
-	r.restore_security(k)
-	assert r.sa_arm_delay, 'a lockout running at the reset must run on from boot'
-	// nothing to keep: nothing armed
-	mut q := Server{}
-	q.init(64)
-	q.restore_security([kept_len]u8{})
-	assert !q.sa_arm_delay
 }
 
 // The service table. A server with every seam wired (0x27, the fault memory, 0x11 and 0x28), so
@@ -944,3 +1018,25 @@ fn test_the_active_session_did() {
 	assert call(mut raw, [u8(0x22), 0xF1, 0x86]) == [u8(0x7F), 0x22, 0x31]
 }
 
+// @verifies REQ-CAN-TP-022
+// a DID's 0x22 answer, and the 0x2E request writing it, are did_answer_len of its data
+fn test_a_did_answer_is_did_answer_len_long() {
+	mut s := Server{}
+	s.init(256)
+	s.dids[0] = Did{
+		id:       0x0110
+		len:      u8(max_did_data)
+		writable: true
+	}
+	s.ndid = 1
+	mut resp := [256]u8{}
+	req := [u8(0x22), 0x01, 0x10]
+	assert s.handle(&req[0], req.len, &resp[0]) == did_answer_len(max_did_data)
+	s.session = session_extended
+	mut w := [u8(0x2E), 0x01, 0x10]
+	for _ in 0 .. max_did_data {
+		w << 0x5A
+	}
+	assert w.len == did_answer_len(max_did_data)
+	assert s.handle(unsafe { &w[0] }, w.len, &resp[0]) == 3 && resp[0] == 0x6E
+}

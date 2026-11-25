@@ -13,7 +13,7 @@ handlers, wired by the **Loom**, over a comms stack we own. **Start with
 `docs/architecture.md`** for how the pieces fit. See `docs/` for the deeper
 rationale (`no-alloc.md`, `memory-protection.md`, `multicore-perf.md`,
 `threadx-amp.md`, `fb-placement.md` — what an FB can do on each core, as REQ-PLACE-* —
-`communication.md`, `diagnostics.md` — the fault-memory / diagnostic-server
+`communication.md`, `can-tp.md` — ISO-TP on CAN: what of ISO 15765-2 is implemented and the choices the standard leaves open — `diagnostics.md` — the fault-memory / diagnostic-server
 plan (#286–#288) — `autosar-comparison.md` — which RTE/COM
 patterns we keep, plan, or skip — `ways-of-working.md` — how many teams + a
 weekly DBC stay in sync via the signal-name contract — and `porting.md` — the
@@ -38,7 +38,11 @@ comm/   comms stack: com (tx modes; encode_raw, the ONE send encode — emitted 
         signal at GenSigStartValue or the in-range value nearest 0, candb init_payload, emitted by loom2v
         pdu_init_lines alone (#399); the receive rule — RxMonitor / RxGate in rxmon.v, ONE rule the host
         bridge and the ThreadX comm thread both run, emitted by tools/loom2v/gen_rx.v), e2e (AUTOSAR E2E
-        Profile 1), secoc (AES-CMAC), isotp (15765-2), uds (14229), nm,
+        Profile 1), secoc (AES-CMAC), isotp (15765-2: a link holds no buffer — its owner binds them, sized by the node's `[isotp] max_message`, 8..4095, default 520; it transmits at the node's `[isotp] tx_dl` — 8, or a CAN-FD length up to 64 on an fd bus — and receives any frame length; N_Bs / N_Cr / N_Ar; ids by normal addressing, 11-bit or 29-bit with `ext`, or normal fixed addressing — `sa` / `ta`, `addressing.v` `fixed_id` — read by ONE reader, `tools/ecumodel` `diag_ids`, for `[isotp]` and a system node's `diag` alike — a dissolved node's `[isotp]` that states no physical ids takes its `diag`, which sysgen lowers into it (a `functional_id`, and an `ext` agreeing with the allocation, may be stated beside a normal-addressing one), and one that states them must equal it (REQ-TOPO-014); a `diag` with one of `req` / `rsp` is refused; the format is part of the id everywhere; run on silicon once (zone_a, `isotp-29bit-silicon`); no extended or mixed addressing, no hardware acceptance filters; docs/can-tp.md), uds (14229 — it
+        serves 0x31 `[[routine]]`s, each run by an FB through two cells, and answers responsePending
+        0x78 while one runs: routine.v, pending.v; 0x2F on a live `[[did]]` with a `control`, the
+        tester's value replacing the FB's where the owner encodes the signal: io_control.v; a node
+        unlocks its levels by 0x27 or — `[uds] access = "authentication"` — by 0x29 ACR with Ed25519, auth.v, the same levels, count and lockout, every unlock granted or dropped through `Server.relock` / `end_levels` alike — a proof answered 0x78 and verified a slice per pass while its answer is owed (pending.v), never a whole verify in one pass; docs/diagnostics.md §3.1), udsauth (the per-level 0x29 public keys and bcrypto's stepped verify, `VerifyJob`, behind `uds.AuthOps`; `scripts/auth_target_check.sh` cross-builds such a ThreadX node), nm,
         fault (debounce + fault memory behind 0x19/0x14/0x85; snapshots, extended data, displacement
         and its persistence in the NvM journal — entry.v, persist.v), param (variant coding: read-only
         FB inputs coded with 0x2E on a bound DID, one NvM journal record each, docs/diagnostics.md §3.4),
@@ -49,7 +53,11 @@ comm/   comms stack: com (tx modes; encode_raw, the ONE send encode — emitted 
         drain — is step.v, which the bootloader runs whole as serve_step), diagroute (a DoIP
         gateway's tester on its buses: a diagnostic message for a node behind it forwarded on the
         node's ids and its answers returned from its logical address — REQ-NET-019, only for a
-        tester holding the gateway's own unlock for its connection, REQ-NET-020; docs/net.md)
+        tester holding the gateway's own unlock for its connection, REQ-NET-020; up to the
+        gateway's own max_message — a longer answer answered 0x14 in the node's name, a routed 0x34's
+        block length lowered to it, REQ-CAN-TP-025 — and a request up to its node's ([[doip.route]]
+        max_message; longer is NACK 0x04), REQ-CAN-TP-023, sent at its node's frame length ([[doip.route]]
+        tx_dl, REQ-CAN-TP-026); docs/net.md)
 driver/ driver port: can — SocketCAN (host) / ST FDCAN HAL / AUTOSAR CanIf (CDD); see docs/porting.md
 osal/   OS abstraction: time, cores, IOC (sim=POSIX, target=ThreadX AMP)
 tools/  BUILD-TIME only (heap OK): dbc2cfg, cfg2v, loom2v, sigmap, benches, candb
@@ -183,6 +191,10 @@ each example's `test/` (blobly_net project + Lua), run by `make test`.
 feature branch runs only `guard`, so a green tick there is the identity check, NOT the test
 gate. Open the PR to get one.
 
+ci.yml's two jobs (`test`, `cross`) run on **`ubuntu-24.04`**, pinned rather than `ubuntu-latest`: 24.04 is the supported
+floor, and when `ubuntu-latest` became 26.04 (2026-11) its gcc 14 and arm-none-eabi 14.2 broke the
+build under every open PR at once. Moving to a newer image is its own PR.
+
 It runs more than the four you would run by hand: host unit tests
 (`v -cc cc -nocache -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot`), `make lint`,
 `make check`, `make trace-check` (not `make trace`), `syscheck`, `v -cc cc -nocache -enable-globals test
@@ -247,7 +259,8 @@ the boot request cell and the reset by 0x11's path; docs/bootloader.md "App → 
 That file includes the board's `bootmap.h`; on a board with none the build stops there, naming
 `[boot]`. A `[boot]` node's `gen/loom_build.mk` also includes **`boot/boot.mk`**: the ONE boot
 manager program (`boot/target/main.v`, `boards/common/boot_glue.c`) built for that node from its
-`[isotp]` and `[boot]` keys (`gen/boot_gen.h`) and its board's `bootmap.h`, the application linked
+`[isotp]` and `[boot]` keys (`gen/boot_gen.h`; its message buffers are one block sized by `[isotp]
+max_message` through the `boot.bufs` layout, which the image carves it by too) and its board's `bootmap.h`, the application linked
 at the app slot, `make image SW_VERSION=<n>`, and `make flash` = boot + factory image
 (`threadx_makefiles_test.v` pins that). The system_full CAN nodes all run that way, so
 **`make flash` on domain / sysnode / zone_a writes the boot at 0x08000000 and the app at
@@ -262,7 +275,10 @@ the two variants of the serve loop. zone_a's NvM journal (its persisted fault me
 flash sectors 6 + 7 (`boards/h723/bootmap.h` NVM_*, outside the app region, which is sectors 1..5) and
 holds its persisted fault memory and its `SteerLimit` parameter: `make flash` never erases it, so DTCs
 and coded parameters survive a reflash — clear DTCs with 0x14, recode a parameter with 0x2E
-(`test/param_zone_a.lua` leaves it at 360).
+(`test/param_zone_a.lua` leaves it at 360). sysnode's H735 has the same map (app sectors 1..5, its
+journal sectors 6 + 7, `boards/h735dk/bootmap.h`), its journal holding the 0x27 failed-key state —
+every node that performs 0x27 (or 0x29, whose failed proofs it counts too) declares `[nvm]` (docs/diagnostics.md §3.1); a bench H735 whose boot
+predates that map needs `make flash` (boot included) and sectors 6 + 7 erased once.
 
 **CI pins the V compiler, and it is V3**: the commit in `.v-version` (today master `5f7d4d0`, the newest
 commit with a vc bootstrap generated from it once vlang/v#30964 and #30972 had merged; vlang/v#30552,
@@ -427,6 +443,10 @@ Three things that make the loop work:
   test.) On hardware: never flash the bench from two sessions at once.
 - **Update this file in the PR that lands the work**, especially new modules or a changed
   build/flash step. A guide that drifts is worse than none: it gets believed.
+- **A diagram is edited in its script, never by hand.** Every `docs/*.drawio.svg` is drawn by a
+  script in `docs/diagrams/` (`python3 docs/diagrams/<name>.py docs`; `drawio.py` is the
+  generator: plain SVG plus the mxfile draw.io opens), and `scripts/diagrams_check.sh`, in CI,
+  fails when a committed SVG differs from what its script draws.
 
 ### Polling a codex review
 

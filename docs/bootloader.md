@@ -102,7 +102,7 @@ the handoff instead of refusing it:
    server exactly as it was.
 3. **Performed as an answered reset** by the comm thread (`diag_target_reset`): the same path 0x11
    takes — the bounded controller drain (REQ-BOOT-012), on a `[doip]` node the
-   `doip_tx_pending()` wait, the NvM flush, the 0x27 keep cell — then the **boot request cell**
+   `doip_tx_pending()` wait, the NvM flush (the 0x27 failed-key state with it) — then the **boot request cell**
    (`boards/common/bootcell.h`, one statement of the cells for both sides, addresses from the
    board's `bootmap.h`) and the reset. `[boot]` also serves DID **0xF195**: the running image's
    header `sw_version`, so a tester can see which image the bootloader started.
@@ -129,7 +129,7 @@ The boot manager keeps the promise: the request cell carries WHY it was written
 (`BOOTCELL_REQ_HANDOFF`, or `BOOTCELL_REQ_SHELL` for the bench `boot` command), and on a handoff
 `boot.Prog.open_handed_off` starts the server in the programming session — locked, and timed by
 S3 like any session, so a tester that never speaks loses it and the stay-window (REQ-BOOT-014)
-gives the ECU back to the application (docs/diagnostics.md §7, "the session survives the
+gives the ECU back to the application (docs/diagnostics.md §6, "the session survives the
 handoff"). Serving on the ids and bus of the node's own `[isotp]` is the per-node bootloader's,
 built per node ("One boot manager, every node", below).
 
@@ -143,18 +143,19 @@ The boot manager is **one program** — `boot/target/main.v` with its C half
 |---|---|---|
 | flash layout, cells | the board's `bootmap.h` (`boards/h755zi`, `h735dk`, `h723`) | C macros; `scripts/boot_layout.sh` reads the same header for make (the boot's link limit, the app's link at `APP_VECTORS`, the flash addresses) |
 | flash driver | the board's `BOARD_FLASH` (board.mk) | `boards/h755zi/flash.c` (dual bank); `boards/common/flash_h72x.c` for the single-bank H723 and H735 |
-| bus, ids, flow control, frame format | the node's `[isotp]` and its bus | `gen/boot_gen.h` (loom2v): the comm thread's FDCAN index, its `fd`, `rx_id`/`tx_id`, `bs`/`stmin` |
+| bus, ids and their format, flow control, frame format and length | the node's `[isotp]` and its bus | `gen/boot_gen.h` (loom2v): the comm thread's FDCAN index, its `fd`, `rx_id`/`tx_id` (`BOOT_RX_ID`/`BOOT_TX_ID`; normal fixed addressing's derived ids on such a node), whether they are 29-bit (`BOOT_EXT`: `[isotp] ext` or normal fixed addressing — a tester reaches the bootloader on the ids, and in the format, it used for the application), `bs`/`stmin`, `tx_dl` (`BOOT_TX_DL`: the frame length it answers with, above 8 only with `BOOT_CAN_FD`); the link takes the flow control and frame length through `boot.LinkCfg` (`boot/link.v`), every field required, so the image cannot leave one out |
 | keys | the node's `[boot]` `image_key` / `session_key` (public, 64 hex; required — no silent default) | `gen/boot_gen.h` |
 | 0x29 challenge | the board's TRNG | `diag_board.c`'s `diag_sa_init`/`diag_sa_seed`, the RNG driver the application's 0x27 uses |
 
-Its serve loop is not its own either: the transport side — frame intake with the truncation
-rule, a request dropped while an answer is in flight, the answer pumped with a refused frame
+Its serve loop is not its own either: the transport side — frame intake at the length a frame
+arrived, judged against its PCI by the link, a request dropped while an answer is in flight, the answer pumped with a refused frame
 aborting it (and its reset), S3 held while an exchange is in flight, the wire drain before a reset —
 is `comm/diag/step.v`, the one the application's `Connection` uses; the boot runs it whole
 (`diag.serve_step`) and keeps only the decision, the flash ops and the stay-window.
 
 So a tester addresses the application and then its bootloader **identically**: same bus, same
-ids, and on zone_a's CAN-FD edge bus the same FD frames with classic-sized ISO-TP. The boot also
+ids, and on zone_a's CAN-FD edge bus the same FD frames at the node's TX_DL (64, its `[isotp] tx_dl`;
+a tester's frames of any length are taken, docs/can-tp.md §3.5). The boot also
 answers DID 0xF195 (the installed image's `sw_version`), the DID the application serves.
 
 `make` on a `[boot]` node builds both images (`all: boot`) with the application linked at the
@@ -219,9 +220,10 @@ dies with the connection, one whose answer was acknowledged never does (a reques
 it dropping takes nothing with it), and a bus frame the controller refuses cancels neither — one
 rule, `uds.RemoteReset` (comm/uds remote.v), which the application's server keeps too; and a connection that drops ends the session
 it held once it has spoken in it — a stray connection that drops first does not end a handoff. A
-DoIP message holds one ISO-TP message (`comm/doip` `max_msg` = header + addresses + 520), so the
-boot's 512-byte TransferData blocks fit — blobly_net's `flash.program` runs over a DoIP connection
-unchanged (checked against an in-process entity answering 514-byte blocks).
+DoIP message holds one ISO-TP message of the node's maximum length (`comm/doip` `msg_len` =
+header + addresses + the node's `[isotp] max_message`), so the boot's TransferData blocks fit —
+blobly_net's `flash.program` runs over a DoIP connection unchanged (checked against an in-process
+entity answering 514-byte blocks).
 
 **The handoff over DoIP.** The application's server accepts a remote 0x10 02 only when its
 bootloader serves DoIP (`Connection.handoff_remote`, generated for `[boot]` + `[doip]`; otherwise
@@ -258,7 +260,7 @@ Plain UDS, because it is already transport-neutral by construction:
 | identify | 0x22 read DID | bootloader + app version/validity (REQ-BOOT-009) |
 | authenticate | 0x29 Authentication | challenge/response; the tester signs, the boot verifies with its public key (REQ-BOOT-016) |
 | erase | 0x31 routine: erase region | region = app area only (REQ-BOOT-008 enforced here); answered responsePending (0x78), then a sector per step (below) |
-| transfer | 0x34 / 0x36 × N / 0x37 | block-wise, per-block ack (ISO-TP flow control does the pacing on CAN; DoIP brings its own) |
+| transfer | 0x34 / 0x36 × N / 0x37 | block-wise, per-block ack (ISO-TP flow control does the pacing on CAN; DoIP brings its own). The block follows the connection (below) |
 | verify | 0x31 routine: check image | full-image CRC (+ signature when REQ-BOOT-011 lands) — only THEN is the header's valid mark written (REQ-BOOT-005) |
 | go | 0x11 ECU reset | boot decision runs again, now finds a valid image |
 
@@ -284,8 +286,9 @@ work not done twice), given up after `work_resend_max` tries. A push still waiti
 connection drops is never sent to the next tester, and the routine goes with it. So no gap
 between responses is longer than one sector's erase, well inside P2* (5 s). The image check (0x31
 FF01: CRC + SHA-512 + Ed25519 over the image) is answered `7F 31 78` and done in one step the same
-way. A 0x36 block is not: its 512 bytes are 16 flash-word programs (H7: 256 bits each, on the order of 100 µs at most)
-— a couple of milliseconds of stall at most, inside P2. A request while a routine runs is answered
+way. A 0x36 block is not: at the default its 512 bytes are 16 flash-word programs (H7: 256 bits
+each, on the order of 100 µs at most) — a couple of milliseconds of stall at most, inside P2; at a
+4095-byte maximum its 4064 bytes are 127 of them, about 13 ms, still inside P2 (50 ms). A request while a routine runs is answered
 busyRepeatRequest (0x21).
 
 `comm/uds` today serves DIDs; the bootloader adds 0x10/0x29/0x31/0x34/0x36/0x37/0x11 —
@@ -299,6 +302,34 @@ blobly_net already carries a `doip` module for the host half. No service, block
 format, or session state may reference frame sizes or bus timing (REQ-BOOT-006);
 block size is the transport binding's business, exactly like the trace dump's
 `pack_chunk(cap)`.
+
+**The block follows the connection** (REQ-BOOT-020). The bootloader's 0x34 answer advertises the
+longest TransferData block its connection's maximum message length — the node's `[isotp]
+max_message`, 520 by default — holds in whole flash words: `block_data` = (`max_message` − 2)
+rounded down to 32 bytes (`boot.block_data_for`), and maxNumberOfBlockLength is that plus the two
+service bytes. A longer 0x36 is refused 0x13; a connection too short for one word per block refuses
+0x34 with 0x22 (generation refuses a `max_message` below the 66-byte 0x29 proof anyway):
+
+| `max_message` | data per block | maxNumberOfBlockLength | flash-word programs per block |
+|---|---|---|---|
+| 520 (default) | 512 | 514 (`74 20 02 02`) | 16 |
+| 4095 (system_full's zone_a) | 4064 | 4066 (`74 20 0F E2`) | 127 (about 13 ms at the H7's word time, inside P2) |
+
+The bootloader's message buffers follow it too: the request and response buffers (`max_message`
+each, the link reassembling into one and sending from the other), and on a `[doip]` node the
+entity's assembly buffer, a receive chunk, the response stream and the mailbox's two buffers — one
+block `boards/common/boot_glue.c` declares from `gen/boot_gen.h` (`BOOT_MAX_MESSAGE`, and
+`BOOT_BUF_LEN` = the `boot.bufs` layout's total, which the image carves the block by too and parks on
+when the block is smaller). Of the boot's 128 KB of RAM:
+
+| `max_message` | bus-only bootloader | on a `[doip]` node |
+|---|---|---|
+| 520 (default) | 1040 bytes | 3692 bytes |
+| 4095 | 8192 bytes | 28720 bytes (about 28 KB: four 4096-byte messages, two DoIP assembly buffers and the response stream) |
+
+Through a DoIP gateway whose maximum is smaller, the gateway lowers the block length the 0x34 answer
+offers to its own maximum, and the bootloader takes the shorter blocks as it takes the last one
+(REQ-CAN-TP-025, [net.md](net.md)).
 
 ## Atomic activation (REQ-BOOT-007) — two strategies, one requirement
 
@@ -412,6 +443,16 @@ authenticates. `0x29` replaces the legacy `0x27` seed/key: instead of a shared s
 the ECU issues a random challenge and the tester returns a **signature** over it, which
 the ECU verifies with the public key it already holds. Nothing extractable from an ECU
 lets an attacker forge it.
+
+The bootloader's profile is its own: sub-functions 01 (challenge) and 02 (proof). An
+APPLICATION can serve 0x29 too, with `[uds] access = "authentication"` — ISO's 05 / 06
+(requestChallengeForAuthentication, verifyProofOfOwnershipUnidirectional) granting a security
+level instead of the flash services ([diagnostics.md](diagnostics.md) §3.1). Both are Ed25519,
+verified by the same `bcrypto` verifier, with one dev key — `examples/keys/tester.seed` signs for
+both, its public half the bootloader's `session_key` and an application's `auth_keys = { "1" =
+"reference" }` — but not one message: the bootloader's proof signs the bare 32-byte challenge, an
+application's a domain-separated message (a context, the level, the challenge), so a proof made
+for one is never a proof for the other.
 
 ```mermaid
 sequenceDiagram

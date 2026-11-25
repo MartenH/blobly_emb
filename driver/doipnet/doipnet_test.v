@@ -1,6 +1,8 @@
 module doipnet
 
 import comm.doip
+import comm.uds as udsc
+import os
 
 // The DoIP network loop against a scripted stream: what a pass sends, when it drops the
 // connection, and what it reports about routing activation — the same loop the application's
@@ -86,8 +88,23 @@ fn echo(_ voidptr, req &u8, n int, _ bool, resp &u8, _ int) int {
 	return n
 }
 
-fn entity() doip.Server {
+// the sizes of an entity at the default maximum message length
+const max_uds = 520
+// spelled out because a fixed array's size must be a constant expression; held to doip.msg_len /
+// resp_len by test_the_buffer_sizes_are_the_entitys
+const max_msg = doip.header_len + 4 + max_uds
+const max_resp = doip.header_len + 5 + doip.header_len + 4 + max_uds
+
+// bound: an entity whose assembly buffer, its own, holds a max_uds message
+fn bound() doip.Server {
 	mut s := doip.Server{}
+	buf := []u8{len: doip.msg_len(max_uds)}
+	s.bind(&buf[0], max_uds)
+	return s
+}
+
+fn entity() doip.Server {
+	mut s := bound()
 	s.entity_addr = 0x07A0
 	s.serve.answer = echo
 	return s
@@ -95,8 +112,8 @@ fn entity() doip.Server {
 
 struct Bufs {
 mut:
-	inb [doip.max_msg]u8
-	out [doip.max_resp]u8
+	inb [max_msg]u8
+	out [max_resp]u8
 }
 
 fn test_activation_then_a_request_in_one_receive() {
@@ -188,9 +205,34 @@ fn test_receive_is_bounded_by_the_assembly_room() {
 	for _ in 0 .. 3 {
 		pass(mut f, mut s, &b.inb[0], &b.out[0])
 	}
-	assert f.offered == [doip.max_msg, doip.max_msg, doip.max_msg - 20]
+	assert f.offered == [max_msg, max_msg, max_msg - 20]
 	assert s.buf_len == 0
 	assert f.sent.len == 2
+}
+
+// @verifies REQ-CAN-TP-023
+// a message longer than the entity assembles is refused with the generic NACK 0x02 as soon as its
+// header is in, and discarded as its bytes arrive: the connection stays open (ISO 13400-2's
+// generic header handler), and the next message — arriving in the receive that ends the refused
+// one — is served
+fn test_a_message_too_large_is_refused_and_skipped_on_an_open_connection() {
+	mut s := entity()
+	mut b := Bufs{}
+	big := diag([]u8{len: max_uds + 1, init: 0x2E})
+	assert big.len == max_msg + 1
+	mut tail := big[500..].clone()
+	tail << diag([u8(0x3E), 0x00])
+	mut f := Fake{
+		chunks: [activation(), big[..8], big[8..500], tail]
+	}
+	for _ in 0 .. 4 {
+		pass(mut f, mut s, &b.inb[0], &b.out[0])
+	}
+	assert f.drops == 0 && s.activated && !s.fatal
+	assert f.sent.len == 3
+	assert f.sent[1].len == 9 && f.sent[1][2] == 0x00 && f.sent[1][3] == 0x00 && f.sent[1][8] == 0x02
+	assert f.sent[2].len == (8 + 5) + (8 + 4 + 2) && f.sent[2][13 + 12] == 0x7E
+	assert s.buf_len == 0 && s.skip == 0
 }
 
 // a connection that drops mid-message leaves nothing of it for the next connection
@@ -232,7 +274,7 @@ fn test_a_pushed_response_goes_to_the_activated_tester() {
 // while connected, framed from the routed node.
 // @verifies REQ-NET-019
 fn routed_gateway() doip.Server {
-	mut s := doip.Server{}
+	mut s := bound()
 	s.entity_addr = 0x07A0
 	s.activated = true
 	s.tester_addr = 0x0E00
@@ -244,7 +286,7 @@ fn routed_gateway() doip.Server {
 fn test_a_routed_answer_goes_to_the_tester_from_the_routed_node() {
 	mut f := Fake{}
 	mut s := routed_gateway()
-	mut out := [doip.max_resp]u8{}
+	mut out := [max_resp]u8{}
 	ans := [u8(0x62), 0xF1, 0x90, 0x5A]
 	assert routed(mut f, mut s, 0x07C0, 4, &ans[0], ans.len, &out[0])
 	assert f.sent.len == 1
@@ -259,7 +301,7 @@ fn test_a_routed_answer_goes_to_the_tester_from_the_routed_node() {
 fn test_an_answer_to_an_earlier_request_or_connection_is_no_ones() {
 	mut f := Fake{}
 	mut s := routed_gateway()
-	mut out := [doip.max_resp]u8{}
+	mut out := [max_resp]u8{}
 	ans := [u8(0x7E), 0x00]
 	assert !routed(mut f, mut s, 0x07C0, 3, &ans[0], ans.len, &out[0]) // the tester moved on
 	s.activated = false
@@ -274,7 +316,7 @@ fn test_an_answer_to_an_earlier_request_or_connection_is_no_ones() {
 fn test_the_answer_after_a_response_pending_is_still_taken() {
 	mut f := Fake{}
 	mut s := routed_gateway()
-	mut out := [doip.max_resp]u8{}
+	mut out := [max_resp]u8{}
 	pending := [u8(0x7F), 0x31, 0x78]
 	final := [u8(0x71), 0x01, 0xFF, 0x00]
 	assert routed(mut f, mut s, 0x07C0, 4, &pending[0], pending.len, &out[0])
@@ -297,13 +339,14 @@ fn test_the_routers_verdicts_are_diagnostic_nack_codes() {
 	assert verdict_code(.unknown_target) == int(doip.dnack_unknown_target)
 	assert verdict_code(.locked) == int(doip.dnack_unreachable)
 	assert verdict_code(.busy) == int(doip.dnack_out_of_memory)
+	assert verdict_code(.too_large) == int(doip.dnack_too_large)
 	assert verdict_code(.refused) == int(doip.dnack_transport_error)
 }
 
 fn test_an_answer_due_when_the_connection_ends_never_reaches_the_next_tester() {
 	mut f := Fake{}
 	mut s := routed_gateway()
-	mut out := [doip.max_resp]u8{}
+	mut out := [max_resp]u8{}
 	due := s.ticket
 	end(mut f, mut s)
 	// the next tester activates on a fresh connection, without the gateway's unlock
@@ -311,4 +354,71 @@ fn test_an_answer_due_when_the_connection_ends_never_reaches_the_next_tester() {
 	ans := [u8(0x62), 0xF1, 0x90, 0x5A]
 	assert !routed(mut f, mut s, 0x07C0, due, &ans[0], ans.len, &out[0])
 	assert f.sent.len == 0
+}
+
+// @verifies REQ-CAN-TP-023
+// the loop follows the entity's maximum message: at 4095 a receive is offered the whole assembly
+// room and a 4095-byte request is served whole, through a response buffer of the entity's size
+fn test_the_loop_follows_the_entitys_maximum_message() {
+	mut s := doip.Server{}
+	big := []u8{len: doip.msg_len(4095)}
+	s.bind(&big[0], 4095)
+	s.entity_addr = 0x07A0
+	s.serve.answer = echo
+	inb := []u8{len: s.msg_cap()}
+	out := []u8{len: s.resp_cap()}
+	req := diag([]u8{len: 4095, init: 0x22})
+	mut f := Fake{
+		chunks: [activation(), req]
+	}
+	for _ in 0 .. 2 {
+		pass(mut f, mut s, &inb[0], &out[0])
+	}
+	assert f.offered == [doip.msg_len(4095), doip.msg_len(4095)]
+	assert f.sent.len == 2 && f.sent[1].len == 13 + 12 + 4095
+}
+
+// @verifies REQ-CAN-TP-023
+// a routed answer is framed up to the entity's limit and no further: one of max_uds goes to the
+// tester, one byte more is not framed (the response buffer holds a max_uds message) and the answer
+// stays due
+fn test_a_routed_answer_past_the_entitys_limit_is_not_framed() {
+	mut f := Fake{}
+	mut s := routed_gateway()
+	mut out := [max_resp]u8{}
+	mut ans := []u8{len: max_uds + 1, init: u8(index)}
+	ans[0] = 0x62
+	assert !routed(mut f, mut s, 0x07C0, 4, unsafe { &ans[0] }, ans.len, &out[0])
+	assert f.sent.len == 0 && s.route_open
+	assert routed(mut f, mut s, 0x07C0, 4, unsafe { &ans[0] }, max_uds, &out[0])
+	assert f.sent.len == 1 && f.sent[0][12..] == ans[..max_uds]
+}
+
+fn test_the_buffer_sizes_are_the_entitys() {
+	assert max_msg == doip.msg_len(max_uds)
+	assert max_resp == doip.resp_len(max_uds)
+}
+
+
+// The push slot is one size in both halves: doip_netx.c's MB_PUSH_MAX (what doip_mb_push_resp takes)
+// and push_max, which sizes the doip thread's buffer (a larger push_max with a smaller buffer would
+// leave a push the buffer cannot take for ever).
+fn test_the_push_slot_is_one_size() {
+	c := os.read_file(os.join_path(@VMODROOT, 'driver', 'eth', 'doip_netx.c')) or { panic(err) }
+	line := c.split_into_lines().filter(it.starts_with('#define MB_PUSH_MAX '))
+	assert line.len == 1
+	assert line[0].all_after('#define MB_PUSH_MAX ').trim_space().int() == push_max
+	v := os.read_file(os.join_path(@VMODROOT, 'driver', 'doipnet', 'netx_d_freestanding.v')) or {
+		panic(err)
+	}
+	assert v.contains('mut pushed := [push_max]u8{}')
+}
+
+// What is pushed fits the slot: a 0x29 06's ownershipVerified (21 bytes — a valid proof is granted
+// only where its answer fits, so a smaller slot would make authentication over DoIP fail for ever),
+// and comm/diag's authentication test pushes at this same size (it cannot import this module).
+fn test_the_push_slot_holds_an_authentication_answer() {
+	assert push_max >= udsc.auth_proof_answer_len
+	t := os.read_file(os.join_path(@VMODROOT, 'comm', 'diag', 'auth_test.v')) or { panic(err) }
+	assert t.contains('const doip_push_max = ${push_max}\n')
 }

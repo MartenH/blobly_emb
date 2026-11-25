@@ -73,14 +73,14 @@ pub fn (n Netx) activated(on bool) {
 
 // run is the doip thread's body (doip_netx.c calls the image's blobly_doip_run once its sockets
 // are up): `count` vehicle announcements `interval_ms` apart (A_DoIP_Announce_Num /
-// A_DoIP_Announce_Interval), then one tester at a time, forever. inb holds doip.max_msg bytes,
-// out doip.max_resp.
+// A_DoIP_Announce_Interval), then one tester at a time, forever. inb holds s.msg_cap() bytes,
+// out s.resp_cap() (the node's maximum message length decides both).
 pub fn run(mut s doip.Server, count int, interval_ms int, inb &u8, out &u8) {
 	run_gateway(mut s, count, interval_ms, inb, out, unsafe { nil })
 }
 
 // run_gateway is run for a gateway (REQ-NET-019): the answers of the nodes behind it come out of
-// doip_netx.c's route channel into `ans` (doip.max_uds bytes, registered with doip_rt_init) and go
+// doip_netx.c's route channel into `ans` (s.max_uds bytes, registered with doip_rt_init) and go
 // to the tester as diagnostic messages from those nodes. ans = nil: a node that routes nothing.
 pub fn run_gateway(mut s doip.Server, count int, interval_ms int, inb &u8, out &u8, ans &u8) {
 	if count > 0 {
@@ -96,7 +96,7 @@ pub fn run_gateway(mut s doip.Server, count int, interval_ms int, inb &u8, out &
 		}
 	}
 	mut st := Netx{}
-	mut pushed := [16]u8{}
+	mut pushed := [push_max]u8{}
 	mut fast_since := u32(0)
 	mut fast_ticket := s.ticket
 	for {
@@ -159,8 +159,8 @@ pub fn route(ctx voidptr, idx int, req &u8, n int, conn u32, ticket u32) int {
 // first routed request too), and the routed request waiting, judged by the router — but neither
 // while a dropped connection is still untaken (serve_mailbox takes it next pass and ends that
 // tester's unlock first: a new tester never routes on it, REQ-NET-020); then the answers the
-// router has, into the channel while it has room. req holds doip.max_uds bytes (registered with
-// doip_rt_init).
+// router has, into the channel while it has room. req holds the router's max_message bytes
+// (registered with doip_rt_init).
 pub fn serve_routes(mut r diagroute.Router, unlocked u8, req &u8, now u64) {
 	if C.doip_rt_take_ended() != 0 {
 		r.cancel() // the tester went: its exchange and answers are no one's
@@ -177,7 +177,7 @@ pub fn serve_routes(mut r diagroute.Router, unlocked u8, req &u8, now u64) {
 	}
 	for r.waiting() > 0 {
 		a := r.head()
-		if C.doip_rt_put(a.logical, a.ticket, &a.data[0], a.len) == 0 {
+		if C.doip_rt_put(a.logical, a.ticket, a.data, a.len) == 0 {
 			break
 		}
 		r.pop()
@@ -189,8 +189,8 @@ pub fn serve_routes(mut r diagroute.Router, unlocked u8, req &u8, now u64) {
 // (comm/diag.Connection) and the bootloader's serve loop (boot.Prog) alike: what the doip thread
 // reported (an answer sent: a reset waiting on it may go; a connection dropped: what it held ends),
 // then the request waiting in the mailbox, served and answered. The server answers remote_sent,
-// remote_dropped and serve_remote(req, n, functional, resp) int. req holds doip.max_msg bytes,
-// resp doip.max_uds.
+// remote_dropped and serve_remote(req, n, functional, resp) int. req and resp hold what the
+// mailbox was registered with (doip_mb_init): the node's maximum message length at least.
 pub fn serve_mailbox[T](mut s T, req &u8, resp &u8) {
 	if C.doip_mb_take_sent() != 0 {
 		s.remote_sent()

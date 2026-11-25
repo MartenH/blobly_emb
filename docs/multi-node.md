@@ -305,7 +305,26 @@ Multi-node's second job (after routing) is **identity**, allocated in
 - **NM node id** (+ derived `alive` id, within the cluster `peers` range) — who
   the node is on the wire for coordinated sleep/wake.
 - **Diagnostic / boot address** (an ISO-TP req/rsp id pair) — how the OTA or
-  diagnostic master reaches *this* node's UDS/boot session to reflash it.
+  diagnostic master reaches *this* node's UDS/boot session to reflash it. A node's
+  `diag` states it one of two ways, as its `[isotp]` does ([can-tp.md](can-tp.md) §2):
+  `diag = { req, rsp [, ext] [, logical] }` (11-bit ids, or 29-bit with `ext = true`), or
+  `diag = { addressing = "normal_fixed", sa, ta [, functional_ta] [, logical] }` (normal fixed
+  addressing: its own address and the tester's, from which `req = 0x18DA<sa><ta>` and
+  `rsp = 0x18DA<ta><sa>` derive — and, with `functional_ta`, the functional id
+  `0x18DB<functional_ta><ta>`). Anything else — an id wider than its format, ids beside addresses, a
+  missing or out-of-range address, equal addresses, one of `req` / `rsp` without the other — is
+  refused (REQ-TOPO-013). A node with its own
+  `[isotp]` **serves on** its allocation (REQ-TOPO-014): an `[isotp]` that states no physical ids
+  (none of `rx_id`, `tx_id`, `addressing`, `sa`, `ta`, `functional_ta`) takes them —
+  sysgen writes the allocation's keys under its `[isotp]` header in the generated node, the rest of
+  the table as authored — so the addressing is stated once, in system.toml. Beside an allocation on
+  normal addressing (which states no functional id) it may keep its own `functional_id`, in the
+  allocation's format, and an `ext` that agrees with that format; beside one on normal fixed
+  addressing it states neither (`functional_ta` is the functional id). One that states its ids
+  must state the allocation's (request id, response id and their format, and the functional id where
+  the allocation states `functional_ta`), and one that states none on a node with no `diag` is
+  refused. A node without an `[isotp]` runs no diagnostic server, and gets none. sysgen also lowers
+  the allocation into the `[[doip.route]]` of a gateway that routes to the node ([net.md](net.md)).
 - **Trace node id** — so the observer distinguishes nodes; the current trace id
   is `(core, thread)` and grows a node prefix → `(node, core, thread)`.
 
@@ -331,7 +350,14 @@ because it cannot see its peers:
   bus's* DBC — id, DLC, bit layout, endianness agree on both ends; a signal route
   is checked against the source and destination DBCs independently.
 - **Identity uniqueness.** No two nodes share an NM id, a diagnostic address, or
-  a trace node id.
+  a trace node id, and no node's diagnostic id is another frame's on its bus (a module frame, a
+  route's request id, a DBC frame — a node with no `[isotp]` placed on its one CAN bus by its
+  `diag`). A diagnostic id is its number AND its format: an 11-bit and a 29-bit id of one number
+  never collide (REQ-TOPO-002). A DBC frame on a node's diagnostic *answer* id is refused; on a
+  *request* id (functional included) it is refused where a node of the system transmits that frame
+  (a gateway's route included) or receives it — application traffic there would reach the server as
+  requests — and only noted (a warning) where no node does either: a DBC commonly documents the
+  request frame an external tester sends (OBD `0x7DF`, a `Diag_Req`).
 - **NM cluster coherence.** All nodes agree on the cluster (`peers` range, the
   sleep/wake parameters) — a node with a mismatched cluster silently never
   sleeps with the others.

@@ -122,3 +122,13 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-COMMS-001"
+
+# A DBC message's id format is part of its identity on the wire, on the host bridge and the target.
+[[req]]
+id = "REQ-COM-012"
+title = "A message keeps its identifier format"
+text = "COM shall send each bus message in the identifier format its bus database declares, 11-bit, or 29-bit where the database marks the identifier extended, and shall take a received frame as that message only when its identifier and format both match; a standard and an extended frame with the same identifier are different messages. Generation shall refuse a message whose standard identifier does not fit 11 bits rather than send it truncated."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-COMMS-001"

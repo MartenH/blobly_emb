@@ -3,7 +3,7 @@ module main
 import toml
 import tools.ecumodel
 
-// The ThreadX comm thread's receive path (R5, docs/diagnostics.md §3.2): the host bridge's
+// The ThreadX comm thread's receive path (docs/diagnostics.md §3.2): the host bridge's
 // templates (gen_rx.v) over the target's seams. A received frame that needs the COM receive rule —
 // a deadline, E2E or SecOC, a signal with a status or lost count, or a layout the lean whole-frame
 // copy cannot hand over — is decoded by the DBC codec, judged by com.RxMonitor, and its signals
@@ -106,9 +106,11 @@ fn rx_iocb_idx(m Model) map[string]int {
 // CommStep is one step of the ThreadX comm thread's pass. comm_pass_order is the ONE order the
 // generator emits them in (emit_run_target), with the reception gate re-sampled at every point that
 // can change it, so no frame is judged by a stale gate:
-//   housekeep  the connection's timers (S3, a pending reset)
+//   housekeep  the routines' results read (a result published before a routine's deadline is in
+//              its cell when the timeout is judged), then the connection's timers (S3, a pending
+//              reset, a routine's timeout)
 //   open       the pass clock; the gate's first sampling; signal-status faults' level steps
-//   reports    the FBs' fault reports consumed
+//   reports    the FBs' fault reports consumed, the routines' requests published
 //   remote     a DoIP request served — then the gate re-sampled (a 0x28 over IP)
 //   drain      the FIFO, frame by frame: a CAN request served re-samples the gate (a 0x28 on CAN);
 //              an NM frame that wakes the network re-samples it and starts the operation cycle
@@ -386,13 +388,14 @@ fn validate_rx_target(m Model) {
 }
 
 // iocb_overflow: why the image's byte-IOC cells do not fit the pool — the signal cells (eth signals
-// and checked received ones, rx_iocb_idx) and two per fault-owning FB — or none. The one statement
-// of the bound, asked by the fault and the receive validations alike.
+// and checked received ones, rx_iocb_idx), two per fault-owning FB and two per routine — or none.
+// The one statement of the bound, asked by the fault, routine and receive validations alike.
 fn iocb_overflow(m Model) ?string {
 	sigs := rx_iocb_idx(m).len
 	faults := 2 * fault_local_fbs(m).len
-	if sigs + faults <= iocb_pool_n {
+	routines := if m.target.threadx { 2 * m.routines.len } else { 0 }
+	if sigs + faults + routines <= iocb_pool_n {
 		return none
 	}
-	return '${sigs} signal cell(s) (eth signals and checked received ones) and ${faults} fault cell(s) exceed the byte-IOC pool of ${iocb_pool_n} (boards/common/iocb.c IOCB_POOL_N)'
+	return '${sigs} signal cell(s) (eth signals and checked received ones), ${faults} fault cell(s) and ${routines} routine cell(s) exceed the byte-IOC pool of ${iocb_pool_n} (boards/common/iocb.c IOCB_POOL_N)'
 }

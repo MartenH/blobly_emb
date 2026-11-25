@@ -680,6 +680,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 		for c in conns {
 			tp := snake(c.name)
 			glue << '\tconn_${tp} diag.Connection // the node\'s diagnostic server on its ISO-TP connection'
+			glue << '\tconn_${tp}_req [${c.max_message}]u8 // its request buffer: [isotp] max_message'
+			glue << '\tconn_${tp}_resp [${c.max_message}]u8 // its response buffer'
 			if m.faults.len > 0 {
 				glue << '\tfmem fault.Memory // the node\'s fault memory: this bridge is its one writer (D2)'
 				glue << '\tfcycle_on bool // the operation-cycle signal as last seen'
@@ -691,6 +693,9 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			}
 			if sa_levels(m) != 0 {
 				glue << '\tsa_${tp} uds.ReferenceSecurity // 0x27 on the host: the SIM key (not a secret, decision D5)'
+				if auth_on(m) {
+					glue << '\tauth_keys_${tp} udsauth.Keys // 0x29: the public keys per level ([uds] auth_keys)'
+				}
 			}
 		}
 		for d in dests {
@@ -788,11 +793,14 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			// Housekeeping FIRST (comm/diag), so the receive gate below and the functional path in
 			// the drain see this instant's state. On the host there is no platform reset, so an
 			// answered ECUReset returns the DIAGNOSTIC state to power-on (docs/diagnostics.md §3.1).
+			// the routines' results first: a result in its cell when the tick judges a deadline
+			glue << routine_bridge_results(m, 'st.conn_${snake(conns[0].name)}')
 			for c in conns {
 				glue << '\tst.conn_${snake(c.name)}.housekeep(now)'
 			}
 			glue << rx_gate_lines(m, rx_msgs, bname, owner, '\t')
 			glue << fault_pass_lines(m, owner)
+			glue << routine_bridge_lines(m, 'st.conn_${snake(conns[0].name)}')
 			if m.faults.len > 0 {
 				// the FB faults' snapshots at once, before the drain decodes newer values
 				glue << fault_capture_lines(m, 'st.fmem', 'st.conn_${snake(conns[0].name)}', '\t')
@@ -924,6 +932,9 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			glue << '\tmut tx_${msg} := can.Frame{'
 			glue << '\t\tid:  ${msg}_id'
 			glue << '\t\tlen: ${msg}_dlc'
+			if msg_ext[msg] {
+				glue << '\t\text: true // an extended (29-bit) DBC message'
+			}
 			glue << '\t}'
 			// a field no local signal has published this pass goes out at its initial value
 			glue << pdu_init_lines(m.sig_of[list[0]] or { SigInfo{} }, 'tx_${msg}', '\t')
@@ -938,7 +949,19 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					'f64(${fld}.${si.val_field})'
 				}
 				glue << '\tmut ${fld} := sig.${sname}{}'
-				glue << '\tif osal.${acquire_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld}))) {'
+				if k := io_index(m, sname) {
+					// a 0x2F control (gen_ioctl.v): the tester's value in place of the FB's, written
+					// over what was acquired before the encode — the FB never sees it. Asked of the
+					// server in place, with no local of its own: this scope's locals are the signals'
+					// snake names, and a DBC signal may be named like any identifier
+					srv := 'st.conn_${snake(conns[0].name)}.server'
+					glue << '\tif osal.${acquire_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld}))) || ${srv}.io_on(${k}) { // 0x2F'
+					glue << '\t\tif ${srv}.io_on(${k}) {'
+					glue << '\t\t\t${fld}.${si.val_field} = ${io_field_of(si.val_type, '${srv}.io_published(${k})')}'
+					glue << '\t\t}'
+				} else {
+					glue << '\tif osal.${acquire_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld}))) {'
+				}
 				glue << '\t\tif ${si.dbc_msg}_${snake(sname)}_set(mut tx_${msg}.data, ${phys}) {'
 				glue << '\t\t\ttx_${msg}_sat++'
 				glue << '\t\t}'
@@ -1247,7 +1270,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\tst.conn_${tp}.refresh = diag_refresh_${tp}'
 			}
 			// the host bridge injects the reference key (blobly_net's), seeded from the clock
-			glue << security_init_lines(m, srv, 'st.sa_${tp}.ops(u32(osal.now_us()))')
+			// (on an authenticating node its seed is the 0x29 challenge, and the keys are auth_keys)
+			glue << security_init_lines(m, srv, 'st.sa_${tp}.ops(u32(osal.now_us()))', 'st.auth_keys_${tp}')
 			if m.faults.len > 0 {
 				glue << fault_slot_lines(m, 'st.fmem', '\t')
 				glue << signal_fault_init(m, '\t')
@@ -1626,22 +1650,33 @@ fn did_refresh_fn(m Model, tp string) []string {
 		}
 		si := m.sig_of[did.signal] or { continue }
 		f := snake(did.signal)
-		out << '\tmut ${f}_did := sig.${did.signal}{}'
-		out << '\tif osal.${acquire_fn(si.transport)}(${f}_ch, &${f}_did, u8(sizeof(${f}_did))) {'
-		out << did_encode_lines(idx, '${f}_did.${si.val_field}', si.val_type, '\t\t')
+		// the locals are named by the DID's index, as the target's (diag_target_fns): several live
+		// DIDs may read one signal
+		v := 'v_${idx}'
+		out << '\tmut ${v} := sig.${did.signal}{} // ${did.signal}'
+		if k := io_index(m, did.signal) {
+			// a controlled signal: the FB's value noted for 0x2F 02, and the DID reads what is
+			// published — the control's value, the FB's, or the initial value before its first
+			out << '\t${v}_have := osal.${acquire_fn(si.transport)}(${f}_ch, &${v}, u8(sizeof(${v})))'
+			out << '\tsrv.io_note(${k}, ${as_i64(si.val_type, '${v}.${si.val_field}', false)}, ${v}_have)'
+			out << did_io_encode_lines(idx, k, v, si.val_type)
+			continue
+		}
+		out << '\tif osal.${acquire_fn(si.transport)}(${f}_ch, &${v}, u8(sizeof(${v}))) {'
+		out << did_encode_lines(idx, '${v}.${si.val_field}', si.val_type, '\t\t')
 		out << '\t}'
 	}
 	out << '}'
 	return out
 }
 
-// security_levels: the [[did]] gates' share of the 0x27 levels a server serves — every level some
-// read or write gate names (bit L-1 for level L). The server serves sa_levels (gen_diag.v): these
-// plus the levels [uds] service rows name.
+// security_levels: the [[did]]s' share of the 0x27 levels a server serves — every level some read
+// or write gate, or a control, names (bit L-1 for level L). The server serves sa_levels
+// (gen_diag.v): these plus the levels [uds] service rows name.
 fn security_levels(dids []DidCfg) u8 {
 	mut mask := u8(0)
 	for d in dids {
-		for l in [d.read_security, d.write_security] {
+		for l in [d.read_security, d.write_security, d.control_security] {
 			if l != 0 {
 				mask |= u8(1) << (l - 1)
 			}

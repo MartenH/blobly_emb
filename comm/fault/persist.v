@@ -2,7 +2,7 @@ module fault
 
 import comm.uds
 
-// Persistence of the fault memory (docs/diagnostics.md §3.3, R6b): what survives a reset and a
+// Persistence of the fault memory (docs/diagnostics.md §3.3): what survives a reset and a
 // power loss, kept in an injected Store — the NvM journal on a ThreadX target (nvm.Journal through
 // the generated seam), nothing on the host. Two kinds of value:
 //

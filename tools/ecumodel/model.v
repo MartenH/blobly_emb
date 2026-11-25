@@ -376,6 +376,18 @@ pub:
 	typ    string
 }
 
+// bus_fd: whether [bus.<bus>] is CAN-FD (`fd = true`); a bus or key absent reads false. The ONE
+// reading of that key: cfg2v's `<bus>_fd` constants (how a host node's channels are opened),
+// loom2v (the comm thread's channel, a gateway's route buses, the bootloader's BOOT_CAN_FD, and
+// what a frame on the bus may be — a route's frame lengths, a tx_dl above 8) and sysmodel (a
+// member's bus against the system's) all ask it here, so no generated code can send a long frame
+// on a channel another tool opened classic.
+pub fn bus_fd(doc toml.Doc, bus string) bool {
+	bv := doc.value_opt('bus') or { return false }
+	bc := bv.as_map()[bus] or { return false }
+	return (bc.as_map()['fd'] or { toml.Any(false) }).bool()
+}
+
 // eth_bus_of returns the (single, ecucheck-enforced) kind = "eth" bus, or ''.
 pub fn eth_bus_of(doc toml.Doc) string {
 	if bv := doc.value_opt('bus') {
@@ -1546,8 +1558,17 @@ const isotp_server_keys = ['s3_ms', 'security_attempts', 'security_delay_ms', 's
 
 // validate_diag_layout refuses the pre-[uds] diagnostic layout, naming the move it needs rather
 // than translating it: [[isotp]] (an array, with a `name`) is now the [isotp] table — a node has
-// ONE diagnostic server, and so one connection — and the server's own keys moved to [uds].
+// ONE diagnostic server, and so one connection — and the server's own keys moved to [uds]. Then
+// the connection's ids, by the one reader of how an id is stated (addressing.v diag_ids: normal or
+// normal fixed addressing, 11- or 29-bit, REQ-CAN-TP-040/041), and a gateway's routes' ids in
+// their node's format (route_id_errors, REQ-NET-021).
 pub fn validate_diag_layout(doc toml.Doc) []string {
+	mut errs := isotp_layout_errors(doc)
+	errs << route_id_errors(doc)
+	return errs
+}
+
+fn isotp_layout_errors(doc toml.Doc) []string {
 	mut errs := []string{}
 	iv := doc.value_opt('isotp') or { return errs }
 	if iv is []toml.Any {
@@ -1578,5 +1599,7 @@ pub fn validate_diag_layout(doc toml.Doc) []string {
 	if 'name' in im {
 		errs << '[isotp] `name` is gone: a node has one diagnostic connection — drop it (docs/diagnostics.md)'
 	}
+	_, id_errs := diag_ids(cfgschema.ecu, isotp_keys, im, '[isotp]')
+	errs << id_errs
 	return errs
 }

@@ -5,6 +5,24 @@ module doip
 // the configuration rules the generator and syscheck share (policy.v).
 // @verifies REQ-NET-007 (the DoIP transport binding)
 
+// the sizes of a server bound at the default maximum message length, as the tests use them
+const max_uds = 520
+const max_msg = header_len + 4 + max_uds
+const max_resp = header_len + 5 + header_len + 4 + max_uds
+
+// new_server: a server bound to an assembly buffer of its own at max_uds
+fn new_server() Server {
+	return server_at(max_uds)
+}
+
+// server_at: a server whose UDS messages are at most `m` bytes, its buffer the owner's
+fn server_at(m int) Server {
+	mut s := Server{}
+	buf := []u8{len: msg_len(m)}
+	s.bind(&buf[0], m)
+	return s
+}
+
 // build a DoIP frame into dst; returns total length (doip_test.v's, each test file is its own)
 fn frame(dst &u8, ptype u16, payload []u8) int {
 	unsafe {
@@ -42,7 +60,7 @@ fn ra_code(s Server, sa u16, r []u8) u8 {
 }
 
 fn entity() Server {
-	mut s := Server{}
+	mut s := new_server()
 	s.entity_addr = 0x07A0
 	return s
 }
