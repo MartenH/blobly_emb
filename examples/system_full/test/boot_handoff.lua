@@ -52,6 +52,16 @@ end
 local rec_path = os.getenv("BOOT_RECORD")
 local rec = nil
 local rec_buses = {}
+-- record.start resolves a relative path against this script's directory and io.lines against the
+-- working directory: rec_file is the one file both name — the script's directory as it was given
+-- to the runner (its chunk name, relative to the working directory when the runner's was) joined
+-- to the relative path, which is where record.start writes
+local rec_file = rec_path
+if rec_path and rec_path ~= "" and not rec_path:match("^/") and not rec_path:match("^%a:[/\\]") then
+  local src = debug.getinfo(1, "S").source
+  local dir = src:match("^@(.*)[/\\]") or "."
+  rec_file = dir .. "/" .. rec_path
+end
 if rec_path and rec_path ~= "" then
   local seen = {}
   for _, n in ipairs(nodes) do
@@ -207,16 +217,17 @@ end
 if rec then
   local c = rec:stop()
   log(string.format("recorded %d frames (%d ours, %d theirs, %d missed, %d dropped) to %s",
-    c.frames, c.ours, c.theirs, c.missed, c.dropped, rec_path))
+    c.frames, c.ours, c.theirs, c.missed, c.dropped, rec_file))
   test("no other tester sent on the nodes' request ids during the run", function()
     local req = {}
     for _, n in ipairs(nodes) do
       if n.bus then req[n.bus .. " " .. string.format("%03X", n.req)] = true end
     end
     local count, first, last = 0, nil, nil
-    for line in io.lines(rec_path) do
-      -- (t) <bus> <id>#<data> R: a frame this run did not send
-      local bus, id = line:match("^%(%S+%) (%S+) (%x+)#%x* R$")
+    for line in io.lines(rec_file) do
+      -- (t) <bus> <id>#<body> R: a frame this run did not send, whatever its body says — classic
+      -- data (`#<data>`), CAN-FD (`##<flags><data>`, zone_a's edge bus) or remote (`#R<n>`)
+      local bus, id = line:match("^%(%S+%) (%S+) (%x+)#%S* R$")
       if bus and req[bus .. " " .. id] then
         count = count + 1
         first = first or line
