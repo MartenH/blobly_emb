@@ -41,7 +41,7 @@ fn C.board_timebase_init()
 fn C.xcore_ioc_init() // the shared xioc pool (satellite is the writer side)
 fn C.xcore_load_pub(int, u16) // publish this core's per-mille load for the owner's CpuLoad (xcore.h)
 fn C.core_load_tick() // total core load window (trace_hooks.c)
-fn C.core_busy_permille() int // the last window's total busy share, -1 = not measurable
+fn C.core_busy_bp() int // the last window's total busy share in basis points, -1 = not measurable
 fn C.xcore_busy_pub(int, int) // this core's total load for the owner (xcore_sat.c)
 fn C.xcore_layout_retract() // boot FIRST act: close polling before touching channels
 fn C.xcore_layout_publish() // layout-id handshake: owner polls nothing until this
@@ -103,7 +103,7 @@ fn run_m4_app() {
 		C.xcore_trace_service() // ~one poll per tick: plenty for the dump handshake
 		C.xcore_load_pub(1, sched.load_permille())
 		C.core_load_tick()
-		C.xcore_busy_pub(1, C.core_busy_permille())
+		C.xcore_busy_pub(1, C.core_busy_bp())
 		C.xcore_bulk_produce() // cross-core bulk producer (platform-owned pool)
 		C.xcore_layout_publish() // REPUBLISH per tick: the owner retracts the id at ITS
 		// boot (SRAM survives an owner-only reset — a retained id + retained channels
