@@ -82,7 +82,11 @@ yet), `ok` (a good frame), `timeout` (the deadline passed), or `integrity` (the 
 frame failed its E2E CRC or SecOC check; value zero). An E2E repeat is a duplicate, not a
 fault, and publishes nothing. On an E2E-protected frame, `lost = "u16"` (or `u32`) adds
 the count of frames the sequence counter showed not received intact (a CRC-failed frame
-counts, as in AUTOSAR E2E) — monotonic, wrapping; diff it.
+counts, as in AUTOSAR E2E) — monotonic, wrapping; diff it. It is **required** on every
+received signal of an E2E frame that reaches the application, CAN and SOME/IP alike: the
+verdict for a gap is `ok` (the value is valid; only the gap is news), so the counter is the
+only way the FB hears that frames went missing (REQ-E2E-002), and generation refuses a
+signal without it (#334).
 The bridge owns `status` and `lost` on a received signal (a `valid` field there fails
 generation); on an internal signal they are ordinary fields an FB may forward. See
 [diagnostics.md](diagnostics.md) §3.2.
@@ -447,8 +451,9 @@ runs it out too. It is independent of the QM COM deadline (`rx = { timeout_ms }`
 is a complementary monitor; either may be configured alone, and both publish `timeout`.
 The E2E timeout is required on a received E2E frame whose signals reach the application,
 and each of those signals must declare `status`, so a loss never reaches an FB as a
-plain zero. A valid frame that arrives after the timeout ran out, but before the bridge's
-next pass noticed, still reports `timeout` for that frame.
+plain zero, and `lost`, so a skipped sequence reaches it at all (a gap's verdict is `ok`).
+A valid frame that arrives after the timeout ran out, but before the bridge's next pass
+noticed, still reports `timeout` for that frame.
 A *lost* frame is still consumed (it's valid and fresh — the skip just marks the gap);
 *repeated* and *corrupt* frames are dropped. The generator rejects an `e2e` whose
 `crc_pos`/`counter_pos` fall outside the frame DLC, and a `timeout_ms` on a transmitted

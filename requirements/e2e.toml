@@ -22,6 +22,9 @@ derives = "SYS-REQ-SAFE-001"
 # RxStatus, and a system.toml frame's e2e.timeout_ms is lowered to the receiving node.
 # On a ThreadX target's CAN comm thread since R5: the same templates as the host bridge, the rule
 # in com.RxMonitor, the status crossing to the FB through the byte IOC.
+# The skipped-sequence report is the signal's `lost` counter: the verdict for a gap is ok (the
+# value is valid), so since #334 loom2v refuses a received E2E signal reaching the application
+# without `lost`, CAN and SOME/IP alike, as it refuses one without `status`.
 [[req]]
 id = "REQ-E2E-002"
 title = "Detect repetition and loss"

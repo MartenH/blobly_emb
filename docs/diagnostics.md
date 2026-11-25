@@ -655,7 +655,8 @@ pub enum RxStatus { never_received ok timeout integrity }
   rather than healthy.
 - The status is the **most recent condition**: `integrity` (an E2E or SecOC failure) holds until a
   good frame (`ok`) or until the deadline passes with none (`timeout`).
-- E2E's `lost` frames are counted and published beside the status.
+- E2E's `lost` frames are counted and published beside the status — required on every received
+  E2E signal, since the status of a gap is `ok`.
 - The status is an FB input (substitute a value, or react) and a **fault source**: a signal can
   declare DTCs for timeout, integrity and loss with no FB code (§3.3).
 

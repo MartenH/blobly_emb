@@ -499,7 +499,8 @@ fn check_signals_dissolved(s System) []Issue {
 		// loom2v serializes ONE value field per DBC signal; the receiving bridge fills the
 		// receive metadata — `status = "RxStatus"` and an E2E `lost` counter — which is not
 		// on the wire. So the supported shape is exactly one value field of a fixed scalar
-		// type (no u64/i64 — lossy through the f64 bridge), plus optional metadata. A `valid`
+		// type (no u64/i64 — lossy through the f64 bridge), plus the receiver's metadata — which
+		// sysgen adds, both, to every receiver of an E2E frame (loom2v requires both there). A `valid`
 		// field is refused as loom2v refuses it on a received signal. REQ-TOPO-001.
 		mut n_value := 0
 		for fname, ftype in sig.fields {
@@ -554,7 +555,7 @@ fn check_signals_dissolved(s System) []Issue {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-001'
-				msg:      'signal "${sig.name}": has ${n_value} value fields — a cross-node signal on a CAN bus carries exactly one (plus optional `status` / `lost`), because a DBC signal is a scalar'
+				msg:      'signal "${sig.name}": has ${n_value} value fields — a cross-node signal on a CAN bus carries exactly one (plus the receiving bridge\'s `status` / `lost`), because a DBC signal is a scalar'
 			}
 		}
 		// the producer must be a declared node on the signal's bus

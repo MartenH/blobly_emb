@@ -401,7 +401,9 @@ verdict is published too, by the CAN bridge's rule (comm/e2e `RxState.receive`):
 frame requires `e2e.timeout_ms` — E2E's own sender-loss timeout (REQ-E2E-002) — and a
 `status = "RxStatus"` on each of its signals, which reads `ok`, `timeout` (the sender went
 silent; the value is withheld) or `integrity` (a corrupt frame; withheld), on the host and the
-ThreadX eth thread alike; a `lost` field (u16/u32) carries the frames the sequence showed missing.
+ThreadX eth thread alike; a `lost` field (u16/u32), required beside it (#334), carries the
+frames the sequence showed missing — the verdict for a gap is `ok`, so the counter is the only
+report of a skipped sequence.
 In system.toml the frame states `timeout_ms` and sysgen gives it, with the status and lost
 fields, to the receiving node only.
 that leaves the frame's rx state and the frames after it intact. An `rx`

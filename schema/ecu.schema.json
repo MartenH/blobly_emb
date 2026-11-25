@@ -267,7 +267,7 @@
       "type": "object",
       "properties": {
         "name": {"type": "string", "description": "PascalCase; a signal a bus carries takes its DBC name"},
-        "fields": {"type": "object", "additionalProperties": {"type": "string"}, "description": "field name -> type, the signal's struct"},
+        "fields": {"type": "object", "additionalProperties": {"type": "string"}, "description": "field name -> type, the signal's struct; a received signal may add `status = \"RxStatus\"`, and one from an E2E frame needs it and `lost = \"u16\"` or `\"u32\"` (the bridge fills both)"},
         "from": {"type": "string", "description": "the producer: a partition, thread, bus or \"io\"; left out, the partition of the fb that writes it (REQ-INV-007)"},
         "to": {"type": "string", "description": "the consumer: a partition, thread, bus or \"io\"; left out, the partition of an fb that reads it (REQ-INV-007)"},
         "transport": {"type": "string", "enum": ["double", "triple", "seqlock", "dma", "hw_sem", "mailbox"], "default": "double", "description": "the IOC buffer between partitions (derived for io signals); the hardware ones are target backends, double on host Default: \"double\"."},
