@@ -42,12 +42,12 @@ void xcore_busy_watch(void) {
 	}
 }
 
-/* a satellite core's total busy share (per mille), -1 = not reported, or not since the last window */
+/* a satellite core's total busy share (basis points, 0.01 %), -1 = not reported, or not since the last window */
 int xcore_busy_get(int core) {
 	if (core < 0 || core >= 8 || !g_busy_live[core])
 		return -1;
-	uint32_t pm = XIOC_LD((volatile uint32_t *)(uintptr_t)XCORE_BUSY_ADDR + core) & 0xFFFFu;
-	return pm == 0xFFFFu ? -1 : (int)pm;
+	uint32_t bp = XIOC_LD((volatile uint32_t *)(uintptr_t)XCORE_BUSY_ADDR + core) & 0xFFFFu;
+	return bp == 0xFFFFu ? -1 : (int)bp;
 }
 
 void xcore_ow_init(uint32_t off, uint32_t words) {
