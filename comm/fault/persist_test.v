@@ -122,6 +122,12 @@ fn pf_put(ctx voidptr, id u16, data &u8, len u16) bool {
 	return true
 }
 
+// pf_full: the journal's own answer for its last refused put (the generated nvm_store_full).
+fn pf_full(ctx voidptr) bool {
+	r := unsafe { &Rig(ctx) }
+	return r.j.last_refusal.for_space()
+}
+
 fn pf_get(ctx voidptr, id u16, out &u8, cap u16) u16 {
 	r := unsafe { &Rig(ctx) }
 	return r.j.get(id, out, cap)
@@ -264,6 +270,7 @@ fn (mut r Rig) restart(power_cycle bool) {
 		ctx:      r
 		put:      pf_put
 		get:      pf_get
+		full:     pf_full
 		id:       0x0F00
 		retry_us: 1000
 	}
@@ -432,6 +439,55 @@ fn test_a_refused_clear_answers_0x72_and_changes_nothing() {
 	r.pass(-1, .not_tested, 0, 2)
 	mut b := [4]u8{}
 	assert r.j.get(0x1000, &b[0], 4) == 1, 'the cleared snapshot block was not tombstoned'
+}
+
+// A journal filled in one power cycle (no erase point between the commits, as a long test loop
+// does) refuses until its next erase point compacts it. The 0x14 that meets it answers 0x22
+// conditionsNotCorrect — the flash did not fail, a reset recovers — and changes nothing; once the
+// erase point has run, the same clear is stored.
+fn test_a_clear_refused_by_a_full_journal_answers_0x22_and_changes_nothing() {
+	mut r := new_rig(2)
+	img := nvm.records_for(u16(2 + r.n * image_rec)) // the records one status image takes
+	mut now := u64(1)
+	mut refused := false
+	mut stepped := false
+	for _ in 0 .. 400 {
+		now += 10_000 // past retry_us: no pass is held back by an earlier refusal
+		if r.slot(3).status & confirmed == 0 {
+			r.pass(3, .failed, 5, now) // DTC 3 keeps no snapshot: one image per write
+			assert !r.m.refused, 'a pass met the full journal before a clear did'
+			continue
+		}
+		if !stepped && r.j.pending_erase >= 0 && r.j.free_records() >= img
+			&& r.j.free_records() < 2 * img {
+			// the clear would take the journal's last image and the next pass meet it full: one
+			// write of DTC 1 (its first completed test) takes it instead, so the clear meets it
+			r.pass(1, .passed, 0, now)
+			assert !r.m.refused
+			stepped = true
+			continue
+		}
+		before := r.slot(3)
+		gen := r.m.control_gen(r.order[3])
+		resp := r.req([u8(0x14), 0xC1, 0x00, 0x03])
+		if resp == [u8(0x54)] {
+			continue
+		}
+		assert resp == [u8(0x7F), 0x14, 0x22], 'a full journal answered ${resp}'
+		assert r.j.last_refusal == .full_until_erase
+		assert !r.f.dead && !r.f.refuse // nothing failed: the journal is full
+		after := r.slot(3)
+		assert after.status == before.status && after.occurrence == before.occurrence
+			&& r.m.control_gen(r.order[3]) == gen, 'a refused clear changed the memory'
+		refused = true
+		break
+	}
+	assert refused, 'the journal never filled'
+	assert r.j.erase_pending() // the erase point (the flush after an ECUReset's answer, a sleep edge, the boot)
+	assert r.req([u8(0x14), 0xC1, 0x00, 0x03]) == [u8(0x54)]
+	assert r.slot(3).status == status_cleared
+	r.reboot()
+	assert r.slot(3).status == status_cleared, 'the clear after the erase point was not durable'
 }
 
 // A refused automatic write stays outstanding and is retried — no sooner than retry_us, so a

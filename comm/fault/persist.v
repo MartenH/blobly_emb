@@ -110,18 +110,27 @@ const img_cycle_open = u8(0x01) // image byte 1: an operation cycle was in progr
 const img_setting_off = u8(0x02) // image byte 1: DTC setting was off (0x85) — so was its end
 
 // Store is the persistence seam: `put` replaces a block's value (false = refused, nothing
-// changed), `get` reads it (its length, 0 = absent). Nil `put` = RAM only.
+// changed), `get` reads it (its length, 0 = absent), `full` says why the last put was refused —
+// true for the journal's space (nvm.PutRefusal.for_space), which a 0x14 answers 0x22 rather than
+// 0x72 (uds.store_refusal_nrc); nil = never for space. Nil `put` = RAM only.
 pub struct Store {
 pub mut:
 	ctx      voidptr
 	put      fn (ctx voidptr, id u16, data &u8, len u16) bool = unsafe { nil }
 	get      fn (ctx voidptr, id u16, out &u8, cap u16) u16 = unsafe { nil }
+	full     fn (ctx voidptr) bool = unsafe { nil }
 	id       u16 // the status image's block
 	retry_us u64 // a refused automatic write waits this long before the next attempt
 }
 
 fn (m &Memory) stored() bool {
 	return m.store.put != unsafe { nil } && m.store.get != unsafe { nil }
+}
+
+// refused_full: whether the put the store just refused was refused for space (Store.full). Asked
+// at once: the store answers for its last put only.
+fn (m &Memory) refused_full() bool {
+	return m.store.full != unsafe { nil } && m.store.full(m.store.ctx)
 }
 
 // image builds the status image into m.scratch and returns its length. With `clearing`, the
@@ -270,7 +279,8 @@ pub fn (mut m Memory) persist(now u64, flush bool) bool {
 // write_snapshots writes every captured snapshot not yet in the store — before any image that
 // claims it — skipping those of the DTCs a clear of `group` is about to free (`clearing`); it
 // returns (every snapshot that displaced a stored one is in — else the image must wait for it,
-// any write was refused).
+// any write was refused), and records in `hold_full` whether the first refusal that holds the
+// image back was one of space.
 fn (mut m Memory) write_snapshots(group u32, clearing bool) (bool, bool) {
 	mut ok := true
 	mut refused := false
@@ -291,6 +301,9 @@ fn (mut m Memory) write_snapshots(group u32, clearing bool) (bool, bool) {
 		} else {
 			refused = true
 			if m.entries[k].took_claim {
+				if ok {
+					m.hold_full = m.refused_full()
+				}
 				ok = false
 			}
 		}
@@ -365,30 +378,32 @@ pub fn (s &Slot) block_len() int {
 	return 7 + 1 + s.body_len() + s.nfreeze
 }
 
-// persist_clear: 0x14's image made durable before the clear touches RAM (true without a store).
-fn (mut m Memory) persist_clear(group u32) bool {
+// persist_clear: 0x14's image made durable before the clear touches RAM. Returns the NRC of a
+// refusal (uds.store_refusal_nrc: 0x22 for the journal's space, 0x72 otherwise), 0 = durable (or
+// no store).
+fn (mut m Memory) persist_clear(group u32) u8 {
 	m.wrote = 0
 	if !m.stored() {
-		return true
+		return 0
 	}
 	// the snapshots first, for the reason persist writes them first
 	ready, _ := m.write_snapshots(group, true)
 	if !ready {
 		m.clear_refused = true
-		return false
+		return uds.store_refusal_nrc(m.hold_full)
 	}
 	n := m.image(true, group)
 	changed, _ := m.image_change(n)
 	if !changed {
-		return true // the store already holds exactly this (a repeated clear): nothing to write
+		return 0 // the store already holds exactly this (a repeated clear): nothing to write
 	}
 	if !m.store.put(m.store.ctx, m.store.id, &m.scratch[0], u16(n)) {
 		m.clear_refused = true
-		return false
+		return uds.store_refusal_nrc(m.refused_full())
 	}
 	m.commit_image(n)
 	m.wrote++
-	return true
+	return 0
 }
 
 // restore reads the store back, after init (slots configured) and before the first report is

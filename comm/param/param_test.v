@@ -68,6 +68,12 @@ fn st_put(ctx voidptr, id u16, data &u8, len u16) bool {
 	return r.j.put(id, data, len)
 }
 
+// st_full: the journal's own answer for its last refused put (the generated nvm_store_full).
+fn st_full(ctx voidptr) bool {
+	r := unsafe { &Rig(ctx) }
+	return r.j.last_refusal.for_space()
+}
+
 fn st_get(ctx voidptr, id u16, out &u8, cap u16) u16 {
 	r := unsafe { &Rig(ctx) }
 	return r.j.get(id, out, cap)
@@ -222,8 +228,9 @@ fn (mut r Rig) reboot() {
 	r.ps.n = 3
 	r.ps.store = Store{
 		ctx: r
-		put: st_put
-		get: st_get
+		put:  st_put
+		get:  st_get
+		full: st_full
 	}
 	r.ps.publish = st_publish
 	r.ps.pub_ctx = r
@@ -386,6 +393,37 @@ fn test_a_refused_write_answers_0x72_and_changes_nothing() {
 	assert r.puts == puts + 1
 	r.reboot()
 	assert r.cell_a[steer] == 100 && r.cell_a[trailer] == 0 // durable unchanged
+}
+
+// A journal filled in one power cycle (no erase point between the writes) refuses until its next
+// erase point compacts it: a write that meets it answers 0x22 conditionsNotCorrect — the flash did
+// not fail, a reset recovers — and changes nothing; after the erase point the same write is stored.
+fn test_a_write_refused_by_a_full_journal_answers_0x22_and_changes_nothing() {
+	mut r := new_rig()
+	r.unlock()
+	mut v := u16(0)
+	mut refused := false
+	for _ in 0 .. 200 {
+		before := r.cell_a[steer]
+		next := v ^ 1 // every write a new value: one record each
+		resp := r.write(0x0110, [u8(next >> 8), u8(next)])
+		if resp[0] == 0x6E {
+			v = next
+			continue
+		}
+		assert resp == [u8(0x7F), 0x2E, 0x22], 'a full journal answered ${resp}'
+		assert r.j.last_refusal == .full_until_erase
+		assert !r.f.dead && !r.f.refuse // nothing failed: the journal is full
+		assert r.cell_a[steer] == before // live unchanged
+		assert r.read(0x0110) == [u8(v >> 8), u8(v)] // the record unchanged
+		refused = true
+		break
+	}
+	assert refused, 'the journal never filled'
+	assert r.j.erase_pending() // the erase point
+	assert r.write(0x0110, [u8(0x01), 0x2C])[0] == 0x6E // 300
+	r.reboot()
+	assert r.cell_a[steer] == 300 // durable
 }
 
 // the header is the identity, exactly: every change below reverts SteerLimit's coding (and only
@@ -555,7 +593,9 @@ fn test_power_cuts_anywhere_leave_an_acknowledged_coding() {
 			ack[i] = v.clone()
 			wrote++
 		} else if !r.f.dead {
-			assert !in_range || resp[2] == 0x72, 'step ${step}: ${resp}'
+			// refused by the journal: 0x22 for its space (full until the next reboot erases), 0x72
+			// for the flash (a refusing program)
+			assert !in_range || resp[2] == uds.store_refusal_nrc(r.j.last_refusal.for_space()), 'step ${step}: ${resp}'
 		}
 		if r.f.dead || g.next(10) == 0 {
 			inflight := if r.f.dead { v.clone() } else { []i64{} }
