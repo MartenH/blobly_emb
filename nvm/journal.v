@@ -77,7 +77,7 @@ pub enum PutRefusal {
 	full_until_erase // the active sector is full and its partner waits for erase_pending()
 	seq_ceiling      // the sequence counter is at its ceiling: the journal is frozen for good
 	pool             // no RAM-table row for a new id, or ids were dropped at mount
-	flash            // a program (or the copy of an inline compaction) failed and read-back could not confirm it
+	flash            // a program (or the copy of an inline compaction) failed and read-back could not confirm it, or the active sector is full and freeing its partner failed (free_failed)
 }
 
 // for_space: the refusal is the journal's space, not the flash — full until the next erase point
@@ -131,6 +131,10 @@ pub mut:
 	pending_erase int
 	// the non-active sector is KNOWN fully erased (compact may skip its erase)
 	partner_clean bool
+	// a step freeing the partner (an erase, a compaction's or a re-homing's copy) failed since the
+	// last erase that succeeded: a put finding the active sector full then answers .flash, not
+	// .full_until_erase, since the next erase point may not recover it. Owned by mount().
+	free_failed bool
 	// mount verdict: the previous session ended with the clean marker as the
 	// newest record (slept orderly). Fresh/empty journal counts as clean.
 	clean bool
@@ -235,6 +239,7 @@ pub fn (mut j Journal) mount() bool {
 	j.max_seq = 0
 	j.pending_erase = -1
 	j.pool_overflow = false
+	j.free_failed = false
 	mut newest_is_marker := true // empty journal = clean
 	mut newest_seq := u32(0)
 	mut any_valid := false
@@ -680,8 +685,10 @@ pub fn (mut j Journal) compact() bool {
 			return false
 		}
 		if !j.ops.erase(j.ops.ctx, j.sector_addr(target), j.cfg.size) {
+			j.free_failed = true
 			return false
 		}
+		j.free_failed = false
 	}
 	old_active := j.active
 	old_cursor := j.cursor
@@ -715,6 +722,7 @@ pub fn (mut j Journal) compact() bool {
 		j.cursor = old_cursor
 		j.pending_erase = target
 		j.partner_clean = false
+		j.free_failed = true
 		return false
 	}
 	for i in 0 .. max_blocks {
@@ -749,9 +757,11 @@ pub fn (mut j Journal) erase_pending() bool {
 		return false
 	}
 	if !j.ops.erase(j.ops.ctx, j.sector_addr(j.pending_erase), j.cfg.size) {
+		j.free_failed = true
 		return false
 	}
 	j.partner_clean = true
+	j.free_failed = false
 	j.pending_erase = -1
 	return true
 }
@@ -784,6 +794,7 @@ fn (mut j Journal) rehome_strays(from int) bool {
 		if j.table[i].present && j.table[i].sector == from {
 			off, seq, ok := j.emit_entry(i)
 			if !ok {
+				j.free_failed = true // fit-checked above: a program failed
 				return false // burned slot(s); retry at the next quiet point
 			}
 			j.table[i].sector = j.active
@@ -817,7 +828,9 @@ fn (mut j Journal) ensure_space(n u32) PutRefusal {
 			return .capacity // a copy overflowing the target = capacity bug; refuse
 		}
 		if !j.partner_clean {
-			return .full_until_erase // no erases in the append path; erase_pending() frees it
+			// no erases in the append path; erase_pending() frees it — unless freeing it has
+			// already failed on the flash, which an erase point may not recover
+			return if j.free_failed { PutRefusal.flash } else { PutRefusal.full_until_erase }
 		}
 		if !j.compact() {
 			// put's capacity check already held the live set to one sector, so a compaction

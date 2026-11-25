@@ -546,9 +546,12 @@ not queued, while the physical connection is busy ([can-tp.md](can-tp.md) §3.6)
   for every such writer (`uds.store_refusal_nrc`, fed by the journal's `last_refusal`): **0x22**
   conditionsNotCorrect when the refusal is the journal's space — full until its next erase point
   compacts it (a reset, an NM sleep edge, the boot), or a write the live set cannot take — and
-  **0x72** generalProgrammingFailure when the flash failed (a program read-back could not confirm)
-  or the journal cannot store at all. A tester reading 0x22 resets the node and retries; 0x72 is
-  the one that says the flash may be at fault. Neither has a status DID or DTC of its own.
+  **0x72** generalProgrammingFailure when the flash failed (a program read-back could not confirm,
+  or freeing the full sector failed: an erase, or a compaction's copy, until an erase succeeds) or
+  the journal cannot store at all. A tester reading 0x22 for a journal full until its erase point
+  resets the node and retries; a live set that cannot take the write is a configuration bound the
+  generator's capacity check should have prevented, and a reset does not change it. 0x72 is the
+  one that says the flash may be at fault. Neither has a status DID or DTC of its own.
 
 #### CommunicationControl (0x28)
 
@@ -972,7 +975,7 @@ param_status = true                         # one byte per parameter: 0 default,
 | A snapshot is never a side door around a DID's gate | `tools/loom2v/fault_target_test.v` `test_snapshot_declarations_are_checked` |
 | Every 0x19 answer, and every DID answer and write, fits the node's `max_message` | `tools/loom2v/diag_target_test.v` (REQ-CAN-TP-022) |
 | A power cut anywhere leaves one coherent memory; a lowered `entries` keeps the most important snapshots | `comm/fault/persist_test.v` power-cut fuzz |
-| A refused 0x14 or parameter 0x2E changes nothing live, answering 0x72 when the flash failed and 0x22 when the journal is full until its next erase point; nothing stored either, unless the flash took the record and only its read-back failed | `persist_test.v` `test_a_refused_clear_answers_0x72_and_changes_nothing`, `test_a_clear_refused_by_a_full_journal_answers_0x22_and_changes_nothing`; `comm/param/param_test.v` `test_a_refused_write_answers_0x72_and_changes_nothing`, `test_a_write_refused_by_a_full_journal_answers_0x22_and_changes_nothing`; `nvm/journal_test.v` (`last_refusal` per cause) |
+| A refused 0x14 or parameter 0x2E changes nothing live, answering 0x72 when the flash failed and 0x22 when the journal is full until its next erase point; nothing stored either, unless the flash took the record and only its read-back failed | `persist_test.v` `test_a_refused_clear_answers_0x72_and_changes_nothing`, `test_a_clear_refused_by_a_full_journal_answers_0x22_and_changes_nothing`, `test_a_clear_held_by_a_refused_snapshot_answers_by_its_refusal`; `comm/param/param_test.v` `test_a_refused_write_answers_0x72_and_changes_nothing`, `test_a_write_refused_by_a_full_journal_answers_0x22_and_changes_nothing`; `nvm/journal_test.v` (`last_refusal` per cause; `test_a_failed_free_is_a_flash_refusal`) |
 | An automatic write the journal refuses is retried, paced | `persist_test.v` `test_a_refused_write_is_retried_after_the_pause` |
 | Counters have fixed widths and saturate | `comm/fault/records_test.v` `test_counters_saturate_at_their_width` |
 | A parameter's record is restored only under its exact header, and revalidated against the current range | `comm/param/param_test.v`; `tools/loom2v/param_target_test.v` |

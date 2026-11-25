@@ -97,7 +97,7 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-DIAG-062"
 title = "A request's own write never erases"
-text = "The write a request makes durable before its answer — a parameter's 0x2E, a 0x14 clear — shall append its own records and, when the journal sector is full, at most copy the live set into the already-erased partner sector, never erase one; a write that would need an erase shall be refused with conditionsNotCorrect (0x22) instead, since the next erase point (a reset, a sleep edge, the boot) recovers it and nothing failed; generalProgrammingFailure (0x72) stays the answer of a program the flash failed. The application server answers such a write in the pass that served it, never with responsePending (0x78)."
+text = "The write a request makes durable before its answer — a parameter's 0x2E, a 0x14 clear — shall append its own records and, when the journal sector is full, at most copy the live set into the already-erased partner sector, never erase one; a write that would need an erase shall be refused with conditionsNotCorrect (0x22) instead, since the next erase point (a reset, a sleep edge, the boot) recovers it and nothing failed; generalProgrammingFailure (0x72) stays the answer of a program or an erase the flash failed. The application server answers such a write in the pass that served it, never with responsePending (0x78)."
 status = "agreed"
 method = "test"
 asil = "QM"
