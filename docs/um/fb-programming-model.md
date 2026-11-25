@@ -81,7 +81,9 @@ A signal received from a bus can carry `status = "RxStatus"`, filled by the plat
 check — a wrong MAC, or a replayed / stale freshness value — or its E2E CRC; an E2E *repeat*, a stuck or replaying counter, publishes nothing, so such a
 sender reaches `timeout` instead). **`timeout` needs a deadline on the frame** — `[[frame]] rx = { timeout_ms }`, or
 `e2e = { ..., timeout_ms }` (required on a received E2E frame); without one a silent sender keeps
-reading `ok` with its last value. An E2E frame can also carry a `lost` counter. The details are in
+reading `ok` with its last value. Each received signal of an E2E frame must also carry a `lost`
+counter (`lost = "u16"` or `"u32"`): a gap in the sequence reads `ok`, so the counter is the only
+report of it, and generation refuses the signal without one. The details are in
 [../communication.md](../communication.md). **What each status means is your decision** — a
 substitute value and a safety reaction are different responses. On `timeout` and `integrity` the
 published value is **zero**, so a last good value has to live in the FB's own state:
