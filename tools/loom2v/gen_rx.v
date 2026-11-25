@@ -187,17 +187,11 @@ fn rx_frame_arm(m Model, msg string, list []string, ext bool, bname string, owne
 	on := owner.on()
 	e2e_on := m.frames.e2e_here(msg, bname)
 	secoc_on := m.frames.secoc_here(msg, bname)
-	e2e_args := '&rx.data[0], int(${msg}_dlc), u16(0x${(m.frames.e2e_id[msg] or { 0 }).hex()}), ${m.frames.e2e_crc[msg] or {
-		0
-	}}, ${m.frames.e2e_ctr[msg] or { 0 }}'
 	// the E2E check of an authentic frame (REQ-E2E-004: SecOC first, and E2E leaves SecOC's bytes out)
-	chk := if secoc_on {
-		'st.rxm_${msg}.e2e.check_ex(${e2e_args}, ${m.frames.secoc_fresh[msg] or { 0 }}, 1, ${m.frames.secoc_mac[msg] or {
-			0
-		}}, ${m.frames.secoc_maclen[msg] or { 0 }})'
-	} else {
-		'st.rxm_${msg}.e2e.check(${e2e_args})'
-	}
+	e2e_meth, e2e_pos := m.frames.e2e_call(msg, 'check', secoc_on)
+	chk := 'st.rxm_${msg}.e2e.${e2e_meth}(&rx.data[0], int(${msg}_dlc), u16(0x${(m.frames.e2e_id[msg] or {
+		0
+	}).hex()}), ${e2e_pos})'
 	accept := if e2e_on {
 		'st.rxm_${msg}.checked(now, chk_${msg}, ${on}, ${owner.receiving()}, ${owner.suspended()})'
 	} else {

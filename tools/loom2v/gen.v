@@ -172,9 +172,10 @@ mut:
 	tx_min_us     map[string]int
 	rx_timeout_us map[string]int
 	e2e_on        map[string]bool
+	e2e_profile   map[string]string // candb.p01 / candb.p05
 	e2e_id        map[string]int
-	e2e_crc       map[string]int
-	e2e_ctr       map[string]int
+	e2e_crc       map[string]int // the CRC's byte (Profile 5: its low byte, the high one after it)
+	e2e_ctr       map[string]int // the counter's byte (Profile 5: crc + 2)
 	// the E2E-owned reception timeout (REQ-E2E-002), read for received frames only. A DBC's
 	// E2ETimeout lands here for a frame this ECU only sends too, where it is unused;
 	// e2e_timeout_authored says which ones ecu.toml set, the only kind refused on a sent frame
@@ -200,6 +201,43 @@ fn (f FrameCfg) e2e_here(frame string, bus string) bool {
 
 fn (f FrameCfg) secoc_here(frame string, bus string) bool {
 	return (f.secoc_on[frame] or { false }) && (f.frame_bus[frame] or { '' }) == bus
+}
+
+// e2e_p05 says that a frame is protected by AUTOSAR E2E Profile 5 (else Profile 1).
+fn (f FrameCfg) e2e_p05(frame string) bool {
+	return (f.e2e_profile[frame] or { '' }) == candb.p05
+}
+
+// e2e_bits is the [lo, hi) bit ranges a frame's E2E fields occupy: Profile 1's CRC byte and the
+// counter's LOW nibble (its high nibble is free), Profile 5's 2-byte CRC and whole counter byte.
+fn (f FrameCfg) e2e_bits(frame string) [][]int {
+	crc := f.e2e_crc[frame] or { 0 }
+	ctr := f.e2e_ctr[frame] or { 0 }
+	if f.e2e_p05(frame) {
+		return [[crc * 8, crc * 8 + 16], [ctr * 8, ctr * 8 + 8]]
+	}
+	return [[crc * 8, crc * 8 + 8], [ctr * 8, ctr * 8 + 4]]
+}
+
+// e2e_call is the comm/e2e call that stamps (`op` = 'protect') or checks ('check') a frame, as
+// the method and the arguments after the Data ID: Profile 1's CRC and counter bytes, Profile 5's
+// header offset (its CRC's byte); with `secoc`, the _ex form and SecOC's freshness/MAC windows
+// left out of the CRC (REQ-E2E-004). ONE spelling for every call site.
+fn (f FrameCfg) e2e_call(frame string, op string, secoc bool) (string, string) {
+	mut meth := op
+	mut args := if f.e2e_p05(frame) {
+		meth += '_p05'
+		'${f.e2e_crc[frame] or { 0 }}'
+	} else {
+		'${f.e2e_crc[frame] or { 0 }}, ${f.e2e_ctr[frame] or { 0 }}'
+	}
+	if secoc {
+		meth += '_ex'
+		args += ', ${f.secoc_fresh[frame] or { 0 }}, 1, ${f.secoc_mac[frame] or { 0 }}, ${f.secoc_maclen[frame] or {
+			0
+		}}'
+	}
+	return meth, args
 }
 
 // parse_signals parses [[signal]] into the model: sig_of (with each signal's fields in
@@ -949,10 +987,7 @@ fn frame_reserved_bits(f FrameCfg, frame string, bus string) [][]int {
 	// protection applies ONLY on the frame's bus (e2e_here/secoc_here); a route on a
 	// different bus does NOT protect, so it must still fill those SG_.
 	if f.e2e_here(fk, bus) {
-		crc := f.e2e_crc[fk]
-		ctr := f.e2e_ctr[fk]
-		out << [crc * 8, crc * 8 + 8]
-		out << [ctr * 8, ctr * 8 + 4] // only the LOW nibble is the counter; high nibble is free
+		out << f.e2e_bits(fk)
 	}
 	if f.secoc_here(fk, bus) {
 		fresh := f.secoc_fresh[fk]
@@ -1377,6 +1412,7 @@ fn (mut f FrameCfg) set_e2e(fk string, e ecumodel.FrameE2e) {
 		panic('frame "${fk}": e2e data_id 0x${e.data_id.hex()} is out of range (0..0xFFFF)')
 	}
 	f.e2e_on[fk] = true
+	f.e2e_profile[fk] = e.profile
 	f.e2e_id[fk] = e.data_id
 	f.e2e_crc[fk] = e.crc_pos
 	f.e2e_ctr[fk] = e.counter_pos
@@ -2031,12 +2067,12 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 			slo, shi := r.to_bit, r.to_bit + r.to_len // [slo, shi) the routed signal's bits
 			mut clash := ''
 			if m.frames.e2e_here(tof, r.to_bus) {
-				cb := (m.frames.e2e_crc[tof] or { 0 }) * 8
-				nb := (m.frames.e2e_ctr[tof] or { 0 }) * 8
-				if slo < cb + 8 && shi > cb {
-					clash = 'the E2E CRC byte'
-				} else if slo < nb + 4 && shi > nb {
-					clash = 'the E2E counter nibble' // low nibble; high nibble is free
+				bits := m.frames.e2e_bits(tof)
+				if slo < bits[0][1] && shi > bits[0][0] {
+					clash = if m.frames.e2e_p05(tof) { 'the E2E CRC bytes' } else { 'the E2E CRC byte' }
+				} else if slo < bits[1][1] && shi > bits[1][0] {
+					// Profile 1: the low nibble; its high nibble is free
+					clash = if m.frames.e2e_p05(tof) { 'the E2E counter byte' } else { 'the E2E counter nibble' }
 				}
 			}
 			if m.frames.secoc_here(tof, r.to_bus) {
@@ -4473,7 +4509,12 @@ fn main() {
 			}
 			cp := m.frames.e2e_crc[fk] or { 0 }
 			np := m.frames.e2e_ctr[fk] or { 0 }
-			if cp < 0 || cp >= dlc || np < 0 || np >= dlc || cp == np {
+			if m.frames.e2e_p05(fk) {
+				// the header ecumodel holds together: CRC low, CRC high, counter
+				if cp < 0 || np != cp + 2 || np >= dlc {
+					panic('e2e ${fk}: the Profile 5 header (crc_pos=${cp}, counter_pos=${np}) must be 3 bytes within dlc=${dlc}')
+				}
+			} else if cp < 0 || cp >= dlc || np < 0 || np >= dlc || cp == np {
 				panic('e2e ${fk}: crc_pos=${cp}, counter_pos=${np} must be distinct and within dlc=${dlc}')
 			}
 		}
@@ -4498,7 +4539,9 @@ fn main() {
 			if m.frames.e2e_on[fk] or { false } {
 				cp := m.frames.e2e_crc[fk] or { 0 }
 				np := m.frames.e2e_ctr[fk] or { 0 }
-				for pos in [cp, np] {
+				// every byte an E2E field occupies: Profile 5's CRC is two
+				fields := if m.frames.e2e_p05(fk) { [cp, cp + 1, np] } else { [cp, np] }
+				for pos in fields {
 					if pos == fp || (pos >= mp && pos < mp + ml) {
 						panic('e2e+secoc ${fk}: crc_pos=${cp}/counter_pos=${np} collide with ' +
 							'fresh_pos=${fp}/mac@${mp}+${ml} — REQ-E2E-004 requires disjoint ' +

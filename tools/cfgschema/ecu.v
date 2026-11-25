@@ -217,7 +217,7 @@ fn ecu_schema() Schema {
 			k('peer', .str).doc("eth: this event's own address:port, when not [someip].peer"),
 			sub('tx', .tbl, 'tx').doc('how it is sent'),
 			sub('rx', .tbl, 'rx').doc('the receive deadline'),
-			sub('e2e', .tbl, 'e2e').doc("AUTOSAR E2E Profile 1 (the DBC's E2E attributes otherwise)"),
+			sub('e2e', .tbl, 'e2e').doc("AUTOSAR E2E Profile 1 or 5 (the DBC's E2E attributes otherwise)"),
 			sub('secoc', .tbl, 'secoc').doc('SecOC: AES-CMAC (CAN only)'),
 		]),
 		tbl('tx', 'inline tx', 'How a frame is sent (comm/com).', [
@@ -228,10 +228,12 @@ fn ecu_schema() Schema {
 		tbl('rx', 'inline rx', '', [
 			k('timeout_ms', .int).d('0').range(0, 2147483).doc('the reception deadline (ms; 0 = none); past it the signal status is timeout'),
 		]),
-		tbl('e2e', 'inline e2e', "AUTOSAR E2E Profile 1. Each key defaults to the DBC's E2E attribute; a differing value needs deviates_from_dbc.", [
+		tbl('e2e', 'inline e2e', "AUTOSAR E2E Profile 1 or 5. Each key defaults to the DBC's E2E attribute; a differing value needs deviates_from_dbc.", [
+			k('profile', .str).one_of(['P01', 'P05', 'PROFILE_01', 'PROFILE_05', 'autosar_p01',
+				'autosar_p05']).doc('Profile 1 (8-bit CRC, 4-bit counter) or Profile 5 (16-bit CRC, 8-bit counter; CAN only). Absent: the DBC\'s E2EProfile, else P01'),
 			k('data_id', .int).range(0, 0xFFFF).hex().own_check().doc('the Data ID mixed into the CRC'),
-			k('crc_pos', .int).doc("the CRC's byte"),
-			k('counter_pos', .int).doc('the byte whose low nibble holds the counter'),
+			k('crc_pos', .int).doc("the CRC's byte (Profile 5: its low byte, the high byte after it)"),
+			k('counter_pos', .int).doc('the byte whose low nibble holds the counter (Profile 5: the whole byte, crc_pos + 2)'),
 			k('timeout_ms', .int).range(0, 2147483).doc('rx: the E2E-owned sender-loss timeout (ms; REQ-E2E-002)'),
 			k('deviates_from_dbc', .boolean).d('false').doc("a field above that differs from the DBC's E2E attributes is deliberate"),
 		]),

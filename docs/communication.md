@@ -414,25 +414,28 @@ or SecOC, `lost` the E2E `lost` counter — each refused at generation when miss
 
 ## E2E protection (ISO 26262)
 
-**The supported E2E profile is AUTOSAR E2E Profile 1 (P01)**, Data ID mode BOTH, bit-exact
-to the specification. On a CAN frame of up to 30 bytes (P01's DataLength limit of 240 bits) it
-interoperates with an AUTOSAR ECU configured for P01, and with blobly_net's `autosar_p01`. It
-is the P01 algorithm on longer frames and on a SOME/IP event's trailer too, but that is not an
-AUTOSAR configuration: AUTOSAR protects SOME/IP through its E2E transformer profiles (P04 and
-later), which also cover header fields.
+**The supported E2E profiles are AUTOSAR E2E Profile 1 (P01)**, Data ID mode BOTH, **and
+Profile 5 (P05)**, each bit-exact to the specification. On a CAN frame of up to 30 bytes (P01's
+DataLength limit of 240 bits) P01 interoperates with an AUTOSAR ECU configured for P01, and with
+blobly_net's `autosar_p01`; P05, on any CAN or CAN-FD frame, with one configured for P05 and with
+blobly_net's `autosar_p05`. P01 is the P01 algorithm on longer frames and on a SOME/IP event's
+trailer too, but that is not an AUTOSAR configuration: AUTOSAR protects SOME/IP through its E2E
+transformer profiles (P04 and later), which also cover header fields. P05 is implemented on CAN
+frames only; a SOME/IP trailer is always P01.
 
-- **CRC:** CRC-8, polynomial 0x1D, start value 0x00, no final XOR. This is not the catalogue's
-  CRC-8/SAE-J1850 (0xFF / 0xFF): AUTOSAR's chained CRC calls cancel those.
-- **What the CRC covers:** the 16-bit Data ID (low byte, then high), then every frame byte except
-  the CRC's own.
-- **Counter:** 4 bits (the low nibble of `counter_pos`), counting 0..14 and wrapping to 0. A
-  received 15 is refused.
+| | Profile 1 | Profile 5 |
+|---|---|---|
+| CRC | CRC-8, polynomial 0x1D, start value 0x00, no final XOR (not the catalogue's CRC-8/SAE-J1850, 0xFF / 0xFF: AUTOSAR's chained CRC calls cancel those) | CRC-16/CCITT-FALSE: polynomial 0x1021, start value 0xFFFF, no final XOR |
+| where | one byte, `crc_pos` | two bytes, low byte first, at `crc_pos` and `crc_pos + 1` |
+| what it covers | the 16-bit Data ID (low byte, then high), then every frame byte except the CRC's own | every frame byte except the CRC's two, then the Data ID (low byte, then high) |
+| counter | 4 bits (the low nibble of `counter_pos`), 0..14 then 0; a received 15 is refused | the whole byte after the CRC (`counter_pos = crc_pos + 2`), 0..255 then 0 |
 
-It is pinned by vectors from an independent implementation (autosar-e2e) in `comm/e2e/e2e_test.v`,
-the same table blobly_net's `autosar_p01` is pinned by. Other profiles (P02 and later) and the
-LOW / ALT / NIBBLE Data ID modes are not implemented. On a frame that also carries SecOC, the CRC
-additionally excludes SecOC's bytes (REQ-E2E-004, below). That composition rule goes beyond
-Profile 1 itself.
+Both are pinned by vectors from an independent implementation (autosar-e2e) in
+`comm/e2e/e2e_test.v` and `comm/e2e/p05_test.v`, the same tables blobly_net's `autosar_p01` and
+`autosar_p05` are pinned by. Other profiles (P02, P04, P07 and later) and the LOW / ALT / NIBBLE
+Data ID modes are not implemented. On a frame that also carries SecOC, either CRC additionally
+excludes SecOC's bytes (REQ-E2E-004, below). That composition rule goes beyond the profiles
+themselves.
 
 A `[[frame]]` can be **end-to-end protected**: `comm/e2e` stamps an alive counter
 and a CRC into the frame on tx and verifies them on rx, so the receiver detects
@@ -460,20 +463,31 @@ e2e  = { data_id = 0x10, crc_pos = 1, counter_pos = 2 }  # AUTOSAR E2E Profile 1
 [[frame]]
 name = "BrakeStatus"; bus = "can0"                        # rx: E2E owns the loss check
 e2e  = { data_id = 0x44, crc_pos = 4, counter_pos = 5, timeout_ms = 300 }
+
+[[frame]]
+name = "ChassisFd"; bus = "can0"                          # Profile 5: CRC bytes 2-3, counter 4
+e2e  = { profile = "P05", data_id = 0x0BEE, crc_pos = 2, counter_pos = 4 }
 ```
+
+`profile` is `"P01"` or `"P05"` (`PROFILE_01` / `autosar_p01` and their P05 forms read the
+same); absent, it is the DBC's `E2EProfile`, else P01, so a table written before Profile 5 means
+what it always did.
 
 **The whole contract may come from the DBC instead** (blobly_net#271), through five message
 attributes defined once, for both repositories, in blobly_net's
 [`docs/dbc_attributes.md`](https://github.com/MartenH/blobly_net/blob/main/docs/dbc_attributes.md):
-`E2ECounterSignal` and `E2ECrcSignal` (signal names), `E2EProfile` (`"P01"`, the one profile
-`comm/e2e` implements; `PROFILE_01` and `autosar_p01` read the same), `E2EDataId`, and
+`E2ECounterSignal` and `E2ECrcSignal` (signal names), `E2EProfile` (`"P01"` or `"P05"`, the
+profiles `comm/e2e` implements; `PROFILE_01` and `autosar_p01` read as P01, `PROFILE_05` and
+`autosar_p05` as P05), `E2EDataId`, and
 `E2ETimeout` (ms, E2E's own sender-loss timeout for a receiver; 0 means none, and a sender
 ignores it). blobly_net reads and writes the same attributes and its `cmd/arxml2dbc` exports
 them, so both tools take one contract from one file. `tools/ecumodel`'s `resolve_frame_e2e` is
 the one resolution: a `[[frame]].e2e` field, `timeout_ms` included, is an override, and one that
 contradicts the DBC is refused unless the table says `deviates_from_dbc = true`; a field it
-leaves out is the DBC's. The CRC signal must be 8 bits on a byte boundary and the counter 4 bits
-in a byte's low nibble. A frame carrying the ECU's own signals needs no `[[frame]]` at all on an
+leaves out is the DBC's (the profile included). For P01 the CRC signal must be 8 bits on a byte
+boundary and the counter 4 bits in a byte's low nibble; for P05 the CRC signal must be 16 bits,
+little-endian, on a byte boundary, and the counter 8 bits in the byte after it — blobly_net's
+rule for `autosar_p05`. A frame carrying the ECU's own signals needs no `[[frame]]` at all on an
 ECU with one CAN bus (with several, or for a routed frame, a `[[frame]]` names its bus); a
 received one still needs a timeout from one place or the other. Without a DBC declaration the
 table must give all three of `data_id`, `crc_pos` and `counter_pos`; a declaration `comm/e2e`

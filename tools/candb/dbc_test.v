@@ -100,7 +100,7 @@ BA_ "E2ECrcSignal" BO_ 2147483905 "C";
 	assert !plain.messages[0].e2e.declared(), 'a default alone protects nothing'
 }
 
-// docs/dbc_attributes.md (blobly_net): Profile 1's three spellings are one profile; E2ETimeout
+// docs/dbc_attributes.md (blobly_net): Profile 1's three spellings are one profile, and Profile 5's; E2ETimeout
 // is ms, a per-message 0 is "none" and not overridden by a default, a default of 0 states
 // nothing, and a timeout alone declares no protection; an empty value is malformed, not absent;
 // a Data ID never comes from a default
@@ -108,6 +108,11 @@ fn test_e2e_spellings_and_timeout_rules() {
 	for v in ['P01', 'PROFILE_01', 'autosar_p01'] {
 		db := parse_dbc('BO_ 1 A: 8 N\n SG_ S : 0|8@1+ (1,0) [0|255] "" X\nBA_ "E2EProfile" BO_ 1 "${v}";\n')!
 		assert db.messages[0].e2e.profile == 'autosar_p01', v
+	}
+	// Profile 5's three spellings likewise, as blobly_net's candb reads them
+	for v in ['P05', 'PROFILE_05', 'autosar_p05'] {
+		db := parse_dbc('BO_ 1 A: 8 N\n SG_ S : 0|8@1+ (1,0) [0|255] "" X\nBA_ "E2EProfile" BO_ 1 "${v}";\n')!
+		assert db.messages[0].e2e.profile == 'autosar_p05', v
 	}
 	db := parse_dbc('BO_ 1 A: 8 N
  SG_ C : 0|8@1+ (1,0) [0|255] "" X

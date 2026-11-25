@@ -2011,3 +2011,12 @@ fn test_bus_fd_reads_the_bus_table_and_defaults_false() {
 	none_doc := toml.parse_text('[isotp]\nrx_id = 0x7E0\n') or { panic('bad test toml: ${err}') }
 	assert !bus_fd(none_doc, 'edge') // no [bus] at all
 }
+
+// #305: Profile 5 is implemented on CAN frames; a SOME/IP trailer is Profile 1's counter-then-CRC
+fn test_someip_e2e_is_profile_1() {
+	trailer := eth_tx_frame.replace('signals = ["CpuLoad"]', 'signals = ["CpuLoad"]\ne2e     = { PROFILE data_id = 1, counter_pos = 1, crc_pos = 2 }')
+	assert errs_of(eth_head + trailer.replace('PROFILE ', '') + app) == []
+	assert errs_of(eth_head + trailer.replace('PROFILE ', 'profile = "PROFILE_01", ') + app) == []
+	e := errs_of(eth_head + trailer.replace('PROFILE ', 'profile = "P05", ') + app)
+	assert e.any(it.contains('eth frame "BenchTelem" e2e.profile = "P05": the SOME/IP trailer is Profile 1')), e.str()
+}

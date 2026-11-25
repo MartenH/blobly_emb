@@ -14,6 +14,7 @@ module ecumodel
 
 import toml
 import tools.cfgschema
+import tools.candb
 
 // toml_arr returns the array of tables under `key`, or empty when the key is absent — so an
 // ecu.toml that omits an optional section doesn't phantom-iterate a single empty entry.
@@ -766,6 +767,12 @@ fn validate_someip(doc toml.Doc, ends map[string]SigEnds, part_names map[string]
 		// toward the bound.
 		if ev := fm['e2e'] {
 			evm := ev.as_map()
+			// the trailer is Profile 1's counter-then-CRC: a SOME/IP Profile 5 is not implemented
+			if pv := evm['profile'] {
+				if !(pv is string && candb.profile_from_dbc(pv) == candb.p01) {
+					errs << 'eth frame "${fname}" e2e.profile = ${pv.to_toml()}: the SOME/IP trailer is Profile 1 (P01) — Profile 5 is implemented on CAN frames only'
+				}
+			}
 			cpos := (evm['counter_pos'] or { toml.Any(i64(-1)) }).i64()
 			crc := (evm['crc_pos'] or { toml.Any(i64(-1)) }).i64()
 			if cpos != size || crc != size + 1 {

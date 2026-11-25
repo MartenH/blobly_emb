@@ -289,7 +289,7 @@
         "peer": {"type": "string", "description": "eth: this event's own address:port, when not [someip].peer"},
         "tx": {"allOf": [{"$ref": "#/definitions/tx"}], "description": "how it is sent"},
         "rx": {"allOf": [{"$ref": "#/definitions/rx"}], "description": "the receive deadline"},
-        "e2e": {"allOf": [{"$ref": "#/definitions/e2e"}], "description": "AUTOSAR E2E Profile 1 (the DBC's E2E attributes otherwise)"},
+        "e2e": {"allOf": [{"$ref": "#/definitions/e2e"}], "description": "AUTOSAR E2E Profile 1 or 5 (the DBC's E2E attributes otherwise)"},
         "secoc": {"allOf": [{"$ref": "#/definitions/secoc"}], "description": "SecOC: AES-CMAC (CAN only)"}
       },
       "required": ["name", "bus"],
@@ -316,12 +316,13 @@
     },
     "e2e": {
       "title": "inline e2e",
-      "description": "AUTOSAR E2E Profile 1. Each key defaults to the DBC's E2E attribute; a differing value needs deviates_from_dbc.",
+      "description": "AUTOSAR E2E Profile 1 or 5. Each key defaults to the DBC's E2E attribute; a differing value needs deviates_from_dbc.",
       "type": "object",
       "properties": {
+        "profile": {"type": "string", "enum": ["P01", "P05", "PROFILE_01", "PROFILE_05", "autosar_p01", "autosar_p05"], "description": "Profile 1 (8-bit CRC, 4-bit counter) or Profile 5 (16-bit CRC, 8-bit counter; CAN only). Absent: the DBC's E2EProfile, else P01"},
         "data_id": {"type": "integer", "minimum": 0, "maximum": 65535, "description": "the Data ID mixed into the CRC"},
-        "crc_pos": {"type": "integer", "description": "the CRC's byte"},
-        "counter_pos": {"type": "integer", "description": "the byte whose low nibble holds the counter"},
+        "crc_pos": {"type": "integer", "description": "the CRC's byte (Profile 5: its low byte, the high byte after it)"},
+        "counter_pos": {"type": "integer", "description": "the byte whose low nibble holds the counter (Profile 5: the whole byte, crc_pos + 2)"},
         "timeout_ms": {"type": "integer", "minimum": 0, "maximum": 2147483, "description": "rx: the E2E-owned sender-loss timeout (ms; REQ-E2E-002)"},
         "deviates_from_dbc": {"type": "boolean", "default": false, "description": "a field above that differs from the DBC's E2E attributes is deliberate Default: false."}
       },

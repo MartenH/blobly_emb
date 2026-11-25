@@ -158,3 +158,98 @@ fn test_the_dbc_timeout_stands_on_its_own_and_a_bad_one_is_replaceable() {
 	t, _ := resolve_frame_e2e('brake_status', true, e2e_table('{ timeout_ms = 4294967596 }'), z)!
 	assert t.timeout_ms == 4294967596
 }
+
+// Profile 5 (blobly_net's autosar_p05, the same field rule): a 16-bit little-endian byte-aligned
+// CRC and an 8-bit counter in the byte after it
+const p05_dbc = 'BO_ 288 EngineData: 8 Engine
+ SG_ Crc : 0|16@1+ (1,0) [0|65535] "" X
+ SG_ Ctr : 16|8@1+ (1,0) [0|255] "" X
+ SG_ Lo : 24|8@1+ (1,0) [0|255] "" X
+ SG_ Hi : 32|32@1+ (1,0) [0|4294967295] "" X
+BA_ "E2ECrcSignal" BO_ 288 "Crc";
+BA_ "E2ECounterSignal" BO_ 288 "Ctr";
+BA_ "E2EDataId" BO_ 288 4660;
+'
+
+fn engine(extra string) candb.Message {
+	return (candb.parse_dbc(p05_dbc + extra) or { panic(err) }).messages[0]
+}
+
+fn test_the_dbc_declares_a_profile_5_layout() {
+	for spelling in ['P05', 'PROFILE_05', 'autosar_p05'] {
+		e, on := dbc_e2e(engine('BA_ "E2EProfile" BO_ 288 "${spelling}";'))!
+		assert on
+		assert e == FrameE2e{
+			profile:     candb.p05
+			data_id:     0x1234
+			crc_pos:     0
+			counter_pos: 2
+		}, spelling
+	}
+	// and a table carrying only the timeout keeps the DBC's profile
+	e, _ := resolve_frame_e2e('engine_data', true, e2e_table('{ timeout_ms = 300 }'), engine('BA_ "E2EProfile" BO_ 288 "P05";'))!
+	assert e.profile == candb.p05 && e.crc_pos == 0 && e.counter_pos == 2
+}
+
+fn test_a_profile_5_declaration_comm_e2e_cannot_stamp_is_refused() {
+	p05 := 'BA_ "E2EProfile" BO_ 288 "P05";'
+	for extra, why in {
+		// the CRC 8 bits wide, or big-endian (high byte first)
+		'BA_ "E2ECrcSignal" BO_ 288 "Lo";':       '16 bits, little-endian'
+		// the counter a whole byte, but not the one after the CRC
+		'BA_ "E2ECounterSignal" BO_ 288 "Lo";':   'not in the byte after the 2-byte CRC'
+		'BA_ "E2ECounterSignal" BO_ 288 "Hi";':   'must be 8 bits'
+		'BA_ "E2EDataId" BO_ 288 70000;':         '0..0xFFFF'
+	} {
+		dbc_e2e(engine(p05 + '\n' + extra)) or {
+			assert err.msg().contains(why), '${extra}: ${err.msg()}'
+			continue
+		}
+		assert false, '${extra} was accepted'
+	}
+	be := (candb.parse_dbc(p05_dbc.replace(' SG_ Crc : 0|16@1+', ' SG_ Crc : 7|16@0+') + p05) or {
+		panic(err)
+	}).messages[0]
+	dbc_e2e(be) or {
+		assert err.msg().contains('little-endian'), err.msg()
+		return
+	}
+	assert false, 'a big-endian Profile 5 CRC was accepted'
+}
+
+fn test_a_frame_table_states_its_profile() {
+	plain := (candb.parse_dbc('BO_ 1 A: 8 X\n SG_ S : 0|8@1+ (1,0) [0|255] "" X\n') or { panic(err) }).messages[0]
+	e, _ := resolve_frame_e2e('a', true, e2e_table('{ profile = "P05", data_id = 1, crc_pos = 3, counter_pos = 5 }'),
+		plain)!
+	assert e.profile == candb.p05 && e.crc_pos == 3 && e.counter_pos == 5
+	// with no profile, a table is Profile 1, as it always was
+	e1, _ := resolve_frame_e2e('a', true, e2e_table('{ data_id = 1, crc_pos = 3, counter_pos = 4 }'), plain)!
+	assert e1.profile == candb.p01
+	// Profile 5's counter is the byte after its CRC's two
+	resolve_frame_e2e('a', true, e2e_table('{ profile = "P05", data_id = 1, crc_pos = 3, counter_pos = 4 }'),
+		plain) or {
+		assert err.msg().contains('not in the byte after the 2-byte CRC'), err.msg()
+		// a profile comm/e2e does not implement is refused by name
+		resolve_frame_e2e('a', true, e2e_table('{ profile = "P02", data_id = 1, crc_pos = 3, counter_pos = 4 }'),
+			plain) or {
+			assert err.msg().contains('is not a profile comm/e2e implements'), err.msg()
+			return
+		}
+		assert false, 'P02 was accepted'
+	}
+	assert false, 'a Profile 5 counter beside its CRC was accepted'
+}
+
+fn test_a_table_profile_contradicting_the_dbc_is_refused_unless_deliberate() {
+	resolve_frame_e2e('brake_status', true, e2e_table('{ profile = "P05" }'), brake('')) or {
+		assert err.msg().contains('e2e.profile = "P05" contradicts the DBC (autosar_p01)'), err.msg()
+		// an agreeing one is fine, in any spelling
+		resolve_frame_e2e('brake_status', true, e2e_table('{ profile = "PROFILE_01" }'), brake(''))!
+		// deviating, the table's profile and layout replace the DBC's
+		e, _ := resolve_frame_e2e('brake_status', true, e2e_table('{ profile = "P05", crc_pos = 2, counter_pos = 4, deviates_from_dbc = true }'),
+			brake(''))!
+		assert e.profile == candb.p05 && e.crc_pos == 2 && e.counter_pos == 4 && e.data_id == 0x44
+		return
+	}
+	assert false, 'a contradicting profile was accepted'
+}
