@@ -33,8 +33,12 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 fail=0
-# c_archive as tools/tools.mk defines it, with one more (harmless) step: another archive rule
-other_archive='c_archive=$(call c_signed,$(1))$(1) $@ $(filter-out %.sig,$^) && :'
+# c_archive as tools/tools.mk defines it, with one more (harmless) step: another archive rule.
+# A recipe macro's what-if is an --eval override, never a command-line assignment: make exports
+# a command-line variable, and GNU make 4.4 expands an exported one for every $(shell ...), outside
+# any rule, where c_signed's $(error) stops make before it can answer (#439). An --eval variable is
+# not exported by any make, so the question asked does not hang on tools.mk's unexport list.
+other_archive='--eval=override c_archive=$(call c_signed,$(1))$(1) $@ $(filter-out %.sig,$^) && :'
 tmpf=$(mktemp) || exit 1
 tref=$(mktemp) || exit 1
 # A what-if with another flag rewrites the signatures make reads (tools/tools.mk c_sign writes one
@@ -281,7 +285,7 @@ for mk in $cmks; do
 		flags_check "$d" "$o" "$d/build/$a.sig"
 		# how c_object records it is part of its signature: another record filter leaves it stale
 		sigs_keep "$d"
-		stale "$d" "$o" c_unpinned=cat || { echo "app_deps_check: $d/$o ignores a change to how its record is written (c_unpinned)"; fail=1; }
+		stale "$d" "$o" '--eval=override c_unpinned=cat' || { echo "app_deps_check: $d/$o ignores a change to how its record is written (c_unpinned)"; fail=1; }
 		sigs_back
 		stale "$d" "$o" -W "$bh" || { echo "app_deps_check: an edit to $bh leaves $d/$o up to date"; fail=1; }
 		# and the archive is made by a signed command too (tools/tools.mk c_archive) — the ar command

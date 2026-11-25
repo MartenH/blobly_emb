@@ -208,8 +208,10 @@ gate. Open the PR to get one.
 ci.yml's two jobs (`test`, `cross`) run on **`ubuntu-24.04`**, pinned rather than `ubuntu-latest`: 24.04 is the supported
 floor, and when `ubuntu-latest` became 26.04 (2026-11) it broke the build under every open PR at
 once — gcc 14 refused a missing prototype (#438), and GNU make 4.4.1 exported `app_deps_check.sh`'s
-command-line `c_archive` into `$(shell)`, where it stopped make (#439; `tools.mk` now `unexport`s its
-recipe macros). Moving to a newer image is its own PR.
+command-line `c_archive` into `$(shell)`, where it stopped make (#439; the script now asks its recipe-macro
+what-ifs as `--eval=override ...`, which no make exports, so make 4.3 in CI and 4.4.1 answer alike, and
+`tools.mk` `unexport`s those macros for a person who gives one on the command line). Moving to a newer
+image is its own PR.
 
 It runs more than the four you would run by hand: host unit tests (the image code's through
 `make coverage-check`, then `v -cc cc -nocache -enable-globals test tools`), `make lint`,

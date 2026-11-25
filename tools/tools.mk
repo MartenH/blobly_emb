@@ -205,11 +205,12 @@ c_records = $(wildcard $(addsuffix .d,$(1)))
 # so the objects' own signature is keyed by their directory ($(BUILD)/tx), not by the archive.
 AR_CMD = $(AR) -rc
 c_archive = $(call c_signed,$(1))$(1) $@ $(filter-out %.sig,$^)
-# These are recipe macros, never environment variables. One given on the command line (the
-# what-ifs of scripts/app_deps_check.sh give c_archive and c_unpinned) is exported by default, and
-# GNU make 4.4 exports to $(shell ...) as well as to recipes: the export expands it outside any
-# rule, where $@ and $^ are empty, so c_signed's $(error) stopped make 4.4.1 at its first $(shell)
-# (Ubuntu 26.04; make 4.3 met it only once a recipe ran) and c_sign would write a stray signature.
+# These are recipe macros, never environment variables. One given on the command line (a what-if
+# such as `make -q 'c_archive=...'`) is exported by default, and GNU make 4.4 exports to $(shell ...)
+# as well as to recipes: the export expands it outside any rule, where $@ and $^ are empty, so
+# c_signed's $(error) stopped make 4.4.1 at its first $(shell) (Ubuntu 26.04; make 4.3 met it only
+# once a recipe ran) and c_sign would write a stray signature. scripts/app_deps_check.sh asks its
+# what-ifs through --eval, which no make exports, so its answers do not rest on this list.
 unexport c_build c_object c_archive c_signed c_sign c_sigtext c_unpinned
 #
 # A last check before a c_build target is linked, where its Makefile needs one: $(c_check_<target>),
