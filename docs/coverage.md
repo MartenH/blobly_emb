@@ -9,14 +9,16 @@ drops below what is recorded here, and CI fails when this file is stale.
 
 | files measured | not built by a host test | points | own | any |
 |---|---|---|---|---|
-| 44 | 6 | 3364 | 89.9% | 93.1% |
+| 53 | 6 | 3945 | 91.4% | 94.2% |
 
 | file | points | own covered | own | any |
 |---|---|---|---|---|
-| bcrypto/ed25519.v | 222 | 219 | 98.6% | 98.6% |
+| bcrypto/ed25519.v | 293 | 287 | 98.0% | 99.3% |
 | bcrypto/sha512.v | 65 | 65 | 100.0% | 100.0% |
 | boot/boot.v | 38 | 37 | 97.4% | 97.4% |
-| boot/prog.v | 270 | 234 | 86.7% | 88.1% |
+| boot/bufs/bufs.v | 6 | 6 | 100.0% | 100.0% |
+| boot/link.v | 3 | 0 | 0.0% | 100.0% |
+| boot/prog.v | 275 | 240 | 87.3% | 88.7% |
 | boot/target/main.v | — | — | not built | not built |
 | boot/target/serve_d_boot_doip.v | — | — | not built | not built |
 | boot/target/serve_notd_boot_doip.v | — | — | not built | not built |
@@ -25,16 +27,17 @@ drops below what is recorded here, and CI fails when this file is stale.
 | comm/com/encode.v | 12 | 12 | 100.0% | 100.0% |
 | comm/com/endpoint.v | — | — | not built | not built |
 | comm/com/rxmon.v | 36 | 36 | 100.0% | 100.0% |
-| comm/diag/diag.v | 80 | 76 | 95.0% | 95.0% |
-| comm/diag/step.v | 35 | 33 | 94.3% | 94.3% |
-| comm/diagroute/diagroute.v | 116 | 111 | 95.7% | 95.7% |
-| comm/doip/doip.v | 179 | 175 | 97.8% | 97.8% |
+| comm/diag/diag.v | 114 | 109 | 95.6% | 95.6% |
+| comm/diag/step.v | 36 | 35 | 97.2% | 97.2% |
+| comm/diagroute/diagroute.v | 171 | 162 | 94.7% | 94.7% |
+| comm/doip/doip.v | 201 | 194 | 96.5% | 96.5% |
 | comm/doip/policy.v | 4 | 4 | 100.0% | 100.0% |
 | comm/e2e/e2e.v | 40 | 40 | 100.0% | 100.0% |
-| comm/fault/entry.v | 86 | 82 | 95.3% | 95.3% |
+| comm/fault/entry.v | 90 | 86 | 95.6% | 95.6% |
 | comm/fault/fault.v | 150 | 149 | 99.3% | 99.3% |
 | comm/fault/persist.v | 202 | 194 | 96.0% | 96.0% |
-| comm/isotp/isotp.v | 128 | 121 | 94.5% | 98.4% |
+| comm/isotp/addressing.v | 2 | 2 | 100.0% | 100.0% |
+| comm/isotp/isotp.v | 174 | 173 | 99.4% | 100.0% |
 | comm/nm/frame.v | 31 | 28 | 90.3% | 93.5% |
 | comm/nm/nm.v | 35 | 32 | 91.4% | 94.3% |
 | comm/nm_can/module.v | 19 | 17 | 89.5% | 89.5% |
@@ -42,18 +45,24 @@ drops below what is recorded here, and CI fails when this file is stale.
 | comm/nm_udp/nm_udp.v | 13 | 13 | 100.0% | 100.0% |
 | comm/param/param.v | 97 | 88 | 90.7% | 90.7% |
 | comm/secoc/secoc.v | 96 | 95 | 99.0% | 99.0% |
-| comm/shell/shell.v | 83 | 70 | 84.3% | 84.3% |
+| comm/shell/shell.v | 81 | 69 | 85.2% | 85.2% |
 | comm/someip/someip.v | 61 | 59 | 96.7% | 96.7% |
 | comm/telem/telem.v | 38 | 26 | 68.4% | 68.4% |
 | comm/trace/capture.v | 53 | 46 | 86.8% | 86.8% |
 | comm/trace/control.v | 36 | 36 | 100.0% | 100.0% |
-| comm/trace/module.v | 80 | 72 | 90.0% | 90.0% |
+| comm/trace/module.v | 80 | 73 | 91.3% | 91.3% |
 | comm/trace/multicore.v | 31 | 28 | 90.3% | 90.3% |
 | comm/trace/trace.v | 128 | 121 | 94.5% | 94.5% |
+| comm/uds/auth.v | 81 | 80 | 98.8% | 98.8% |
+| comm/uds/io_control.v | 52 | 50 | 96.2% | 96.2% |
+| comm/uds/pending.v | 45 | 44 | 97.8% | 97.8% |
 | comm/uds/remote.v | 7 | 0 | 0.0% | 100.0% |
-| comm/uds/uds.v | 332 | 232 | 69.9% | 95.5% |
-| driver/can/can.v | 21 | 0 | 0.0% | 0.0% |
-| driver/doipnet/doipnet.v | 23 | 21 | 91.3% | 91.3% |
+| comm/uds/routine.v | 78 | 75 | 96.2% | 96.2% |
+| comm/uds/sa_store.v | 32 | 31 | 96.9% | 96.9% |
+| comm/uds/uds.v | 355 | 254 | 71.5% | 95.8% |
+| comm/udsauth/udsauth.v | 22 | 21 | 95.5% | 95.5% |
+| driver/can/can.v | 21 | 14 | 66.7% | 66.7% |
+| driver/doipnet/doipnet.v | 24 | 22 | 91.7% | 91.7% |
 | driver/doipnet/netx_d_freestanding.v | — | — | not built | not built |
 | driver/eth/eth.v | 7 | 0 | 0.0% | 0.0% |
 | driver/io/io.v | 13 | 12 | 92.3% | 92.3% |
