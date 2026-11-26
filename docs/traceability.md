@@ -185,10 +185,10 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-125 | QM | test | verified | auth_test.v (pass), auth_test.v (pass) |
 | REQ-DIAG-126 | QM | test | verified | auth_bench_key_test.v (pass), diag_target_test.v (pass), diag_target_test.v (pass), diag_target_test.v (pass), doip_target_test.v (pass), doipcfg_test.v (pass), doipcfg_test.v (pass), udsauth_test.v (pass) |
 | REQ-DIAG-127 | QM | test | verified | auth_test.v (pass), auth_test.v (pass), auth_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), udsauth_test.v (pass) |
-| REQ-E2E-001 | B | test | verified | e2e_test.v (pass) |
+| REQ-E2E-001 | B | test | verified | e2e_test.v (pass), p05_test.v (pass) |
 | REQ-E2E-002 | B | test | verified | e2e_test.v (pass), rx_target_test.v (pass), rxmon_test.v (pass) |
-| REQ-E2E-003 | B | test | verified | e2e_test.v (pass) |
-| REQ-E2E-004 | B | test | verified | compose_test.v (pass) |
+| REQ-E2E-003 | B | test | verified | e2e_test.v (pass), p05_test.v (pass) |
+| REQ-E2E-004 | B | test | verified | compose_test.v (pass), p05_test.v (pass) |
 | REQ-ECU-001 | QM | test | verified | ecu_test.v (pass) |
 | REQ-ECU-002 | QM | test | verified | ecu_test.v (pass) |
 | REQ-ECU-003 | QM | test | verified | ecu_test.v (pass), handoff_test.v (pass) |

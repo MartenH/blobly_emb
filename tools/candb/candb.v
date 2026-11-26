@@ -66,7 +66,7 @@ pub struct E2eDecl {
 pub mut:
 	counter     string
 	crc         string
-	profile     string // normalised: Profile 1 is 'autosar_p01' however the file spells it
+	profile     string // normalised: 'autosar_p01' / 'autosar_p05' however the file spells Profile 1 / 5
 	data_id     u32
 	has_data_id bool   // 0 is a legitimate Data ID, so presence is its own fact
 	bad_data_id string // an E2EDataId the file wrote that is not a Data ID — never read as absent
@@ -76,10 +76,19 @@ pub mut:
 }
 
 // profile_from_dbc is the profile an `E2EProfile` value names: Profile 1 under any of its
-// spellings — `P01`, AUTOSAR's `PROFILE_01`, and `autosar_p01` — and anything else as written.
+// spellings — `P01`, AUTOSAR's `PROFILE_01`, and `autosar_p01` —, Profile 5 likewise (`P05`,
+// `PROFILE_05`, `autosar_p05`), and anything else as written — blobly_net's candb reads them so.
 pub fn profile_from_dbc(v string) string {
-	return if v in ['P01', 'PROFILE_01', 'autosar_p01'] { 'autosar_p01' } else { v }
+	return match v {
+		'P01', 'PROFILE_01', 'autosar_p01' { p01 }
+		'P05', 'PROFILE_05', 'autosar_p05' { p05 }
+		else { v }
+	}
 }
+
+// p01 / p05: the normalised names of the two E2E profiles comm/e2e implements.
+pub const p01 = 'autosar_p01'
+pub const p05 = 'autosar_p05'
 
 pub fn (d E2eDecl) declared() bool {
 	return d.counter != '' || d.crc != '' || d.profile != '' || d.has_data_id || d.bad_data_id != ''

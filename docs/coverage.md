@@ -9,7 +9,7 @@ drops below what is recorded here, and CI fails when this file is stale.
 
 | files measured | not built by a host test | points | own | any |
 |---|---|---|---|---|
-| 53 | 6 | 3945 | 91.4% | 94.2% |
+| 53 | 6 | 3966 | 91.5% | 94.3% |
 
 | file | points | own covered | own | any |
 |---|---|---|---|---|
@@ -32,7 +32,7 @@ drops below what is recorded here, and CI fails when this file is stale.
 | comm/diagroute/diagroute.v | 171 | 162 | 94.7% | 94.7% |
 | comm/doip/doip.v | 201 | 194 | 96.5% | 96.5% |
 | comm/doip/policy.v | 4 | 4 | 100.0% | 100.0% |
-| comm/e2e/e2e.v | 40 | 40 | 100.0% | 100.0% |
+| comm/e2e/e2e.v | 61 | 61 | 100.0% | 100.0% |
 | comm/fault/entry.v | 90 | 86 | 95.6% | 95.6% |
 | comm/fault/fault.v | 150 | 149 | 99.3% | 99.3% |
 | comm/fault/persist.v | 202 | 194 | 96.0% | 96.0% |

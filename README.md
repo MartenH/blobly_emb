@@ -210,8 +210,8 @@ that writes it to its readers and, for a bus signal, to its DBC frame, bits and 
 - **Transmission modes**: cyclic, on change with a minimum gap, mixed, and triggered.
 - **Receive monitoring**: a deadline per frame, counted from start, and a per-signal status
   (`never_received`, `ok`, `timeout`, `integrity`) that can raise a DTC with no FB code.
-- **AUTOSAR E2E Profile 1**, pinned to vectors from an independent implementation; the contract
-  can come from DBC attributes shared with Blobly Net.
+- **AUTOSAR E2E Profiles 1 and 5** (P05 on CAN frames), pinned to vectors from an independent
+  implementation; the contract can come from DBC attributes shared with Blobly Net.
 - **SecOC-style authentication** with AES-128 CMAC and a freshness counter, combinable with E2E.
 - **CAN network management**: a CanNm-shaped state machine with partial networking; the bus goes
   quiet in sleep and the NvM flush runs at prepare-bus-sleep.
@@ -285,7 +285,7 @@ integration tests run.
 - It stands in for the ECUs a system declares but does not build: a simulated server answers
   diagnostics as `system.toml` and the node's `ecu.toml` describe it.
 - It flashes through the bootloader and draws the multi-core trace.
-- The wire formats the two share are pinned by golden vectors on both sides: E2E Profile 1, the
+- The wire formats the two share are pinned by golden vectors on both sides: E2E Profiles 1 and 5, the
   0x29 Ed25519 exchange, ISO-TP CAN-FD frames and normal fixed addressing ids.
 
 ## How it's tested
@@ -326,7 +326,8 @@ The ST HAL and AUTOSAR CanIf CAN backends and the ThreadX-on-Linux demo are not 
 - **Handlers are periodic.** No reception-triggered handlers, queued signals or mode management.
 - **No ARXML input**; ARXML reaches a node through Blobly Net's `arxml2dbc`. DBC multiplexing is
   parsed but not modelled.
-- **E2E is Profile 1 only.** SecOC is not AUTOSAR-SecOC compatible: its freshness counter is
+- **E2E is Profiles 1 and 5 only**, and Profile 5 on CAN frames only (a SOME/IP trailer is
+  Profile 1). SecOC is not AUTOSAR-SecOC compatible: its freshness counter is
   8 bits in RAM and the key is written in `ecu.toml`.
 - **DoIP** runs on ThreadX targets only, one tester at a time, with no TLS. SOME/IP has no
   Service Discovery.
