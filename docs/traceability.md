@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 338 | 245 | 30 | 63 | 0 |
+| 339 | 246 | 30 | 63 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -281,6 +281,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NVM-013 | QM | test | verified | journal_test.v (pass) |
 | REQ-NVM-014 | QM | test | uncovered | — |
 | REQ-NVM-015 | QM | test | verified | fault_target_test.v (pass), param_target_test.v (pass) |
+| REQ-NVM-016 | QM | analysis | verified | journal_test.v (pass), wear_test.v (pass) |
 | REQ-PLACE-001 | QM | test | verified | xcore_down_gen_test.v (pass), xcore_down_test.v (pass) |
 | REQ-PLACE-002 | QM | test | verified | xcore_down_gen_test.v (pass), xcore_down_test.v (pass) |
 | REQ-PLACE-003 | QM | test | verified | xcore_down_gen_test.v (pass) |
@@ -624,6 +625,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NVM-013 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-NVM-014 | | | | | | | | | | | | | | | | | | | | | | |
 | REQ-NVM-015 | | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-NVM-016 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-PLACE-001 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-PLACE-002 | | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-PLACE-003 | | | | | | | | | | | | | | | | | | | ✓ | | | |

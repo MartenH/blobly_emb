@@ -133,8 +133,8 @@ fn new_rig() &Rig {
 	return r
 }
 
-// reboot: what the generated image does at start — the journal mounted and its pending erase done
-// (the boot quiet point of a node without NM), the table configured and restored before the kernel
+// reboot: what the generated image does at start — the journal mounted and its boot erase point run
+// (a node without NM: boot_erase_point), the table configured and restored before the kernel
 // (publishing every FB's input), then the server configured and the table bound to it.
 fn (mut r Rig) reboot() {
 	r.f.dead = false
@@ -153,7 +153,7 @@ fn (mut r Rig) reboot() {
 	}
 	mounted := r.j.mount()
 	if mounted {
-		r.j.erase_pending()
+		r.j.boot_erase_point()
 	}
 	r.ps = Params{}
 	r.ps.p[steer] = Param{

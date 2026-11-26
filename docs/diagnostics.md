@@ -551,7 +551,10 @@ not queued, while the physical connection is busy ([can-tp.md](can-tp.md) §3.6)
   the journal cannot store at all. A tester reading 0x22 for a journal full until its erase point
   resets the node and retries; a live set that cannot take the write is a configuration bound the
   generator's capacity check should have prevented, and a reset does not change it. 0x72 is the
-  one that says the flash may be at fault. Neither has a status DID or DTC of its own.
+  one that says the flash may be at fault. Neither has a status DID or DTC of its own. How much a
+  run holds before its erase point — zone_a: 6132 records, about 190 0x14 at their worst — is
+  printed and checked at generation, and why the full journal is not erased at run time is
+  [nvm.md](nvm.md) "No erase at run time" (REQ-NVM-016).
 
 #### CommunicationControl (0x28)
 

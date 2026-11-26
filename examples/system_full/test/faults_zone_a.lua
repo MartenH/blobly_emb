@@ -11,7 +11,10 @@
 -- 100 ms. The FB reads the latest value at each dispatch, so nearly every dispatch fails and the
 -- accumulating counter qualifies; once the script stops, the gateway's plausible values pass it again.
 -- (Two senders of one id can collide in arbitration with different data — an occasional error frame,
--- retransmitted; harmless on a bench.) Bench only (the flashed board on the CANsub, edge = channel 1):
+-- retransmitted; harmless on a bench.) Each run clears and re-fails the DTC, writing the NvM journal,
+-- which erases only at boot or after an ECUReset: in a long loop reset zone_a every 12 runs, or a
+-- 0x14 answers 0x22 once the power cycle's room is used (docs/nvm.md "No erase at run time").
+-- Bench only (the flashed board on the CANsub, edge = channel 1):
 --   BLOBLY_NET=/path/to/blobly_net; v -enable-globals \
 --     run $BLOBLY_NET/cmd/script/run.v examples/system_full/test/faults_zone_a.lua
 

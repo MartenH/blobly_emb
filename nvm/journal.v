@@ -35,7 +35,9 @@ module nvm
 //     program failure is READ-BACK-VERIFIED (landed intact = success), else
 //     the slot is burned;
 //   - mount is READ-ONLY: scan + table + cursor; recovery belongs to
-//     erase_pending()/compact() at runtime; the append path NEVER erases;
+//     erase_pending()/compact() at an erase point; the append path NEVER erases
+//     (an erase stalls the bank 1-2 s, so the CALLER picks the erase points:
+//     docs/nvm.md "No erase at run time");
 //   - a power cut or transient driver failure at any point leaves the journal
 //     mountable with "last complete value per block wins";
 //   - compaction sources the RAM table for plain values and IMMUTABLE flash
@@ -140,6 +142,9 @@ pub mut:
 	clean bool
 	// runtime tail state: the newest appended record is the marker
 	tail_clean bool
+	// the active sector while the newest record there is the marker (-1: it is not, or the journal
+	// is empty). An erase point re-lays the marker unless it is that newest record.
+	marker_sector int
 	mounted    bool
 	// mount found MORE distinct ids on flash than the pool holds and had to
 	// drop some (scan-order). Unreachable behind the generator's block-count
@@ -242,6 +247,7 @@ pub fn (mut j Journal) mount() bool {
 	j.free_failed = false
 	mut newest_is_marker := true // empty journal = clean
 	mut newest_seq := u32(0)
+	mut newest_sector := -1
 	mut any_valid := false
 	mut nonempty := [2]bool{}
 	mut dirty_tail := [2]bool{}
@@ -294,6 +300,7 @@ pub fn (mut j Journal) mount() bool {
 			}
 			if seq > newest_seq {
 				newest_seq = seq
+				newest_sector = s
 				// a REAL marker is always plain — a chain-flagged block-0 record
 				// is a crafted/corrupt artifact and must not testify to a clean
 				// shutdown (defense-in-depth; per-record CRC blocks bit flips)
@@ -352,6 +359,7 @@ pub fn (mut j Journal) mount() bool {
 	}
 	j.clean = newest_is_marker
 	j.tail_clean = newest_is_marker
+	j.marker_sector = if newest_is_marker && newest_sector == j.active { j.active } else { -1 }
 	j.cursor = if dirty_tail[j.active] { j.cfg.size } else { cursors[j.active] }
 	other := 1 - j.active
 	j.partner_clean = clean_sector[other]
@@ -693,6 +701,7 @@ pub fn (mut j Journal) compact() bool {
 	old_active := j.active
 	old_cursor := j.cursor
 	was_clean := j.tail_clean
+	j.marker_sector = -1 // the copies overtake the marker
 	j.compacting = true
 	j.active = target
 	j.cursor = 0
@@ -738,6 +747,37 @@ pub fn (mut j Journal) compact() bool {
 	return true
 }
 
+// boot_erase_point is the erase point of a node without NM, at boot before the kernel (docs/nvm.md
+// "No erase at run time"): the sector a compaction left behind is erased, and an active sector less
+// than half free is compacted and the old one erased too. So every run starts with at least half a
+// sector free beside a clean partner — run_capacity's premise. A step that fails leaves the journal
+// mountable and is retried at the next boot.
+pub fn (mut j Journal) boot_erase_point() {
+	j.erase_pending()
+	if j.free_records() < boot_free_floor(j.slots()) && j.compact() {
+		j.erase_pending()
+	}
+}
+
+// boot_free_floor: the free records boot_erase_point leaves in the active sector, at least — it
+// compacts below this. The generator's room check starts a run without NM from it.
+pub fn boot_free_floor(slots u32) u32 {
+	return slots / 2
+}
+
+// run_capacity: the records a run between two erase points takes at least, before a put meets
+// .full_until_erase. The run starts with `start_free` records free in the active sector (half a
+// sector after boot_erase_point; nothing is promised at an NM node's wake) and a clean partner; the
+// write that no longer fits compacts into the partner, which copies the live set (`live` records,
+// the marker's slot included), and the partner then fills. Each sector can end in up to `waste`
+// unused records, the parts but one of a chained value that did not fit. The generator's per-cycle
+// check asks this, so it and the journal cannot disagree. A burned slot is outside it: a fault.
+pub fn run_capacity(slots u32, live u32, waste u32, start_free u32) u32 {
+	first := if start_free > waste { start_free - waste } else { u32(0) }
+	second := if slots > live + waste { slots - live - waste } else { u32(0) }
+	return first + second
+}
+
 // erase_pending performs the deferred cleanup at the caller's quiet point,
 // re-homing strays into the active sector FIRST (power-safe order).
 pub fn (mut j Journal) erase_pending() bool {
@@ -777,8 +817,10 @@ fn (mut j Journal) rehome_strays(from int) bool {
 	ns := j.strays(from)
 	if ns == 0 {
 		// the newest clean MARKER may still live in the sector about to be
-		// erased — re-anchor it (one slot) so orderly stays orderly.
-		if j.tail_clean {
+		// erased, or copies may have overtaken it — re-anchor it (one slot) so
+		// orderly stays orderly. The active sector's newest record being the
+		// marker needs nothing, though that sector be full.
+		if j.tail_clean && j.marker_sector != j.active {
 			if !j.append_marker() {
 				return false
 			}
@@ -790,6 +832,7 @@ fn (mut j Journal) rehome_strays(from int) bool {
 	if j.free_records() < need {
 		return false
 	}
+	j.marker_sector = -1 // the copies overtake the marker
 	for i in 0 .. max_blocks {
 		if j.table[i].present && j.table[i].sector == from {
 			off, seq, ok := j.emit_entry(i)
@@ -992,6 +1035,7 @@ fn (mut j Journal) append_marker() bool {
 	if !j.program_slot(&rec[0]) {
 		return false
 	}
+	j.marker_sector = j.active
 	return true
 }
 

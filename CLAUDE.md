@@ -295,7 +295,10 @@ the two variants of the serve loop. zone_a's NvM journal (its persisted fault me
 flash sectors 6 + 7 (`boards/h723/bootmap.h` NVM_*, outside the app region, which is sectors 1..5) and
 holds its persisted fault memory and its `SteerLimit` parameter: `make flash` never erases it, so DTCs
 and coded parameters survive a reflash — clear DTCs with 0x14, recode a parameter with 0x2E
-(`test/param_zone_a.lua` leaves it at 360). sysnode's H735 has the same map (app sectors 1..5, its
+(`test/param_zone_a.lua` leaves it at 360). The journal erases only at an erase point (boot, an
+ECUReset's flush, an NM sleep edge), never at run time — a single-bank erase stalls the MCU 1–2 s —
+so a long bench loop resets zone_a about every 12 fault runs, or a 0x14 answers 0x22 until it does
+(docs/nvm.md "No erase at run time"; the room per run is printed by the wear check). sysnode's H735 has the same map (app sectors 1..5, its
 journal sectors 6 + 7, `boards/h735dk/bootmap.h`), its journal holding the 0x27 failed-key state —
 every node that performs 0x27 (or 0x29, whose failed proofs it counts too) declares `[nvm]` (docs/diagnostics.md §3.1); a bench H735 whose boot
 predates that map needs `make flash` (boot included) and sectors 6 + 7 erased once.

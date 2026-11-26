@@ -1152,3 +1152,252 @@ fn test_no_value_receivers_on_journal() {
 		}
 	}
 }
+
+// ---- runs between erase points (docs/nvm.md "No erase at run time") ---------
+
+// RunRig drives a node without NM over many power cycles: each boots through boot_erase_point and
+// then writes until the journal waits for the next erase point, the way a long bench loop does.
+// Four 4-byte values and one 42-byte chained one (3 records, the size of zone_a's status image):
+// a live set of 8 records with the marker's slot, and 2 records a chain may leave unused.
+struct RunRig {
+mut:
+	f      &TestFlash
+	j      Journal
+	rng    u32
+	shadow map[u16][]u8 // each block's last accepted value
+}
+
+const run_live = u32(8)
+const run_waste = u32(2)
+const run_chain = u16(42)
+
+fn new_run_rig() RunRig {
+	mut f := &TestFlash{}
+	j := fresh(mut f, false)
+	return RunRig{
+		f:   f
+		j:   j
+		rng: 0x1234_5678
+	}
+}
+
+// next: the rig's deterministic pseudo-random sequence.
+fn (mut r RunRig) next() u32 {
+	r.rng = r.rng * 1_103_515_245 + 12_345
+	return r.rng >> 8
+}
+
+// write: one put of a random value to a random block; whether it was accepted, and its records.
+fn (mut r RunRig) write() (bool, u32) {
+	pick := r.next() % 5
+	block := if pick == 4 { u16(10) } else { u16(1 + pick) }
+	len := if block == 10 { run_chain } else { u16(4) }
+	mut d := []u8{len: int(len)}
+	for i in 0 .. int(len) {
+		d[i] = u8(r.next())
+	}
+	if !r.j.put(block, unsafe { &d[0] }, len) {
+		return false, 0
+	}
+	r.shadow[block] = d
+	return true, records_for(len)
+}
+
+// check: every block reads its last accepted value.
+fn (r &RunRig) check(ctx string) {
+	for block, want in r.shadow {
+		mut out := [64]u8{}
+		n := r.j.get(block, &out[0], 64)
+		assert out[..int(n)] == want, '${ctx}: block ${block} lost its last accepted value'
+	}
+}
+
+// power_up: the flash outlives the journal — mount, then the boot erase point.
+fn (mut r RunRig) power_up() {
+	r.j = remount(mut r.f)
+	r.check('mount')
+	r.j.boot_erase_point()
+}
+
+// run writes until a put is refused: the records the run took. Stops early, with the cut seen,
+// when the armed power cut fires.
+fn (mut r RunRig) run() (u32, bool) {
+	mut took := u32(0)
+	for {
+		ok, n := r.write()
+		if r.f.calls >= r.f.cut_call {
+			return took, true
+		}
+		if !ok {
+			return took, false
+		}
+		took += n
+	}
+	return took, false
+}
+
+// @verifies REQ-NVM-016
+// The many-cycle loop that filled zone_a's journal (#393): every power cycle takes at least
+// run_capacity records and then refuses for the journal's space (0x22 to a tester, never 0x72), and
+// the next boot's erase point frees it again — no cycle wedges, none loses a value, no erase in a
+// run, and no word is programmed twice.
+fn test_every_power_cycle_takes_its_run_capacity_and_the_boot_frees_it() {
+	mut r := new_run_rig()
+	want := run_capacity(r.j.slots(), run_live, run_waste, boot_free_floor(r.j.slots()))
+	assert want == 36 // (16 - 2) + (32 - 8 - 2)
+	for cycle in 0 .. 60 {
+		r.power_up()
+		assert r.j.free_records() >= boot_free_floor(r.j.slots()) && r.j.partner_clean, 'cycle ${cycle}: the boot left no run'
+		erases := r.f.erases
+		took, _ := r.run()
+		assert r.j.last_refusal == .full_until_erase && r.j.last_refusal.for_space(), 'cycle ${cycle}: refused ${r.j.last_refusal}'
+		assert took >= want, 'cycle ${cycle}: the run took ${took} records, run_capacity promises ${want}'
+		assert r.f.erases == erases, 'cycle ${cycle}: a run erased'
+		r.check('cycle ${cycle}')
+		assert !r.f.double_prog
+	}
+}
+
+// Power lost anywhere in a cycle — inside the run's inline compaction, inside the boot erase
+// point's compaction, or in its erase — leaves a journal that mounts with every block at its last
+// accepted value, and the cycles after it take their full run_capacity again.
+fn test_power_cuts_in_a_cycle_leave_a_readable_journal_and_full_runs_after() {
+	want := run_capacity(32, run_live, run_waste, boot_free_floor(32))
+	// cycle 0 fills the journal, so cycle 1's boot compacts and its run compacts once more: a cut
+	// at every program call of cycle 1
+	mut whole := new_run_rig()
+	whole.power_up()
+	whole.run()
+	before := whole.f.calls
+	whole.power_up()
+	whole.run()
+	programs := whole.f.calls - before
+	assert programs > 2 * (run_live - 1) // both compactions' copies, and the puts between
+	for cut in u32(1) .. programs + 1 {
+		mut r := new_run_rig()
+		r.power_up()
+		r.run()
+		r.f.cut_call = r.f.calls + cut
+		r.f.cut_bytes = 16 // a torn record
+		r.j = remount(mut r.f)
+		r.j.boot_erase_point()
+		mut cut_seen := r.f.calls >= r.f.cut_call
+		if !cut_seen {
+			_, cut_seen = r.run()
+		}
+		assert cut_seen, 'cut ${cut}: never reached'
+		r.f.cut_call = 0xFFFF_FFFF // the power is back
+		for cycle in 0 .. 3 {
+			r.power_up()
+			took, _ := r.run()
+			assert r.j.last_refusal == .full_until_erase, 'cut ${cut}, cycle ${cycle}: refused ${r.j.last_refusal}'
+			assert took >= want, 'cut ${cut}, cycle ${cycle}: the run took ${took} records of ${want}'
+			r.check('cut ${cut}, cycle ${cycle}')
+		}
+		assert !r.f.double_prog, 'cut ${cut}: a word was programmed twice'
+	}
+	// the boot's erase cut halfway (the sector a compaction left behind is half wiped)
+	mut r := new_run_rig()
+	r.power_up()
+	r.run()
+	r.j = remount(mut r.f)
+	r.f.erase_cut = true
+	assert !r.j.erase_pending()
+	for cycle in 0 .. 3 {
+		r.power_up()
+		took, _ := r.run()
+		assert r.j.last_refusal == .full_until_erase && took >= want, 'erase cut, cycle ${cycle}: ${took} records, refused ${r.j.last_refusal}'
+		r.check('erase cut, cycle ${cycle}')
+	}
+	assert !r.f.double_prog
+}
+
+// The bound is reached: a run that starts with exactly half a sector free — the boot erase point
+// compacts only below that — still takes run_capacity, and not much more.
+fn test_a_run_from_exactly_half_a_sector_takes_its_run_capacity() {
+	mut r := new_run_rig()
+	r.power_up()
+	for r.j.free_records() > boot_free_floor(r.j.slots()) {
+		data := [u8(r.next()), 0, 0, 0]
+		assert r.j.put(1, &data[0], 4)
+		r.shadow[1] = data.clone()
+	}
+	compactions := r.f.erases
+	r.power_up()
+	assert r.f.erases == compactions, 'the boot erased with half a sector free'
+	assert r.j.free_records() == boot_free_floor(r.j.slots())
+	want := run_capacity(r.j.slots(), run_live, run_waste, boot_free_floor(r.j.slots()))
+	took, _ := r.run()
+	assert r.j.last_refusal == .full_until_erase
+	assert took >= want && took <= want + run_live + 2 * run_waste, 'the run took ${took} records, run_capacity says ${want}'
+	r.check('half a sector')
+}
+
+// run_capacity's arithmetic: the start's free space less the waste, then the partner less the
+// live set and the waste; neither term below zero (an NM node's wake promises no start).
+fn test_run_capacity_arithmetic() {
+	assert run_capacity(4096, 12, 2, 2048) == 2046 + 4082
+	assert run_capacity(4096, 12, 2, 0) == 4082
+	assert run_capacity(32, 40, 2, 16) == 14
+	assert run_capacity(32, 8, 20, 16) == 4
+}
+
+// A run that ends with the clean marker in the active sector's last slot — the reset flush's
+// mark_clean taking the one slot left — is freed by the next erase point: the marker already lives
+// in the active sector, so nothing is re-laid before the erase, and every later boot runs again.
+fn test_a_marker_in_the_last_slot_does_not_block_the_erase_point() {
+	mut r := new_run_rig()
+	r.power_up()
+	for r.j.pending_erase < 0 || r.j.free_records() > 1 {
+		data := [u8(r.next()), 0, 0, 0]
+		assert r.j.put(1, &data[0], 4)
+		r.shadow[1] = data.clone()
+	}
+	assert r.j.mark_clean() && r.j.free_records() == 0
+	// the NM sleep edge's erase, at run time
+	mut rt := remount(mut r.f)
+	assert rt.clean && rt.erase_pending() && rt.partner_clean
+	// the boot erase point, and the runs after it
+	r.j = remount(mut r.f)
+	assert r.j.clean
+	want := run_capacity(r.j.slots(), run_live, run_waste, boot_free_floor(r.j.slots()))
+	for cycle in 0 .. 3 {
+		r.power_up()
+		assert r.j.free_records() >= boot_free_floor(r.j.slots()) && r.j.partner_clean, 'cycle ${cycle}: the boot left no run'
+		took, _ := r.run()
+		assert r.j.last_refusal == .full_until_erase && took >= want, 'cycle ${cycle}: ${took} records, refused ${r.j.last_refusal}'
+		r.check('cycle ${cycle}')
+		assert r.j.mark_clean() || r.j.free_records() == 0
+	}
+	assert !r.f.double_prog
+}
+
+// A clean marker in the active sector, strays in the partner: the strays copied overtake the
+// marker, so a marker write that fails after them is laid again by the next erase point, and
+// the journal mounts clean.
+fn test_a_marker_overtaken_by_rehomed_strays_is_laid_again_after_a_failure() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 1, 91)
+	putv(mut j, 2, 92)
+	f.cut_call = f.calls + 2 // interrupt the compaction copy -> strays remain
+	f.cut_bytes = 16
+	j.compact()
+	f.cut_call = 0xFFFF_FFFF
+	mut j2 := remount(mut f)
+	assert j2.pending_erase >= 0 && j2.strays(j2.pending_erase) > 0
+	assert j2.mark_clean()
+	mut j3 := remount(mut f)
+	assert j3.clean && j3.marker_sector == j3.active
+	strays := j3.strays(j3.pending_erase)
+	f.cut_call = f.calls + strays + 1 // the marker after the copies fails
+	f.cut_bytes = 0
+	assert !j3.erase_pending()
+	f.cut_call = 0xFFFF_FFFF
+	assert j3.erase_pending()
+	mut j4 := remount(mut f)
+	assert j4.clean, 'the strays copied after the marker left the tail unclean'
+	assert getv(j4, 1)? == 91
+	assert getv(j4, 2)? == 92
+	assert !f.double_prog
+}

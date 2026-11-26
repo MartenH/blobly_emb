@@ -229,20 +229,19 @@ fn test_the_fault_memory_is_persisted_in_the_journal() {
 		'if !g_fmem.persist(t1, true) {', 'C.diag_sys_reset()', 'fn nvm_store_put(_ voidptr, id u16, data &u8, len u16) bool {',
 		'return g_nvm.put(id, data, len)', 'return g_nvm.last_refusal.for_space()', 'pub fn boot() {', 'if g_nvm.mounted {',
 		'keep := [', '/* the fault memory status */', 'g_nvm.prune(&keep[0], 3)',
-		'g_nvm.erase_pending() // the boot quiet point (no NM)',
-		'if g_nvm.free_records() < g_nvm.slots() / 2 && g_nvm.compact() {', 'g_nvm.erase_pending()'])
+		'g_nvm.boot_erase_point() // the boot quiet point (no NM)'])
 	// the run itself never erases: a single-bank erase stalls the whole MCU for 1-2 s
 	// (the ECUReset path's flush may still erase: after the answer, with the MCU about to restart)
 	run := glue.all_after('fn comm_thread_entry').all_before('if g_diag.reset_due() != 0 {')
-	assert !run.contains('erase_pending()'), 'an erase at run time'
+	assert !run.contains('erase_pending()') && !run.contains('boot_erase_point()'), 'an erase at run time'
 	assert mk.contains(r'$(REPO)/boards/common/nvm_map.c $(BOARD_FLASH)'), mk
 	assert !glue.contains('fmem_put'), 'the fault memory has a store seam of its own again'
 	// with NM: no erase at boot (the sleep edges are the quiet points), and a write made in bus
 	// sleep re-lays the clean marker through the whole choreography
 	c2, o2, g2, _ := ft_generate('persist_nm', same, ft_conn + ft_fault)
 	assert c2 == 0, o2
-	assert boot_fn(glue).contains('erase_pending()'), 'boot_fn found no erase in a node without NM'
-	assert !boot_fn(g2).contains('erase_pending'), 'an NM node erases at boot:\n${boot_fn(g2)}'
+	assert boot_fn(glue).contains('boot_erase_point()'), 'boot_fn found no erase in a node without NM'
+	assert !boot_fn(g2).contains('erase_pending') && !boot_fn(g2).contains('boot_erase_point'), 'an NM node erases at boot:\n${boot_fn(g2)}'
 	assert !g2.contains('g_fmem.refused && g_nvm.pending_erase'), 'an NM node erased outside its sleep edges'
 	in_order(g2, ['if g_fmem.ending { // woken inside the grace', 'g_fmem.consume(0, g_frep_load_slow.r[0])',
 		'g_fmem.cycle_start()', 'g_fmem.end_cycle_after(t1, u64(200000)) // the cycle-end barrier',
@@ -523,10 +522,15 @@ fn test_the_journal_budget_holds_every_snapshot_whole() {
 		extra + '\n[fault_memory]\nentries = 1\n\n[nvm]') + 'sector_records = 40\n'
 	code, out, _, _ := ft_generate('budget', same, cfg)
 	assert code != 0 && out.contains('the journal needs 42 records'), out
-	// a sector this small wears out at the default rates: the capacity alone is under test here
+	// a sector this small wears out at the default rates: the capacity alone is under test here. 42
+	// passes the floor, and the room between two erase points (REQ-NVM-016) then refuses it: 19
+	// records beside the live set, where one operation cycle writes 77
 	c2, o2, _, _ := ft_generate('budget_ok', same, cfg.replace('sector_records = 40', 'sector_records = 42') +
 		'endurance = 10000000\n\n[nvm.assume]\ncycles_per_day = 1\nresets_per_day = 0\nclears_per_day = 0\nsetting_changes_per_day = 0\n')
-	assert c2 == 0, o2
+	assert c2 != 0 && !o2.contains('the journal needs') && o2.contains('a cycle outgrows the journal'), o2
+	c3, o3, _, _ := ft_generate('budget_room', same, cfg.replace('sector_records = 40', 'sector_records = 120') +
+		'endurance = 10000000\n\n[nvm.assume]\ncycles_per_day = 1\nresets_per_day = 0\nclears_per_day = 0\nsetting_changes_per_day = 0\n')
+	assert c3 == 0, o3
 }
 
 // @verifies REQ-CAN-TP-022
