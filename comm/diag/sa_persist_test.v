@@ -159,10 +159,7 @@ fn (mut r SRig) boot_cut(at u32, erase u32) {
 		keep := [sp_block, sp_other]!
 		r.j.prune(&keep[0], 2)
 		if !r.nm {
-			r.j.erase_pending()
-			if r.j.free_records() < r.j.slots() / 2 && r.j.compact() {
-				r.j.erase_pending()
-			}
+			r.j.boot_erase_point()
 		}
 	}
 	r.f.cut_at = 0

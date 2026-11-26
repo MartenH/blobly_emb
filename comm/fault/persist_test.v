@@ -493,6 +493,55 @@ fn test_a_clear_refused_by_a_full_journal_answers_0x22_and_changes_nothing() {
 	assert r.slot(3).status == status_cleared, 'the clear after the erase point was not durable'
 }
 
+// The bench loop of #393 over many power cycles: in each, faults fail and are cleared until the
+// journal is full; then a 0x14 that must write answers 0x22 — never 0x72 — and changes nothing (one
+// whose image the store already holds, a clear of a failure the full journal never took, writes
+// nothing and is answered 0x54). The power-up (this node's erase point) frees the journal and
+// restores what it last stored, and the next cycle's writes are stored again: no cycle wedges, and
+// none answers as if the flash had failed.
+fn test_every_power_cycle_of_clears_ends_in_0x22_and_the_next_stores_again() {
+	mut r := new_rig(2)
+	mut now := u64(1)
+	for cycle in 0 .. 12 {
+		now += 10_000
+		if r.slot(1).status & confirmed == 0 {
+			r.pass(1, .failed, 5, now) // DTC 1 stays confirmed in the store: clearing it must write
+			assert !r.m.refused, 'cycle ${cycle}: the power-up left no room'
+		}
+		mut stored := 0
+		mut full := false
+		for _ in 0 .. 400 {
+			now += 10_000 // past retry_us: no pass is held back by an earlier refusal
+			k := if stored % 2 == 0 { 3 } else { 0 } // DTC 3 keeps no snapshot, DTC 0 one
+			if r.slot(k).status & confirmed == 0 {
+				r.pass(k, .failed, 5, now)
+				if r.m.refused {
+					full = true
+					break
+				}
+				continue
+			}
+			resp := r.req([u8(0x14), 0xC1, 0x00, u8(k)])
+			if resp != [u8(0x54)] {
+				assert resp == [u8(0x7F), 0x14, 0x22], 'cycle ${cycle}: a full journal answered ${resp}'
+				full = true
+				break
+			}
+			stored++
+		}
+		assert full && stored > 0, 'cycle ${cycle}: ${stored} clears stored, full ${full}'
+		before := stored_image(r)
+		st := r.slot(1).status
+		assert r.req([u8(0x14), 0xC1, 0x00, 0x01]) == [u8(0x7F), 0x14, 0x22], 'cycle ${cycle}: a clear that must write was not refused for space'
+		assert r.j.last_refusal == .full_until_erase && !r.f.dead && !r.f.refuse // nothing failed
+		assert r.slot(1).status == st && stored_image(r) == before, 'cycle ${cycle}: a refused clear changed the memory'
+		r.reboot()
+		assert stored_image(r) == before, 'cycle ${cycle}: the power-up lost what the journal stored'
+		assert r.slot(1).status & confirmed != 0
+		r.check_restored('cycle ${cycle}')
+	}
+}
+
 // displaced_pending: cap 1, DTC 0's snapshot committed and DTC 1 displacing it with its own
 // snapshot refused by the flash (block 0x1001) — so the durable image must keep claiming DTC 0's
 // until DTC 1's is in, and a 0x14 of another DTC waits on that snapshot write first.

@@ -1,6 +1,14 @@
 # Persistence (non-volatile storage) — design
 
-> Status (2026-11-17): **the 0x27 failed-key state is a journal writer** — each level's wrong keys
+> Status (2026-11-26): **no erase at run time, and the room between two erase points is checked at
+> generation** (REQ-NVM-016, #393). A journal a run fills stays full until the next erase point —
+> the boot without NM, a sleep edge with NM, the flush after an ECUReset's answer — because an erase
+> inside a run stalls the whole MCU on every board here; why, board by board, in "No erase at run
+> time" below. The boot's erase point is one journal call, `boot_erase_point`; `run_capacity` is the
+> room a run then has, which the generator holds one operation cycle's writes to and prints (zone_a:
+> 6132 records, about 190 0x14 at their worst). A full journal answers 0x14 and 0x2E with 0x22 (#451).
+>
+> Earlier (2026-11-17): **the 0x27 failed-key state is a journal writer** — each level's wrong keys
 > since its last correct key, saturating at `security_attempts`, one 10-byte record at the fixed
 > block 0x044E, so neither a reset nor a power cycle between guesses buys fresh attempts
 > ([diagnostics.md](diagnostics.md) §3.1). A ThreadX node that performs 0x27 — or unlocks by 0x29 Authentication, whose failed proofs
@@ -243,7 +251,8 @@ time to make space — is closed structurally, not handled:
   same fact behind the capacity gate). The journal keeps that reserve untouchable,
   and the compaction WATERMARK sits above it: free space below `reserve + margin`
   makes compaction due during NORMAL runtime, on the comm thread's schedule, long
-  before shutdown needs the room. The sleep flush therefore never erases — it is
+  before shutdown needs the room (as built: compaction runs inline when a write does not fit and
+  the partner is erased; its ERASE waits for an erase point — "No erase at run time"). The sleep flush therefore never erases — it is
   N microsecond-scale appends into space guaranteed to exist. GC-at-shutdown is
   not a case to handle; it is a state that cannot be reached. Generation refuses a
   sector that cannot hold the live set twice plus, on a node that performs 0x27 (or 0x29),
@@ -276,7 +285,8 @@ time to make space — is closed structurally, not handled:
   merely awaits erase.
 - The erase itself is hardware-autonomous (start it, poll completion each comm
   pass) — the CPU services the bus and new appends throughout; the seconds are
-  the flash controller's, not the thread's.
+  the flash controller's, not the thread's. (Designed, NOT built: on every board here the erase's
+  bank is one code executes from, so it stalls the CPU — "No erase at run time".)
 - The new sector cannot overflow mid-GC: it starts empty and absorbs live set +
   margin — the same generation-time arithmetic as the headroom.
 
@@ -386,6 +396,60 @@ must be drawn per board, next to the bootloader's:
   sees `FlashOps` — the SAME hooks the bootloader defined, and on target the SAME
   `boards/<b>/flash.c` driver. One flash driver, two customers, one bench
   validation.
+
+## No erase at run time (REQ-NVM-016, #393)
+
+The append path never erases. A write that no longer fits compacts inline into the partner when the
+partner is erased — copies, no erase — and the sector it leaves behind waits for an ERASE POINT:
+
+- **the boot**, on a node without NM: `Journal.boot_erase_point` (before the kernel) erases the
+  sector a compaction left behind, and an active sector less than half free is compacted and the old
+  one erased too — so a run starts with at least half a sector free beside an erased partner;
+- **the sleep edges**, on a node with NM (the flush choreography's trailing `erase_pending`);
+- **the flush after an ECUReset's answer**, on both: the reset is coming, the stall costs nothing.
+
+Between two of them a run takes at least `nvm.run_capacity(slots, live, waste, start)` records:
+`start` free in the active sector (half a sector after the boot; nothing promised at an NM node's
+wake), then the partner less the live set; each sector may end in `waste` records a chained value
+that did not fit leaves unused. Then every put answers `full_until_erase`: a 0x14 or a parameter's
+0x2E is answered 0x22 and changes nothing (a reset recovers it, #451), the 0x27 state is held in RAM
+and retried, and the next erase point frees the journal for a run of the full room again
+(`nvm/journal_test.v`, power cuts anywhere in the cycle included).
+
+**Why the full journal is not erased at run time.** The engine could: `erase_pending` re-homes before
+it erases, and every power cut inside it is fuzzed. The flash cannot, on any board here:
+
+- **H723 / H735** (zone_a, sysnode): one bank. The smallest erase is a 128 KB
+  sector; while it runs, every instruction fetch and data read from the bank stalls for the
+  sector's erase time (1–2 s), and the H7 FLASH IP has no erase suspend. The code, the vector table
+  and ThreadX all execute from that bank, so the whole MCU stops: no CAN frame sent or read for 1–2 s
+  — longer than every receiver's timeout for this node's cyclic frames, and longer than the FDCAN
+  receive FIFO holds a loaded bus — no FB dispatched (zone_a's steering limit frozen), the DoIP
+  answer behind it past P2. That is the stall REQ-DIAG-062 and REQ-NVM-015 exist to forbid; a
+  tester's 0x14 does not license it (it is served in the default session, while the vehicle moves).
+- **H755** (domain, h755_threadx): the journal is bank 2, the CM7 runs from bank 1 — but the CM4
+  image executes from bank 2, so the erase stalls the CM4 instead, mid-run.
+
+A board whose journal sits in a bank NO code executes from could erase at run time, and only with an
+erase that does not block the comm thread (start it, poll each pass: `FlashOps.erase` is blocking,
+`bflash_erase` busy-waits). None exists here; that board brings both. Compacting fully at every
+boot instead would raise a run's room by at most half a sector and cost an erase per power cycle —
+at the default 144 a day, the pair's endurance in months.
+
+**What is built instead: the room is a number at generation.** The wear report states it, and
+generation fails when one operation cycle's writes at the `[nvm.assume]` rates exceed it (REQ-NVM-016)
+— traffic the wear check passes when cycles are rare (a node powered for a day writes a day's
+traffic into one run). With the default rates system_full prints (`tools/loom2v/wear_test.v`):
+
+- **zone_a** (a power-up or an ECUReset): at least 6132 records, 41 a cycle at the assumed rates —
+  191 0x14 at their worst, 32 records each (the image, every DTC's requalification, the snapshot).
+- **domain** (a sleep edge or an ECUReset): at least 4088 records, 120 a cycle — 681 0x14 at their
+  worst; **sysnode**: 4094, 3 a cycle.
+
+**Bench practice.** A loop that clears and re-fails faults on a node without NM fills its run's room:
+zone_a's journal filled after about 350 clears of `faults_zone_a.lua` (each lighter than the worst).
+Reset the node (0x11) or power-cycle it within the room — every 12 runs, as #392's loop does; a 0x22
+to a 0x14 there means reset and retry, never a failing flash (that is 0x72).
 
 ## Diagnostics / fault memory (freeze frames) — the other customer
 

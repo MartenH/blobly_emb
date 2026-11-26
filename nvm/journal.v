@@ -35,7 +35,9 @@ module nvm
 //     program failure is READ-BACK-VERIFIED (landed intact = success), else
 //     the slot is burned;
 //   - mount is READ-ONLY: scan + table + cursor; recovery belongs to
-//     erase_pending()/compact() at runtime; the append path NEVER erases;
+//     erase_pending()/compact() at an erase point; the append path NEVER erases
+//     (an erase stalls the bank 1-2 s, so the CALLER picks the erase points:
+//     docs/nvm.md "No erase at run time");
 //   - a power cut or transient driver failure at any point leaves the journal
 //     mountable with "last complete value per block wins";
 //   - compaction sources the RAM table for plain values and IMMUTABLE flash
@@ -736,6 +738,31 @@ pub fn (mut j Journal) compact() bool {
 	}
 	j.pending_erase = old_active
 	return true
+}
+
+// boot_erase_point is the erase point of a node without NM, at boot before the kernel (docs/nvm.md
+// "No erase at run time"): the sector a compaction left behind is erased, and an active sector less
+// than half free is compacted and the old one erased too. So every run starts with at least half a
+// sector free beside a clean partner — run_capacity's premise. A step that fails leaves the journal
+// mountable and is retried at the next boot.
+pub fn (mut j Journal) boot_erase_point() {
+	j.erase_pending()
+	if j.free_records() < j.slots() / 2 && j.compact() {
+		j.erase_pending()
+	}
+}
+
+// run_capacity: the records a run between two erase points takes at least, before a put meets
+// .full_until_erase. The run starts with `start_free` records free in the active sector (half a
+// sector after boot_erase_point; nothing is promised at an NM node's wake) and a clean partner; the
+// write that no longer fits compacts into the partner, which copies the live set (`live` records,
+// the marker's slot included), and the partner then fills. Each sector can end in up to `waste`
+// unused records, the parts but one of a chained value that did not fit. The generator's per-cycle
+// check asks this, so it and the journal cannot disagree. A burned slot is outside it: a fault.
+pub fn run_capacity(slots u32, live u32, waste u32, start_free u32) u32 {
+	first := if start_free > waste { start_free - waste } else { u32(0) }
+	second := if slots > live + waste { slots - live - waste } else { u32(0) }
+	return first + second
 }
 
 // erase_pending performs the deferred cleanup at the caller's quiet point,

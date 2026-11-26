@@ -9,7 +9,7 @@ drops below what is recorded here, and CI fails when this file is stale.
 
 | files measured | not built by a host test | points | own | any |
 |---|---|---|---|---|
-| 53 | 6 | 3979 | 91.5% | 94.3% |
+| 53 | 6 | 3984 | 91.6% | 94.3% |
 
 | file | points | own covered | own | any |
 |---|---|---|---|---|
@@ -70,5 +70,5 @@ drops below what is recorded here, and CI fails when this file is stale.
 | ecu/lifecycle.v | 11 | 8 | 72.7% | 72.7% |
 | ecu/modes.v | 13 | 13 | 100.0% | 100.0% |
 | loom/loom.v | 48 | 40 | 83.3% | 83.3% |
-| nvm/journal.v | 374 | 331 | 88.5% | 89.6% |
+| nvm/journal.v | 379 | 338 | 89.2% | 89.7% |
 | wdg/sentinel.v | 16 | 16 | 100.0% | 100.0% |
