@@ -46,7 +46,7 @@ jobs:
   test:
     name: linux • host unit tests + check + trace
     # pinned, not ubuntu-latest: Ubuntu 24.04 is the supported floor, and ubuntu-latest moving to
-    # 26.04 (gcc 14, arm-none-eabi 14.2) changed the build under every open PR at once
+    # 26.04 (gcc 14, GNU make 4.4.1, arm-none-eabi 14.2) changed the build under every open PR at once
     runs-on: ubuntu-24.04
     timeout-minutes: 40 # ~20 min on V3; a hung job otherwise holds an account-wide slot for 6 h
     steps:
