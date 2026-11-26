@@ -417,7 +417,7 @@ that did not fit leaves unused. Then every put answers `full_until_erase`: a 0x1
 0x2E is answered 0x22 and changes nothing (a reset recovers it, #451), the 0x27 state is held in RAM
 and retried, and the next erase point frees the journal for a run of the full room again
 (`nvm/journal_test.v`, power cuts anywhere in the cycle included) — a full sector ending in the
-reset flush's clean marker too: an erase re-lays the marker only when it lives in the sector erased.
+reset flush's clean marker too: an erase re-lays the marker unless it is already the active sector's newest record (records copied after it overtake it).
 
 **Why the full journal is not erased at run time.** The engine could: `erase_pending` re-homes before
 it erases, and every power cut inside it is fuzzed. The flash cannot, on any board here:

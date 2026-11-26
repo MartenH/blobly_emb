@@ -142,8 +142,8 @@ pub mut:
 	clean bool
 	// runtime tail state: the newest appended record is the marker
 	tail_clean bool
-	// the sector holding the newest marker while tail_clean (-1: none, an empty journal). An erase
-	// re-lays the marker only when it lives in the sector erased. Owned by mount().
+	// the active sector while the newest record there is the marker (-1: it is not, or the journal
+	// is empty). An erase point re-lays the marker unless it is that newest record.
 	marker_sector int
 	mounted    bool
 	// mount found MORE distinct ids on flash than the pool holds and had to
@@ -359,7 +359,7 @@ pub fn (mut j Journal) mount() bool {
 	}
 	j.clean = newest_is_marker
 	j.tail_clean = newest_is_marker
-	j.marker_sector = if newest_is_marker { newest_sector } else { -1 }
+	j.marker_sector = if newest_is_marker && newest_sector == j.active { j.active } else { -1 }
 	j.cursor = if dirty_tail[j.active] { j.cfg.size } else { cursors[j.active] }
 	other := 1 - j.active
 	j.partner_clean = clean_sector[other]
@@ -701,6 +701,7 @@ pub fn (mut j Journal) compact() bool {
 	old_active := j.active
 	old_cursor := j.cursor
 	was_clean := j.tail_clean
+	j.marker_sector = -1 // the copies overtake the marker
 	j.compacting = true
 	j.active = target
 	j.cursor = 0
@@ -816,9 +817,10 @@ fn (mut j Journal) rehome_strays(from int) bool {
 	ns := j.strays(from)
 	if ns == 0 {
 		// the newest clean MARKER may still live in the sector about to be
-		// erased — re-anchor it (one slot) so orderly stays orderly. One in
-		// the active sector needs nothing, though that sector be full.
-		if j.tail_clean && j.marker_sector == from {
+		// erased, or copies may have overtaken it — re-anchor it (one slot) so
+		// orderly stays orderly. The active sector's newest record being the
+		// marker needs nothing, though that sector be full.
+		if j.tail_clean && j.marker_sector != j.active {
 			if !j.append_marker() {
 				return false
 			}
@@ -830,6 +832,7 @@ fn (mut j Journal) rehome_strays(from int) bool {
 	if j.free_records() < need {
 		return false
 	}
+	j.marker_sector = -1 // the copies overtake the marker
 	for i in 0 .. max_blocks {
 		if j.table[i].present && j.table[i].sector == from {
 			off, seq, ok := j.emit_entry(i)

@@ -374,7 +374,7 @@ fn check_journal_wear(m Model, doc toml.Doc) []string {
 	if w.usable <= 0 {
 		panic('loom2v: [nvm] the live set (${w.live} records) leaves no room between compactions in a ${m.nvm.sector_records}-record sector — without NM the journal compacts at every boot that finds less than half a sector free; grow the sectors\n' + lines.join('\n'))
 	}
-	if w.per_cycle > f64(w.per_run) {
+	if w.per_cycle > f64(w.per_run) + 1e-6 { // per_cycle is a quotient: an exact fit may round above it
 		panic('loom2v: [nvm] a cycle outgrows the journal — at the assumed rates the average operation cycle writes ${w.per_cycle:.0} records, and between two erase points (${w.points}) the journal takes ${w.per_run}, so its writes would be refused until the next one (0x22 to a tester). Grow the sectors, raise min_write_ms, persist fewer "now" signals, or state the vehicle\'s real rates in [nvm.assume]:\n' + lines.join('\n'))
 	}
 	if w.years < f64(m.nvm.min_years) {

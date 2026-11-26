@@ -1342,7 +1342,6 @@ fn test_run_capacity_arithmetic() {
 	assert run_capacity(32, 8, 20, 16) == 4
 }
 
-// @verifies REQ-NVM-016
 // A run that ends with the clean marker in the active sector's last slot — the reset flush's
 // mark_clean taking the one slot left — is freed by the next erase point: the marker already lives
 // in the active sector, so nothing is re-laid before the erase, and every later boot runs again.
@@ -1371,4 +1370,34 @@ fn test_a_marker_in_the_last_slot_does_not_block_the_erase_point() {
 		assert r.j.mark_clean() || r.j.free_records() == 0
 	}
 	assert !r.f.double_prog
+}
+
+// A clean marker in the active sector, strays in the partner: the strays copied overtake the
+// marker, so a marker write that fails after them is laid again by the next erase point, and
+// the journal mounts clean.
+fn test_a_marker_overtaken_by_rehomed_strays_is_laid_again_after_a_failure() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 1, 91)
+	putv(mut j, 2, 92)
+	f.cut_call = f.calls + 2 // interrupt the compaction copy -> strays remain
+	f.cut_bytes = 16
+	j.compact()
+	f.cut_call = 0xFFFF_FFFF
+	mut j2 := remount(mut f)
+	assert j2.pending_erase >= 0 && j2.strays(j2.pending_erase) > 0
+	assert j2.mark_clean()
+	mut j3 := remount(mut f)
+	assert j3.clean && j3.marker_sector == j3.active
+	strays := j3.strays(j3.pending_erase)
+	f.cut_call = f.calls + strays + 1 // the marker after the copies fails
+	f.cut_bytes = 0
+	assert !j3.erase_pending()
+	f.cut_call = 0xFFFF_FFFF
+	assert j3.erase_pending()
+	mut j4 := remount(mut f)
+	assert j4.clean, 'the strays copied after the marker left the tail unclean'
+	assert getv(j4, 1)? == 91
+	assert getv(j4, 2)? == 92
+	assert !f.double_prog
 }
