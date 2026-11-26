@@ -272,14 +272,14 @@ fn journal_wear(m Model, doc toml.Doc) Wear {
 		}
 	}
 	slots := int(m.nvm.sector_records)
-	usable := if nm { slots - live - waste } else { slots / 2 - live }
+	usable := if nm { slots - live - waste } else { int(nvm.boot_free_floor(u32(slots))) - live }
 	// each compaction erases one sector, and the pair alternates: each sector sees half of them
 	erases := if usable > 0 { total / f64(usable) * hours_per_year / 2.0 } else { 0.0 }
 	years := if erases > 0 { f64(m.nvm.endurance) / erases } else { 1.0e9 }
 	// between two erase points (docs/nvm.md "No erase at run time"): without NM the boot leaves half
 	// a sector free beside a clean partner (nvm boot_erase_point), with NM a sleep edge leaves the
 	// partner clean and the active sector anywhere; an ECUReset's flush erases on both
-	start := if nm { u32(0) } else { u32(slots / 2) }
+	start := if nm { u32(0) } else { nvm.boot_free_floor(u32(slots)) }
 	per_run := int(nvm.run_capacity(u32(slots), u32(live), u32(waste), start))
 	// a 0x14 at its worst, awake (in bus sleep each write lays a marker too): its image and every
 	// DTC's requalification, each snapshot DTC's new capture and the tombstone of the block it

@@ -252,20 +252,23 @@ time to make space — is closed structurally, not handled:
   and the compaction WATERMARK sits above it: free space below `reserve + margin`
   makes compaction due during NORMAL runtime, on the comm thread's schedule, long
   before shutdown needs the room (as built: compaction runs inline when a write does not fit and
-  the partner is erased; its ERASE waits for an erase point — "No erase at run time"). The sleep flush therefore never erases — it is
-  N microsecond-scale appends into space guaranteed to exist. GC-at-shutdown is
+  the partner is erased; its ERASE waits for an erase point — "No erase at run time"). The sleep flush's
+  writes therefore never wait for an erase — they are N microsecond-scale appends into space
+  guaranteed to exist; an NM node's trailing `erase_pending` comes after them, as that node's erase point. GC-at-shutdown is
   not a case to handle; it is a state that cannot be reached. Generation refuses a
   sector that cannot hold the live set twice plus, on a node that performs 0x27 (or 0x29),
   every write a tester without the key can make (`security_attempts` per served
   level), so wrong keys alone never fill a sector.
 - **Quiesce ordering, storage holds the door.** Dispatch stops → flush dirty →
-  clean marker → (compact now if the watermark says so — on same-bank boards this
-  IS the designated erase window; other-bank boards already compacted at runtime)
+  clean marker → (erase what a compaction left behind — on an NM node's sleep edge this IS
+  the erase point; no board here erases at run time, "No erase at run time")
   → storage-done → only then power down. NM coordinates the BUS sleep on its own
   timeline; the LOCAL power-down waits on storage-done. A power cut anywhere in the
   sequence converges by the format rules above.
-- **Writes are never forbidden — including during shutdown.** Appends are legal
-  whenever cursor space exists, and headroom guarantees it does. The wake-up race
+- **Writes are never forbidden by phase — including during shutdown.** Appends are legal
+  whenever cursor space exists; the headroom guarantees the flush's, and a run's other writes have
+  `run_capacity` records before every put answers `full_until_erase` until the next erase point
+  ("No erase at run time"). The wake-up race
   (bus activity aborts the sleep after the flush) is benign: new records land
   after the marker and life continues. Which gives crash detection its cleanest
   form: **a session was clean iff the newest record is a marker.** A marker with
@@ -290,10 +293,9 @@ time to make space — is closed structurally, not handled:
 - The new sector cannot overflow mid-GC: it starts empty and absorbs live set +
   margin — the same generation-time arithmetic as the headroom.
 
-One invariant, stated once: the journal accepts appends at ANY moment the ECU is
-alive — during compaction, during shutdown, during the wake race — because
-ordering is seq, sourcing is the RAM table, and the only slow operation runs in
-hardware.
+One invariant, stated once: no phase forbids an append — compaction, shutdown and the wake race
+alike — because ordering is seq and sourcing is the RAM table; only room refuses one, past a run's
+`run_capacity` until the next erase point ("No erase at run time").
 
 ## Flash portability (what the 32-byte record does and does not assume)
 
@@ -409,12 +411,13 @@ partner is erased — copies, no erase — and the sector it leaves behind waits
 - **the flush after an ECUReset's answer**, on both: the reset is coming, the stall costs nothing.
 
 Between two of them a run takes at least `nvm.run_capacity(slots, live, waste, start)` records:
-`start` free in the active sector (half a sector after the boot; nothing promised at an NM node's
-wake), then the partner less the live set; each sector may end in `waste` records a chained value
+`start` free in the active sector (`nvm.boot_free_floor`, half a sector, after the boot — the
+threshold `boot_erase_point` compacts below; nothing promised at an NM node's wake), then the partner less the live set; each sector may end in `waste` records a chained value
 that did not fit leaves unused. Then every put answers `full_until_erase`: a 0x14 or a parameter's
 0x2E is answered 0x22 and changes nothing (a reset recovers it, #451), the 0x27 state is held in RAM
 and retried, and the next erase point frees the journal for a run of the full room again
-(`nvm/journal_test.v`, power cuts anywhere in the cycle included).
+(`nvm/journal_test.v`, power cuts anywhere in the cycle included) — a full sector ending in the
+reset flush's clean marker too: an erase re-lays the marker only when it lives in the sector erased.
 
 **Why the full journal is not erased at run time.** The engine could: `erase_pending` re-homes before
 it erases, and every power cut inside it is fuzzed. The flash cannot, on any board here:

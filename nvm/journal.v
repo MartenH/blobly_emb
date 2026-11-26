@@ -142,6 +142,9 @@ pub mut:
 	clean bool
 	// runtime tail state: the newest appended record is the marker
 	tail_clean bool
+	// the sector holding the newest marker while tail_clean (-1: none, an empty journal). An erase
+	// re-lays the marker only when it lives in the sector erased. Owned by mount().
+	marker_sector int
 	mounted    bool
 	// mount found MORE distinct ids on flash than the pool holds and had to
 	// drop some (scan-order). Unreachable behind the generator's block-count
@@ -244,6 +247,7 @@ pub fn (mut j Journal) mount() bool {
 	j.free_failed = false
 	mut newest_is_marker := true // empty journal = clean
 	mut newest_seq := u32(0)
+	mut newest_sector := -1
 	mut any_valid := false
 	mut nonempty := [2]bool{}
 	mut dirty_tail := [2]bool{}
@@ -296,6 +300,7 @@ pub fn (mut j Journal) mount() bool {
 			}
 			if seq > newest_seq {
 				newest_seq = seq
+				newest_sector = s
 				// a REAL marker is always plain — a chain-flagged block-0 record
 				// is a crafted/corrupt artifact and must not testify to a clean
 				// shutdown (defense-in-depth; per-record CRC blocks bit flips)
@@ -354,6 +359,7 @@ pub fn (mut j Journal) mount() bool {
 	}
 	j.clean = newest_is_marker
 	j.tail_clean = newest_is_marker
+	j.marker_sector = if newest_is_marker { newest_sector } else { -1 }
 	j.cursor = if dirty_tail[j.active] { j.cfg.size } else { cursors[j.active] }
 	other := 1 - j.active
 	j.partner_clean = clean_sector[other]
@@ -747,9 +753,15 @@ pub fn (mut j Journal) compact() bool {
 // mountable and is retried at the next boot.
 pub fn (mut j Journal) boot_erase_point() {
 	j.erase_pending()
-	if j.free_records() < j.slots() / 2 && j.compact() {
+	if j.free_records() < boot_free_floor(j.slots()) && j.compact() {
 		j.erase_pending()
 	}
+}
+
+// boot_free_floor: the free records boot_erase_point leaves in the active sector, at least — it
+// compacts below this. The generator's room check starts a run without NM from it.
+pub fn boot_free_floor(slots u32) u32 {
+	return slots / 2
 }
 
 // run_capacity: the records a run between two erase points takes at least, before a put meets
@@ -804,8 +816,9 @@ fn (mut j Journal) rehome_strays(from int) bool {
 	ns := j.strays(from)
 	if ns == 0 {
 		// the newest clean MARKER may still live in the sector about to be
-		// erased — re-anchor it (one slot) so orderly stays orderly.
-		if j.tail_clean {
+		// erased — re-anchor it (one slot) so orderly stays orderly. One in
+		// the active sector needs nothing, though that sector be full.
+		if j.tail_clean && j.marker_sector == from {
 			if !j.append_marker() {
 				return false
 			}
@@ -1019,6 +1032,7 @@ fn (mut j Journal) append_marker() bool {
 	if !j.program_slot(&rec[0]) {
 		return false
 	}
+	j.marker_sector = j.active
 	return true
 }
 

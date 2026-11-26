@@ -1243,11 +1243,11 @@ fn (mut r RunRig) run() (u32, bool) {
 // run, and no word is programmed twice.
 fn test_every_power_cycle_takes_its_run_capacity_and_the_boot_frees_it() {
 	mut r := new_run_rig()
-	want := run_capacity(r.j.slots(), run_live, run_waste, r.j.slots() / 2)
+	want := run_capacity(r.j.slots(), run_live, run_waste, boot_free_floor(r.j.slots()))
 	assert want == 36 // (16 - 2) + (32 - 8 - 2)
 	for cycle in 0 .. 60 {
 		r.power_up()
-		assert r.j.free_records() >= r.j.slots() / 2 && r.j.partner_clean, 'cycle ${cycle}: the boot left no run'
+		assert r.j.free_records() >= boot_free_floor(r.j.slots()) && r.j.partner_clean, 'cycle ${cycle}: the boot left no run'
 		erases := r.f.erases
 		took, _ := r.run()
 		assert r.j.last_refusal == .full_until_erase && r.j.last_refusal.for_space(), 'cycle ${cycle}: refused ${r.j.last_refusal}'
@@ -1262,7 +1262,7 @@ fn test_every_power_cycle_takes_its_run_capacity_and_the_boot_frees_it() {
 // point's compaction, or in its erase — leaves a journal that mounts with every block at its last
 // accepted value, and the cycles after it take their full run_capacity again.
 fn test_power_cuts_in_a_cycle_leave_a_readable_journal_and_full_runs_after() {
-	want := run_capacity(32, run_live, run_waste, 16)
+	want := run_capacity(32, run_live, run_waste, boot_free_floor(32))
 	// cycle 0 fills the journal, so cycle 1's boot compacts and its run compacts once more: a cut
 	// at every program call of cycle 1
 	mut whole := new_run_rig()
@@ -1317,7 +1317,7 @@ fn test_power_cuts_in_a_cycle_leave_a_readable_journal_and_full_runs_after() {
 fn test_a_run_from_exactly_half_a_sector_takes_its_run_capacity() {
 	mut r := new_run_rig()
 	r.power_up()
-	for r.j.free_records() > r.j.slots() / 2 {
+	for r.j.free_records() > boot_free_floor(r.j.slots()) {
 		data := [u8(r.next()), 0, 0, 0]
 		assert r.j.put(1, &data[0], 4)
 		r.shadow[1] = data.clone()
@@ -1325,8 +1325,8 @@ fn test_a_run_from_exactly_half_a_sector_takes_its_run_capacity() {
 	compactions := r.f.erases
 	r.power_up()
 	assert r.f.erases == compactions, 'the boot erased with half a sector free'
-	assert r.j.free_records() == r.j.slots() / 2
-	want := run_capacity(r.j.slots(), run_live, run_waste, r.j.slots() / 2)
+	assert r.j.free_records() == boot_free_floor(r.j.slots())
+	want := run_capacity(r.j.slots(), run_live, run_waste, boot_free_floor(r.j.slots()))
 	took, _ := r.run()
 	assert r.j.last_refusal == .full_until_erase
 	assert took >= want && took <= want + run_live + 2 * run_waste, 'the run took ${took} records, run_capacity says ${want}'
@@ -1340,4 +1340,35 @@ fn test_run_capacity_arithmetic() {
 	assert run_capacity(4096, 12, 2, 0) == 4082
 	assert run_capacity(32, 40, 2, 16) == 14
 	assert run_capacity(32, 8, 20, 16) == 4
+}
+
+// @verifies REQ-NVM-016
+// A run that ends with the clean marker in the active sector's last slot — the reset flush's
+// mark_clean taking the one slot left — is freed by the next erase point: the marker already lives
+// in the active sector, so nothing is re-laid before the erase, and every later boot runs again.
+fn test_a_marker_in_the_last_slot_does_not_block_the_erase_point() {
+	mut r := new_run_rig()
+	r.power_up()
+	for r.j.pending_erase < 0 || r.j.free_records() > 1 {
+		data := [u8(r.next()), 0, 0, 0]
+		assert r.j.put(1, &data[0], 4)
+		r.shadow[1] = data.clone()
+	}
+	assert r.j.mark_clean() && r.j.free_records() == 0
+	// the NM sleep edge's erase, at run time
+	mut rt := remount(mut r.f)
+	assert rt.clean && rt.erase_pending() && rt.partner_clean
+	// the boot erase point, and the runs after it
+	r.j = remount(mut r.f)
+	assert r.j.clean
+	want := run_capacity(r.j.slots(), run_live, run_waste, boot_free_floor(r.j.slots()))
+	for cycle in 0 .. 3 {
+		r.power_up()
+		assert r.j.free_records() >= boot_free_floor(r.j.slots()) && r.j.partner_clean, 'cycle ${cycle}: the boot left no run'
+		took, _ := r.run()
+		assert r.j.last_refusal == .full_until_erase && took >= want, 'cycle ${cycle}: ${took} records, refused ${r.j.last_refusal}'
+		r.check('cycle ${cycle}')
+		assert r.j.mark_clean() || r.j.free_records() == 0
+	}
+	assert !r.f.double_prog
 }
