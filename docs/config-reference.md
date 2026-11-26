@@ -308,7 +308,7 @@ A typed signal from one endpoint to another: a partition, a thread, a bus, or "i
 | key | type | required | default | allowed | description |
 |---|---|---|---|---|---|
 | `name` | string | yes | — |  | PascalCase; a signal a bus carries takes its DBC name |
-| `fields` | table of strings | yes | — |  | field name -> type, the signal's struct |
+| `fields` | table of strings | yes | — |  | field name -> type, the signal's struct; a received signal may add `status = "RxStatus"`, and one from an E2E frame needs it and `lost = "u16"` or `"u32"` (the bridge fills both) |
 | `from` | string |  | — |  | the producer: a partition, thread, bus or "io"; left out, the partition of the fb that writes it (REQ-INV-007) |
 | `to` | string |  | — |  | the consumer: a partition, thread, bus or "io"; left out, the partition of an fb that reads it (REQ-INV-007) |
 | `transport` | string |  | `"double"` | `"double"`, `"triple"`, `"seqlock"`, `"dma"`, `"hw_sem"`, `"mailbox"` | the IOC buffer between partitions (derived for io signals); the hardware ones are target backends, double on host |

@@ -1,5 +1,7 @@
 module main
 
+// @verifies REQ-E2E-002
+
 import os
 import tools.sysmodel
 
@@ -52,6 +54,16 @@ fn test_a_signal_of_a_received_eth_e2e_frame_without_status_is_refused() {
 	})
 	assert code != 0
 	assert out.contains('signal "LampCmdSafe" comes from the E2E-protected eth frame'), out
+}
+
+fn test_a_signal_of_a_received_eth_e2e_frame_without_lost_is_refused() {
+	// REQ-E2E-002: a gap in the sequence is reported, and the verdict for it is ok, so the
+	// counter is the one way the application hears frames went missing
+	code, out, _ := host_someip_with('nolost', fn (s string) string {
+		return s.replace('fields = { level = "u8", status = "RxStatus", lost = "u16" }', 'fields = { level = "u8", status = "RxStatus" }')
+	})
+	assert code != 0
+	assert out.contains('signal "LampCmdSafe" comes from the E2E-protected eth frame "BenchCmdSafe" but has no `lost` counter'), out
 }
 
 fn test_a_status_on_an_unprotected_eth_frame_is_refused() {

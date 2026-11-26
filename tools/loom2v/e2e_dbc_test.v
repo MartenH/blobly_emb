@@ -1,5 +1,7 @@
 module main
 
+// @verifies REQ-E2E-002
+
 import os
 import tools.sysmodel
 
@@ -95,6 +97,19 @@ fn test_a_received_frame_the_dbc_protects_takes_its_deadline_from_the_dbc() {
 	})
 	assert code4 != 0
 	assert out4.contains('E2ETimeout "soon" in the DBC is not a number of ms'), out4 // via the fault that needs it
+}
+
+fn test_a_signal_of_a_received_e2e_frame_without_lost_is_refused() {
+	// REQ-E2E-002 on CAN: BrakePressure, from the protected BrakeStatus, with no `lost` counter
+	// (and without the lost-frames fault that would refuse it first)
+	code, out, _ := overspeed_with('nolost', fn (src string) string {
+		s := src.replace('fields = { kpa = "u16", status = "RxStatus", lost = "u16" }', 'fields = { kpa = "u16", status = "RxStatus" }')
+		i := s.index('[[fault]]\nname   = "BrakeMsgLost"') or { panic('overspeed lost BrakeMsgLost — update this test') }
+		j := s.index_after('[fault_memory]', i) or { panic('BrakeMsgLost is not followed by [fault_memory]') }
+		return s[..i] + s[j..]
+	})
+	assert code != 0
+	assert out.contains('signal "BrakePressure" comes from the E2E-protected frame "brake_status" but has no `lost` counter'), out
 }
 
 // lamp_dbc gives LampFrame CRC and counter signals and declares its E2E in the DBC.

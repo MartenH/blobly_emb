@@ -5568,8 +5568,9 @@ fn ms_to_us(ms i64, what string) int {
 // validate_e2e_timeouts: the E2E-owned timeout (REQ-E2E-002, ASIL B), checked ONCE against the whole
 // model — every bus, used or not. It is REQUIRED on an E2E frame whose signals the bridge delivers
 // to the application, and each of those signals must carry `status`, or its expiry would publish
-// a zero value indistinguishable from a healthy one. It comes from `e2e.timeout_ms` or the DBC's
-// `E2ETimeout`; one AUTHORED in ecu.toml is refused where nothing receives the frame (transmitted,
+// a zero value indistinguishable from a healthy one, and `lost`, or a skipped sequence would
+// never reach the application (the verdict for a gap is ok). It comes from `e2e.timeout_ms` or
+// the DBC's `E2ETimeout`; one AUTHORED in ecu.toml is refused where nothing receives the frame (transmitted,
 // or neither decoded nor a signal route's source), while the DBC's is for whoever receives it.
 fn validate_e2e_timeouts(m Model) {
 	// the SOME/IP receive path (#299): the same two requirements, per received eth E2E frame —
@@ -5596,8 +5597,12 @@ fn validate_e2e_timeouts(m Model) {
 			panic('loom2v: eth frame "${fr.name}" is E2E-protected and received, but its e2e has no timeout_ms — REQ-E2E-002 detects total loss of the sender inside E2E itself')
 		}
 		for sn in fr.signals {
-			if !(m.sig_of[sn] or { SigInfo{} }).has_status {
+			si := m.sig_of[sn] or { SigInfo{} }
+			if !si.has_status {
 				panic('loom2v: signal "${sn}" comes from the E2E-protected eth frame "${fr.name}" but has no `status = "RxStatus"` — without it an E2E timeout reaches the FB as a zero value that looks healthy')
+			}
+			if si.lost_type == '' {
+				panic(e2e_no_lost(sn, 'eth frame "${fr.name}"'))
 			}
 		}
 	}
@@ -5623,11 +5628,22 @@ fn validate_e2e_timeouts(m Model) {
 			panic('loom2v: frame "${fk}" is E2E-protected and received, but has no E2E timeout (e2e.timeout_ms, or E2ETimeout in the DBC) — REQ-E2E-002 detects total loss of the sender inside E2E itself, not only by the QM COM deadline')
 		}
 		for sname in sigs {
-			if !(m.sig_of[sname] or { SigInfo{} }).has_status {
+			si := m.sig_of[sname] or { SigInfo{} }
+			if !si.has_status {
 				panic('loom2v: signal "${sname}" comes from the E2E-protected frame "${fk}" but has no `status = "RxStatus"` — without it an E2E timeout reaches the FB as a zero value that looks healthy')
+			}
+			if si.lost_type == '' {
+				panic(e2e_no_lost(sname, 'frame "${fk}"'))
 			}
 		}
 	}
+}
+
+// e2e_no_lost is the refusal of a received E2E signal with no `lost` counter, CAN and eth alike:
+// REQ-E2E-002 reports a skipped sequence to the application, and the E2E verdict for a gap is
+// ok (the value is valid; only the gap is news), so the counter is the only way the FB hears it.
+fn e2e_no_lost(signal string, frame string) string {
+	return 'loom2v: signal "${signal}" comes from the E2E-protected ${frame} but has no `lost` counter (lost = "u16" or "u32") — REQ-E2E-002 reports a skipped sequence to the application, and without the counter a gap reads as plain ok'
 }
 
 // FaultCfg is one [[fault]] (docs/diagnostics.md §3.3): a DTC, the FB handler that tests it, how its

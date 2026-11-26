@@ -201,7 +201,7 @@ fn ecu_schema() Schema {
 		]),
 		tbl('signal', '[[signal]]', 'A typed signal from one endpoint to another: a partition, a thread, a bus, or "io".', [
 			req('name', .str).doc('PascalCase; a signal a bus carries takes its DBC name'),
-			sub('fields', .str_map, '').required().doc("field name -> type, the signal's struct"),
+			sub('fields', .str_map, '').required().doc("field name -> type, the signal's struct; a received signal may add `status = \"RxStatus\"`, and one from an E2E frame needs it and `lost = \"u16\"` or `\"u32\"` (the bridge fills both)"),
 			k('from', .str).doc('the producer: a partition, thread, bus or "io"; left out, the partition of the fb that writes it (REQ-INV-007)'),
 			k('to', .str).doc('the consumer: a partition, thread, bus or "io"; left out, the partition of an fb that reads it (REQ-INV-007)'),
 			k('transport', .str).d('"double"').one_of(['double', 'triple', 'seqlock', 'dma', 'hw_sem',

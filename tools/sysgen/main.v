@@ -368,7 +368,8 @@ fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 		part := sig_part.reader[name] or { continue }
 		// received through E2E (the frame on THIS node's bus says so in its DBC): the bridge's
 		// receive status and lost count ride along, as on a someip E2E event — loom2v requires
-		// the status, so an E2E timeout never reaches the FB as a healthy-looking zero
+		// both, so an E2E timeout never reaches the FB as a healthy-looking zero and a skipped
+		// sequence reaches it at all (REQ-E2E-002)
 		mut rx_fields := sig.fields.clone()
 		if protected[sig.name] {
 			rx_fields['status'] = 'RxStatus'
@@ -827,8 +828,8 @@ fn someip_sections(sys sysmodel.System, node sysmodel.Node, bus sysmodel.Bus, vi
 				s2 := sys.signal_by_name(sg) or { continue }
 				part := sig_part.reader[sg] or { 'app' }
 				// received through E2E: the bridge's receive status and lost count ride along (loom2v
-				// requires the status, so an E2E timeout never reaches the FB as a healthy-looking
-				// zero); neither is ever on the wire
+				// requires both, so an E2E timeout never reaches the FB as a healthy-looking zero and
+				// a skipped sequence reaches it at all); neither is ever on the wire
 				mut rx_fields := s2.fields.clone()
 				if fr.has_e2e {
 					// and the E2E count of frames the sequence showed missing (REQ-E2E-002's
