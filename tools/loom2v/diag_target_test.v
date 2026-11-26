@@ -173,6 +173,9 @@ write = { session = ["extended"], security = 1 }
 	assert !glue.contains('diag_keep'), 'the RAM keep cell is still wired'
 	store := glue.all_after('g_diag.server.sa_store = uds.SecurityStore{').all_before('}')
 	assert !store.contains('token_us'), 'a write budget is wired:\n${store}'
+	// a refused 0x27 write answers no NRC, so the store does not ask why (no fault memory or
+	// parameter here asks either)
+	assert !store.contains('full') && !glue.contains('fn nvm_store_full('), 'the refusal reason is wired with no NRC to answer'
 	// restored after the server is configured, before the loop
 	in_order(glue, ['g_diag.server.security_levels = u8(0x01)', 'g_diag.server.restore_persisted_security()',
 		'for {'])

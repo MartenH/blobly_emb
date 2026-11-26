@@ -456,6 +456,7 @@ fn param_config_lines(m Model) []string {
 	g << '\tg_param.store = param.Store{'
 	g << '\t\tput: nvm_store_put'
 	g << '\t\tget: nvm_store_get'
+	g << '\t\tfull: nvm_store_full'
 	g << '\t}'
 	g << '\tg_param.publish = param_pub'
 	return g

@@ -178,6 +178,8 @@ fn test_parameters_are_restored_before_the_kernel_and_bound_on_the_comm_thread()
 	// the one store seam over the journal, shared with the fault memory and the 0x27 state
 	assert o.glue.contains('put: nvm_store_put') && o.glue.contains('get: nvm_store_get')
 	assert o.glue.count('fn nvm_store_put(') == 1 && !o.glue.contains('param_put')
+	// why a put was refused reaches the 0x2E answer: the journal's space is 0x22, the flash 0x72
+	assert o.glue.contains('full: nvm_store_full') && o.glue.contains('return g_nvm.last_refusal.for_space()')
 	assert o.manifest.contains('LoadCap,0x110,'), o.manifest
 	assert o.manifest.contains(',reset,x:i8:-128..127=-3'), o.manifest
 }

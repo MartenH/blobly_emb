@@ -253,6 +253,7 @@ pub mut:
 	wrote    int  // writes the last persist / clear made (the owner re-lays its clean marker)
 	refused  bool // the store refused a write since the last persist, a 0x14's included (observability)
 	clear_refused bool // a 0x14 the store refused, carried into the next persist's `refused`
+	hold_full     bool // write_snapshots: the refusal holding the image back was one of space
 }
 
 // init sets every configured slot to the power-on status. Call after filling dtc / confirm / aging.
@@ -293,6 +294,7 @@ pub fn (mut m Memory) init() {
 	m.wrote = 0
 	m.refused = false
 	m.clear_refused = false
+	m.hold_full = false
 }
 
 // consume applies slot i's latest Report. Call every owner pass for every fault.
@@ -432,7 +434,9 @@ pub fn (mut m Memory) cycle_end() {
 // Returns the negative response code, 0 = cleared: 0x31 for an unknown DTC, 0x22 when a slot's
 // producer has left so many clears unacknowledged that no fresh generation can be assigned — then
 // NOTHING is cleared, since a clear that reused a generation could let a pre-clear report count —
-// and 0x72 when the store refuses the cleared image (nothing is cleared then either).
+// and, when the store refuses the cleared image, uds.store_refusal_nrc's answer (nothing is cleared
+// then either): 0x22 when the journal is full until its next erase point (a reset compacts it),
+// 0x72 when the flash failed.
 pub fn (mut m Memory) clear(group u32) u8 {
 	mut hit := false
 	for i in 0 .. m.n {
@@ -448,9 +452,10 @@ pub fn (mut m Memory) clear(group u32) u8 {
 		return 0x31 // requestOutOfRange: no such DTC
 	}
 	// persisted: the cleared image must be durable before anything changes in RAM — a refused
-	// write leaves live and durable state as they were, and the tester gets 0x72
-	if !m.persist_clear(group) {
-		return 0x72 // generalProgrammingFailure
+	// write leaves live and durable state as they were, and the tester gets 0x22 or 0x72
+	nrc := m.persist_clear(group)
+	if nrc != 0 {
+		return nrc
 	}
 	for i in 0 .. m.n {
 		if group != 0xFFFFFF && m.slots[i].dtc != group {

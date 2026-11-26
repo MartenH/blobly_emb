@@ -86,6 +86,17 @@ pub const nrc_response_pending = u8(0x78)
 pub const nrc_subfunction_not_in_session = u8(0x7E)
 pub const nrc_service_not_in_session = u8(0x7F)
 
+// store_refusal_nrc is the ONE answer a request gives a tester when the journal refuses the write
+// it must make durable before answering (a 0x14 clear, a parameter's 0x2E): 0x22
+// conditionsNotCorrect when the refusal is the journal's space (`full` — full until its next
+// erase point compacts it, which a reset, a sleep edge or the boot brings, or a write the live set
+// cannot take: nvm.PutRefusal.for_space, through a store seam's `full`), 0x72
+// generalProgrammingFailure otherwise (the flash failed, or the journal cannot store at all).
+// Nothing changes either way; only 0x72 says the flash may be at fault.
+pub fn store_refusal_nrc(full bool) u8 {
+	return if full { nrc_conditions_not_correct } else { nrc_general_programming_failure }
+}
+
 // SecurityAccess (0x27). Level L is requested with subfunction 2L-1 (requestSeed) and unlocked
 // with 2L (sendKey); a DID's `security` gate names L.
 pub const seed_len = 4
@@ -128,7 +139,7 @@ pub mut:
 // DidWrite is the seam a bound DID's 0x2E goes through, after the server's session and security
 // gates and its record-length check (the DID's declared size, 0x13): `write` returns the NRC (0 =
 // accepted — the server then stores the record as the DID's data and answers). comm/param builds
-// it: range (0x31), then the journal (0x72).
+// it: range (0x31), then the journal (store_refusal_nrc: 0x22 for its space, 0x72 for the flash).
 pub struct DidWrite {
 pub mut:
 	ctx   voidptr
@@ -1100,7 +1111,7 @@ fn (mut s Server) write_did(req &u8, req_len int, resp &u8) int {
 	// ISO 14229-1 0x2E order: a DID that does not exist, is not writable, or is not writable
 	// in the active session is NOT SUPPORTED for write (0x31); then security (0x33); then the
 	// record length (0x13); then, for a parameter, its conditions (0x22), range (0x31) and the
-	// write itself (0x72) — the seam's.
+	// write itself (store_refusal_nrc) — the seam's.
 	if i < 0 || !s.dids[i].writable || !in_mask(s.dids[i].write_sessions, s.session) {
 		return negative(resp, 0x2E, nrc_request_out_of_range)
 	}

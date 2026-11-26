@@ -86,7 +86,8 @@ fn pf_put(ctx voidptr, id u16, data &u8, len u16) bool {
 			}
 		}
 	}
-	if r.refuse_id != 0 && id == r.refuse_id {
+	r.id_refused = r.refuse_id != 0 && id == r.refuse_id
+	if r.id_refused {
 		return false
 	}
 	if id == r.m.store.id {
@@ -120,6 +121,13 @@ fn pf_put(ctx voidptr, id u16, data &u8, len u16) bool {
 		r.snap_puts++
 	}
 	return true
+}
+
+// pf_full: the journal's own answer for its last refused put (the generated nvm_store_full); a
+// block refuse_id refuses is the flash refusing it, never the journal's space.
+fn pf_full(ctx voidptr) bool {
+	r := unsafe { &Rig(ctx) }
+	return !r.id_refused && r.j.last_refusal.for_space()
 }
 
 fn pf_get(ctx voidptr, id u16, out &u8, cap u16) u16 {
@@ -167,6 +175,7 @@ struct Rig {
 mut:
 	f          PFlash
 	refuse_id  u16 // the store refuses writes to this block (0 = none)
+	id_refused bool // the last put was refused by refuse_id (the flash, not the journal's space)
 	j          nvm.Journal
 	m          Memory
 	srv        uds.Server
@@ -264,6 +273,7 @@ fn (mut r Rig) restart(power_cycle bool) {
 		ctx:      r
 		put:      pf_put
 		get:      pf_get
+		full:     pf_full
 		id:       0x0F00
 		retry_us: 1000
 	}
@@ -432,6 +442,105 @@ fn test_a_refused_clear_answers_0x72_and_changes_nothing() {
 	r.pass(-1, .not_tested, 0, 2)
 	mut b := [4]u8{}
 	assert r.j.get(0x1000, &b[0], 4) == 1, 'the cleared snapshot block was not tombstoned'
+}
+
+// A journal filled in one power cycle (no erase point between the commits, as a long test loop
+// does) refuses until its next erase point compacts it. The 0x14 that meets it answers 0x22
+// conditionsNotCorrect — the flash did not fail, a reset recovers — and changes nothing; once the
+// erase point has run, the same clear is stored.
+fn test_a_clear_refused_by_a_full_journal_answers_0x22_and_changes_nothing() {
+	mut r := new_rig(2)
+	img := nvm.records_for(u16(2 + r.n * image_rec)) // the records one status image takes
+	mut now := u64(1)
+	mut refused := false
+	mut stepped := false
+	for _ in 0 .. 400 {
+		now += 10_000 // past retry_us: no pass is held back by an earlier refusal
+		if r.slot(3).status & confirmed == 0 {
+			r.pass(3, .failed, 5, now) // DTC 3 keeps no snapshot: one image per write
+			assert !r.m.refused, 'a pass met the full journal before a clear did'
+			continue
+		}
+		if !stepped && r.j.pending_erase >= 0 && r.j.free_records() >= img
+			&& r.j.free_records() < 2 * img {
+			// the clear would take the journal's last image and the next pass meet it full: one
+			// write of DTC 1 (its first completed test) takes it instead, so the clear meets it
+			r.pass(1, .passed, 0, now)
+			assert !r.m.refused
+			stepped = true
+			continue
+		}
+		before := r.slot(3)
+		gen := r.m.control_gen(r.order[3])
+		resp := r.req([u8(0x14), 0xC1, 0x00, 0x03])
+		if resp == [u8(0x54)] {
+			continue
+		}
+		assert resp == [u8(0x7F), 0x14, 0x22], 'a full journal answered ${resp}'
+		assert r.j.last_refusal == .full_until_erase
+		assert !r.f.dead && !r.f.refuse // nothing failed: the journal is full
+		after := r.slot(3)
+		assert after.status == before.status && after.occurrence == before.occurrence
+			&& r.m.control_gen(r.order[3]) == gen, 'a refused clear changed the memory'
+		refused = true
+		break
+	}
+	assert refused, 'the journal never filled'
+	assert r.j.erase_pending() // the erase point (the flush after an ECUReset's answer, a sleep edge, the boot)
+	assert r.req([u8(0x14), 0xC1, 0x00, 0x03]) == [u8(0x54)]
+	assert r.slot(3).status == status_cleared
+	r.reboot()
+	assert r.slot(3).status == status_cleared, 'the clear after the erase point was not durable'
+}
+
+// displaced_pending: cap 1, DTC 0's snapshot committed and DTC 1 displacing it with its own
+// snapshot refused by the flash (block 0x1001) — so the durable image must keep claiming DTC 0's
+// until DTC 1's is in, and a 0x14 of another DTC waits on that snapshot write first.
+fn displaced_pending() &Rig {
+	mut r := new_rig(1)
+	r.m.slots[r.order[0]].priority = 50 // equals: either may displace the other
+	r.m.slots[r.order[1]].priority = 50
+	r.pass(0, .failed, 1, 1)
+	r.m.cycle_end()
+	r.m.cycle_start()
+	r.pass(0, .passed, 1, 2)
+	r.refuse_id = 0x1001
+	r.pass(1, .failed, 2, 3)
+	e := r.m.entries[r.slot(1).entry - 1]
+	assert r.slot(0).entry == 0 && e.took_claim && !e.durable
+	return r
+}
+
+// A 0x14 held back by a snapshot that must go in before the cleared image answers by why that
+// snapshot was refused: 0x72 when the flash refused it, and 0x22 when the journal is full until its
+// next erase point — which a reset recovers — and nothing changes either way.
+fn test_a_clear_held_by_a_refused_snapshot_answers_by_its_refusal() {
+	mut r := displaced_pending()
+	before := r.slot(3).status
+	assert r.req([u8(0x14), 0xC1, 0x00, 0x03]) == [u8(0x7F), 0x14, 0x72]
+	assert r.slot(3).status == before && !r.m.entries[r.slot(1).entry - 1].durable
+
+	r = displaced_pending()
+	// the rest of the journal's users fill it in this power cycle, the snapshot still held back
+	payload := [u8(1), 2, 3, 4]
+	for _ in 0 .. 200 {
+		if !r.j.put(0x2000, &payload[0], 4) {
+			break
+		}
+	}
+	assert r.j.last_refusal == .full_until_erase
+	r.refuse_id = 0 // the snapshot now meets the journal
+	img := stored_image(r)
+	st1 := r.slot(1).status
+	assert r.req([u8(0x14), 0xC1, 0x00, 0x03]) == [u8(0x7F), 0x14, 0x22]
+	assert r.j.last_refusal == .full_until_erase
+	assert r.slot(3).status == before && r.slot(1).status == st1
+	assert !r.m.entries[r.slot(1).entry - 1].durable && stored_image(r) == img, 'a refused clear changed the store'
+	assert r.j.erase_pending() // the erase point
+	assert r.req([u8(0x14), 0xC1, 0x00, 0x03]) == [u8(0x54)]
+	assert r.m.entries[r.slot(1).entry - 1].durable // the snapshot went in first
+	r.reboot()
+	assert r.slot(1).entry != 0 && r.slot(1).status & confirmed != 0
 }
 
 // A refused automatic write stays outstanding and is retried — no sooner than retry_us, so a
@@ -798,7 +907,7 @@ fn test_a_cycle_interrupted_with_setting_off_ends_changing_nothing() {
 }
 
 // A refused 0x14 stays visible to the owner through the next persist, so a node without NM can
-// make room (its runtime erase) instead of answering 0x72 until the next boot.
+// make room (its runtime erase) instead of refusing (0x22) until the next erase point.
 fn test_a_refused_clear_reaches_the_owner() {
 	mut r := new_rig(2)
 	r.pass(0, .failed, 1, 1)

@@ -465,12 +465,15 @@ fn fault_live_records(m Model) int {
 
 // nvm_store_fns: the ONE store seam over the journal every store points at — the fault memory's,
 // the parameters', the 0x27 state's (one thread: the comm thread owns the journal and every store,
-// so the seam is a plain call).
+// so the seam is a plain call). `nvm_store_full` answers why the last put was refused (the
+// journal's space, nvm.PutRefusal.for_space), which a refused 0x14 or parameter 0x2E answers 0x22
+// rather than 0x72 (uds.store_refusal_nrc); the 0x27 state answers no NRC and does not ask it.
 fn nvm_store_fns(m Model) []string {
-	if !fault_persist_on(m) && !(m.target.threadx && m.params.len > 0) && !sa_persist_on(m) {
+	answers := fault_persist_on(m) || (m.target.threadx && m.params.len > 0) // a store whose refusal is an NRC
+	if !answers && !sa_persist_on(m) {
 		return []string{}
 	}
-	return [
+	mut g := [
 		'',
 		'fn nvm_store_put(ctx voidptr, id u16, data &u8, len u16) bool {',
 		'\treturn g_nvm.put(id, data, len)',
@@ -480,6 +483,10 @@ fn nvm_store_fns(m Model) []string {
 		'\treturn g_nvm.get(id, out, cap)',
 		'}',
 	]
+	if answers {
+		g << ['', 'fn nvm_store_full(ctx voidptr) bool {', '\treturn g_nvm.last_refusal.for_space()', '}']
+	}
+	return g
 }
 
 // fault_store_lines: the memory wired to the journal and restored from it — after its slots are
@@ -492,6 +499,7 @@ fn fault_store_lines(m Model, fmem string, ind string) []string {
 		'${ind}${fmem}.store = fault.Store{',
 		'${ind}\tput:      nvm_store_put',
 		'${ind}\tget:      nvm_store_get',
+		'${ind}\tfull:     nvm_store_full',
 		'${ind}\tid:       u16(0x${m.fault_status_id.hex()}) // the status image',
 		'${ind}\tretry_us: u64(${m.nvm.min_write_ms}) * 1000 // a refused write waits the system floor',
 		'${ind}}',
@@ -864,7 +872,8 @@ fn nvm_sat_restore_lines(m Model, doc toml.Doc, thr string) []string {
 // write may be a DoIP tester's 0x14, whose answer waits in the mailbox for the network threads
 // below this one — a 1-2 s erase here would hold it past P2 (REQ-DIAG-064). A sector a
 // compaction left behind waits for the next sleep edge; until then a refused put or marker
-// stays refused (0x72 to a tester; the 0x27 state is held in RAM and retried), never erased for.
+// stays refused (0x22 to a tester, uds.store_refusal_nrc; the 0x27 state is held in RAM and
+// retried), never erased for.
 fn nvm_flush_choreo(m Model, ioc_idx map[string]int, ind string, erase bool) []string {
 	mut g := []string{}
 	g << '${ind}mut nvm_flush_ok := true'

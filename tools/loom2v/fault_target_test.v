@@ -221,13 +221,13 @@ fn test_the_fault_memory_is_persisted_in_the_journal() {
 	assert code == 0, out
 	in_order(glue, ['fn comm_thread_entry', 'g_fmem.slots[0].priority = u8(7)', 'g_fmem.slots[0].freeze[0] = u16(0xf190)',
 		'g_fmem.slots[0].freeze_len[0] = u8(6)', 'g_fmem.slots[0].nfreeze = 1', 'g_fmem.slots[0].snap_id = u16(0x',
-		'g_fmem.cap = 1', 'g_fmem.init()', 'g_fmem.store = fault.Store{', 'g_fmem.restore()',
+		'g_fmem.cap = 1', 'g_fmem.init()', 'g_fmem.store = fault.Store{', 'full:     nvm_store_full', 'g_fmem.restore()',
 		'g_fmem.cycle_start() // [fault_memory] cycle = "power"', 'for {',
 		'g_fmem.consume(0, g_frep_load_slow.r[0])', 'if g_fmem.capture_due() {', 'g_diag.refresh_now()',
 		'g_fmem.capture(&g_diag.server)', 'g_fmem.persist(t1, false)',
 		'if g_diag.reset_due() != 0 {', 'g_fmem.consume(0, g_frep_load_slow.r[0])',
 		'if !g_fmem.persist(t1, true) {', 'C.diag_sys_reset()', 'fn nvm_store_put(_ voidptr, id u16, data &u8, len u16) bool {',
-		'return g_nvm.put(id, data, len)', 'pub fn boot() {', 'if g_nvm.mounted {',
+		'return g_nvm.put(id, data, len)', 'return g_nvm.last_refusal.for_space()', 'pub fn boot() {', 'if g_nvm.mounted {',
 		'keep := [', '/* the fault memory status */', 'g_nvm.prune(&keep[0], 3)',
 		'g_nvm.erase_pending() // the boot quiet point (no NM)',
 		'if g_nvm.free_records() < g_nvm.slots() / 2 && g_nvm.compact() {', 'g_nvm.erase_pending()'])

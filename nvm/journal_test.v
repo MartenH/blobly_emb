@@ -231,8 +231,10 @@ fn test_transient_program_failure_burns_slot() {
 	f.cut_bytes = 0
 	data := [u8(2), 0, 0, 0]
 	assert !j.put(1, &data[0], 4)
+	assert j.last_refusal == .flash && !j.last_refusal.for_space() // the flash failed: 0x72 to a tester
 	assert getv(j, 1)? == 1
 	putv(mut j, 1, 3) // the retry lands in a fresh slot
+	assert j.last_refusal == .none
 	assert getv(j, 1)? == 3
 	mut j2 := remount(mut f)
 	assert getv(j2, 1)? == 3
@@ -276,6 +278,7 @@ fn test_capacity_refusal() {
 		}
 	}
 	assert refused
+	assert j.last_refusal == .capacity && j.last_refusal.for_space() // nothing failed
 	assert !f.double_prog
 	mut j2 := remount(mut f)
 	assert getv(j2, 1)? == 1 // what fit stays consistent
@@ -460,6 +463,7 @@ fn test_misuse_guards() {
 	data := [u8(1), 2, 3, 4]
 	mut out := [4]u8{}
 	assert !j.put(1, &data[0], 4)
+	assert j.last_refusal == .invalid && !j.last_refusal.for_space()
 	assert j.get(1, &out[0], 4) == 0
 	assert !j.compact()
 	assert !j.mark_clean()
@@ -674,13 +678,71 @@ fn test_no_erase_in_append_path() {
 	// active full AND partner dirty: the put must refuse, not erase inline
 	data := [u8(9), 0, 0, 0]
 	assert !j.put(2, &data[0], 4)
+	// full until the erase point, not a flash failure: a tester is answered 0x22, never 0x72
+	assert j.last_refusal == .full_until_erase && j.last_refusal.for_space()
+	assert !j.put(2, &data[0], 4) // and it stays so while the partner waits (no erase in between)
+	assert j.last_refusal == .full_until_erase
 	assert f.erases == erases, 'a put erased' // REQ-DIAG-062: no write a request causes waits on one
 	assert j.erase_pending() // the quiet point frees the partner
 	putv(mut j, 2, 888) // retry succeeds (compact without erase)
+	assert j.last_refusal == .none
 	mut j2 := remount(mut f)
 	assert getv(j2, 2)? == 888
 	assert getv(j2, 1)? == 1
 	assert !f.double_prog
+}
+
+// Freeing the partner failing on the flash (its erase, or an inline compaction's copy) is not the
+// journal waiting for its erase point: every put that then finds the active sector full answers
+// .flash (0x72 to a tester), not .full_until_erase, until an erase succeeds.
+fn test_a_failed_free_is_a_flash_refusal() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 1, 1)
+	for j.free_records() > 0 {
+		putv(mut j, 2, j.free_records())
+	}
+	// the inline compaction into the clean partner fails its copy: the first refusal is the flash
+	f.cut_call = f.calls + 1
+	f.cut_bytes = 0
+	data := [u8(9), 0, 0, 0]
+	assert !j.put(2, &data[0], 4)
+	assert j.last_refusal == .flash
+	f.cut_call = 0xFFFF_FFFF
+	// the partner now waits for an erase, but its freeing already failed: still the flash
+	assert !j.put(2, &data[0], 4)
+	assert j.last_refusal == .flash && !j.last_refusal.for_space()
+	// the erase point's erase fails too: still the flash
+	f.erase_cut = true
+	assert !j.erase_pending()
+	assert !j.put(2, &data[0], 4)
+	assert j.last_refusal == .flash
+	// an erase that succeeds ends it
+	assert j.erase_pending()
+	putv(mut j, 2, 888) // the inline compaction into the erased partner
+	assert j.last_refusal == .none
+	for j.free_records() > 0 {
+		putv(mut j, 2, 7)
+	}
+	assert !j.put(2, &data[0], 4)
+	assert j.last_refusal == .full_until_erase // nothing failed since: the erase point recovers
+	mut j2 := remount(mut f)
+	assert getv(j2, 2)? == 7
+	assert getv(j2, 1)? == 1
+	assert !f.double_prog
+}
+
+// A journal at its sequence ceiling is frozen for good: the refusal says so, and it is not one of
+// space (an erase point frees nothing).
+fn test_seq_ceiling_refusal_is_not_of_space() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 1, 1)
+	j.max_seq = seq_ceiling
+	data := [u8(2), 0, 0, 0]
+	assert !j.put(1, &data[0], 4)
+	assert j.last_refusal == .seq_ceiling && !j.last_refusal.for_space()
+	assert getv(j, 1)? == 1
 }
 
 // ---- v2: keyed ids + chained values -----------------------------------------

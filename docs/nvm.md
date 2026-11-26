@@ -528,7 +528,24 @@ waiting. A sector only needs erasing after a compaction, and the `bus_sleep`
 entry edge erases whatever the run left, so in sleep the partner is clean
 unless a sleep's writes fill a whole sector. If one does, the next sleep edge
 erases it, and until then a put or marker the journal refuses stays refused:
-0x72 to a tester, an unclean claim for a value (the 0x27 state is held in RAM and retried, below).
+0x22 to a tester, an unclean claim for a value (the 0x27 state is held in RAM and retried, below).
+
+**Why a put was refused.** `put` keeps its bool; beside it `Journal.last_refusal`
+(`nvm.PutRefusal`, `.none` after an accepted put) says why: `invalid` (not
+mounted, a reserved id or length), `capacity` (the live set after the write would
+not fit one sector with rewrite headroom), `full_until_erase` (the active sector
+is full and its partner waits for `erase_pending()`), `seq_ceiling` (frozen for
+good), `pool` (no RAM-table row), `flash` (a program, or an inline compaction's
+copy, that read-back could not confirm — or the active sector full while freeing
+its partner has failed: an erase, a compaction's or a re-homing's copy, until an
+erase succeeds, `free_failed`, so a failing erase is never read as a journal
+that only waits). `for_space()` is true for `capacity` and `full_until_erase`:
+nothing failed. Only `full_until_erase` is recovered by an erase point; a
+`capacity` refusal is the live set itself, which a compaction keeps. The generated seam hands it to the fault memory and the
+parameters (`nvm_store_full`, the stores' `full`), which answer a refused 0x14 or
+0x2E by `uds.store_refusal_nrc`: 0x22 for space, 0x72 otherwise
+(docs/diagnostics.md, "Stored before the answer"). The 0x27 state answers no NRC
+and does not ask.
 
 ## The 0x27 failed-key state
 

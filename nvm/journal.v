@@ -66,6 +66,27 @@ const plen_mask = u16(0x03FF)
 // reachable through flash endurance; enforced, not assumed.
 const seq_ceiling = u32(0xFFFF_FF00)
 
+// PutRefusal is why the last put() returned false (Journal.last_refusal; .none after an accepted
+// put). It sits BESIDE put's bool, which keeps its contract: a caller that only needs "stored or
+// not" reads nothing else, and one that answers a tester tells a journal waiting for its erase
+// from a flash that failed (for_space).
+pub enum PutRefusal {
+	none             // the last put was accepted
+	invalid          // not mounted, a reserved id, or a length the journal cannot hold
+	capacity         // the live set after the write would not fit one sector with rewrite headroom
+	full_until_erase // the active sector is full and its partner waits for erase_pending()
+	seq_ceiling      // the sequence counter is at its ceiling: the journal is frozen for good
+	pool             // no RAM-table row for a new id, or ids were dropped at mount
+	flash            // a program (or the copy of an inline compaction) failed and read-back could not confirm it, or the active sector is full and freeing its partner failed (free_failed)
+}
+
+// for_space: the refusal is the journal's space, not the flash — full until the next erase point
+// compacts it (a reset, a sleep edge, the boot), or a write the capacity cannot take. Nothing
+// failed; a tester's write may succeed after an erase point (or with a smaller live set).
+pub fn (r PutRefusal) for_space() bool {
+	return r == .full_until_erase || r == .capacity
+}
+
 // Entry is the mounted latest-value of one block (a RAM pool row). Plain
 // values live inline in data[]; chained values are a REFERENCE into flash
 // (append-only flash is immutable, so the reference is never stale).
@@ -110,6 +131,10 @@ pub mut:
 	pending_erase int
 	// the non-active sector is KNOWN fully erased (compact may skip its erase)
 	partner_clean bool
+	// a step freeing the partner (an erase, a compaction's or a re-homing's copy) failed since the
+	// last erase that succeeded: a put finding the active sector full then answers .flash, not
+	// .full_until_erase, since the next erase point may not recover it. Owned by mount().
+	free_failed bool
 	// mount verdict: the previous session ended with the clean marker as the
 	// newest record (slept orderly). Fresh/empty journal counts as clean.
 	clean bool
@@ -122,6 +147,8 @@ pub mut:
 	pool_overflow bool
 	// reentry guard: compact()'s own copy appends must never re-compact
 	compacting bool
+	// why the last put() returned false; .none after an accepted one (written by put alone)
+	last_refusal PutRefusal
 }
 
 fn (j &Journal) sector_addr(s int) u32 {
@@ -212,6 +239,7 @@ pub fn (mut j Journal) mount() bool {
 	j.max_seq = 0
 	j.pending_erase = -1
 	j.pool_overflow = false
+	j.free_failed = false
 	mut newest_is_marker := true // empty journal = clean
 	mut newest_seq := u32(0)
 	mut any_valid := false
@@ -429,12 +457,12 @@ fn (mut j Journal) adopt_chain(cs ChainScan, s int) {
 // put appends a new value (plain <= 20 B, chained <= chain_data_max). The pool
 // is updated ONLY after the full flash append succeeds; the write ATTEMPT
 // dirties the tail regardless of outcome. put() == false means UNCONFIRMED
-// only when read-back could not confirm a landed record.
+// only when read-back could not confirm a landed record. Why a put was
+// refused is last_refusal, set by every call.
 pub fn (mut j Journal) put(block u16, data &u8, len u16) bool {
-	if !j.mounted || block == marker_block || block == id_reserved {
-		return false
-	}
-	if len == 0 || len > chain_data_max {
+	if !j.mounted || block == marker_block || block == id_reserved || len == 0
+		|| len > chain_data_max {
+		j.last_refusal = .invalid
 		return false
 	}
 	// the RESULTING live set (marker slot included via live_records) must fit
@@ -460,12 +488,15 @@ pub fn (mut j Journal) put(block u16, data &u8, len u16) bool {
 		}
 	}
 	if j.live_records() - old_rec + new_rec + worst > j.slots() {
+		j.last_refusal = .capacity
 		return false
 	}
-	if u32(len) <= data_max {
-		return j.append_plain(block, data, len)
+	j.last_refusal = if u32(len) <= data_max {
+		j.append_plain(block, data, len)
+	} else {
+		j.append_chain(block, data, len)
 	}
-	return j.append_chain(block, data, len)
+	return j.last_refusal == .none
 }
 
 // dirty_tail_now: called by the append paths immediately before the first
@@ -654,8 +685,10 @@ pub fn (mut j Journal) compact() bool {
 			return false
 		}
 		if !j.ops.erase(j.ops.ctx, j.sector_addr(target), j.cfg.size) {
+			j.free_failed = true
 			return false
 		}
+		j.free_failed = false
 	}
 	old_active := j.active
 	old_cursor := j.cursor
@@ -689,6 +722,7 @@ pub fn (mut j Journal) compact() bool {
 		j.cursor = old_cursor
 		j.pending_erase = target
 		j.partner_clean = false
+		j.free_failed = true
 		return false
 	}
 	for i in 0 .. max_blocks {
@@ -723,9 +757,11 @@ pub fn (mut j Journal) erase_pending() bool {
 		return false
 	}
 	if !j.ops.erase(j.ops.ctx, j.sector_addr(j.pending_erase), j.cfg.size) {
+		j.free_failed = true
 		return false
 	}
 	j.partner_clean = true
+	j.free_failed = false
 	j.pending_erase = -1
 	return true
 }
@@ -758,6 +794,7 @@ fn (mut j Journal) rehome_strays(from int) bool {
 		if j.table[i].present && j.table[i].sector == from {
 			off, seq, ok := j.emit_entry(i)
 			if !ok {
+				j.free_failed = true // fit-checked above: a program failed
 				return false // burned slot(s); retry at the next quiet point
 			}
 			j.table[i].sector = j.active
@@ -779,27 +816,32 @@ fn (mut j Journal) rehome_strays(from int) bool {
 // --- internals -------------------------------------------------------------
 
 // ensure_space: room for `n` contiguous records (a chain never straddles a
-// compaction). Outside compaction a full sector triggers the inline compact
-// ONLY when it is erase-free (clean partner) — quiet-point discipline.
-fn (mut j Journal) ensure_space(n u32) bool {
+// compaction), or why there is none (.none = there is). Outside compaction a
+// full sector triggers the inline compact ONLY when it is erase-free (clean
+// partner) — quiet-point discipline.
+fn (mut j Journal) ensure_space(n u32) PutRefusal {
 	if j.max_seq >= seq_ceiling {
-		return false // seq would wrap; the journal freezes rather than lie
+		return .seq_ceiling // seq would wrap; the journal freezes rather than lie
 	}
 	if j.cursor + n * rec_size > j.cfg.size {
 		if j.compacting {
-			return false // a copy overflowing the target = capacity bug; refuse
+			return .capacity // a copy overflowing the target = capacity bug; refuse
 		}
 		if !j.partner_clean {
-			return false // no erases in the append path; erase_pending() frees it
+			// no erases in the append path; erase_pending() frees it — unless freeing it has
+			// already failed on the flash, which an erase point may not recover
+			return if j.free_failed { PutRefusal.flash } else { PutRefusal.full_until_erase }
 		}
 		if !j.compact() {
-			return false
+			// put's capacity check already held the live set to one sector, so a compaction
+			// that fails here either may not run (ids dropped at mount) or failed a copy
+			return if j.pool_overflow { PutRefusal.pool } else { PutRefusal.flash }
 		}
 		if j.cursor + n * rec_size > j.cfg.size {
-			return false
+			return .capacity
 		}
 	}
-	return true
+	return .none
 }
 
 // emit_entry writes entry i's CURRENT value as fresh records into the active
@@ -807,7 +849,7 @@ fn (mut j Journal) ensure_space(n u32) bool {
 // location). Returns (start offset, seq, ok).
 fn (mut j Journal) emit_entry(i int) (u32, u32, bool) {
 	if !j.table[i].chained {
-		if !j.ensure_space(1) {
+		if j.ensure_space(1) != .none {
 			return 0, 0, false
 		}
 		start := j.cursor
@@ -823,7 +865,7 @@ fn (mut j Journal) emit_entry(i int) (u32, u32, bool) {
 	// chained: copy part payloads verbatim from the immutable old location,
 	// re-encoded under one fresh seq at the new cursor.
 	nparts := chain_parts(j.table[i].len)
-	if !j.ensure_space(nparts) {
+	if j.ensure_space(nparts) != .none {
 		return 0, 0, false
 	}
 	old_base := j.sector_addr(j.table[i].sector) + j.table[i].ref_off
@@ -851,13 +893,14 @@ fn (mut j Journal) emit_entry(i int) (u32, u32, bool) {
 
 // append_plain: a new <= 20 B value from the caller's buffer; pool installed
 // only on success (an inline compact copies the OLD value by construction).
-fn (mut j Journal) append_plain(block u16, data &u8, len u16) bool {
-	if !j.ensure_space(1) {
-		return false
+fn (mut j Journal) append_plain(block u16, data &u8, len u16) PutRefusal {
+	room := j.ensure_space(1)
+	if room != .none {
+		return room
 	}
 	i := j.slot_for(block)
 	if i < 0 {
-		return false // pool full (generation-gated)
+		return .pool // pool full (generation-gated)
 	}
 	j.dirty_tail_now()
 	mut rec := [32]u8{}
@@ -865,7 +908,7 @@ fn (mut j Journal) append_plain(block u16, data &u8, len u16) bool {
 	j.max_seq = seq
 	encode_record(mut rec, block, len, seq, data)
 	if !j.program_slot(&rec[0]) {
-		return false
+		return .flash
 	}
 	j.table[i].present = true
 	j.table[i].id = block
@@ -876,21 +919,22 @@ fn (mut j Journal) append_plain(block u16, data &u8, len u16) bool {
 	}
 	j.table[i].seq = seq
 	j.table[i].sector = j.active
-	return true
+	return .none
 }
 
 // append_chain: a new > 20 B value as contiguous parts under ONE seq; the
 // whole-value CRC32 lands in the LAST part (completion evidence last). The
 // pool is installed only after every part is durable — a cut anywhere leaves
 // an incomplete run and the previous complete value wins at mount.
-fn (mut j Journal) append_chain(block u16, data &u8, len u16) bool {
+fn (mut j Journal) append_chain(block u16, data &u8, len u16) PutRefusal {
 	nparts := chain_parts(len)
-	if !j.ensure_space(nparts) {
-		return false
+	room := j.ensure_space(nparts)
+	if room != .none {
+		return room
 	}
 	i := j.slot_for(block)
 	if i < 0 {
-		return false
+		return .pool
 	}
 	j.dirty_tail_now()
 	whole := boot.crc32(data, u32(len))
@@ -924,7 +968,7 @@ fn (mut j Journal) append_chain(block u16, data &u8, len u16) bool {
 		lenf := chain_flag | (u16(k) << part_shift) | u16(p)
 		encode_record_raw(mut rec, block, lenf, seq, &payload[0])
 		if !j.program_slot(&rec[0]) {
-			return false
+			return .flash
 		}
 	}
 	j.table[i].present = true
@@ -934,11 +978,11 @@ fn (mut j Journal) append_chain(block u16, data &u8, len u16) bool {
 	j.table[i].seq = seq
 	j.table[i].sector = j.active
 	j.table[i].ref_off = start
-	return true
+	return .none
 }
 
 fn (mut j Journal) append_marker() bool {
-	if !j.ensure_space(1) {
+	if j.ensure_space(1) != .none {
 		return false
 	}
 	mut rec := [32]u8{}

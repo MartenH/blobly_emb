@@ -29,7 +29,7 @@ security level its row names (unlocked by 0x27, or by 0x29 on an authenticating 
 |---|---|---|
 | 0x10 | **DiagnosticSessionControl**<br>01 default, 03 extended, 04 safety. 02 programming only as the bootloader handoff of a `[boot]` node, else 0x12. The answer carries P2server_max 50 ms and P2\*server_max 5 s | other (OEM) sessions |
 | 0x11 | **ECUReset**<br>01 hardReset, 03 softReset: answered, then performed, never performed unanswered | 02 keyOffOnReset, 04 / 05 rapid power shutdown |
-| 0x14 | **ClearDiagnosticInformation**<br>all DTCs (0xFFFFFF) or one DTC. On a target, stored before the answer (0x72 otherwise) | DTC groups other than "all"; the memorySelection byte |
+| 0x14 | **ClearDiagnosticInformation**<br>all DTCs (0xFFFFFF) or one DTC. On a target, stored before the answer (0x22 when the journal is full until its next erase point, 0x72 when the flash failed) | DTC groups other than "all"; the memorySelection byte |
 | 0x19 | **ReadDTCInformation**<br>01, 02, 03, 04, 06, 0A | every other sub-function (05, 07–09, 0B–19, 42, 55, …) |
 | 0x22 | **ReadDataByIdentifier**<br>several DIDs per request; up to 16 DIDs of up to 32 bytes: constants, live signals, parameters and their status, `tx_saturations`; 0xF186 (the active session) and, with `[boot]`, 0xF195 (the running image's version), served by the server itself. A live DID of a controlled signal reads the value published (the FB's held to its range as the encoder sends it; the initial value before the FB's first publish) | ISO identification DIDs not declared as constants |
 | 0x27 | **SecurityAccess**<br>levels 1–8, a 4-byte seed, attempt limit and lockout delay, the failed-key count kept across a reset — on a node with `access = "seed_key"` (the default) | a power-up delay; a securityAccessDataRecord is accepted and ignored; on a node with `access = "authentication"` (answered 0x11) |
@@ -327,7 +327,8 @@ unanswered**.
   `write` gate. Without either it is read-only.
 - **0x2E accepts exactly the DID's declared size** and never changes it. The checks run in this
   order: the service row (0x7F, 0x33), the DID's session (0x31), its level (0x33), the length
-  (0x13), then for a parameter its conditions (0x22), range (0x31) and the journal (0x72).
+  (0x13), then for a parameter its conditions (0x22), range (0x31) and the journal (0x22 for its
+  space, 0x72 for the flash — below, "Stored before the answer").
 - **0xF186** (active session) and, with `[boot]`, **0xF195** (the running image's version, which
   the bootloader verified) are the server's own; declaring them is refused.
 
@@ -541,8 +542,16 @@ not queued, while the physical connection is busy ([can-tp.md](can-tp.md) §3.6)
   Erases happen at boot, at an NM sleep edge and after an ECUReset's answer (§3.3, "Where writes
   happen").
 - **Stored before the answer.** If the journal refuses the write, the previous state stands and
-  the request answers **0x72** generalProgrammingFailure, never a positive response for data that
-  was not stored.
+  the request is answered negatively, never positively for data that was not stored — by one rule
+  for every such writer (`uds.store_refusal_nrc`, fed by the journal's `last_refusal`): **0x22**
+  conditionsNotCorrect when the refusal is the journal's space — full until its next erase point
+  compacts it (a reset, an NM sleep edge, the boot), or a write the live set cannot take — and
+  **0x72** generalProgrammingFailure when the flash failed (a program read-back could not confirm,
+  or freeing the full sector failed: an erase, or a compaction's copy, until an erase succeeds) or
+  the journal cannot store at all. A tester reading 0x22 for a journal full until its erase point
+  resets the node and retries; a live set that cannot take the write is a configuration bound the
+  generator's capacity check should have prevented, and a reset does not change it. 0x72 is the
+  one that says the flash may be at fault. Neither has a status DID or DTC of its own.
 
 #### CommunicationControl (0x28)
 
@@ -841,7 +850,7 @@ re-runs the flush **without its erase** (REQ-NVM-015).
   sector rollover left one pending (a stall of 1–2 s just before the reset), never otherwise at run
   time: an erase on a single-bank chip stalls every instruction fetch. Boot leaves at least half a
   sector free; past a second fill in one run, writes are refused until the next boot (a 0x14 then
-  answers 0x72).
+  answers 0x22; on zone_a that is about 350 clears in one power cycle, emb#393).
 
 **Worst-case comm-thread stall** per pass: one flash program per 32-byte record, at most the
 unwritten snapshots, one image (up to 17 records for 32 faults) and the tombstones. A write that
@@ -881,7 +890,7 @@ param_status = true                         # one byte per parameter: 0 default,
 | Identity in the journal | the block id is the parameter's DID (or a pinned `nvm_id`), never a hash. The record states its structure exactly: format, `version`, field count, each field's type, then the values |
 | A firmware update | restored only when the whole header matches. Renaming a field keeps the coding; a changed type, count or `version` reverts to the default. Same-type fields reordered are taken by position, so bump `version` when meaning changes |
 | Range | checked again at restore: a value outside a narrowed range runs the default and reads `reverted`; a widened range keeps the coding |
-| 0x2E order | the service row, the DID's session (0x31) and level (0x33), then the length (0x13), the range (0x31), then the journal. A refusal there is 0x72 and changes nothing in this run; the stored value is unchanged too unless the flash took the record and only its read-back failed, so after a 0x72 the next write is stored whatever it holds |
+| 0x2E order | the service row, the DID's session (0x31) and level (0x33), then the length (0x13), the range (0x31), then the journal. A refusal there is 0x22 (the journal full until its next erase point) or 0x72 (the flash) and changes nothing in this run; the stored value is unchanged too unless the flash took the record and only its read-back failed, so after a refusal the next write is stored whatever it holds |
 | An unchanged value | writes nothing, so a tester polling 0x2E costs no wear. The first write of a never-coded parameter is stored even when it equals the default |
 | When it takes effect | `next_dispatch`: in the pass that wrote it. `reset`: from the next power-up or ECUReset. 0x22 reads the coded value either way |
 | Status DID | 0 default (nothing stored), 1 coded, 2 reverted (another layout, out of range, or the journal unreadable) |
@@ -966,7 +975,7 @@ param_status = true                         # one byte per parameter: 0 default,
 | A snapshot is never a side door around a DID's gate | `tools/loom2v/fault_target_test.v` `test_snapshot_declarations_are_checked` |
 | Every 0x19 answer, and every DID answer and write, fits the node's `max_message` | `tools/loom2v/diag_target_test.v` (REQ-CAN-TP-022) |
 | A power cut anywhere leaves one coherent memory; a lowered `entries` keeps the most important snapshots | `comm/fault/persist_test.v` power-cut fuzz |
-| A refused 0x14 or parameter 0x2E answers 0x72 and changes nothing live; nothing stored either, unless the flash took the record and only its read-back failed | `persist_test.v` `test_a_refused_clear_answers_0x72_and_changes_nothing`; `comm/param/param_test.v` `test_a_refused_write_answers_0x72_and_changes_nothing` |
+| A refused 0x14 or parameter 0x2E changes nothing live, answering 0x72 when the flash failed and 0x22 when the journal is full until its next erase point; nothing stored either, unless the flash took the record and only its read-back failed | `persist_test.v` `test_a_refused_clear_answers_0x72_and_changes_nothing`, `test_a_clear_refused_by_a_full_journal_answers_0x22_and_changes_nothing`, `test_a_clear_held_by_a_refused_snapshot_answers_by_its_refusal`; `comm/param/param_test.v` `test_a_refused_write_answers_0x72_and_changes_nothing`, `test_a_write_refused_by_a_full_journal_answers_0x22_and_changes_nothing`; `nvm/journal_test.v` (`last_refusal` per cause; `test_a_failed_free_is_a_flash_refusal`) |
 | An automatic write the journal refuses is retried, paced | `persist_test.v` `test_a_refused_write_is_retried_after_the_pause` |
 | Counters have fixed widths and saturate | `comm/fault/records_test.v` `test_counters_saturate_at_their_width` |
 | A parameter's record is restored only under its exact header, and revalidated against the current range | `comm/param/param_test.v`; `tools/loom2v/param_target_test.v` |

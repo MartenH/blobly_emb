@@ -39,10 +39,12 @@ module param
 // record of the wrong length — the server's check on the DID's declared size, which bind sets to the
 // parameter's width — 0x31 for a field out of range), put into the journal, and only once
 // the journal has accepted it does the 0x22 record, the status, and — for `apply = next_dispatch`
-// — the FB's input change. A refused put answers 0x72 generalProgrammingFailure and leaves this
+// — the FB's input change. A refused put answers uds.store_refusal_nrc's NRC — 0x22
+// conditionsNotCorrect when the journal is full until its next erase point (or the live set cannot
+// take the write), 0x72 generalProgrammingFailure when the flash failed — and leaves this
 // run's live value, record and status as they were; the durable value too, unless the flash took
 // the record and only its read-back failed (the journal's own limit: `put` false is UNCONFIRMED) —
-// so after a 0x72 the next write is stored whatever it holds, and re-writing the old value is how a
+// so after a refusal the next write is stored whatever it holds, and re-writing the old value is how a
 // tester makes the old value certain again. A write of the value the journal already holds writes
 // nothing (a tester polling 0x2E with an unchanged value costs no wear).
 //
@@ -72,12 +74,14 @@ pub const status_reverted = u8(2) // a stored value was refused at restore (anot
 // range, or the journal unreadable): the compiled default is in use
 
 // Store is the journal seam: `put` replaces a block's value (false = refused, nothing changed),
-// `get` reads it (its length, 0 = absent).
+// `get` reads it (its length, 0 = absent), `full` says why the last put was refused — true for the
+// journal's space (nvm.PutRefusal.for_space; nil = never for space).
 pub struct Store {
 pub mut:
-	ctx voidptr
-	put fn (ctx voidptr, id u16, data &u8, len u16) bool = unsafe { nil }
-	get fn (ctx voidptr, id u16, out &u8, cap u16) u16 = unsafe { nil }
+	ctx  voidptr
+	put  fn (ctx voidptr, id u16, data &u8, len u16) bool = unsafe { nil }
+	get  fn (ctx voidptr, id u16, out &u8, cap u16) u16 = unsafe { nil }
+	full fn (ctx voidptr) bool = unsafe { nil }
 }
 
 // Field is one field of a parameter: its width on the wire (1, 2 or 4 bytes; a bool is 1), whether
@@ -349,7 +353,8 @@ pub fn (mut ps Params) write(did u16, data &u8, n int) u8 {
 			// a read-back that failed), and the next start would read it — so the next write is
 			// stored whatever it holds, the old value included, and supersedes it
 			p.has_stored = false
-			return nrc_general_programming_failure
+			return uds.store_refusal_nrc(ps.store.full != unsafe { nil }
+				&& ps.store.full(ps.store.ctx))
 		}
 		ps.wrote++
 		for f in 0 .. p.nfields {
