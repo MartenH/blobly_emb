@@ -140,7 +140,7 @@ derives = "SYS-REQ-NVM-001"
 [[req]]
 id = "REQ-NVM-016"
 title = "A cycle's writes fit between two erase points"
-text = "Storage reclamation that erases flash shall run only at an erase point — boot on a node without network management, a sleep edge on one with it, the flush after an ECU reset's answer — never inside a run, where a sector erase stalls the flash bank. The room the storage takes between two erase points shall be computed when the configuration is generated, from the same rule the storage applies at boot, and generation shall fail when one operation cycle's writes at the declared rates exceed it; the report states that room, and how many fault-memory clears at their worst it holds."
+text = "Storage reclamation that erases flash shall run only at an erase point — boot on a node without network management, a sleep edge on one with it, the flush after an ECU reset's answer — never inside a run, where a sector erase stalls the flash bank. The room the storage takes between two erase points shall be computed when the configuration is generated, from the same rule the storage applies at boot, and generation shall fail when the average operation cycle's writes at the declared rates exceed it; the report states that room, and how many fault-memory clears at their worst fit beside the average cycle."
 status = "draft"
 method = "analysis"
 asil = "QM"

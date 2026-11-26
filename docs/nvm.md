@@ -437,14 +437,21 @@ boot instead would raise a run's room by at most half a sector and cost an erase
 at the default 144 a day, the pair's endurance in months.
 
 **What is built instead: the room is a number at generation.** The wear report states it, and
-generation fails when one operation cycle's writes at the `[nvm.assume]` rates exceed it (REQ-NVM-016)
+generation fails when the average operation cycle's writes at the `[nvm.assume]` rates exceed it (REQ-NVM-016)
 — traffic the wear check passes when cycles are rare (a node powered for a day writes a day's
 traffic into one run). With the default rates system_full prints (`tools/loom2v/wear_test.v`):
 
-- **zone_a** (a power-up or an ECUReset): at least 6132 records, 41 a cycle at the assumed rates —
-  191 0x14 at their worst, 32 records each (the image, every DTC's requalification, the snapshot).
-- **domain** (a sleep edge or an ECUReset): at least 4088 records, 120 a cycle — 681 0x14 at their
-  worst; **sysnode**: 4094, 3 a cycle.
+- **zone_a** (a power-up or an ECUReset): at least 6132 records, 41 an average cycle at the assumed
+  rates — room beside it for 190 0x14 at their worst, 32 records each (the image, every DTC's
+  requalification, the snapshot).
+- **domain** (a sleep edge or an ECUReset): at least 4088 records, 120 an average cycle — room for
+  661 0x14 at their worst while awake (in bus sleep each write lays a clean marker too);
+  **sysnode**: 4094, 3 an average cycle.
+
+The check holds the AVERAGE cycle to the room — necessary, not sufficient: the rates are per day,
+and one cycle may carry a day's clears, which the 0x14 count beside it bounds. On an NM node a
+power loss before the sleep edge carries the run on into the next cycle, since its boot erases
+nothing (a just-woken node must not stall, nor the H755's CM4): the room then spans both.
 
 **Bench practice.** A loop that clears and re-fails faults on a node without NM fills its run's room:
 zone_a's journal filled after about 350 clears of `faults_zone_a.lua` (each lighter than the worst).

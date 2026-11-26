@@ -214,8 +214,7 @@ fn new_rig(cap int) &Rig {
 	return r
 }
 
-// reboot: the journal mounted and its pending erase done (the boot quiet point of a node without
-// NM), the memory configured, restored, and its power cycle begun — what the generated comm thread
+// reboot: the journal mounted and its boot erase point run (a node without NM: boot_erase_point), the memory configured, restored, and its power cycle begun — what the generated comm thread
 // does at start. Slots 0..2 keep a snapshot (F1A0, 4 B + F190, 18 B: a chained block); slot 3 none.
 fn (mut r Rig) reboot() {
 	r.restart(true)
@@ -239,7 +238,7 @@ fn (mut r Rig) restart(power_cycle bool) {
 		size:   pf_sector
 	}
 	assert r.j.mount()
-	r.j.erase_pending()
+	r.j.boot_erase_point()
 	r.m = Memory{}
 	for k in 0 .. r.n {
 		i := r.order[k]
@@ -657,7 +656,9 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 	mut flips := 0
 	for run in 0 .. 40 {
 		mut r := new_rig(2)
-		mut captured := map[string][]u8{} // dtc:stamp -> the record captured
+		// dtc:stamp:structure -> the record captured; a stamp restarts under a new schema, whose
+		// blocks are other blocks, so the stated structure is part of the key
+		mut captured := map[string][]u8{}
 		mut schema_of := map[string]bool{} // dtc:record -> captured under the swapped schema
 		mut now := u64(1)
 		for step in 0 .. 300 {
@@ -752,7 +753,12 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 			for k in 0 .. r.m.cap {
 				e := r.m.entries[k]
 				if e.used {
-					key := '${r.m.slots[e.slot].dtc}:${e.stamp}'
+					s := r.m.slots[e.slot]
+					mut structure := ''
+					for f in 0 .. s.nfreeze {
+						structure += '${s.freeze[f]:04x}/${s.freeze_len[f]}'
+					}
+					key := '${s.dtc}:${e.stamp}:${structure}'
 					schema_of['${r.m.slots[e.slot].dtc}:${e.data[..e.len].hex()}'] = r.swapped // RAM holds the schema in force
 					captured[key] = e.data[..e.len].clone()
 				}
@@ -796,7 +802,12 @@ fn test_power_cuts_anywhere_leave_one_coherent_memory() {
 				assert n == r.m.block_len(i), '${ctx}: slot ${i} claims a snapshot the store does not hold (${n} B)'
 				dtc := u32(blk[0]) << 16 | u32(blk[1]) << 8 | u32(blk[2])
 				stamp := u32(blk[3]) << 24 | u32(blk[4]) << 16 | u32(blk[5]) << 8 | u32(blk[6])
-				key := '${dtc}:${stamp}'
+				mut structure := ''
+				for f in 0 .. int(blk[8]) {
+					o := snap_fixed + f * snap_per_did
+					structure += '${u16(blk[o]) << 8 | u16(blk[o + 1]):04x}/${blk[o + 2]}'
+				}
+				key := '${dtc}:${stamp}:${structure}'
 				assert dtc == r.m.slots[i].dtc && key in captured
 					&& captured[key] == block_body(blk[..n]), '${ctx}: slot ${i} claims a snapshot that is not the one captured'
 			}

@@ -16,10 +16,11 @@
 // result.
 //
 // The same rates are held to the journal's room between two ERASE POINTS (REQ-NVM-016): no erase runs
-// in a run (docs/nvm.md "No erase at run time"), so an operation cycle's writes at the assumed rates
-// must fit what the journal takes between two of them (nvm.run_capacity), or they would be refused
-// until the next. The report states that room, and how many 0x14 at their worst it holds — the
-// bound a long bench loop meets in one power cycle (#393).
+// in a run (docs/nvm.md "No erase at run time"), so the average operation cycle's writes at the
+// assumed rates must fit what the journal takes between two of them (nvm.run_capacity), or they
+// would be refused until the next — a necessary bound, not a sufficient one: a cycle may carry a
+// day's clears. The report states that room, and how many 0x14 at their worst fit beside the
+// average cycle — the bound a long bench loop meets in one power cycle (#393).
 module main
 
 import toml
@@ -83,8 +84,8 @@ struct Wear {
 	erases    f64 // erases of each sector of the pair per year
 	years     f64
 	per_run   int // records the journal takes between two erase points, at least (nvm.run_capacity)
-	per_cycle f64 // records one operation cycle writes at the assumed rates
-	clear     int // records one 0x14 writes at its worst (0 without a persisted fault memory)
+	per_cycle f64 // records the average operation cycle writes at the assumed rates
+	clear     int // records one 0x14 writes at its worst, awake (0 without a persisted fault memory)
 	points    string // what the erase points are, as printed
 	assumed   []string // the assumptions the rates used, as printed
 	unwritten string // what is never written, said so the reader does not look for it
@@ -280,8 +281,9 @@ fn journal_wear(m Model, doc toml.Doc) Wear {
 	// partner clean and the active sector anywhere; an ECUReset's flush erases on both
 	start := if nm { u32(0) } else { u32(slots / 2) }
 	per_run := int(nvm.run_capacity(u32(slots), u32(live), u32(waste), start))
-	// a 0x14 at its worst: its image and every DTC's requalification, each snapshot DTC's new
-	// capture and the tombstone of the block it replaces
+	// a 0x14 at its worst, awake (in bus sleep each write lays a marker too): its image and every
+	// DTC's requalification, each snapshot DTC's new capture and the tombstone of the block it
+	// replaces
 	clear := if fp {
 		fault.clear_images(n, nsnap) * img_recs + (snap_recs + nsnap) * fault.captures_per_cycle
 	} else {
@@ -297,7 +299,7 @@ fn journal_wear(m Model, doc toml.Doc) Wear {
 		per_run: per_run
 		per_cycle: total / cycles
 		clear: clear
-		points: if nm { 'a sleep edge or an ECUReset' } else { 'a power-up or an ECUReset' }
+		points: (if nm { 'a sleep edge' } else { 'a power-up' }) + if served { ' or an ECUReset' } else { '' }
 		assumed: assumed
 		unwritten: if fp {
 			'debounce counters are never written; the aging and failed-cycle counters ride in the status image'} else {
@@ -345,9 +347,11 @@ fn wear_lines(m Model, w Wear) []string {
 		pct := if w.total > 0 { 100.0 * s.per_hour / w.total } else { 0.0 }
 		out << '  ${s.what}: ${s.per_hour:.1} records/h (${pct:.1}%) — ${s.how}'
 	}
-	mut run := '  between two erase points (${w.points}): at least ${w.per_run} records, ${w.per_cycle:.0} a cycle at the assumed rates'
+	mut run := '  between two erase points (${w.points}): at least ${w.per_run} records, ${w.per_cycle:.0} an average cycle at the assumed rates'
 	if w.clear > 0 {
-		run += ' — ${w.per_run / w.clear} 0x14 at their worst (${w.clear} records each: the image, every DTC\'s requalification, the snapshots)'
+		beside := int(f64(w.per_run) - w.per_cycle)
+		n := if beside > 0 { beside / w.clear } else { 0 }
+		run += ' — room beside it for ${n} 0x14 at their worst (${w.clear} records each, awake: the image, every DTC\'s requalification, the snapshots)'
 	}
 	out << run
 	out << "  assumed ([nvm.assume], the vehicle's): ${w.assumed.join(', ')}"
@@ -371,7 +375,7 @@ fn check_journal_wear(m Model, doc toml.Doc) []string {
 		panic('loom2v: [nvm] the live set (${w.live} records) leaves no room between compactions in a ${m.nvm.sector_records}-record sector — without NM the journal compacts at every boot that finds less than half a sector free; grow the sectors\n' + lines.join('\n'))
 	}
 	if w.per_cycle > f64(w.per_run) {
-		panic('loom2v: [nvm] a cycle outgrows the journal — at the assumed rates an operation cycle writes ${w.per_cycle:.0} records, and between two erase points (${w.points}) the journal takes ${w.per_run}, so its writes would be refused until the next one (0x22 to a tester). Grow the sectors, raise min_write_ms, persist fewer "now" signals, or state the vehicle\'s real rates in [nvm.assume]:\n' + lines.join('\n'))
+		panic('loom2v: [nvm] a cycle outgrows the journal — at the assumed rates the average operation cycle writes ${w.per_cycle:.0} records, and between two erase points (${w.points}) the journal takes ${w.per_run}, so its writes would be refused until the next one (0x22 to a tester). Grow the sectors, raise min_write_ms, persist fewer "now" signals, or state the vehicle\'s real rates in [nvm.assume]:\n' + lines.join('\n'))
 	}
 	if w.years < f64(m.nvm.min_years) {
 		panic('loom2v: [nvm] wear check failed — ${w.years:.1} years < min_years ${m.nvm.min_years}. Raise min_write_ms, grow the sectors, persist fewer "now" signals, or state the vehicle\'s real rates in [nvm.assume]:\n' + lines.join('\n'))

@@ -179,7 +179,7 @@ fn test_a_cycle_that_outgrows_the_room_between_erase_points_is_refused() {
 	assert code != 0, 'a cycle that fills the journal was generated:\n${out}'
 	assert out.contains('[nvm] a cycle outgrows the journal'), out
 	assert !out.contains('wear check failed') && out.contains('48.5 years'), 'the wear check alone refuses it:\n${out}'
-	assert out.contains('writes 279 records, and between two erase points (a sleep edge or an ECUReset) the journal takes 247'), out
+	assert out.contains('the average operation cycle writes 279 records, and between two erase points (a sleep edge or an ECUReset) the journal takes 247'), out
 	report := wear_report(out)
 	assert report.len > 0 && report.all(it.contains('loom2v:')), out
 	c2, o2 := wt_generate('fits', wt_cfg + 'sector_records = 256\n\n' + rare + 'codings_per_day = 0\n')
@@ -281,7 +281,7 @@ fn test_system_full_lasts_and_its_numbers_are_printed() {
 	assert share(d, 'fault memory status image (12 B = 1 records)').starts_with('88 records/h'), d.join('\n')
 	assert share(d, 'fault memory snapshots').starts_with('16 records/h'), d.join('\n')
 	assert share(d, 'parameters (1)').starts_with('1 records/h'), d.join('\n')
-	assert d.any(it.contains('between two erase points (a sleep edge or an ECUReset): at least 4088 records, 120 a cycle')), d.join('\n')
+	assert d.any(it.contains('between two erase points (a sleep edge or an ECUReset): at least 4088 records, 120 an average cycle at the assumed rates — room beside it for 661 0x14 at their worst (6 records each, awake')), d.join('\n')
 	// zone_a: a power-cycle node — its persisted fault memory, its parameter, its resets' markers
 	z := reports['zone_a'] or { []string{} }
 	assert z.len > 0 && z[0].contains('289 records/h') && z[0].contains('16.1 years'), z.join('\n')
@@ -293,13 +293,13 @@ fn test_system_full_lasts_and_its_numbers_are_printed() {
 	// between two erase points — a power-up or an ECUReset — half a sector, then the partner less
 	// the live set: about 190 0x14 that each requalify every DTC, the bound a long bench loop meets
 	// (#393: about 350 clears of the fault suite, each requalifying fewer DTCs)
-	assert z.any(it.contains('between two erase points (a power-up or an ECUReset): at least 6132 records, 41 a cycle at the assumed rates — 191 0x14 at their worst (32 records each')), z.join('\n')
+	assert z.any(it.contains('between two erase points (a power-up or an ECUReset): at least 6132 records, 41 an average cycle at the assumed rates — room beside it for 190 0x14 at their worst (32 records each, awake')), z.join('\n')
 	// sysnode: the 0x27 state its gates bring is its journal's one writer, on an NM node — each
 	// state write may land in bus sleep and lay a clean marker
 	g := reports['sysnode'] or { []string{} }
 	assert g.len > 0 && g[0].contains('23 records/h') && g[0].contains('live set 2'), g.join('\n')
 	assert share(g, 'the 0x27 state (10 B = 1 record)').starts_with('4 records/h'), g.join('\n')
 	assert share(g, 'clean markers').starts_with('19 records/h'), g.join('\n')
-	assert g.any(it.contains('between two erase points (a sleep edge or an ECUReset): at least 4094 records, 3 a cycle')
+	assert g.any(it.contains('between two erase points (a sleep edge or an ECUReset): at least 4094 records, 3 an average cycle')
 		&& !it.contains('0x14')), g.join('\n')
 }
