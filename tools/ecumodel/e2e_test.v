@@ -253,3 +253,21 @@ fn test_a_table_profile_contradicting_the_dbc_is_refused_unless_deliberate() {
 	}
 	assert false, 'a contradicting profile was accepted'
 }
+
+// a complete deviating table with no profile stamped Profile 1 before Profile 5 existed, so
+// against a Profile 5 declaration it must name one; one that leaves fields to the DBC keeps P05
+fn test_a_complete_deviating_table_against_profile_5_states_its_profile() {
+	p05 := engine('BA_ "E2EProfile" BO_ 288 "P05";')
+	resolve_frame_e2e('engine_data', true, e2e_table('{ data_id = 0x10, crc_pos = 1, counter_pos = 3, deviates_from_dbc = true }'),
+		p05) or {
+		assert err.msg().contains('states no profile'), err.msg()
+		e, _ := resolve_frame_e2e('engine_data', true, e2e_table('{ profile = "P01", data_id = 0x10, crc_pos = 1, counter_pos = 3, deviates_from_dbc = true }'),
+			p05)!
+		assert e.profile == candb.p01 && e.crc_pos == 1 && e.counter_pos == 3
+		d, _ := resolve_frame_e2e('engine_data', true, e2e_table('{ data_id = 0x10, deviates_from_dbc = true }'),
+			p05)!
+		assert d.profile == candb.p05 && d.data_id == 0x10 && d.crc_pos == 0
+		return
+	}
+	assert false, 'a complete deviating table took the DBC profile silently'
+}

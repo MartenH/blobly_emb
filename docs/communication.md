@@ -475,8 +475,9 @@ e2e  = { profile = "P05", data_id = 0x0BEE, crc_pos = 2, counter_pos = 4 }
 ```
 
 `profile` is `"P01"` or `"P05"` (`PROFILE_01` / `autosar_p01` and their P05 forms read the
-same); absent, it is the DBC's `E2EProfile`, else P01, so a table written before Profile 5 means
-what it always did.
+same); absent, it is the DBC's `E2EProfile`, else P01. A complete table with
+`deviates_from_dbc = true` against a P05 declaration must state it, since such a table stamped
+P01 before Profile 5 existed — so a table written before Profile 5 never changes meaning silently.
 
 **The whole contract may come from the DBC instead** (blobly_net#271), through five message
 attributes defined once, for both repositories, in blobly_net's
@@ -486,9 +487,8 @@ profiles `comm/e2e` implements; `PROFILE_01` and `autosar_p01` read as P01, `PRO
 `autosar_p05` as P05), `E2EDataId`, and
 `E2ETimeout` (ms, E2E's own sender-loss timeout for a receiver; 0 means none, and a sender
 ignores it). blobly_net reads and writes the same attributes and its `cmd/arxml2dbc` exports
-them, so both tools take one contract from one file. One gap remains: `cmd/arxml2dbc` still
-exports Profile 1 only, so an ARXML PROFILE_05 frame reaches a node's DBC unprotected until
-blobly_net#707 lands; write its `[[frame]].e2e` table by hand meanwhile. `tools/ecumodel`'s `resolve_frame_e2e` is
+them (Profile 5 too, since blobly_net#709), so both tools take one contract from one file.
+`tools/ecumodel`'s `resolve_frame_e2e` is
 the one resolution: a `[[frame]].e2e` field, `timeout_ms` included, is an override, and one that
 contradicts the DBC is refused unless the table says `deviates_from_dbc = true`; a field it
 leaves out is the DBC's (the profile included). For P01 the CRC signal must be 8 bits on a byte

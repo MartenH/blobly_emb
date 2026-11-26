@@ -1,5 +1,7 @@
 module cfgschema
 
+import tools.candb
+
 // ecu: ecu.toml — one ECU. ecucheck walks it (check), the generators read it, and the leaf
 // checks take their bounds from it. The diagnostic tables are in ecu_diag.v.
 pub const ecu = ecu_schema()
@@ -229,8 +231,7 @@ fn ecu_schema() Schema {
 			k('timeout_ms', .int).d('0').range(0, 2147483).doc('the reception deadline (ms; 0 = none); past it the signal status is timeout'),
 		]),
 		tbl('e2e', 'inline e2e', "AUTOSAR E2E Profile 1 or 5. Each key defaults to the DBC's E2E attribute; a differing value needs deviates_from_dbc.", [
-			k('profile', .str).one_of(['P01', 'P05', 'PROFILE_01', 'PROFILE_05', 'autosar_p01',
-				'autosar_p05']).doc('Profile 1 (8-bit CRC, 4-bit counter) or Profile 5 (16-bit CRC, 8-bit counter; CAN only). Absent: the DBC\'s E2EProfile, else P01'),
+			k('profile', .str).one_of(candb.profile_spellings.keys()).doc('Profile 1 (8-bit CRC, 4-bit counter) or Profile 5 (16-bit CRC, 8-bit counter; CAN only). Absent: the DBC\'s E2EProfile, else P01'),
 			k('data_id', .int).range(0, 0xFFFF).hex().own_check().doc('the Data ID mixed into the CRC'),
 			k('crc_pos', .int).doc("the CRC's byte (Profile 5: its low byte, the high byte after it)"),
 			k('counter_pos', .int).doc('the byte whose low nibble holds the counter (Profile 5: the whole byte, crc_pos + 2)'),

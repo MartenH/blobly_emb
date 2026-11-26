@@ -1,5 +1,6 @@
 module main
 
+import tools.candb
 import tools.cfgschema
 
 // The schema's enumerations that a generator MAPS rather than just checks: every value the schema
@@ -55,5 +56,17 @@ fn test_the_generator_defaults_are_the_schemas() {
 		'codings_per_day':         a.codings
 	} {
 		assert cfgschema.ecu.key('nvm_assume', key).default_int() == v, key
+	}
+}
+
+// every [[frame]].e2e.profile the schema offers is a profile comm/e2e implements, and each one
+// implemented has a spelling there
+fn test_the_e2e_profile_choices_are_the_implemented_profiles() {
+	choices := cfgschema.ecu.key('e2e', 'profile').choices
+	for c in choices {
+		assert candb.profile_from_dbc(c) in candb.profiles, c
+	}
+	for p in candb.profiles {
+		assert p in choices.map(candb.profile_from_dbc(it)), p
 	}
 }

@@ -2060,7 +2060,8 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 		}
 		// the dest producer stamps protection AFTER composing the routed value, so a routed
 		// signal must not occupy any protection byte or it would be overwritten (corrupt
-		// data on the wire). Reject the overlap: the E2E CRC byte + counter low-nibble, or
+		// data on the wire). Reject the overlap: the E2E fields (e2e_bits: Profile 1's CRC
+		// byte and counter low nibble, Profile 5's two CRC bytes and counter byte), or
 		// the SecOC freshness + MAC bytes, vs this route's dest signal bit span. (Bus-scoped:
 		// protection applies only on the frame's authored bus, so use e2e_here/secoc_here.)
 		// a routed signal is guaranteed LITTLE-ENDIAN (parse_routes rejects Motorola BEFORE

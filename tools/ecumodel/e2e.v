@@ -34,7 +34,7 @@ pub fn dbc_e2e(m candb.Message) !(FrameE2e, bool) {
 		return FrameE2e{}, false
 	}
 	what := 'frame "${m.name}": the DBC\'s E2E declaration'
-	if d.profile !in [candb.p01, candb.p05] {
+	if d.profile !in candb.profiles {
 		return error('${what} names profile "${d.profile}" — only P01 and P05 (AUTOSAR E2E Profiles 1 and 5) are implemented')
 	}
 	if d.bad_data_id != '' {
@@ -130,7 +130,7 @@ fn layout_problem(profile string, crc int, ctr int) ?string {
 // of the spellings the DBC's E2EProfile takes (candb.profile_from_dbc), else an error.
 fn frame_e2e_profile(frame string, v toml.Any) !string {
 	p := if v is string { candb.profile_from_dbc(v) } else { '' }
-	if p !in [candb.p01, candb.p05] {
+	if p !in candb.profiles {
 		return error('frame "${frame}": e2e.profile = ${v.to_toml()} is not a profile comm/e2e implements ("P01" or "P05")')
 	}
 	return p
@@ -184,7 +184,7 @@ pub fn resolve_frame_e2e(frame string, has_toml bool, em map[string]toml.Any, m 
 	// replaced for its layout keeps its profile), else Profile 1
 	mut profile := candb.p01
 	if msg := m {
-		if msg.e2e.profile in [candb.p01, candb.p05] {
+		if msg.e2e.profile in candb.profiles {
 			profile = msg.e2e.profile
 		}
 	}
@@ -195,6 +195,11 @@ pub fn resolve_frame_e2e(frame string, has_toml bool, em map[string]toml.Any, m 
 				'drop it, or set deviates_from_dbc = true if the difference is deliberate')
 		}
 		profile = p
+	} else if deviates && complete && profile != candb.p01 {
+		// a complete deviating table with no profile stamped Profile 1 before Profile 5 existed,
+		// so against a Profile 5 declaration it must say which it means
+		return error('frame "${frame}": e2e replaces the DBC\'s ${profile} layout but states no profile — ' +
+			'say e2e.profile = "P01" or "P05"')
 	}
 	mut v := [dbc.data_id, dbc.crc_pos, dbc.counter_pos]
 	for i, k in frame_e2e_fields {

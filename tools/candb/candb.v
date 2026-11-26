@@ -79,16 +79,24 @@ pub mut:
 // spellings — `P01`, AUTOSAR's `PROFILE_01`, and `autosar_p01` —, Profile 5 likewise (`P05`,
 // `PROFILE_05`, `autosar_p05`), and anything else as written — blobly_net's candb reads them so.
 pub fn profile_from_dbc(v string) string {
-	return match v {
-		'P01', 'PROFILE_01', 'autosar_p01' { p01 }
-		'P05', 'PROFILE_05', 'autosar_p05' { p05 }
-		else { v }
-	}
+	return profile_spellings[v] or { v }
 }
 
-// p01 / p05: the normalised names of the two E2E profiles comm/e2e implements.
+// p01 / p05: the normalised names of the two E2E profiles comm/e2e implements, `profiles`.
 pub const p01 = 'autosar_p01'
 pub const p05 = 'autosar_p05'
+pub const profiles = [p01, p05]
+
+// profile_spellings: every spelling of a profile comm/e2e implements, to its normalised name —
+// what an E2EProfile attribute and a [[frame]].e2e.profile (cfgschema's choices) may say.
+pub const profile_spellings = {
+	'P01':         p01
+	'P05':         p05
+	'PROFILE_01':  p01
+	'PROFILE_05':  p05
+	'autosar_p01': p01
+	'autosar_p05': p05
+}
 
 pub fn (d E2eDecl) declared() bool {
 	return d.counter != '' || d.crc != '' || d.profile != '' || d.has_data_id || d.bad_data_id != ''
